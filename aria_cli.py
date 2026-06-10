@@ -4486,11 +4486,55 @@ def _try_handle_market_snapshot_analysis(message: str) -> dict:
     chg_str = f"{sign}{chg:.2f}%" if chg is not None else "N/A"
     range_str = f"{currency} {low:,.2f} - {currency} {high:,.2f}" if low is not None and high is not None else "N/A"
 
+    # ── Technical indicators: try mdc first, fall back to direct yfinance ──
     ti = {}
     try:
         ti = mdc.technical_indicators(symbol, days=120)
     except Exception:
         ti = {}
+
+    # If mdc returned nothing useful (all None), try yfinance directly
+    if not ti.get("success") or ti.get("rsi") is None:
+        try:
+            import yfinance as _yf
+            import numpy as _np
+            _hist = _yf.Ticker(symbol).history(period="6mo")
+            if len(_hist) >= 20:
+                _close = _hist["Close"]
+                _vol   = _hist["Volume"]
+                # RSI(14)
+                _d = _close.diff()
+                _g = _d.clip(lower=0).rolling(14).mean()
+                _l = (-_d.clip(upper=0)).rolling(14).mean()
+                _rs = _g / _l.replace(0, _np.nan)
+                _rsi = float((100 - 100 / (1 + _rs)).iloc[-1])
+                # MACD hist
+                _ema12  = _close.ewm(span=12).mean()
+                _ema26  = _close.ewm(span=26).mean()
+                _macd   = _ema12 - _ema26
+                _signal = _macd.ewm(span=9).mean()
+                _mhist  = float((_macd - _signal).iloc[-1])
+                # Bollinger Bands & MA
+                _ma20  = _close.rolling(20).mean()
+                _std20 = _close.rolling(20).std()
+                _ma60  = _close.rolling(60).mean() if len(_close) >= 60 else _ma20
+                ti = {
+                    "success":   True,
+                    "rsi":       round(_rsi, 2) if not _np.isnan(_rsi) else None,
+                    "macd_hist": round(_mhist, 4),
+                    "ma20":      round(float(_ma20.iloc[-1]), 2),
+                    "ma60":      round(float(_ma60.iloc[-1]), 2),
+                    "bb_upper":  round(float((_ma20 + 2 * _std20).iloc[-1]), 2),
+                    "bb_lower":  round(float((_ma20 - 2 * _std20).iloc[-1]), 2),
+                    "provider":  "yfinance_direct",
+                }
+                # Back-fill volume if missing from quote
+                if volume is None or str(volume) in ("None", "N/A", ""):
+                    _recent_vol = _vol.iloc[-1]
+                    if not _np.isnan(_recent_vol):
+                        volume = int(_recent_vol)
+        except Exception:
+            pass
 
     rsi = _num(ti.get("rsi"))
     mhist = _num(ti.get("macd_hist"))
@@ -4520,29 +4564,58 @@ def _try_handle_market_snapshot_analysis(message: str) -> dict:
     support_str = ", ".join(f"{currency} {v:,.2f}" for v in supports) or "N/A"
     resistance_str = ", ".join(f"{currency} {v:,.2f}" for v in resistances) or "N/A"
 
-    if rsi is not None and rsi >= 70:
-        stance = "偏谨慎，等待回调或确认突破"
-    elif mhist is not None and mhist < 0 and (chg or 0) < 0:
-        stance = "短线偏弱，先观察支撑是否守住"
-    elif mhist is not None and mhist > 0 and (chg or 0) >= 0:
-        stance = "短线偏强，但仍需控制仓位"
+    # ── 短期判断门控：核心技术指标（RSI / MACD）至少有一个才输出信号 ────
+    # 成交量、支撑/阻力是辅助字段，缺失不影响判断
+    _enough_data = (rsi is not None) or (mhist is not None)
+    _na_count = sum([
+        rsi is None,
+        mhist is None,
+        volume is None or str(volume) in ("None", "N/A", ""),
+        len(supports) == 0,
+        len(resistances) == 0,
+    ])
+
+    if _enough_data:
+        if rsi is not None and rsi >= 70:
+            stance = "偏谨慎，等待回调或确认突破"
+        elif rsi is not None and rsi <= 30:
+            stance = "超卖区域，关注企稳信号"
+        elif mhist is not None and mhist < 0 and (chg or 0) < 0:
+            stance = "短线偏弱，先观察支撑是否守住"
+        elif mhist is not None and mhist > 0 and (chg or 0) >= 0:
+            stance = "短线偏强，但仍需控制仓位"
+        else:
+            stance = "震荡观察，等待更明确方向"
+        stance_line = f"**短期判断**：{stance}。\n\n"
     else:
-        stance = "震荡观察，等待更明确方向"
+        stance_line = (
+            f"> ⚠ 技术指标数据不足（{_na_count}/5 项缺失），无法生成可靠信号。\n"
+            f"> 运行 `/ta {symbol}` 或稍后重试获取完整数据。\n\n"
+        )
+
+    # ── 仅显示有数据的行 ──────────────────────────────────────────────────
+    lines = [f"## {name} ({symbol}) 市场快照\n"]
+    lines.append(f"- **最新价**：{currency} {price:,.2f}（{chg_str}）")
+    if range_str != "N/A":
+        lines.append(f"- **日内区间**：{range_str}")
+    _vol_str = _fmt_int(volume)
+    if _vol_str != "N/A":
+        lines.append(f"- **成交量**：{_vol_str}")
+    if rsi_view != "N/A":
+        lines.append(f"- **RSI(14)**：{rsi_view}")
+    if macd_view != "N/A":
+        lines.append(f"- **MACD hist**：{macd_view}")
+    if support_str != "N/A":
+        lines.append(f"- **支撑位**：{support_str}")
+    if resistance_str != "N/A":
+        lines.append(f"- **阻力位**：{resistance_str}")
 
     weekday = datetime.now().weekday()
     session_note = "美股周末/休市时，此处为最近可用行情。" if weekday >= 5 else "盘中/盘后状态以数据源返回为准。"
-    response = (
-        f"## {name} ({symbol}) 市场快照\n\n"
-        f"- **最新价**：{currency} {price:,.2f}（{chg_str}）\n"
-        f"- **日内区间**：{range_str}\n"
-        f"- **成交量**：{_fmt_int(volume)}\n"
-        f"- **RSI(14)**：{rsi_view}\n"
-        f"- **MACD hist**：{macd_view}\n"
-        f"- **支撑位**：{support_str}\n"
-        f"- **阻力位**：{resistance_str}\n\n"
-        f"**短期判断**：{stance}。\n\n"
-        f"*数据源：{provider}。{session_note} 本内容不构成投资建议。*"
-    )
+    ti_provider = ti.get("provider", "")
+    data_note = f"{provider}" + (f" + {ti_provider}" if ti_provider and ti_provider != provider else "")
+
+    response = "\n".join(lines) + "\n\n" + stance_line + f"*数据源：{data_note}。{session_note} 本内容不构成投资建议。*"
     return {"success": True, "response": response, "tools_used": ["market_snapshot"]}
 
 
@@ -7806,6 +7879,7 @@ class SlashCommands:
     def _set_model_by_id(self, model_id: str):
         """Set model by Ollama model ID (works for both built-in and community models)."""
         self.terminal.config["model"] = model_id
+        self.terminal._actual_model = None  # reset: new config model, no known fallback yet
         save_config(self.terminal.config)
         # Pretty label
         for m in MODELS.values():
@@ -13781,6 +13855,7 @@ class ArtheraTerminal:
         self.cancel_event: Optional[asyncio.Event] = None
         self._streaming = False
         self._last_provider = "aws"  # Track last successful provider
+        self._actual_model: Optional[str] = None  # actual Ollama model in use (may differ from config)
 
         # ── Session-level telemetry (like Claude Code's /cost) ──────────
         import time as _time_mod
@@ -13825,7 +13900,7 @@ class ArtheraTerminal:
                 completer=pt_completer,
                 complete_while_typing=True,
                 style=ARIA_PT_STYLE,
-                placeholder=HTML('<style fg="#606060">try "analyze AAPL" or type / for commands</style>'),
+                placeholder=HTML('<style fg="#606060">发送消息，或输入 / 查看命令…</style>'),
             )
         elif _interactive:
             try:
@@ -13884,14 +13959,30 @@ class ArtheraTerminal:
             t1.append(" v3.0", style="dim")
             console.print(t1)
 
-            # Model line — warn if running a weak model
+            # Model line — show configured model; warn early if not installed
             _badge = m.get("badge", "")
+            _model_id_display = current_id
             if _badge == "Fast":
                 console.print(f"  [dim]{m['name']} {m['version']} · {m['tag']}[/dim]  [yellow]⚡lite[/yellow]")
             elif _badge == "Cloud":
                 console.print(f"  [dim]{m['name']} {m['version']} · {m['tag']}[/dim]  [cyan]☁ cloud[/cyan]")
             else:
                 console.print(f"  [dim]{m['name']} {m['version']} · {m['tag']}[/dim]")
+            # Pre-flight: warn immediately if the configured Ollama model is not installed
+            try:
+                _rm2, _ = detect_ollama_models_rich(
+                    self.config.get("ollama_url", "http://localhost:11434"))
+                _installed2 = {_x["name"] for _x in _rm2}
+                if _installed2 and current_id not in _installed2:
+                    # Find best available fallback name
+                    _best_avail = sorted(_installed2)[0]
+                    console.print(
+                        f"  [yellow]⚠ 模型 {current_id} 未安装 → "
+                        f"将使用 {_best_avail}[/yellow]  "
+                        f"[dim]安装: ollama pull {current_id}[/dim]"
+                    )
+            except Exception:
+                pass
             console.print(f"  [dim]{cwd}[/dim]")
             if wl_str:
                 console.print(f"  [dim]{wl_str}[/dim]")
@@ -13952,11 +14043,21 @@ class ArtheraTerminal:
 
     def _status_line(self) -> str:
         current_id = self.config.get("model", "qwen2.5:7b")
-        model_name = "Sonata"
+        # If Ollama switched to a different model, show the actual running model
+        display_id = self._actual_model or current_id
+        model_name = display_id  # fallback: raw model ID
         for k, v in MODELS.items():
-            if v["id"] == current_id:
+            if v["id"] == display_id:
                 model_name = v["name"].replace("Aria ", "")
                 break
+            # also match by actual model ID (e.g. gpt-oss:120b-cloud)
+            if v["id"] == current_id and self._actual_model is None:
+                model_name = v["name"].replace("Aria ", "")
+                break
+        # If actual_model differs from config, append a ⚑ warning marker
+        _mismatch = (self._actual_model is not None and self._actual_model != current_id)
+        if _mismatch:
+            model_name = f"{self._actual_model} ⚑"
         thinking = THINKING_MODES.get(self.config.get("thinking_mode", "auto"), {}).get("label", "Auto")
         # Determine provider label based on last used provider AND selected model badge
         _lp = self._last_provider or ""
@@ -14004,11 +14105,20 @@ class ArtheraTerminal:
                 console.print("[bold]Aria[/bold]")
                 console.print()
                 console.print(Markdown(_strip_latex(final_text)))
-                console.print(f"\n[dim]deterministic · {' '.join(deterministic.get('tools_used', []))}[/dim]\n")
+                # User-friendly footer: show data source(s) instead of internal routing label
+                _tools = deterministic.get("tools_used", [])
+                _tool_label = {
+                    "market_snapshot": "市场快照",
+                    "stock_chart":     "图表分析",
+                }.get(_tools[0], _tools[0]) if _tools else "本地分析"
+                _rate_limited = deterministic.get("rate_limited", False)
+                _rl_note = "  [yellow]⚠ 数据源限流[/yellow]" if _rate_limited else ""
+                console.print(f"\n[dim]{_tool_label} · 本内容不构成投资建议[/dim]{_rl_note}\n")
+                console.print(Rule(style="dim"))
             else:
                 print("\nAria\n")
                 print(final_text)
-                print(f"\ndeterministic · {' '.join(deterministic.get('tools_used', []))}\n")
+                print(f"\n市场快照 · 本内容不构成投资建议\n")
             self.conversation.append({"role": "assistant", "content": final_text})
             return
 
@@ -14444,17 +14554,24 @@ class ArtheraTerminal:
 
                     if _ollama_model:
                         _switched = _ollama_model != model
-                        # 模型名含 "cloud" 时提示"本地运行"避免歧义（模型名由上传者决定，与运行位置无关）
-                        _local_hint = "本地运行" if "cloud" in _ollama_model.lower() else "本地模型"
-                        if HAS_RICH:
-                            _note = (f"  [dim]{_local_hint}: {_ollama_model}"
-                                     + (f"（配置模型 {model} 未安装）" if _switched else "")
-                                     + "[/dim]")
-                            console.print(_note)
+                        self._actual_model = _ollama_model  # record for header display
+                        if _switched:
+                            # 配置的模型未安装，已自动切换 — 用 Panel 明确告知用户
+                            if HAS_RICH:
+                                console.print(Panel(
+                                    f"[yellow]⚠ 配置模型 [bold]{model}[/bold] 未安装\n"
+                                    f"[/yellow][dim]已自动切换至 [bold]{_ollama_model}[/bold]（本地可用）\n"
+                                    f"安装配置模型：[bold]ollama pull {model}[/bold][/dim]",
+                                    border_style="yellow",
+                                    box=rich_box.ROUNDED,
+                                    padding=(0, 1),
+                                ))
+                            else:
+                                print(f"  ⚠ 配置模型 {model} 未安装，已切换至 {_ollama_model}")
                         else:
-                            _note = (f"  {_local_hint}: {_ollama_model}"
-                                     + (f"（配置模型 {model} 未安装）" if _switched else ""))
-                            print(_note)
+                            # 正常使用配置的模型，仅在含 "cloud" 字样时说明是本地运行
+                            if "cloud" in _ollama_model.lower() and HAS_RICH:
+                                console.print(f"  [dim]本地运行: {_ollama_model}[/dim]")
                         _use_plain_print[0]  = True   # disable Live for Ollama
                         _use_batch_render[0] = True   # accumulate silently → Rich render at end
                         result = await stream_ollama(
@@ -14783,6 +14900,18 @@ class ArtheraTerminal:
             if HAS_RICH:
                 copy_hint = "  [dim]/copy[/dim]" if self._last_response else ""
                 console.print(f"\n[dim]{' · '.join(meta_parts)}[/dim]{copy_hint}")
+                # One-time warning if first response and input tokens are very high
+                # (>2000 for a short message suggests a heavy system prompt)
+                _is_first_turn = (self._session_turns == 0)
+                if _is_first_turn and prompt_t > 2000:
+                    _msg_len = len(message)
+                    _sys_est = max(0, prompt_t - _msg_len // 3)
+                    if _sys_est > 1500:
+                        console.print(
+                            f"[dim]  ℹ 系统提示词约 {_sys_est:,} tokens，"
+                            f"较长的对话会较快占满上下文。"
+                            f"可用 /compact 压缩历史，或用 /clear 重置。[/dim]"
+                        )
                 console.print(Rule(style="dim"))
             else:
                 print(f"\n{' · '.join(meta_parts)}\n")
