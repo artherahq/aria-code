@@ -2380,6 +2380,144 @@ def _tool_notebook_edit(params: dict) -> dict:
         return {"success": False, "error": str(e)}
 
 
+def _tool_get_market_data(params: dict) -> dict:
+    """
+    Fetch real-time market data (quote + technical indicators) for a stock/ETF/crypto.
+    Supports A-shares (6-digit code), HK (.HK), US (AAPL), crypto (BTC).
+    Primary: yfinance / MarketDataClient. Fallback: Finnhub.
+    Returns structured data for LLM consumption.
+    """
+    symbol = str(params.get("symbol", "")).strip().upper()
+    if not symbol:
+        return {"success": False, "error": "symbol is required"}
+
+    # ── 1. Quote ──────────────────────────────────────────────────────────────
+    quote: dict = {"success": False, "error": "market data client unavailable"}
+    if _HAS_MDC:
+        import time as _t
+        mdc = _get_mdc()
+        for _att in range(3):
+            try:
+                quote = mdc.quote(symbol)
+                if quote.get("success"):
+                    break
+                _e = str(quote.get("error", "")).lower()
+                if ("rate" in _e or "429" in _e) and _att < 2:
+                    _t.sleep(2 ** _att)
+                    continue
+                break
+            except Exception as exc:
+                _es = str(exc).lower()
+                if ("rate" in _es or "429" in _es) and _att < 2:
+                    _t.sleep(2 ** _att)
+                    continue
+                # Clean up raw Python exception strings
+                _raw = str(exc)
+                if "Connection aborted" in _raw or "RemoteDisconnected" in _raw:
+                    quote = {"success": False, "error": "网络连接中断，请稍后重试"}
+                elif "Connection refused" in _raw:
+                    quote = {"success": False, "error": "连接被拒绝，数据服务暂时不可用"}
+                elif "timeout" in _raw.lower():
+                    quote = {"success": False, "error": "连接超时，请稍后重试"}
+                else:
+                    quote = {"success": False, "error": _raw}
+                break
+
+    # Finnhub fallback for US/global symbols
+    if not quote.get("success"):
+        _fh_key = _get_provider_key("finnhub")
+        if _fh_key:
+            try:
+                import requests as _rq
+                _r = _rq.get(
+                    f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={_fh_key}",
+                    timeout=6,
+                )
+                if _r.status_code == 200:
+                    _fh = _r.json()
+                    if _fh.get("c"):
+                        _pc = _fh.get("pc") or _fh["c"]
+                        quote = {
+                            "success": True, "symbol": symbol,
+                            "price": round(_fh["c"], 4),
+                            "change_pct": round((_fh["c"] - _pc) / _pc * 100, 2) if _pc else 0,
+                            "high": round(_fh.get("h", 0), 4),
+                            "low": round(_fh.get("l", 0), 4),
+                            "currency": "USD", "provider": "finnhub",
+                        }
+            except Exception:
+                pass
+
+    if not quote.get("success"):
+        return quote  # propagate error with clean message
+
+    result = {
+        "success":    True,
+        "symbol":     symbol,
+        "name":       quote.get("name") or symbol,
+        "price":      quote.get("price"),
+        "change_pct": quote.get("change_pct"),
+        "high":       quote.get("high"),
+        "low":        quote.get("low"),
+        "volume":     quote.get("volume"),
+        "market_cap": quote.get("market_cap"),
+        "currency":   quote.get("currency") or "USD",
+        "provider":   quote.get("provider") or "market_data_client",
+    }
+
+    # ── 2. Technical indicators ───────────────────────────────────────────────
+    ti: dict = {}
+    if _HAS_MDC:
+        try:
+            ti = mdc.technical_indicators(symbol, days=120) or {}
+        except Exception:
+            ti = {}
+
+    if not ti.get("success") or ti.get("rsi") is None:
+        try:
+            import yfinance as _yf, numpy as _np
+            _yf_sym = symbol
+            if symbol.isdigit() and len(symbol) == 6:
+                _yf_sym = symbol + (".SS" if symbol.startswith("6") else ".SZ")
+            _hist = _yf.Ticker(_yf_sym).history(period="6mo")
+            if len(_hist) >= 20:
+                _c = _hist["Close"]
+                _v = _hist["Volume"]
+                _d = _c.diff()
+                _g = _d.clip(lower=0).rolling(14).mean()
+                _l = (-_d.clip(upper=0)).rolling(14).mean()
+                _rsi = float((100 - 100 / (1 + _g / _l.replace(0, _np.nan))).iloc[-1])
+                _ema12 = _c.ewm(span=12).mean()
+                _ema26 = _c.ewm(span=26).mean()
+                _macd  = _ema12 - _ema26
+                _mhist = float((_macd - _macd.ewm(span=9).mean()).iloc[-1])
+                _ma20  = _c.rolling(20).mean()
+                _std20 = _c.rolling(20).std()
+                _ma60  = _c.rolling(60).mean() if len(_c) >= 60 else _ma20
+                ti = {
+                    "success":   True,
+                    "rsi":       round(_rsi, 2) if not _np.isnan(_rsi) else None,
+                    "macd_hist": round(_mhist, 4),
+                    "ma20":      round(float(_ma20.iloc[-1]), 2),
+                    "ma60":      round(float(_ma60.iloc[-1]), 2),
+                    "bb_upper":  round(float((_ma20 + 2*_std20).iloc[-1]), 2),
+                    "bb_lower":  round(float((_ma20 - 2*_std20).iloc[-1]), 2),
+                }
+                if result.get("volume") is None:
+                    _rv = _v.iloc[-1]
+                    if not _np.isnan(_rv):
+                        result["volume"] = int(_rv)
+        except Exception:
+            pass
+
+    if ti.get("success"):
+        for _k in ("rsi", "macd_hist", "ma20", "ma60", "bb_upper", "bb_lower"):
+            if ti.get(_k) is not None:
+                result[_k] = ti[_k]
+
+    return result
+
+
 # Local tool registry: name → (handler, description, for display)
 LOCAL_TOOLS = {
     # ── Core file tools ──────────────────────────────────────────────────────
@@ -2395,6 +2533,8 @@ LOCAL_TOOLS = {
     "glob":           (_tool_glob,           "Fast glob file-pattern search"),
     "notebook_read":  (_tool_notebook_read,  "Read a Jupyter notebook (.ipynb)"),
     "notebook_edit":  (_tool_notebook_edit,  "Edit a cell in a Jupyter notebook"),
+    # ── Market data ─────────────────────────────────────────────────────────
+    "get_market_data": (_tool_get_market_data, "Fetch real-time quote + technical indicators for any stock/ETF/crypto"),
 }
 
 # ── Register local finance fallback tools (yfinance / akshare / ccxt) ──────
@@ -2612,6 +2752,34 @@ LOCAL_TOOL_SCHEMAS = [
                     "new_source":  {"type": "string",  "description": "New cell source code/text"},
                 },
                 "required": ["path", "cell_index", "new_source"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_market_data",
+            "description": (
+                "Fetch real-time market data for any stock, ETF, index, or cryptocurrency. "
+                "Returns price, change, high/low, volume, RSI(14), MACD histogram, MA20/60, "
+                "Bollinger Bands. Supports: US tickers (AAPL, NVDA), A-shares (6-digit code like 600519), "
+                "HK stocks (0700.HK), crypto (BTC, ETH), indices (SPY, QQQ). "
+                "You must look up the correct ticker symbol yourself — e.g. LVMH → MC.PA, "
+                "路易威登/路易斯威登 → MC.PA or LVMUY, 宝马 → BMW.DE, 大众 → VWAGY."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "symbol": {
+                        "type": "string",
+                        "description": (
+                            "Ticker symbol. Examples: AAPL, NVDA, 600519, 0700.HK, BTC, MC.PA. "
+                            "For A-shares use the 6-digit code without exchange suffix. "
+                            "Do NOT guess — if unsure about a ticker, say so and ask the user."
+                        ),
+                    },
+                },
+                "required": ["symbol"],
             },
         },
     },
@@ -4620,7 +4788,16 @@ def _try_handle_market_snapshot_analysis(message: str, history: list = None) -> 
             if ("rate" in _exc_str or "429" in _exc_str or "too many" in _exc_str) and _attempt < 2:
                 _time_snap.sleep(2 ** _attempt)
                 continue
-            quote = {"success": False, "error": str(exc)}
+            _raw_exc = str(exc)
+            if "Connection aborted" in _raw_exc or "RemoteDisconnected" in _raw_exc:
+                _clean_err = "网络连接中断，请检查网络后重试"
+            elif "Connection refused" in _raw_exc:
+                _clean_err = "连接被拒绝，数据服务暂时不可用"
+            elif "timeout" in _raw_exc.lower():
+                _clean_err = "连接超时，请稍后重试"
+            else:
+                _clean_err = _raw_exc
+            quote = {"success": False, "error": _clean_err}
             break
 
     # Finnhub fallback when primary data source (yfinance) failed or rate-limited
@@ -4835,7 +5012,7 @@ def _try_handle_market_snapshot_analysis(message: str, history: list = None) -> 
     ti_provider = ti.get("provider", "")
     data_note = f"{provider}" + (f" + {ti_provider}" if ti_provider and ti_provider != provider else "")
 
-    response = "\n".join(lines) + "\n\n" + stance_line + f"*数据源：{data_note}。{session_note} 本内容不构成投资建议。*"
+    response = "\n".join(lines) + "\n\n" + stance_line + f"*数据源：{data_note}。{session_note}*"
     return {"success": True, "response": response, "tools_used": ["market_snapshot"]}
 
 
@@ -6760,11 +6937,12 @@ def _print_finance_result(tool_name: str, result: dict):
 
     # ── Market data / quote ────────────────────────────────────────────
     if tool_name in ("get_market_data", "get_crypto_data", "get_forex_data"):
-        sym  = result.get("symbol", "")
-        px   = result.get("latest_close", result.get("price", 0))
-        chg  = result.get("change_pct", result.get("change_pct_24h", 0)) or 0
-        vol  = result.get("volume", 0)
-        name = result.get("name", "")
+        sym   = result.get("symbol", "")
+        px    = result.get("latest_close", result.get("price", 0))
+        chg   = result.get("change_pct", result.get("change_pct_24h", 0)) or 0
+        vol   = result.get("volume", 0)
+        name  = result.get("name", "")
+        curr  = result.get("currency", "")
         color = "green" if chg >= 0 else "red"
         arrow = "▲" if chg >= 0 else "▼"
         if HAS_RICH:
@@ -6772,19 +6950,40 @@ def _print_finance_result(tool_name: str, result: dict):
             t = Table(show_header=False, box=None, padding=(0, 1))
             t.add_column(style="dim", width=20)
             t.add_column()
-            t.add_row("Symbol", f"[bold]{sym}[/bold]" + (f"  {name}" if name else ""))
-            t.add_row("Price",  f"[bold]{px:,.4g}[/bold]")
-            t.add_row("Change", f"[{color}]{arrow} {chg:+.3f}%[/{color}]")
+            title_str = f"[bold]{sym}[/bold]" + (f"  {name}" if name else "")
+            t.add_row("标的", title_str)
+            px_disp = f"{curr} {px:,.4g}" if curr else f"{px:,.4g}"
+            t.add_row("最新价", f"[bold]{px_disp}[/bold]")
+            t.add_row("涨跌幅", f"[{color}]{arrow} {chg:+.2f}%[/{color}]")
+            _hi = result.get("high"); _lo = result.get("low")
+            if _hi and _lo:
+                t.add_row("日内区间", f"{_lo:,.4g} — {_hi:,.4g}")
             if vol:
-                t.add_row("Volume", f"{vol:,}")
+                t.add_row("成交量", f"{int(vol):,}")
+            # Technical indicators from local tool
+            _rsi = result.get("rsi")
+            if _rsi is not None:
+                _rsi_color = "red" if _rsi >= 70 else ("cyan" if _rsi <= 30 else "white")
+                t.add_row("RSI(14)", f"[{_rsi_color}]{_rsi:.1f}[/{_rsi_color}]")
+            _mh = result.get("macd_hist")
+            if _mh is not None:
+                _mh_color = "green" if _mh > 0 else "red"
+                t.add_row("MACD hist", f"[{_mh_color}]{_mh:+.4f}[/{_mh_color}]")
+            _ma20 = result.get("ma20"); _ma60 = result.get("ma60")
+            if _ma20:
+                t.add_row("MA20", f"{_ma20:,.4g}")
+            if _ma60:
+                t.add_row("MA60", f"{_ma60:,.4g}")
+            # Legacy cloud fields
             for k in ("high_52w", "low_52w", "bid", "ask"):
                 v = result.get(k)
                 if v is not None:
                     t.add_row(k.replace("_", " ").title(), f"{v:,.4g}")
             console.print(t)
-            console.print(f"  {prov_tag}")
+            if prov_tag:
+                console.print(f"  {prov_tag}")
         else:
-            print(f"  {sym}: {px} ({chg:+.3f}%)")
+            print(f"  {sym}: {px} ({chg:+.2f}%)")
         return
 
     # ── Commodity data ─────────────────────────────────────────────────
@@ -14358,8 +14557,24 @@ class ArtheraTerminal:
             user_content = message
         self.conversation.append({"role": "user", "content": user_content})
 
-        deterministic = _try_handle_market_snapshot_analysis(
-            message, history=self.conversation[:-1])  # 不含本条消息自身
+        # ── 路由决策：支持工具调用的模型走 LLM+tool call，否则走确定性路由 ──
+        # 支持 function calling 的模型（Claude / GPT-4 class / qwen-72b+）能自己
+        # 识别公司名 → ticker 并调 get_market_data，不需要硬编码字典。
+        # 本地小模型（<14B）工具调用不稳定，保留确定性路由作降级。
+        _curr_model_id = self.config.get("model", "")
+        _model_has_tools = False
+        if _HAS_MODEL_CAP:
+            try:
+                _mc = get_model_capability(_curr_model_id)
+                _model_has_tools = bool(_mc.tool_calls and _mc.context_window >= 8192)
+            except Exception:
+                pass
+
+        deterministic: dict = {"success": False}
+        if not _model_has_tools:
+            # Deterministic path: only for models that can't reliably do function calling
+            deterministic = _try_handle_market_snapshot_analysis(
+                message, history=self.conversation[:-1])
         if not deterministic.get("success"):
             deterministic = _try_handle_stock_chart_analysis(message)
         if deterministic.get("success") or _is_stock_chart_analysis_request(message):
@@ -15415,7 +15630,18 @@ class ArtheraTerminal:
         if _file_inject:
             prompt = _file_inject + prompt
 
-        deterministic = _try_handle_market_snapshot_analysis(prompt)
+        _curr_model_id_p = self.config.get("model", "")
+        _model_has_tools_p = False
+        if _HAS_MODEL_CAP:
+            try:
+                _mc_p = get_model_capability(_curr_model_id_p)
+                _model_has_tools_p = bool(_mc_p.tool_calls and _mc_p.context_window >= 8192)
+            except Exception:
+                pass
+
+        deterministic: dict = {"success": False}
+        if not _model_has_tools_p:
+            deterministic = _try_handle_market_snapshot_analysis(prompt)
         if not deterministic.get("success"):
             deterministic = _try_handle_stock_chart_analysis(prompt)
         if deterministic.get("success") or _is_stock_chart_analysis_request(prompt):
