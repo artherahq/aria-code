@@ -863,6 +863,37 @@ MODEL_ALIASES = {
     "aria-prelude:1.5b":       "qwen-fast",
 }
 
+# ── 模型降级优先级（单一事实源：预检 / 运行时 fallback 共用）────────────────
+# NOTE: 不用字母排序 — "deepseek-v3.1:671b-cloud" 字母排最前但需要付费
+# Ollama 订阅且时常超时；"gpt-oss:120b-cloud" 中继更可靠。
+_MODEL_FALLBACK_PREFIXES = [
+    "gpt-oss",           # cloud relay, reliable (~1 s)
+    "qwen2.5-coder:7b",  # local, coding capable
+    "qwen2.5:7b",        # local, general capable
+    "qwen2.5-coder:3b",  # local, small coding
+    "qwen2.5:3b",        # local, small general
+    "llama3.2:3b",       # local fallback
+    "mistral",           # local fallback
+    "deepseek-v3.1",     # last resort (requires subscription)
+]
+
+
+def _pick_best_installed_model(installed, preferred: str = ""):
+    """从已安装模型中选出实际将使用的模型（预检与运行时共用此逻辑）。
+
+    优先精确匹配 preferred；否则按 _MODEL_FALLBACK_PREFIXES 能力顺序；
+    全部未命中才退化到字母排序第一个。installed 为空返回 None。
+    """
+    if not installed:
+        return None
+    if preferred and preferred in installed:
+        return preferred
+    for pref in _MODEL_FALLBACK_PREFIXES:
+        cand = next((m for m in sorted(installed) if m.startswith(pref)), None)
+        if cand:
+            return cand
+    return sorted(installed)[0]
+
 
 def detect_ollama_models(ollama_url: str = "http://localhost:11434") -> list:
     """Query Ollama /api/tags and return list of available model names.
@@ -13980,8 +14011,11 @@ class ArtheraTerminal:
         self.last_plan_results: List[dict] = []
         self.cancel_event: Optional[asyncio.Event] = None
         self._streaming = False
-        self._last_provider = "aws"  # Track last successful provider
+        self._last_provider = ""   # last successful provider ("" = no message sent yet)
         self._actual_model: Optional[str] = None  # actual Ollama model in use (may differ from config)
+        self._ollama_alive = False                # set by print_header / health check
+        self._installed_models: set = set()       # installed Ollama models (from header detection)
+        self._auto_healed_from: Optional[str] = None  # original model if auto-paired at startup
 
         # ── Session-level telemetry (like Claude Code's /cost) ──────────
         import time as _time_mod
@@ -14047,6 +14081,32 @@ class ArtheraTerminal:
     def print_header(self):
         # Resolve current model info
         current_id  = self.config.get("model", "qwen2.5:7b")
+
+        # ── 模型自动配对（现实优先）─────────────────────────────────────────
+        # 检测本机已安装的 Ollama 模型；若配置模型未安装，自动配对到最优
+        # 可用模型并持久化配置（与运行时 fallback 共用同一选择逻辑）。
+        self._auto_healed_from: Optional[str] = None   # 原配置模型（仅本次显示用）
+        self._ollama_alive = False
+        self._installed_models: set = set()
+        try:
+            _rm, _ = detect_ollama_models_rich(
+                self.config.get("ollama_url", "http://localhost:11434"))
+            self._installed_models = {_x["name"] for _x in _rm}
+            self._ollama_alive = bool(self._installed_models)
+        except Exception:
+            pass
+        if self._installed_models and current_id not in self._installed_models:
+            _resolved = _pick_best_installed_model(self._installed_models, current_id)
+            if _resolved:
+                self._auto_healed_from = current_id
+                current_id = _resolved
+                self.config["model"] = _resolved
+                self._actual_model = None   # config now matches reality
+                try:
+                    save_config(self.config)
+                except Exception:
+                    pass
+
         current_key = next((k for k, v in MODELS.items() if v["id"] == current_id), None)
         _default_m  = MODELS.get("qwen7b") or MODELS.get("qwen-fast") or next(iter(MODELS.values()))
         m = MODELS.get(current_key, _default_m) if current_key else _default_m
@@ -14085,49 +14145,41 @@ class ArtheraTerminal:
             t1.append(" v3.0", style="dim")
             console.print(t1)
 
-            # Model line — show configured model; warn early if not installed
+            # Model line — 现实优先：显示实际将使用的模型
             _badge = m.get("badge", "")
-            _model_id_display = current_id
-            if _badge == "Fast":
-                console.print(f"  [dim]{m['name']} {m['version']} · {m['tag']}[/dim]  [yellow]⚡lite[/yellow]")
-            elif _badge == "Cloud":
-                console.print(f"  [dim]{m['name']} {m['version']} · {m['tag']}[/dim]  [cyan]☁ cloud[/cyan]")
+            if current_key:
+                _model_label = f"{m['name']} {m['version']} · {m['tag']}"
             else:
-                console.print(f"  [dim]{m['name']} {m['version']} · {m['tag']}[/dim]")
-            # Pre-flight: warn immediately if the configured Ollama model is not installed
-            try:
-                _rm2, _ = detect_ollama_models_rich(
-                    self.config.get("ollama_url", "http://localhost:11434"))
-                _installed2 = {_x["name"] for _x in _rm2}
-                if _installed2 and current_id not in _installed2:
-                    # Find best available fallback name
-                    _best_avail = sorted(_installed2)[0]
-                    console.print(
-                        f"  [yellow]⚠ 模型 {current_id} 未安装 → "
-                        f"将使用 {_best_avail}[/yellow]  "
-                        f"[dim]安装: ollama pull {current_id}[/dim]"
-                    )
-            except Exception:
-                pass
+                _model_label = current_id   # 不在注册表内的模型直接显示原始 ID
+            if _badge == "Fast":
+                console.print(f"  [dim]{_model_label}[/dim]  [yellow]⚡lite[/yellow]")
+            elif _badge == "Cloud":
+                console.print(f"  [dim]{_model_label}[/dim]  [cyan]☁ cloud[/cyan]")
+            else:
+                console.print(f"  [dim]{_model_label}[/dim]")
+            # 自动配对附注（仅当本次启动发生了配对时显示，两行避免折行混乱）
+            if self._auto_healed_from:
+                console.print(
+                    f"  [dim]⚙ 已自动配对：[/dim][yellow]{self._auto_healed_from}[/yellow]"
+                    f"[dim] 未安装 → 配置已更新为 [/dim][bold]{current_id}[/bold]"
+                )
+                console.print(
+                    f"  [dim]  恢复原模型: ollama pull {self._auto_healed_from}"
+                    f" && /model {self._auto_healed_from}[/dim]"
+                )
             console.print(f"  [dim]{cwd}[/dim]")
             if wl_str:
                 console.print(f"  [dim]{wl_str}[/dim]")
             console.print(f"  [dim]{tool_count} tools · {skill_count} skills · /help[/dim]")
 
             # ── Recommend better model if only the tiny 1.5B is installed ─
-            if _badge == "Fast":
-                try:
-                    _rm, _ = detect_ollama_models_rich(
-                        self.config.get("ollama_url", "http://localhost:11434"))
-                    _installed = {_x["name"] for _x in _rm}
-                    _best_id = (MODELS.get("qwen7b") or {}).get("id", "qwen2.5:7b")
-                    if _best_id not in _installed:
-                        console.print(
-                            f"  [yellow]⚡ Tip:[/yellow] [dim]Running lite model. "
-                            f"For best results: [bold]ollama pull {_best_id}[/bold][/dim]"
-                        )
-                except Exception:
-                    pass
+            if _badge == "Fast" and self._installed_models:
+                _best_id = (MODELS.get("qwen7b") or {}).get("id", "qwen2.5:7b")
+                if _best_id not in self._installed_models:
+                    console.print(
+                        f"  [yellow]⚡ Tip:[/yellow] [dim]Running lite model. "
+                        f"For best results: [bold]ollama pull {_best_id}[/bold][/dim]"
+                    )
 
             # Thin separator
             try:
@@ -14196,6 +14248,9 @@ class ArtheraTerminal:
             provider_label = "Cloud"
         elif _model_badge == "Cloud" or "cloud" in current_id.lower():
             provider_label = "Cloud"
+        elif not _lp:
+            # 尚未发送消息 — 根据实际环境推断而非硬编码
+            provider_label = "Local" if getattr(self, "_ollama_alive", False) else "—"
         else:
             provider_label = "AWS"
         return f"{model_name} · {thinking} · {provider_label}"
@@ -14649,34 +14704,10 @@ class ArtheraTerminal:
                             pass
 
                     # 优先使用用户选定的模型；若未安装则按能力顺序降级
-                    # NOTE: 不用字母排序 — "deepseek-v3.1:671b-cloud" 字母排最前但
-                    # 需要付费 Ollama 订阅，实际不可用；"gpt-oss:120b-cloud" 更可靠。
-                    _FALLBACK_PREFIXES = [
-                        "gpt-oss",           # cloud relay, reliable (~1 s)
-                        "qwen2.5-coder:7b",  # local, coding capable
-                        "qwen2.5:7b",        # local, general capable
-                        "qwen2.5-coder:3b",  # local, small coding
-                        "qwen2.5:3b",        # local, small general
-                        "llama3.2:3b",       # local fallback
-                        "mistral",           # local fallback
-                        "deepseek-v3.1",     # last resort (requires subscription)
-                    ]
+                    # （选择逻辑与启动预检共用 _pick_best_installed_model）
                     _ollama_model = None
                     if _ollama_up:
-                        if model in _ollama_models:
-                            _ollama_model = model          # 精确匹配 ✓
-                        elif _ollama_models:
-                            # 按能力顺序选第一个可用模型
-                            for _pref in _FALLBACK_PREFIXES:
-                                _cand = next(
-                                    (m for m in _ollama_models if m.startswith(_pref)), None
-                                )
-                                if _cand:
-                                    _ollama_model = _cand
-                                    break
-                            if not _ollama_model:
-                                # 所有偏好都没有，才退化到字母排序第一个
-                                _ollama_model = sorted(_ollama_models)[0]
+                        _ollama_model = _pick_best_installed_model(_ollama_models, model)
 
                     if _ollama_model:
                         _switched = _ollama_model != model
@@ -15141,7 +15172,13 @@ class ArtheraTerminal:
                         timeout=_aio.ClientTimeout(total=2),
                     ) as r:
                         if r.status == 200:
-                            parts.append("[green]● Ollama[/green]")
+                            _tags = await r.json()
+                            _n = len(_tags.get("models", []))
+                            self._ollama_alive = True
+                            parts.append(
+                                f"[green]● Ollama[/green][dim] · {_n} models[/dim]"
+                                if _n else "[green]● Ollama[/green]"
+                            )
                         else:
                             parts.append("[dim]○ Ollama[/dim]")
             except Exception:
