@@ -1,0 +1,49 @@
+# ~/.aria/datasources.yaml — Market data source configuration for Aria Code
+#
+# Copy this file to ~/.aria/datasources.yaml and configure your preferred sources.
+# Aria Code reads this file via datasources/router.py.
+#
+# Each market has an ordered list of data sources; the first successful one wins.
+#
+# Available sources:
+#   yfinance  — US stocks, ETFs, crypto, HK. No key required.
+#   akshare   — A-shares (best free option). No key required.
+#   tushare   — A-shares with richer financials. Requires free token registration.
+#               Register at: https://tushare.pro/register
+#
+# Quick setup:
+#   aria-code /apikey set tushare your-tushare-token
+
+datasources:
+  # ── A股 / China equities ─────────────────────────────────────────────────
+  a_share:
+    - akshare    # free, no auth — quotes, history, fundamentals, news
+    # - tushare  # richer data (daily limit on free tier); add token below
+
+  # ── US equities, ETFs ────────────────────────────────────────────────────
+  us:
+    - yfinance   # free, no auth — covers NYSE, NASDAQ, AMEX, S&P constituents
+
+  # ── HK equities ──────────────────────────────────────────────────────────
+  hk:
+    - yfinance   # suffix: 0700.HK style works
+
+  # ── Cryptocurrency ────────────────────────────────────────────────────────
+  crypto:
+    - yfinance   # BTC-USD, ETH-USD etc. via Yahoo Finance
+
+# ── API key storage (alternative to /apikey command) ─────────────────────────
+# Prefer using: aria-code /apikey set tushare <token>
+# credentials:
+#   tushare:
+#     token: "your-tushare-token"
+#   finnhub:
+#     api_key: "your-finnhub-key"
+#   alpha_vantage:
+#     api_key: "your-av-key"
+
+# ── Cache settings ────────────────────────────────────────────────────────────
+cache:
+  quote_ttl:   30     # seconds — live quotes
+  history_ttl: 300    # seconds — OHLCV bars
+  fund_ttl:    3600   # seconds — fundamentals / company info

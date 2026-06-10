@@ -1,0 +1,382 @@
+"""
+model_capability.py — Aria Code model capability registry & tool-call adapter.
+
+Responsibilities:
+  - Know which local models support native tool calling vs text-based <tool_call>
+  - Normalise tool call output across Ollama-native / XML-tag / JSON-fenced formats
+  - Inject the correct tool schema format into the Ollama payload
+  - Detect capability dynamically when a model is not in the registry
+
+Usage::
+
+    from model_capability import get_model_capability, build_ollama_tool_payload
+
+    caps = get_model_capability("qwen2.5-coder:7b")
+    # {"tool_calls": True, "format": "ollama_native", "context_window": 32768, ...}
+
+    calls = parse_tool_calls_from_response(full_text, native_tool_calls)
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Tuple
+
+# ---------------------------------------------------------------------------
+# Capability catalogue
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ModelCapability:
+    # Whether the model reliably produces structured tool calls
+    tool_calls: bool = False
+    # "ollama_native"  → Ollama's message.tool_calls list
+    # "xml_tags"       → <tool_call>{"name":…,"arguments":{…}}</tool_call>
+    # "json_fence"     → ```json\n{"tool":…,"arguments":{…}}\n```
+    # "text_only"      → no tool calling; prompt must ask for plain-text answers
+    # "router_only"    → model is only suitable for intent classification / routing;
+    #                    MUST NOT handle coding, analysis, or multi-step tasks
+    format: str = "text_only"
+    context_window: int = 8192
+    thinking: bool = False          # extended-reasoning / <think> tokens
+    finance_tuned: bool = False     # model has finance-domain fine-tuning
+    # Recommended sampling params
+    temperature: float = 0.3
+    top_p: float = 0.9
+    # Maximum simultaneous tool calls per round (safety limit)
+    max_parallel_tools: int = 1
+    # Minimum model size class: "nano" <1B / "small" 1-4B / "medium" 4-14B / "large" >14B
+    size_class: str = "medium"
+    # Extra notes shown in /models list
+    notes: str = ""
+
+
+def is_router_only(cap: "ModelCapability") -> bool:
+    """Return True if this model must NOT handle complex tasks (coding/analysis)."""
+    return cap.format == "router_only"
+
+
+def can_handle_coding(cap: "ModelCapability") -> bool:
+    """Return True if the model is large/capable enough for code generation tasks."""
+    return (
+        cap.format in ("ollama_native", "xml_tags")
+        and cap.context_window >= 8192
+        and cap.size_class not in ("nano",)
+    )
+
+
+def can_handle_analysis(cap: "ModelCapability") -> bool:
+    """Return True if the model can handle multi-step financial analysis."""
+    return (
+        cap.format not in ("router_only",)
+        and cap.context_window >= 4096
+        and cap.size_class not in ("nano",)
+    )
+
+
+# Prefix → capability mapping.  Longest prefix wins.
+_CAPABILITY_TABLE: Dict[str, ModelCapability] = {
+    # ── Qwen family ────────────────────────────────────────────────────────
+    "qwen2.5-coder:32b":    ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.2, size_class="large",  notes="Best local code+finance model"),
+    "qwen2.5-coder:14b":    ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.2, size_class="large"),
+    "qwen2.5-coder:7b":     ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.2, size_class="medium"),
+    "qwen2.5-coder:3b":     ModelCapability(tool_calls=True,  format="ollama_native", context_window=32768,  temperature=0.3, size_class="small"),
+    # 1.5B — too small for reliable tool calls; use text_only to prevent JSON hallucination
+    "qwen2.5-coder:1.5b":  ModelCapability(tool_calls=False, format="text_only",     context_window=8192,   temperature=0.4, size_class="small", notes="1.5B — no tools; simple Q&A only"),
+    # 0.5B — nano class; only suitable for routing/classification, never complex tasks
+    "qwen2.5-coder:0.5b":  ModelCapability(tool_calls=False, format="router_only",   context_window=4096,   temperature=0.5, size_class="nano",  notes="0.5B nano — routing/intent only"),
+    "qwen2.5-coder":        ModelCapability(tool_calls=True,  format="ollama_native", context_window=32768,  temperature=0.2, size_class="medium"),
+    "qwen2.5:72b":          ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.2, notes="Strongest Qwen general model"),
+    "qwen2.5:32b":          ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.2),
+    "qwen2.5:14b":          ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.2),
+    "qwen2.5:7b":           ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.3),
+    "qwen2.5":              ModelCapability(tool_calls=True,  format="ollama_native", context_window=32768,  temperature=0.3),
+    "qwen3":                ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.3, thinking=True),
+    "qwq":                  ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.3, thinking=True, notes="Math/reasoning focused"),
+    # ── DeepSeek family ────────────────────────────────────────────────────
+    "deepseek-r1:671b":     ModelCapability(tool_calls=False, format="xml_tags",      context_window=131072, temperature=0.3, thinking=True, notes="State-of-the-art reasoning"),
+    "deepseek-r1:70b":      ModelCapability(tool_calls=False, format="xml_tags",      context_window=131072, temperature=0.3, thinking=True),
+    "deepseek-r1:32b":      ModelCapability(tool_calls=False, format="xml_tags",      context_window=32768,  temperature=0.3, thinking=True),
+    "deepseek-r1:14b":      ModelCapability(tool_calls=False, format="xml_tags",      context_window=32768,  temperature=0.3, thinking=True),
+    "deepseek-r1:8b":       ModelCapability(tool_calls=False, format="xml_tags",      context_window=32768,  temperature=0.3, thinking=True),
+    "deepseek-r1:7b":       ModelCapability(tool_calls=False, format="xml_tags",      context_window=32768,  temperature=0.3, thinking=True),
+    "deepseek-r1":          ModelCapability(tool_calls=False, format="xml_tags",      context_window=32768,  temperature=0.3, thinking=True),
+    "deepseek-v3.1":        ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.3, notes="DeepSeek V3.1 671B"),
+    "deepseek-v3":          ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.3),
+    "deepseek-v2.5":        ModelCapability(tool_calls=True,  format="ollama_native", context_window=65536,  temperature=0.3),
+    "deepseek-coder-v2":    ModelCapability(tool_calls=True,  format="ollama_native", context_window=65536,  temperature=0.2),
+    # ── LLaMA family ───────────────────────────────────────────────────────
+    "llama3.3:70b":         ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.3, notes="Meta flagship 2024"),
+    "llama3.2:90b":         ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.3),
+    "llama3.2:11b":         ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.3),
+    "llama3.2:3b":          ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.3),
+    "llama3.2":             ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.3),
+    "llama3.1:405b":        ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.3),
+    "llama3.1:70b":         ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.3),
+    "llama3.1:8b":          ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.3),
+    "llama3.1":             ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.3),
+    "llama3":               ModelCapability(tool_calls=False, format="text_only",     context_window=8192,   temperature=0.3),
+    # ── Mistral family ─────────────────────────────────────────────────────
+    "mistral-nemo":         ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.3),
+    "mistral-large":        ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.3),
+    "mistral-small":        ModelCapability(tool_calls=True,  format="ollama_native", context_window=32768,  temperature=0.3),
+    "mistral:7b":           ModelCapability(tool_calls=True,  format="ollama_native", context_window=32768,  temperature=0.3),
+    "mistral":              ModelCapability(tool_calls=True,  format="ollama_native", context_window=32768,  temperature=0.3),
+    "mixtral":              ModelCapability(tool_calls=True,  format="ollama_native", context_window=32768,  temperature=0.3),
+    # ── Phi family ─────────────────────────────────────────────────────────
+    "phi4:14b":             ModelCapability(tool_calls=True,  format="ollama_native", context_window=16384,  temperature=0.3, notes="Microsoft Phi4, compact+capable"),
+    "phi4":                 ModelCapability(tool_calls=True,  format="ollama_native", context_window=16384,  temperature=0.3),
+    "phi3.5":               ModelCapability(tool_calls=True,  format="ollama_native", context_window=16384,  temperature=0.3),
+    "phi3":                 ModelCapability(tool_calls=False, format="text_only",     context_window=8192,   temperature=0.3),
+    # ── Google Gemma ───────────────────────────────────────────────────────
+    "gemma3:27b":           ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.3),
+    "gemma3:12b":           ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.3),
+    "gemma3:4b":            ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.3),
+    "gemma3":               ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.3),
+    "gemma2":               ModelCapability(tool_calls=False, format="text_only",     context_window=8192,   temperature=0.3),
+    # ── Finance-specific ───────────────────────────────────────────────────
+    "finma":                ModelCapability(tool_calls=False, format="text_only",     context_window=4096,   temperature=0.3, finance_tuned=True),
+    "fingpt":               ModelCapability(tool_calls=False, format="text_only",     context_window=4096,   temperature=0.3, finance_tuned=True),
+    "bloomberggpt":         ModelCapability(tool_calls=False, format="text_only",     context_window=2048,   temperature=0.2, finance_tuned=True),
+    # ── Aria own models ────────────────────────────────────────────────────
+    # aria-sonata-3b: primary local production model — 3B, good for finance Q&A + tool calls
+    "aria-sonata-3b":            ModelCapability(tool_calls=False, format="xml_tags", context_window=16384, temperature=0.3, size_class="small", finance_tuned=True, notes="3B local production model"),
+    # aria-sonata 1.x/0.5B series — GGUF Ollama models; xml_tags for text-based tool parsing
+    "aria-sonata:4.5-thinking":  ModelCapability(tool_calls=False, format="xml_tags", context_window=8192,  temperature=0.3, size_class="small", thinking=True,  finance_tuned=True),
+    "aria-sonata:4.5-verbose":   ModelCapability(tool_calls=False, format="xml_tags", context_window=8192,  temperature=0.3, size_class="small",                finance_tuned=True),
+    "aria-sonata:4.6-thinking":  ModelCapability(tool_calls=False, format="xml_tags", context_window=8192,  temperature=0.3, size_class="small", thinking=True,  finance_tuned=True),
+    "aria-sonata":               ModelCapability(tool_calls=False, format="xml_tags", context_window=8192,  temperature=0.3, size_class="small",                finance_tuned=True),
+    # aria-prelude: nano router model — ONLY for intent classification and routing
+    "aria-prelude":              ModelCapability(tool_calls=False, format="router_only", context_window=4096, temperature=0.2, size_class="nano", finance_tuned=True, notes="Nano router — intent classification only"),
+    # ── Arthera cloud-routed models (large, run via cloud API) ────────────
+    "gpt-oss:120b":             ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.3, notes="GPT-OSS 120B cloud"),
+    "gpt-oss":                  ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.3, notes="GPT-OSS cloud"),
+    "deepseek-v3.1:671b-cloud": ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.3, notes="DeepSeek V3.1 671B cloud"),
+}
+
+# Default fallback when model is unknown
+_DEFAULT_CAPABILITY = ModelCapability(
+    tool_calls=False, format="text_only", context_window=4096, temperature=0.5,
+    notes="Unknown model — conservative settings applied",
+)
+
+
+def get_model_capability(model_name: str) -> ModelCapability:
+    """
+    Return capability for *model_name* using longest-prefix matching.
+
+    Examples::
+
+        get_model_capability("qwen2.5-coder:7b-instruct-q4_K_M")
+        # → same as "qwen2.5-coder:7b" entry
+    """
+    name = (model_name or "").strip().lower()
+    # Strip GGUF quantisation suffixes like :q4_k_m, :f16, etc.
+    clean = re.sub(r":[qfQ][0-9].*$", "", name)
+    # Also strip common instruct/chat/gguf tags appended after the size
+    clean = re.sub(r"-(instruct|chat|gguf|base|it)$", "", clean)
+
+    best_prefix = ""
+    best_cap = _DEFAULT_CAPABILITY
+    for prefix, cap in _CAPABILITY_TABLE.items():
+        if clean.startswith(prefix.lower()) and len(prefix) > len(best_prefix):
+            best_prefix = prefix
+            best_cap = cap
+
+    return best_cap
+
+
+# ---------------------------------------------------------------------------
+# Tool schema injection helpers
+# ---------------------------------------------------------------------------
+
+def build_ollama_tool_payload(
+    tools_schema: List[Dict],
+    model_name: str,
+) -> Optional[List[Dict]]:
+    """
+    Return the `tools` field for an Ollama /api/chat request, or None when the
+    model does not support native tool calling.
+
+    When format == "ollama_native" the schema is passed as-is.
+    When format == "xml_tags" we skip the field and rely on prompt injection.
+    """
+    cap = get_model_capability(model_name)
+    if not cap.tool_calls or cap.format != "ollama_native":
+        return None
+    return tools_schema
+
+
+def build_tool_system_prompt(
+    tools_schema: List[Dict],
+    model_name: str,
+) -> str:
+    """
+    For models that do NOT support native tool calls (xml_tags / text_only),
+    return a system-prompt block that instructs the model to emit
+    ``<tool_call>{"name":…,"arguments":{…}}</tool_call>`` tags.
+    """
+    cap = get_model_capability(model_name)
+    if cap.tool_calls and cap.format == "ollama_native":
+        return ""  # handled by native API
+
+    tool_list = []
+    for t in tools_schema:
+        fn = t.get("function", t)
+        params = fn.get("parameters", {}).get("properties", {})
+        required = fn.get("parameters", {}).get("required", [])
+        param_str = ", ".join(
+            f"{k}: {v.get('type','any')}{'*' if k in required else ''}"
+            for k, v in params.items()
+        )
+        tool_list.append(f"  - {fn['name']}({param_str}): {fn.get('description','')}")
+
+    tools_block = "\n".join(tool_list)
+    return (
+        "\n\n## Available Tools\n\n"
+        "When you need to call a tool, output EXACTLY this format (nothing else on the line):\n\n"
+        '<tool_call>{"name": "tool_name", "arguments": {"param": "value"}}</tool_call>\n\n'
+        "Tools available:\n"
+        f"{tools_block}\n\n"
+        "Rules:\n"
+        "1. Call ONE tool at a time. Wait for the result before calling the next.\n"
+        "2. After receiving a tool result, continue your analysis or call another tool.\n"
+        "3. When done with all tools, write your final answer in plain text.\n"
+        "4. Never make up tool results — always call the tool.\n"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Tool call parsers
+# ---------------------------------------------------------------------------
+
+def parse_tool_calls_from_response(
+    text: str,
+    native_calls: Optional[List[Dict]] = None,
+    model_name: str = "",
+) -> List[Dict[str, Any]]:
+    """
+    Unified parser.  Returns list of {"tool": str, "params": dict}.
+
+    Priority:
+      1. native_calls (Ollama tool_calls list) — most reliable
+      2. XML tags  <tool_call>…</tool_call>
+      3. JSON code fences  ```json … ```
+      4. Raw JSON object containing "name"/"arguments" keys
+    """
+    # 1. Native Ollama tool calls
+    if native_calls:
+        result = []
+        for tc in native_calls:
+            fn = tc.get("function", tc)
+            name = fn.get("name", "")
+            args = fn.get("arguments", {})
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args)
+                except json.JSONDecodeError:
+                    args = {}
+            if name:
+                result.append({"tool": name, "params": args})
+        if result:
+            return result
+
+    if not text:
+        return []
+
+    results: List[Dict[str, Any]] = []
+
+    # 2. XML tag format: <tool_call>…</tool_call>
+    xml_pattern = re.compile(
+        r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL | re.IGNORECASE
+    )
+    for m in xml_pattern.finditer(text):
+        tc = _try_parse_json(m.group(1))
+        if tc:
+            results.append(_normalise_call(tc))
+
+    if results:
+        return results
+
+    # 3. JSON fence: ```json … ``` or ``` … ```
+    fence_pattern = re.compile(
+        r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL | re.IGNORECASE
+    )
+    for m in fence_pattern.finditer(text):
+        tc = _try_parse_json(m.group(1))
+        if tc and ("name" in tc or "tool" in tc):
+            results.append(_normalise_call(tc))
+
+    if results:
+        return results
+
+    # 4. Bare JSON object anywhere in text
+    json_pattern = re.compile(r"\{[^{}]*\"(?:name|tool)\"[^{}]*\}", re.DOTALL)
+    for m in json_pattern.finditer(text):
+        tc = _try_parse_json(m.group(0))
+        if tc and ("name" in tc or "tool" in tc):
+            results.append(_normalise_call(tc))
+
+    return results
+
+
+def _try_parse_json(s: str) -> Optional[Dict]:
+    try:
+        return json.loads(s.strip())
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
+def _normalise_call(tc: Dict) -> Dict[str, Any]:
+    """Normalise various key naming conventions → {"tool": …, "params": …}."""
+    name = tc.get("name") or tc.get("tool") or tc.get("function", {}).get("name", "")
+    args = (
+        tc.get("arguments")
+        or tc.get("params")
+        or tc.get("parameters")
+        or tc.get("function", {}).get("arguments", {})
+        or {}
+    )
+    if isinstance(args, str):
+        args = _try_parse_json(args) or {}
+    return {"tool": name, "params": args}
+
+
+# ---------------------------------------------------------------------------
+# Recommended local models for finance work
+# ---------------------------------------------------------------------------
+
+RECOMMENDED_FINANCE_MODELS: List[Dict[str, str]] = [
+    {
+        "model":       "qwen2.5-coder:7b",
+        "reason":      "Best balance of tool calling + code generation for finance scripts",
+        "install":     "ollama pull qwen2.5-coder:7b",
+        "vram_gb":     "5",
+    },
+    {
+        "model":       "qwen2.5:14b",
+        "reason":      "Strong quantitative reasoning, multi-turn strategy analysis",
+        "install":     "ollama pull qwen2.5:14b",
+        "vram_gb":     "10",
+    },
+    {
+        "model":       "deepseek-r1:14b",
+        "reason":      "Deep reasoning for complex factor models (slow but thorough)",
+        "install":     "ollama pull deepseek-r1:14b",
+        "vram_gb":     "10",
+    },
+    {
+        "model":       "llama3.2:3b",
+        "reason":      "Ultra-fast for quick quotes and simple questions",
+        "install":     "ollama pull llama3.2:3b",
+        "vram_gb":     "2",
+    },
+    {
+        "model":       "phi4:14b",
+        "reason":      "Math-strong, good for Greeks / derivative pricing",
+        "install":     "ollama pull phi4",
+        "vram_gb":     "9",
+    },
+]

@@ -1,0 +1,40 @@
+{
+  "_comment": "MCP server configuration for Aria Code. Copy to ~/.arthera/mcp_servers.json",
+  "_docs": "https://modelcontextprotocol.io/docs/concepts/servers",
+
+  "servers": [
+    {
+      "name": "filesystem",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/Users/YOUR_NAME/projects"],
+      "_comment": "File system access — replace path with your project root",
+      "description": "Read/write local project files"
+    },
+    {
+      "name": "quant_engine",
+      "command": "python3",
+      "args": ["/path/to/Arthera/packages/quant_engine/mcp_server.py"],
+      "env": {
+        "PYTHONPATH": "/path/to/Arthera",
+        "FINNHUB_API_KEY": "${FINNHUB_API_KEY}"
+      },
+      "description": "Arthera quant engine — backtest, signals, portfolio tools"
+    },
+    {
+      "name": "web-search",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-brave-search"],
+      "env": {
+        "BRAVE_API_KEY": "${BRAVE_API_KEY}"
+      },
+      "description": "Brave web search for news and research"
+    },
+    {
+      "name": "memory",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory"],
+      "_comment": "Persistent memory across sessions",
+      "description": "Store and retrieve facts across conversations"
+    }
+  ]
+}

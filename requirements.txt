@@ -1,0 +1,40 @@
+# Aria Code CLI — core dependencies
+aiohttp>=3.9.0
+rich>=13.0.0
+prompt_toolkit>=3.0.0
+
+# ── Config parsing — used by providers/llm/registry.py and datasources/router.py
+PyYAML>=6.0
+
+# ── Local LLM & data (all optional — graceful fallback if missing) ─────────
+
+# US/Global market data
+yfinance>=0.2.40
+
+# A-share (China) market data — akshare is the primary source for A股
+# Covers: quotes, northbound flow, sector data, news, limit-up pool, fundamentals
+akshare>=1.14.0
+
+# A-share alternative (better historical data + financials; requires free token)
+# tushare>=1.2.89
+
+# Crypto market data
+ccxt>=4.3.0
+
+# Technical indicators (faster than manual pandas calculations)
+pandas_ta>=0.3.14b
+
+# Portfolio backtesting (optional — pandas fallback available without it)
+# vectorbt>=0.26.0
+
+# Scientific computing for risk metrics
+scipy>=1.12.0
+
+# ── Dependencies of the above ──────────────────────────────────────────────
+numpy>=1.24.0
+pandas>=2.0.0
+requests>=2.31.0
+
+# ── Dev / test ──────────────────────────────────────────────────────────────
+pytest>=8.0.0
+pytest-asyncio>=0.23.0

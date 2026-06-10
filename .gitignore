@@ -1,0 +1,68 @@
+# ── Secrets & credentials ─────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.env
+*.pem
+*.key
+*.p12
+*.pfx
+.certs/
+secrets/
+providers.json
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.venv/
+venv/
+env/
+ENV/
+pip-wheel-metadata/
+
+# ── pytest / coverage ─────────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+
+# ── mypy / ruff / black ───────────────────────────────────────────────────────
+.mypy_cache/
+.ruff_cache/
+
+# ── Runtime data ──────────────────────────────────────────────────────────────
+# Aria Code session state (stored in ~/.arthera/ by default)
+sessions/
+history
+*.session
+
+# ── OS ────────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# ── IDE ───────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# ── Build artifacts ───────────────────────────────────────────────────────────
+*.dmg
+*.pkg
+*.tar.gz
+*.zip
+
+# ── Backup files ──────────────────────────────────────────────────────────────
+*.bak
+*.orig

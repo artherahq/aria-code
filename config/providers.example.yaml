@@ -1,0 +1,52 @@
+# ~/.aria/providers.yaml — LLM provider configuration for Aria Code
+#
+# Copy this file to ~/.aria/providers.yaml and fill in your API keys.
+# Aria Code automatically reads this file at startup.
+#
+# Provider priority: Aria tries each entry in `fallback` order, using the
+# first one that responds successfully.
+#
+# Quick setup (one-liner):
+#   aria-code /apikey set deepseek sk-your-deepseek-key
+#   aria-code /apikey set openai  sk-your-openai-key
+#   aria-code /apikey set groq    gsk_your-groq-key
+
+llm:
+  # ── Default model for everyday chat ────────────────────────────────────────
+  # Spec format: "<provider>/<model>" or just "<provider>"
+  default: "ollama/qwen2.5:7b"
+
+  # ── Fallback chain (tried in order when default fails) ─────────────────────
+  fallback:
+    - "deepseek/deepseek-chat"          # fastest cloud option, very affordable
+    - "openai/gpt-4o-mini"              # reliable, good for English
+    - "anthropic/claude-3-5-haiku-latest"  # best reasoning quality
+    - "groq/llama-3.3-70b-versatile"    # fast free tier (rate-limited)
+    - "dashscope/qwen-plus"             # Chinese market specialist
+
+  # ── Task-specific overrides ─────────────────────────────────────────────────
+  code_tasks:     "ollama/qwen2.5-coder:7b"  # or "deepseek/deepseek-coder"
+  heavy_analysis: "anthropic/claude-3-5-sonnet-20241022"
+  quick_intent:   "ollama/aria-prelude"       # lightweight intent router
+
+  # ── Provider credentials (alternative to environment variables) ────────────
+  # Prefer setting env vars (DEEPSEEK_API_KEY etc.) over hardcoding here.
+  # credentials:
+  #   deepseek:
+  #     api_key: "sk-..."
+  #   openai:
+  #     api_key: "sk-..."
+  #   anthropic:
+  #     api_key: "sk-ant-..."
+  #   groq:
+  #     api_key: "gsk_..."
+  #   dashscope:
+  #     api_key: "sk-..."
+  #   ollama:
+  #     base_url: "http://localhost:11434"   # default; change if remote
+
+  # ── Generation defaults ─────────────────────────────────────────────────────
+  defaults:
+    temperature: 0.3
+    max_tokens:  4096
+    timeout:     120     # seconds
