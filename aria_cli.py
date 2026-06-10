@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# ruff: noqa: E501
 """
 Aria Code v3.0 — Claude Code 风格的量化投资终端 + 编程代理
 
@@ -24,6 +25,8 @@ Usage:
     python3 apps/cli/aria_cli.py backtest momentum SPY    # 策略回测
     python3 apps/cli/aria_cli.py -p "AAPL PE" --json     # JSON 输出
 """
+
+__version__ = "3.0.0"
 
 import sys
 import os
@@ -113,6 +116,9 @@ try:
     from rich.text import Text
     from rich.status import Status
     from rich.syntax import Syntax
+    from rich.panel import Panel
+    from rich.rule import Rule
+    from rich import box as rich_box
     HAS_RICH = True
 except ImportError:
     HAS_RICH = False
@@ -130,7 +136,10 @@ except ImportError:
 
 if HAS_RICH:
     console = Console(highlight=False)
+    # Syntax highlight theme — override via config "syntax_theme" key
+    _SYNTAX_THEME: str = "monokai"
 else:
+    _SYNTAX_THEME: str = "monokai"
     class _FallbackConsole:
         def print(self, *a, **kw): print(*[str(x) for x in a])
         def input(self, prompt=""): return input(prompt)
@@ -6147,10 +6156,11 @@ def _print_tool_call(tool_name: str, params: dict):
     """Print tool call header — Claude Code style with copper branding."""
     hint = _format_tool_params(tool_name, params)
     if HAS_RICH:
+        console.print(Rule(characters="·", style="dim"))
         if hint:
-            console.print(f"\n  [bold #C08050]{tool_name}[/bold #C08050] [dim]{hint}[/dim]", end="")
+            console.print(f"  [bold #C08050]{tool_name}[/bold #C08050] [dim]{hint}[/dim]")
         else:
-            console.print(f"\n  [bold #C08050]{tool_name}[/bold #C08050]", end="")
+            console.print(f"  [bold #C08050]{tool_name}[/bold #C08050]")
     else:
         if hint:
             print(f"\n  {tool_name} {hint}", end="", flush=True)
@@ -6236,12 +6246,18 @@ def _error_hint(error: str, context: str = "") -> str:
 
 
 def _print_error(msg: str, context: str = ""):
-    """Print error message with recovery hint."""
+    """Print error message with recovery hint — Panel style."""
     if HAS_RICH:
-        console.print(f"[red]{msg}[/red]")
         hint = _error_hint(msg, context)
+        body = f"[red]{msg}[/red]"
         if hint:
-            console.print(f"  [dim]{hint}[/dim]")
+            body += f"\n[dim]{hint}[/dim]"
+        console.print(Panel(
+            body,
+            border_style="red",
+            box=rich_box.ROUNDED,
+            padding=(0, 1),
+        ))
     else:
         print(msg)
 
@@ -6307,7 +6323,12 @@ def _print_tool_result(tool_name: str, result: dict, elapsed: float = 0, params:
             size_str = f"{size}B" if size < 1024 else f"{size//1024}KB"
             label = f"{path}  {lines} lines  {size_str}{time_suffix}"
             if HAS_RICH:
-                console.print(f" [dim]{label}[/dim]")
+                console.print(Panel(
+                    f"[green]✓[/green] [dim]{label}[/dim]",
+                    border_style="dim",
+                    box=rich_box.ROUNDED,
+                    padding=(0, 1),
+                ))
             else:
                 print(f" {label}")
         elif tool_name == "edit_file":
@@ -6336,14 +6357,22 @@ def _print_tool_result(tool_name: str, result: dict, elapsed: float = 0, params:
             returncode = data.get("returncode", 0)
             if HAS_RICH:
                 rc_color = "green" if returncode == 0 else "red"
-                console.print(f" [{rc_color}]exit {returncode}[/{rc_color}][dim]{time_suffix}[/dim]")
+                rc_icon  = "✓" if returncode == 0 else "✗"
+                lines_str = ""
                 if stdout:
                     out_lines = stdout.splitlines()
-                    show = out_lines[:6]
-                    for ol in show:
-                        console.print(f"    [dim]{ol[:120]}[/dim]")
+                    preview = "\n".join(
+                        f"[dim]{ol[:120]}[/dim]" for ol in out_lines[:6]
+                    )
                     if len(out_lines) > 6:
-                        console.print(f"    [dim]… (+{len(out_lines)-6} lines)[/dim]")
+                        preview += f"\n[dim]… (+{len(out_lines)-6} lines)[/dim]"
+                    lines_str = "\n" + preview
+                console.print(Panel(
+                    f"[{rc_color}]{rc_icon} exit {returncode}[/{rc_color}][dim]{time_suffix}[/dim]{lines_str}",
+                    border_style=rc_color,
+                    box=rich_box.ROUNDED,
+                    padding=(0, 1),
+                ))
             else:
                 print(f" exit {returncode}{time_suffix}")
         elif tool_name == "read_file":
@@ -6351,15 +6380,21 @@ def _print_tool_result(tool_name: str, result: dict, elapsed: float = 0, params:
             content = data.get("content", "")
             path = params.get("path", "")
             if HAS_RICH:
-                console.print(f" [dim]{lines} lines{time_suffix}[/dim]")
-                # Show first 3 lines as preview
+                preview_str = ""
                 if content:
                     preview_lines = content.splitlines()[:3]
-                    for pl in preview_lines:
-                        pl_short = pl[:100] + ("…" if len(pl) > 100 else "")
-                        console.print(f"    [dim]{pl_short}[/dim]")
+                    preview_str = "\n" + "\n".join(
+                        f"[dim]{pl[:100]}{'…' if len(pl) > 100 else ''}[/dim]"
+                        for pl in preview_lines
+                    )
                     if lines > 3:
-                        console.print(f"    [dim]… (+{lines-3} more lines)[/dim]")
+                        preview_str += f"\n[dim]… (+{lines-3} more lines)[/dim]"
+                console.print(Panel(
+                    f"[dim]{path}  {lines} lines{time_suffix}[/dim]{preview_str}",
+                    border_style="dim",
+                    box=rich_box.ROUNDED,
+                    padding=(0, 1),
+                ))
             else:
                 print(f" {lines} lines{time_suffix}")
         elif tool_name == "list_files":
@@ -7032,6 +7067,8 @@ class SlashCommands:
             "/ops-report":    (self.cmd_ops_report,    "运营汇报生成: /ops-report <project_id>"),
             "/exit-calc":     (self.cmd_exit_calc,     "退出清算草案: /exit-calc <project_id>"),
             "/load-fork":     (self.cmd_load_fork,    "Restore forked conversation: /load-fork <id>"),
+            # ── Vision / image input ──────────────────────────────────────────
+            "/vision":    (self.cmd_vision,    "Load image for visual analysis: /vision <path>"),
         }
         # Register skills as slash commands
         self.skill_map = {}
@@ -7167,6 +7204,21 @@ class SlashCommands:
                 console.print(f"  [dim]{cat}[/dim]")
                 for s in skills:
                     console.print(f"    [bold #C08050]{s['command']:20s}[/bold #C08050][dim]{s['description']}[/dim]")
+            console.print()
+
+            # Keyboard shortcuts
+            console.print("[bold]Keyboard Shortcuts[/bold]")
+            console.print()
+            shortcuts = [
+                ("ESC",        "Cancel current generation"),
+                ("Ctrl+D",     "Exit"),
+                ("Ctrl+C",     "Cancel / exit"),
+                ("↑  ↓",       "History navigation"),
+                ("Tab",        "Command autocomplete"),
+                ('"""',        "Enter multi-line input mode"),
+            ]
+            for key, desc in shortcuts:
+                console.print(f"  [bold #C08050]{key:14s}[/bold #C08050][dim]{desc}[/dim]")
             console.print()
 
             # Footer
@@ -8317,7 +8369,7 @@ class SlashCommands:
         out = (data.get("stdout", "") + ("\n" + data.get("stderr", "") if data.get("stderr") else "")).strip()
         if out:
             if HAS_RICH:
-                console.print(Syntax(out, "text", theme="monokai"))
+                console.print(Syntax(out, "text", theme=_SYNTAX_THEME))
             else:
                 print(out)
 
@@ -8365,7 +8417,7 @@ class SlashCommands:
                         from rich.pretty import pprint as _pp
                         _pp(parsed, expand_all=False)
                     except Exception:
-                        console.print(Syntax(out, "text", theme="monokai"))
+                        console.print(Syntax(out, "text", theme=_SYNTAX_THEME))
                 else:
                     print(out)
 
@@ -10773,7 +10825,7 @@ class SlashCommands:
                 raw = "\n".join(line.split("│ ", 1)[1] if "│ " in line else line
                                 for line in content.split("\n"))
                 console.print(f"\n[dim]{path} ({result['data']['lines']} lines)[/dim]")
-                console.print(Syntax(raw, lang, line_numbers=True, theme="monokai"))
+                console.print(Syntax(raw, lang, line_numbers=True, theme=_SYNTAX_THEME))
             else:
                 print(f"\n{result['data']['path']} ({result['data']['lines']} lines)")
                 print(content)
@@ -10959,7 +11011,7 @@ class SlashCommands:
                 return
             if data["stdout"]:
                 if HAS_RICH:
-                    console.print(Syntax(data["stdout"], "text", theme="monokai"))
+                    console.print(Syntax(data["stdout"], "text", theme=_SYNTAX_THEME))
                 else:
                     print(data["stdout"])
             if data["stderr"]:
@@ -10994,7 +11046,7 @@ class SlashCommands:
             preview = code[:500] + ("..." if len(code) > 500 else "")
             if HAS_RICH:
                 console.print(f"\n[dim]Found code block ({len(code.splitlines())} lines):[/dim]")
-                console.print(Syntax(preview, "python", theme="monokai"))
+                console.print(Syntax(preview, "python", theme=_SYNTAX_THEME))
             else:
                 print(f"\nFound code ({len(code.splitlines())} lines):")
                 print(preview)
@@ -13441,6 +13493,62 @@ class SlashCommands:
             else:
                 print(f"  News unavailable. Configure: /apikey set finnhub <key>")
 
+    # ---- Vision / image input command ----
+
+    def cmd_vision(self, args: str):
+        """Load an image for visual analysis in the next message: /vision <path>"""
+        from pathlib import Path as _Path
+        import base64 as _b64
+
+        path_str = args.strip().strip("\"'")
+        if not path_str:
+            msg = "Usage: /vision <image_path>  (e.g. /vision ~/Desktop/chart.png)"
+            console.print(f"[dim]{msg}[/dim]" if HAS_RICH else msg)
+            return
+
+        path = _Path(path_str).expanduser().resolve()
+        if not path.exists():
+            _print_error(f"File not found: {path}", "vision")
+            return
+
+        suffix = path.suffix.lstrip(".").lower()
+        mime_map = {
+            "png": "image/png",
+            "jpg": "image/jpeg",
+            "jpeg": "image/jpeg",
+            "gif": "image/gif",
+            "webp": "image/webp",
+        }
+        mime = mime_map.get(suffix)
+        if not mime:
+            _print_error(
+                f"Unsupported image type: .{suffix}",
+                "vision — supported: .png .jpg .jpeg .gif .webp",
+            )
+            return
+
+        try:
+            data = _b64.b64encode(path.read_bytes()).decode()
+        except OSError as e:
+            _print_error(f"Cannot read image: {e}", "vision")
+            return
+
+        self.terminal._pending_image = {
+            "type": "image_url",
+            "image_url": {"url": f"data:{mime};base64,{data}"},
+        }
+        size_kb = path.stat().st_size // 1024
+        if HAS_RICH:
+            console.print(Panel(
+                f"[green]✓[/green] [dim]{path.name}[/dim]  [dim]{size_kb} KB · {mime}[/dim]\n"
+                f"[dim]Image queued — ask your question now[/dim]",
+                border_style="dim",
+                box=rich_box.ROUNDED,
+                padding=(0, 1),
+            ))
+        else:
+            print(f"Image loaded: {path.name} ({size_kb} KB) — send your question now")
+
     # ---- Config command ----
 
     def cmd_config(self, args: str):
@@ -13535,9 +13643,14 @@ class SlashCommands:
             else:
                 console.print("[dim]Usage: /config set key=value[/dim]" if HAS_RICH
                               else "Usage: /config set key=value")
+        elif parts[0] == "reload":
+            fresh = load_config()
+            self.terminal.config.update(fresh)
+            msg = "Config reloaded from ~/.arthera/config.json"
+            console.print(f"[dim]{msg}[/dim]" if HAS_RICH else msg)
         else:
-            console.print("[dim]Usage: /config [show] | /config set key=value[/dim]" if HAS_RICH
-                          else "Usage: /config [show] | /config set key=value")
+            console.print("[dim]Usage: /config [show] | /config set key=value | /config reload[/dim]" if HAS_RICH
+                          else "Usage: /config [show] | /config set key=value | /config reload")
 
     # ---- Context command ----
 
@@ -13678,6 +13791,7 @@ class ArtheraTerminal:
         self._session_turns: int = 0           # number of exchange pairs
         self._last_response: str = ""          # last assistant message text (for /copy)
         self._forks: List[dict] = []           # forked conversation snapshots
+        self._pending_image: Optional[dict] = None  # pending vision content block
 
         # ── ariarc: project-level context injection ──────────────────────
         self.ariarc: Optional[Any] = None
@@ -13867,7 +13981,16 @@ class ArtheraTerminal:
             "ARIA_SESSION":  self.session_id,
             "ARIA_PROVIDER": self._last_provider,
         })
-        self.conversation.append({"role": "user", "content": message})
+        # Attach pending image block if /vision was used before this message
+        if self._pending_image is not None:
+            user_content = [
+                {"type": "text", "text": message},
+                self._pending_image,
+            ]
+            self._pending_image = None
+        else:
+            user_content = message
+        self.conversation.append({"role": "user", "content": user_content})
 
         deterministic = _try_handle_market_snapshot_analysis(message)
         if not deterministic.get("success"):
@@ -13918,6 +14041,7 @@ class ArtheraTerminal:
             thinking_shown = False
             thinking_start = None
             thinking_finished = False
+            thinking_preview_buf: list = []  # accumulate preview chars
             streamed_any = False
 
             if round_num == 0:
@@ -14048,6 +14172,12 @@ class ArtheraTerminal:
                         t_info += f" · {thinking_tokens:,} tokens"
                     if HAS_RICH:
                         console.print(f"  [dim]{t_info}[/dim]")
+                        # Optional thinking preview (config: "thinking_preview": true)
+                        if self.config.get("thinking_preview") and thinking_preview_buf:
+                            preview_text = "".join(thinking_preview_buf)[:280].strip()
+                            if len("".join(thinking_preview_buf)) > 280:
+                                preview_text += "…"
+                            console.print(f"  [dim italic]{preview_text}[/dim italic]")
                     else:
                         print(f"\r  {t_info}")
                 # ── Batch-render mode (Ollama) ────────────────────────────────
@@ -14157,6 +14287,9 @@ class ArtheraTerminal:
                         print("  (thinking...) ", end="", flush=True)
                     thinking_shown = True
                 thinking_tokens += 1
+                # Accumulate up to 300 chars for optional preview
+                if len("".join(thinking_preview_buf)) < 300:
+                    thinking_preview_buf.append(content)
 
             def on_tool_call(tool, params):
                 nonlocal thinking_shown, thinking_start, thinking_finished, thinking_tokens
@@ -14169,6 +14302,11 @@ class ArtheraTerminal:
                         t_info += f" · {thinking_tokens:,} tokens"
                     if HAS_RICH:
                         console.print(f"\r  [dim]{t_info}[/dim]")
+                        if self.config.get("thinking_preview") and thinking_preview_buf:
+                            preview_text = "".join(thinking_preview_buf)[:280].strip()
+                            if len("".join(thinking_preview_buf)) > 280:
+                                preview_text += "…"
+                            console.print(f"  [dim italic]{preview_text}[/dim italic]")
                     else:
                         print(f"\r  {t_info}")
                 _print_tool_call(tool, params if isinstance(params, dict) else {})
@@ -14643,7 +14781,9 @@ class ArtheraTerminal:
                 meta_parts.append(" ".join(tool_names))
 
             if HAS_RICH:
-                console.print(f"\n[dim]{' · '.join(meta_parts)}[/dim]\n")
+                copy_hint = "  [dim]/copy[/dim]" if self._last_response else ""
+                console.print(f"\n[dim]{' · '.join(meta_parts)}[/dim]{copy_hint}")
+                console.print(Rule(style="dim"))
             else:
                 print(f"\n{' · '.join(meta_parts)}\n")
 
@@ -14704,7 +14844,7 @@ class ArtheraTerminal:
         max_ctx = get_model_cfg(mkey).get("num_ctx", 16384)
         ctx_pct = min(100, int(est_tokens / max_ctx * 100))
         ctx_color = "#606060" if ctx_pct < 60 else ("#aa8800" if ctx_pct < 85 else "#cc4444")
-        ctx_str = f'<style fg="{ctx_color}">ctx {ctx_pct}%</style>' if conv else ""
+        ctx_str = f'<style fg="{ctx_color}">ctx {est_tokens:,} / {max_ctx:,}</style>' if conv else ""
         local_indicator = ' <style fg="#448844">⬡ local</style>' if self.config.get("local_mode") else ""
         return HTML(
             f'<style fg="#606060">'
@@ -14716,9 +14856,40 @@ class ArtheraTerminal:
             f'</style>'
         )
 
+    async def _startup_health_check(self):
+        """Async Ollama + cloud connectivity probe displayed after the header."""
+        if not HAS_RICH:
+            return
+        try:
+            import aiohttp as _aio
+            parts = []
+            ollama_url = self.config.get("ollama_url", "http://localhost:11434")
+            try:
+                async with _aio.ClientSession() as s:
+                    async with s.get(
+                        f"{ollama_url}/api/tags",
+                        timeout=_aio.ClientTimeout(total=2),
+                    ) as r:
+                        if r.status == 200:
+                            parts.append("[green]● Ollama[/green]")
+                        else:
+                            parts.append("[dim]○ Ollama[/dim]")
+            except Exception:
+                parts.append("[dim]○ Ollama[/dim]")
+
+            # Cloud provider check (only if API key is set)
+            if self.config.get("auth_token") or os.getenv("ANTHROPIC_API_KEY"):
+                parts.append("[cyan]● Cloud[/cyan]")
+
+            if parts:
+                console.print("  " + "  ".join(parts))
+        except ImportError:
+            pass
+
     async def run_interactive(self):
         """Run the interactive REPL loop."""
         self.print_header()
+        await self._startup_health_check()
 
         # ── Start MCP servers (non-blocking background task) ─────────────
         if _HAS_MCP and not self._mcp_started:
@@ -14988,6 +15159,7 @@ Examples:
         """
     )
 
+    parser.add_argument("--version", "-V", action="version", version=f"aria-code {__version__}")
     parser.add_argument("-p", "--prompt", help="Single prompt (non-interactive)")
     parser.add_argument("--model", help="AI model: sonata|prelude|sonata-thinking|prelude-thinking or full Ollama ID")
     parser.add_argument("--thinking", action="store_true", help="Enable thinking mode")
@@ -15007,6 +15179,10 @@ Examples:
     args = parser.parse_args()
 
     config = load_config()
+
+    # Apply syntax theme from config (P3)
+    global _SYNTAX_THEME
+    _SYNTAX_THEME = config.get("syntax_theme", "monokai")
 
     # Apply CLI overrides
     if args.model:
