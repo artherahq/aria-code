@@ -3599,6 +3599,9 @@ def _build_analysis_prompt_lite(user_message: str) -> str:
         "2. ⚠️ 如果没有注入任何行情数据：\n"
         "   - 直接说：'暂无实时行情数据，请用 /quote <代码> 命令获取最新价格后再分析。'\n"
         "   - 绝对不要编造任何价格、RSI、MACD 数值，不要输出含 N/A 或占位符的模板。\n"
+        "   - 🚫 同样禁止编造财务数据：收入、净利润、增速、市值、利润率等具体数字\n"
+        "     一律不准凭训练记忆给出——你的训练数据已过时，编造的数字会误导投资决策。\n"
+        "   - 🚫 禁止凭记忆写股票代码——容易张冠李戴（如把寒武纪688256写成603019）。\n"
         "   - 不要输出'当前价/N/A'或任何类似格式。\n"
         "3. 根据注入的技术指标给出明确判断：看多/看空/震荡，并说明依据（RSI区间、MACD方向）。\n"
         "4. 支撑位/阻力位必须使用注入数据中的具体价格数字，不要用'大约'或'X.XX'占位符。\n"
@@ -4197,6 +4200,25 @@ _COMPANY_TO_TICKER = {
     "苹果公司": "AAPL", "特斯拉公司": "TSLA",
     # HK / China stocks
     "腾讯": "0700.HK", "阿里": "BABA", "百度": "BIDU", "小米": "1810.HK",
+    # A股个股（裸6位代码，market_data_client 原生支持）
+    "贵州茅台": "600519", "茅台": "600519", "五粮液": "000858",
+    "宁德时代": "300750", "宁德": "300750", "比亚迪": "002594",
+    "寒武纪": "688256", "中芯国际": "688981", "海光信息": "688041",
+    "韦尔股份": "603501", "中科曙光": "603019", "澜起科技": "688008",
+    "科大讯飞": "002230", "海康威视": "002415", "东方财富": "300059",
+    "工业富联": "601138", "汇川技术": "300124", "阳光电源": "300274",
+    "招商银行": "600036", "平安银行": "000001", "中国平安": "601318",
+    "华泰证券": "601688", "中信证券": "600030", "兴业银行": "601166",
+    "工商银行": "601398", "建设银行": "601939", "中国银行": "601988",
+    "美的集团": "000333", "美的": "000333", "格力电器": "000651", "格力": "000651",
+    "海天味业": "603288", "伊利股份": "600887", "伊利": "600887",
+    "恒瑞医药": "600276", "迈瑞医疗": "300760", "爱尔眼科": "300015",
+    "复星医药": "600196", "药明康德": "603259", "片仔癀": "600436",
+    "中国神华": "601088", "紫金矿业": "601899", "赣锋锂业": "002460",
+    "长江电力": "600900", "中国石油": "601857", "中国石化": "600028",
+    "长城汽车": "601633", "上汽集团": "600104", "隆基绿能": "601012",
+    "京东方": "000725", "立讯精密": "002475", "歌尔股份": "002241",
+    "三一重工": "600031", "万华化学": "600309", "中国中免": "601888",
     # US indices & ETFs
     "纳斯达克100": "QQQ", "纳斯达克": "QQQ", "纳指": "QQQ",
     "标普500": "SPY", "标普": "SPY", "S&P500": "SPY",
@@ -4211,13 +4233,16 @@ _COMPANY_TO_TICKER = {
 }
 
 
-def _try_prefetch_market_data(message: str) -> str:
+def _try_prefetch_market_data(message: str, history: list = None) -> str:
     """
     Pre-fetch real market data and inject it into the system prompt so local
     models always answer with real numbers instead of hallucinating.
 
     For technical-analysis queries (support/resistance/RSI/MACD) also fetches
     technical indicators and computes key price levels from the data.
+
+    跟进问题支持：当前消息无标的但含市场关键词时，从会话历史继承最近标的
+    （如上一轮问"寒武纪趋势"，这一轮问"现在的股票和趋势呢"）。
 
     Returns "" if no market query detected or fetch fails.
     """
@@ -4255,6 +4280,10 @@ def _try_prefetch_market_data(message: str) -> str:
         m = _re_sym.search(r'\b([A-Z]{2,5}(?:\.(?:HK|SH|SZ))?)\b', message)
         if m:
             symbol = m.group(1)
+
+    # 4. 跟进问题：从会话历史继承最近提到的标的
+    if not symbol and history:
+        symbol = _extract_symbol_from_history(history) or None
 
     if not symbol:
         return ""
@@ -4471,9 +4500,14 @@ def _check_memory_trigger(text: str) -> Optional[str]:
 
 def _extract_market_symbol(message: str) -> str:
     """Extract a likely market symbol from Chinese company names or tickers."""
-    for cn, tick in _COMPANY_TO_TICKER.items():
+    # 最长名称优先（避免"美的"抢先匹配"美的集团"）
+    for cn, tick in sorted(_COMPANY_TO_TICKER.items(), key=lambda x: -len(x[0])):
         if cn in message:
             return tick
+    # A股裸6位代码（600519 / sh600519 / 688256.SH）
+    m = _re_sym.search(r'(?<!\d)(?:[sS][hHzZ])?([036]\d{5}|68\d{4})(?:\.(?:SH|SZ|SS))?(?!\d)', message)
+    if m:
+        return m.group(1)
     m = _re_sym.search(r'\b([A-Z]{1,5}(?:\.(?:HK|SH|SZ))?)\b', message)
     if m:
         return m.group(1)
@@ -4482,6 +4516,36 @@ def _extract_market_symbol(message: str) -> str:
     m = _re_sym.search(r'(?<![A-Za-z])([A-Z]{1,5}(?:\.(?:HK|SH|SZ))?)(?![A-Za-z])', message)
     if m:
         return m.group(1)
+    return ""
+
+
+def _extract_symbol_from_history(history: list, max_lookback: int = 8) -> str:
+    """从最近的会话历史中提取标的（跟进问题继承上下文，如"现在的股票和趋势呢"）。
+
+    倒序扫描最近 max_lookback 条消息，返回最先命中的标的代码。
+    user 消息优先于 assistant 消息（用户提到的标的意图最明确）。
+    """
+    if not history:
+        return ""
+    recent = history[-max_lookback:]
+    # 先扫 user 消息（倒序）
+    for msg in reversed(recent):
+        if msg.get("role") != "user":
+            continue
+        content = msg.get("content", "")
+        if isinstance(content, list):   # 多模态消息取 text 部分
+            content = " ".join(p.get("text", "") for p in content
+                               if isinstance(p, dict) and p.get("type") == "text")
+        sym = _extract_market_symbol(content)
+        if sym:
+            return sym
+    # 再扫 assistant 消息（倒序）
+    for msg in reversed(recent):
+        if msg.get("role") != "assistant":
+            continue
+        sym = _extract_market_symbol(str(msg.get("content", "")))
+        if sym:
+            return sym
     return ""
 
 
@@ -4494,28 +4558,37 @@ def _is_stock_chart_analysis_request(message: str) -> bool:
     return has_chart and has_analysis and has_stock
 
 
-def _is_market_snapshot_request(message: str) -> bool:
-    """Return True for simple quote / market snapshot analysis requests."""
+def _is_market_snapshot_request(message: str, history: list = None) -> bool:
+    """Return True for simple quote / market snapshot analysis requests.
+
+    跟进问题（"现在的股票和趋势呢"）：当前消息无标的时回溯会话历史继承。
+    """
     if _is_coding_request(message) or _is_stock_chart_analysis_request(message):
         return False
     low = message.lower()
     has_market_word = any(k in low for k in (
         "市场", "行情", "股价", "价格", "涨跌", "涨幅", "现价", "今天",
-        "现在", "最新", "分析", "走势", "market", "quote", "price",
+        "现在", "最新", "分析", "走势", "趋势", "market", "quote", "price",
     ))
-    return has_market_word and bool(_extract_market_symbol(message))
+    if not has_market_word:
+        return False
+    if _extract_market_symbol(message):
+        return True
+    return bool(history and _extract_symbol_from_history(history))
 
 
-def _try_handle_market_snapshot_analysis(message: str) -> dict:
+def _try_handle_market_snapshot_analysis(message: str, history: list = None) -> dict:
     """Deterministic path for simple market analysis.
 
     Local small models tend to mangle injected quote fields into fragments like
     "N/A/N/A/-1.24%".  For snapshot requests, format the data directly.
     """
-    if not _is_market_snapshot_request(message):
+    if not _is_market_snapshot_request(message, history):
         return {"success": False, "error": "not_market_snapshot"}
 
-    symbol = _extract_market_symbol(message) or "AAPL"
+    symbol = (_extract_market_symbol(message)
+              or (_extract_symbol_from_history(history) if history else "")
+              or "AAPL")
     if not _HAS_MDC:
         return {
             "success": True,
@@ -4641,7 +4714,11 @@ def _try_handle_market_snapshot_analysis(message: str) -> dict:
         try:
             import yfinance as _yf
             import numpy as _np
-            _hist = _yf.Ticker(symbol).history(period="6mo")
+            # A股裸6位代码需要 yfinance 后缀：6/68开头→.SS，其余→.SZ
+            _yf_sym = symbol
+            if symbol.isdigit() and len(symbol) == 6:
+                _yf_sym = symbol + (".SS" if symbol.startswith("6") else ".SZ")
+            _hist = _yf.Ticker(_yf_sym).history(period="6mo")
             if len(_hist) >= 20:
                 _close = _hist["Close"]
                 _vol   = _hist["Volume"]
@@ -5425,8 +5502,15 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
     #   1. system prompt 替换为"数据已预取"专用 prompt
     #   2. 数据同时注入到用户消息开头（本地模型对最近的 user message 最敏感）
     if _HAS_MDC and not _is_general:
-        _market_inject = _try_prefetch_market_data(message)
+        _market_inject = _try_prefetch_market_data(message, history)
         if _market_inject:
+            # 过程可见化：让用户看到实时数据已注入（类似工具调用展示）
+            _inj_m = _re_sym.search(r'## 📊 (\S+) 实时行情（来源：(\S+)）', _market_inject)
+            if _inj_m and HAS_RICH:
+                console.print(
+                    f"  [bold #C08050]market_data[/bold #C08050] "
+                    f"[dim]{_inj_m.group(1)} · 实时行情已注入 · {_inj_m.group(2)}[/dim]"
+                )
             # Replace system prompt with data-first prompt.
             # Use nano variant for 1-3B models (no template placeholders).
             _is_nano_model = _use_lite_prompt or _model_size in ("nano", "small")
@@ -14274,7 +14358,8 @@ class ArtheraTerminal:
             user_content = message
         self.conversation.append({"role": "user", "content": user_content})
 
-        deterministic = _try_handle_market_snapshot_analysis(message)
+        deterministic = _try_handle_market_snapshot_analysis(
+            message, history=self.conversation[:-1])  # 不含本条消息自身
         if not deterministic.get("success"):
             deterministic = _try_handle_stock_chart_analysis(message)
         if deterministic.get("success") or _is_stock_chart_analysis_request(message):
@@ -14375,7 +14460,9 @@ class ArtheraTerminal:
 
             def _start_spinner():
                 if HAS_RICH and _spinner[0] is None and not _first_token_received[0]:
-                    _spinner[0] = console.status("", spinner="dots", spinner_style="dim")
+                    _spinner[0] = console.status(
+                        "[dim]思考中… [/dim][dim italic]esc 取消[/dim italic]",
+                        spinner="dots", spinner_style="dim")
                     _spinner[0].__enter__()
 
             def _stop_spinner():
