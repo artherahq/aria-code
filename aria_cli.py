@@ -4726,10 +4726,34 @@ def _is_stock_chart_analysis_request(message: str) -> bool:
     return has_chart and has_analysis and has_stock
 
 
+_UNRESOLVED_CO_INDICATORS = (
+    # 中文公司后缀
+    "公司", "集团", "股份", "有限", "控股", "科技", "电子", "能源", "银行",
+    "汽车", "制药", "医疗", "传媒", "文化", "地产", "金融", "基金", "证券",
+    # 外国品牌/公司名常见关键词（未进入字典的）
+    "路易", "奔驰", "宝马", "大众", "爱马仕", "香奈儿", "耐克", "阿迪",
+    "三星", "索尼", "丰田", "本田", "日产", "空客", "波音", "壳牌", "埃克森",
+    "高盛", "摩根", "花旗", "巴克莱", "德银", "瑞信", "瑞银",
+    "奈飞", "推特", "脸书", "优步", "滴滴", "字节", "快手", "拼多多",
+)
+
+
+def _has_unresolved_company_mention(message: str) -> bool:
+    """Return True if message names a company/brand that _extract_market_symbol couldn't resolve.
+
+    Used to block silent history inheritance: if user says "路易斯威登怎么看" and we
+    can't resolve it, we should NOT fall back to the last queried ticker (e.g. 300124).
+    """
+    if _extract_market_symbol(message):
+        return False  # already resolved — no problem
+    return any(kw in message for kw in _UNRESOLVED_CO_INDICATORS)
+
+
 def _is_market_snapshot_request(message: str, history: list = None) -> bool:
     """Return True for simple quote / market snapshot analysis requests.
 
     跟进问题（"现在的股票和趋势呢"）：当前消息无标的时回溯会话历史继承。
+    但如果消息中包含未能识别的公司名，则不视为跟进问题（不继承历史标的）。
     """
     if _is_coding_request(message) or _is_stock_chart_analysis_request(message):
         return False
@@ -4742,6 +4766,9 @@ def _is_market_snapshot_request(message: str, history: list = None) -> bool:
         return False
     if _extract_market_symbol(message):
         return True
+    # Only inherit history if the message doesn't name an unresolvable company
+    if _has_unresolved_company_mention(message):
+        return False
     return bool(history and _extract_symbol_from_history(history))
 
 
@@ -4754,9 +4781,27 @@ def _try_handle_market_snapshot_analysis(message: str, history: list = None) -> 
     if not _is_market_snapshot_request(message, history):
         return {"success": False, "error": "not_market_snapshot"}
 
-    symbol = (_extract_market_symbol(message)
-              or (_extract_symbol_from_history(history) if history else "")
-              or "AAPL")
+    _msg_sym = _extract_market_symbol(message)
+    _hist_sym = (_extract_symbol_from_history(history) if history else "") if not _msg_sym else ""
+
+    # Guard: if message names an unrecognised company, don't silently use history symbol
+    if not _msg_sym and _has_unresolved_company_mention(message):
+        return {
+            "success": True,
+            "response": (
+                "## ❓ 无法识别的股票\n\n"
+                "未能将消息中提到的公司/品牌解析为已知股票代码。\n\n"
+                "请提供具体代码后重试，例如：\n"
+                "- A股：`/quote 600519`（贵州茅台）\n"
+                "- 港股：`/quote 0700.HK`（腾讯）\n"
+                "- 美股：`/quote AAPL`\n"
+                "- 欧洲：`/quote MC.PA`（LVMH/路易威登）\n\n"
+                "*提示：如需全局搜索，可输入 `/ta <代码>` 获取完整技术分析。*"
+            ),
+            "tools_used": ["market_snapshot"],
+        }
+
+    symbol = _msg_sym or _hist_sym or "AAPL"
     if not _HAS_MDC:
         return {
             "success": True,
@@ -4930,6 +4975,69 @@ def _try_handle_market_snapshot_analysis(message: str, history: list = None) -> 
                     _recent_vol = _vol.iloc[-1]
                     if not _np.isnan(_recent_vol):
                         volume = int(_recent_vol)
+        except Exception:
+            pass
+
+    # Finnhub candle fallback: when price came from Finnhub but yfinance TA failed,
+    # fetch 6-month daily candles from Finnhub to compute RSI/MACD/MA.
+    # Only attempted for US-style symbols (no A-share 6-digit codes, no .HK).
+    _is_us_sym = bool(symbol and not symbol.isdigit() and "." not in symbol)
+    if (not ti.get("success") or ti.get("rsi") is None) and _fh_key and _is_us_sym:
+        try:
+            import requests as _rq2, time as _t2
+            _to_ts = int(_t2.time())
+            _from_ts = _to_ts - 180 * 86400   # ~6 months
+            _cr = _rq2.get(
+                f"https://finnhub.io/api/v1/stock/candle"
+                f"?symbol={symbol}&resolution=D&from={_from_ts}&to={_to_ts}&token={_fh_key}",
+                timeout=8,
+            )
+            if _cr.status_code == 200:
+                _cd = _cr.json()
+                if _cd.get("s") == "ok" and _cd.get("c") and len(_cd["c"]) >= 20:
+                    import numpy as _np2
+                    _c = _cd["c"]   # close prices list
+                    _v = _cd.get("v", [])
+                    import statistics as _st
+                    # RSI(14) — simple loop (no pandas needed)
+                    _gains, _losses = [], []
+                    for i in range(1, len(_c)):
+                        _delta = _c[i] - _c[i-1]
+                        _gains.append(max(_delta, 0))
+                        _losses.append(max(-_delta, 0))
+                    _ag = sum(_gains[:14]) / 14
+                    _al = sum(_losses[:14]) / 14
+                    for i in range(14, len(_gains)):
+                        _ag = (_ag * 13 + _gains[i]) / 14
+                        _al = (_al * 13 + _losses[i]) / 14
+                    _rsi_fh = (100 - 100 / (1 + _ag / _al)) if _al else 100
+                    # MACD(12,26,9)
+                    def _ema_list(prices, span):
+                        k, result_ema = 2/(span+1), [prices[0]]
+                        for p in prices[1:]: result_ema.append(p*k + result_ema[-1]*(1-k))
+                        return result_ema
+                    _ema12_fh = _ema_list(_c, 12)
+                    _ema26_fh = _ema_list(_c, 26)
+                    _macd_fh  = [a - b for a, b in zip(_ema12_fh, _ema26_fh)]
+                    _sig_fh   = _ema_list(_macd_fh, 9)
+                    _mhist_fh = _macd_fh[-1] - _sig_fh[-1]
+                    # MA20 / MA60
+                    _ma20_fh = sum(_c[-20:]) / 20
+                    _ma60_fh = sum(_c[-60:]) / 60 if len(_c) >= 60 else _ma20_fh
+                    # Bollinger Bands
+                    _std20_fh = _st.stdev(_c[-20:])
+                    ti = {
+                        "success":   True,
+                        "rsi":       round(_rsi_fh, 2),
+                        "macd_hist": round(_mhist_fh, 4),
+                        "ma20":      round(_ma20_fh, 2),
+                        "ma60":      round(_ma60_fh, 2),
+                        "bb_upper":  round(_ma20_fh + 2*_std20_fh, 2),
+                        "bb_lower":  round(_ma20_fh - 2*_std20_fh, 2),
+                        "provider":  "finnhub_candle",
+                    }
+                    if volume is None and _v:
+                        volume = int(_v[-1]) if _v[-1] else None
         except Exception:
             pass
 
@@ -5865,14 +5973,23 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
         # Pattern B: short sentence repetition at tail (boilerplate hallucination)
         # Split by Chinese sentence-ending punctuation + newlines
         import re as _re2
+        # Common non-looping phrases that legitimately repeat (disclaimers, transitions)
+        _B_IGNORE = {
+            "本内容不构成投资建议", "不构成投资建议", "请注意风险",
+            "以上仅供参考", "仅供参考", "请以官方数据为准",
+            "如有问题请咨询专业人士", "投资有风险，入市需谨慎",
+            "好的", "当然", "当然可以", "明白了", "好的，我来",
+        }
         sentences = [s.strip() for s in _re2.split(r'[。！？\n]+', tail) if s.strip()]
         if len(sentences) >= 4:
             # Check if any sentence in the last 3 also appears before it in the tail
             for sent in sentences[-3:]:
-                if len(sent) < 10:
+                if len(sent) < 15:          # raised from 10 → less hair-trigger
                     continue
-                # Must appear at least once before the last-3 segment
-                if tail.count(sent) >= 2:
+                if sent in _B_IGNORE:
+                    continue
+                # Require 3+ occurrences (raised from 2) to reduce false positives
+                if tail.count(sent) >= 3:
                     return True
 
         return False
@@ -6901,17 +7018,32 @@ def _print_tool_result(tool_name: str, result: dict, elapsed: float = 0, params:
             else:
                 print(f" {matches} matches{time_suffix}")
         else:
-            # Remote tools — show concise summary
+            # Remote tools — show concise summary in a dim Panel
             summary = json.dumps(data, ensure_ascii=False)
-            short = (summary[:60] + "...") if len(summary) > 60 else summary
+            short = (summary[:80] + "…") if len(summary) > 80 else summary
             if HAS_RICH:
-                console.print(f" [dim]{short}{time_suffix}[/dim]")
+                console.print(Panel(
+                    f"[dim]{tool_name} · {short}{time_suffix}[/dim]",
+                    border_style="dim",
+                    box=rich_box.ROUNDED,
+                    padding=(0, 1),
+                ))
             else:
                 print(f" done{time_suffix}")
     else:
         error = result.get("error", "failed")
+        hint = _error_hint(str(error), context="tool")
         if HAS_RICH:
-            console.print(f" [red]{error[:100]}[/red]")
+            _body = f"[red]{error[:160]}[/red]"
+            if hint:
+                _body += f"\n[dim]{hint}[/dim]"
+            console.print(Panel(
+                _body,
+                border_style="red",
+                box=rich_box.ROUNDED,
+                title=f"[red]{tool_name} failed[/red]",
+                padding=(0, 1),
+            ))
         else:
             print(f" error: {error[:80]}")
 
@@ -6924,10 +7056,14 @@ def _print_finance_result(tool_name: str, result: dict):
     if not result or not isinstance(result, dict):
         return
     if not result.get("success"):
-        # result.get("error") may be None even when key exists — use `or` to fallback
         err = result.get("error") or result.get("message") or "数据暂不可用（服务离线或无数据）"
         if HAS_RICH:
-            console.print(f"  [yellow]⚠ {err}[/yellow]")
+            console.print(Panel(
+                f"[yellow]⚠ {err}[/yellow]",
+                border_style="yellow",
+                box=rich_box.ROUNDED,
+                padding=(0, 1),
+            ))
         else:
             print(f"  ⚠ {err}")
         return
