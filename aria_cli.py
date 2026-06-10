@@ -620,14 +620,16 @@ DEFAULT_CONFIG = {
     "conversation_history": [],
 }
 
-# Module-level write policy — updated whenever config is loaded/changed.
-# Used by _tool_write_file (a standalone function without terminal access).
+# Module-level write/command policies — updated whenever config is loaded/changed.
+# Used by standalone tool functions without terminal access.
 _ACTIVE_WRITE_POLICY = ["desktop_only"]  # list so closures can mutate it
+_ACTIVE_COMMAND_POLICY = ["safe"]
 
 
 def _sync_write_policy(config: dict):
-    """Sync module-level write policy from config dict."""
+    """Sync module-level write/command policies from config dict."""
     _ACTIVE_WRITE_POLICY[0] = config.get("write_policy", "desktop_only")
+    _ACTIVE_COMMAND_POLICY[0] = config.get("command_policy", "safe")
 
 
 def _run_event_hook(event: str, env_extra: dict = None):
@@ -1825,10 +1827,18 @@ def _tool_run_command(params: dict) -> dict:
     command = params.get("command", "")
     if not command:
         return {"success": False, "error": "Missing 'command' parameter"}
-    decision = evaluate_command_policy(command, params.get("policy", "safe"))
+
+    # If the user explicitly approved this command in the confirmation picker,
+    # use "balanced" as the effective policy so medium-risk commands are not
+    # double-blocked after the user already said yes.
+    effective_policy = params.get("policy", "safe")
+    if params.get("user_approved") and effective_policy == "safe":
+        effective_policy = "balanced"
+
+    decision = evaluate_command_policy(command, effective_policy)
     command = decision.normalized_command
 
-    # Safety: block dangerous commands
+    # Safety: always block truly dangerous commands regardless of approval
     dangerous = ["rm -rf /", "mkfs", "dd if=", "> /dev/", ":(){ :", "fork bomb"]
     for d in dangerous:
         if d in command:
@@ -2583,7 +2593,7 @@ _auto_approve_session = False  # Set True when user chooses "Yes, allow all"
 
 
 def _show_edit_preview(params: dict):
-    """Show a diff preview for edit_file (Claude Code style)."""
+    """Show a diff preview for edit_file (Claude Code style, Panel-boxed)."""
     path = params.get("path", "")
     old_str = params.get("old_string", params.get("old_str", ""))
     new_str = params.get("new_string", params.get("new_str", ""))
@@ -2595,19 +2605,15 @@ def _show_edit_preview(params: dict):
         tw = os.get_terminal_size().columns
     except Exception:
         tw = 80
-    border = "╌" * min(tw - 2, 78)
     short = str(p)
-    if len(short) > tw - 6:
-        short = "…" + short[-(tw - 7):]
+    if len(short) > tw - 10:
+        short = "…" + short[-(tw - 11):]
 
     if not HAS_RICH:
         print(f"\n  Edit file  {short}")
         return
 
-    console.print(f"\n  [bold]Edit file[/bold]")
-    console.print(f"  [dim]{short}[/dim]")
-    console.print(f"  [dim]{border}[/dim]")
-
+    body_parts: list = []
     try:
         content = p.read_text(errors="replace")
         pos = content.find(old_str)
@@ -2621,39 +2627,47 @@ def _show_edit_preview(params: dict):
             ctx_start = max(0, line_num - 3)
             for i in range(ctx_start, line_num - 1):
                 if i < len(all_lines):
-                    console.print(f"  [dim]{i+1:4}  {all_lines[i][:100]}[/dim]")
+                    body_parts.append(f"[dim]{i+1:4}  {all_lines[i][:100]}[/dim]")
 
             # Removed lines
             for i, ol in enumerate(old_lines):
                 ln = line_num + i
-                console.print(f"  [red]{ln:4} -  {ol[:100]}[/red]")
+                body_parts.append(f"[red]{ln:4} -  {ol[:100]}[/red]")
 
             # Added lines
             for i, nl in enumerate(new_lines):
                 ln = line_num + i
-                console.print(f"  [green]{ln:4} +  {nl[:100]}[/green]")
+                body_parts.append(f"[green]{ln:4} +  {nl[:100]}[/green]")
 
             # Context after (up to 2 lines)
             after_start = line_num - 1 + len(old_lines)
             for i in range(after_start, min(after_start + 2, len(all_lines))):
-                console.print(f"  [dim]{i+1:4}  {all_lines[i][:100]}[/dim]")
+                body_parts.append(f"[dim]{i+1:4}  {all_lines[i][:100]}[/dim]")
         else:
-            # File not readable or string not found — fallback
+            # String not found — fallback to plain diff lines
             for ol in old_str.splitlines()[:6]:
-                console.print(f"  [red]-  {ol[:100]}[/red]")
+                body_parts.append(f"[red]-  {ol[:100]}[/red]")
             for nl in new_str.splitlines()[:6]:
-                console.print(f"  [green]+  {nl[:100]}[/green]")
+                body_parts.append(f"[green]+  {nl[:100]}[/green]")
     except Exception:
         for ol in old_str.splitlines()[:6]:
-            console.print(f"  [red]-  {ol[:100]}[/red]")
+            body_parts.append(f"[red]-  {ol[:100]}[/red]")
         for nl in new_str.splitlines()[:6]:
-            console.print(f"  [green]+  {nl[:100]}[/green]")
+            body_parts.append(f"[green]+  {nl[:100]}[/green]")
 
-    console.print(f"  [dim]{border}[/dim]")
+    console.print()
+    console.print(Panel(
+        "\n".join(body_parts) if body_parts else "[dim](no preview)[/dim]",
+        title=f"[yellow]Edit file[/yellow] [dim]{short}[/dim]",
+        title_align="left",
+        border_style="yellow",
+        box=rich_box.ROUNDED,
+        padding=(0, 1),
+    ))
 
 
 def _show_write_preview(params: dict):
-    """Show a content preview for write_file (Claude Code style)."""
+    """Show a content preview for write_file (Claude Code style, Panel-boxed)."""
     path = params.get("path", "")
     content = params.get("content", "")
     if not path:
@@ -2666,59 +2680,135 @@ def _show_write_preview(params: dict):
         tw = os.get_terminal_size().columns
     except Exception:
         tw = 80
-    border = "╌" * min(tw - 2, 78)
     short = str(p)
-    if len(short) > tw - 6:
-        short = "…" + short[-(tw - 7):]
+    if len(short) > tw - 10:
+        short = "…" + short[-(tw - 11):]
 
     existed = p.exists()
     action = "Overwrite file" if existed else "Write new file"
+    action_color = "yellow" if existed else "green"
     lines = content.count("\n") + 1
 
     if not HAS_RICH:
         print(f"\n  {action}  {short} ({lines} lines)")
         return
 
-    console.print(f"\n  [bold]{action}[/bold]")
-    console.print(f"  [dim]{short}[/dim]")
-    console.print(f"  [dim]{border}[/dim]")
-
-    preview = content.splitlines()[:8]
-    for pl in preview:
-        console.print(f"  [green]+  {pl[:100]}[/green]")
+    preview_lines = content.splitlines()[:8]
+    body_parts = [f"[green]+ {pl[:100]}[/green]" for pl in preview_lines]
     if lines > 8:
         n = lines - 8
-        console.print(f"  [dim]  ...{n} more line{'s' if n != 1 else ''}[/dim]")
+        body_parts.append(f"[dim]… +{n} more line{'s' if n != 1 else ''}[/dim]")
+    body = "\n".join(body_parts)
 
-    console.print(f"  [dim]{border}[/dim]")
+    console.print()
+    console.print(Panel(
+        body,
+        title=f"[{action_color}]{action}[/{action_color}] [dim]{short}  ({lines} lines)[/dim]",
+        title_align="left",
+        border_style=action_color if existed else "dim",
+        box=rich_box.ROUNDED,
+        padding=(0, 1),
+    ))
 
 
-def _confirm_tool_execution(tool_name: str, params: dict) -> bool:
+def _confirm_tool_execution(tool_name: str, params: dict,
+                            config_policy: str = None) -> bool:
     """Ask user to confirm before executing a destructive tool.
-    Returns True if approved, False if denied."""
+    Returns True if approved, False if denied.
+
+    For run_command: pre-flight policy check happens HERE, before showing the
+    picker. If the command would be blocked even with user approval (high-risk),
+    show error immediately. If medium-risk with 'safe' policy, offer to upgrade
+    policy inline so the user can act without leaving the flow.
+    """
     global _auto_approve_session
+    if config_policy is None:
+        config_policy = _ACTIVE_COMMAND_POLICY[0]
     if _auto_approve_session:
+        # Still inject policy so run_command doesn't re-block
+        if tool_name == "run_command":
+            params["policy"] = config_policy
+            params["user_approved"] = True
         return True
     if tool_name not in _CONFIRM_TOOLS:
         return True
 
-    # Show preview based on tool type
+    # ── Pre-flight for run_command ────────────────────────────────────────────
+    if tool_name == "run_command":
+        from command_safety import evaluate_command_policy, classify_command_risk
+        cmd = params.get("command", "")
+        risk = classify_command_risk(cmd)
+
+        if risk == "high":
+            # Always block high-risk regardless of user approval
+            if HAS_RICH:
+                console.print(Panel(
+                    f"[red]✗ 高风险命令已拒绝[/red]\n[dim]{cmd[:120]}[/dim]\n"
+                    f"[dim]高风险操作（rm -rf / docker / sudo 等）需要在终端手动执行。[/dim]",
+                    border_style="red", box=rich_box.ROUNDED, padding=(0, 1),
+                ))
+            else:
+                print(f"  ✗ 高风险命令已拒绝: {cmd[:80]}")
+            return False
+
+        if risk == "medium" and config_policy == "safe":
+            # Show a richer picker that includes a "Allow & upgrade policy" option
+            if HAS_RICH:
+                console.print()
+                console.print(Panel(
+                    f"[yellow]⚠ 此命令需要 balanced 策略（当前: safe）[/yellow]\n"
+                    f"[dim]{cmd[:120]}[/dim]",
+                    border_style="yellow", box=rich_box.ROUNDED, padding=(0, 1),
+                ))
+            options = [
+                ("Allow once",         "仅此次允许（不改变策略）"),
+                ("Allow & set balanced","允许并升级策略（本会话有效）"),
+                ("Yes, allow all",     "本会话内所有命令自动允许"),
+                ("No",                 "拒绝执行"),
+            ]
+            choice = _arrow_select(options, selected=0, title="")
+            if choice == 0:
+                params["policy"] = "balanced"
+                params["user_approved"] = True
+                return True
+            if choice == 1:
+                # Persist to config if possible
+                params["policy"] = "balanced"
+                params["user_approved"] = True
+                params["_upgrade_policy"] = True   # caller can read and save config
+                return True
+            if choice == 2:
+                _auto_approve_session = True
+                params["policy"] = "balanced"
+                params["user_approved"] = True
+                return True
+            return False   # No
+
+    # ── Default confirmation for write_file / edit_file / low-risk run ────────
     if tool_name == "edit_file":
         _show_edit_preview(params)
     elif tool_name == "write_file":
         _show_write_preview(params)
+    elif tool_name == "run_command":
+        # Header already printed by on_tool_call — just pass through policy
+        params["policy"] = config_policy
+        params["user_approved"] = True
 
     options = [
-        ("Yes", ""),
-        ("Yes, allow all", "auto-approve this session"),
-        ("No", ""),
+        ("Yes",          ""),
+        ("Yes, allow all", "本会话内自动允许"),
+        ("No",           ""),
     ]
-    choice = _arrow_select(options, selected=0, title="")  # pause/resume handled inside
+    choice = _arrow_select(options, selected=0, title="")
 
     if choice == 0:
+        if tool_name == "run_command":
+            params["user_approved"] = True
         return True
     if choice == 1:
         _auto_approve_session = True
+        if tool_name == "run_command":
+            params["user_approved"] = True
         return True
     return False
 
@@ -2861,12 +2951,12 @@ CODING_SYSTEM_PROMPT = (
     "## ABSOLUTELY FORBIDDEN\n"
     "1. NEVER pass slash-commands (/config, /model, /note, /apikey, etc.) to run_command — "
     "   they are NOT shell commands. To change policy tell the user to type the slash command directly.\n"
-    "2. If run_command returns 'Command blocked by policy' or 'risk=medium': STOP immediately. "
-    "   Do NOT retry the same command. Tell the user exactly:\n"
-    "   '⚠️ 命令被安全策略拦截。请在终端运行 `/config set command_policy=balanced`，"
-    "   然后再次尝试。' Then output NO more tool calls.\n"
-    "3. pip3/pip install is medium-risk and requires command_policy=balanced. "
-    "   If blocked, tell the user to change policy ONCE, then stop.\n\n"
+    "2. If run_command returns 'Command blocked by policy': STOP immediately. "
+    "   Do NOT retry the same command. The user declined or the command is high-risk. "
+    "   Tell the user briefly why it was blocked, then output NO more tool calls.\n"
+    "3. Do NOT preemptively pip install packages. Common packages (yfinance, pandas, "
+    "   numpy, matplotlib) are usually already installed. Run the script FIRST; "
+    "   only pip3 install a package after ModuleNotFoundError names it.\n\n"
 
     "## Tool Call Format\n"
     "<tool_call>{\"name\": \"tool_name\", \"arguments\": {\"key\": \"value\"}}</tool_call>\n\n"
@@ -2880,10 +2970,10 @@ CODING_SYSTEM_PROMPT = (
     "- search_code: {pattern, path, glob} — Grep for pattern in files.\n\n"
 
     "## Workflow (strict order, one tool per step)\n"
-    "1. run_command: pip3 install <all packages needed>.\n"
-    "2. Check if file exists: read_file ~/Desktop/<name>.py — if exists, read it and improve with edit_file.\n"
+    "1. Check if file exists: read_file ~/Desktop/<name>.py — if exists, read it and improve with edit_file.\n"
     "   If not exists: write_file ~/Desktop/<descriptive_name>.py — COMPLETE self-contained script.\n"
-    "3. run_command: python3 ~/Desktop/<name>.py (timeout=120).\n"
+    "2. run_command: python3 ~/Desktop/<name>.py (timeout=120).\n"
+    "3. If ModuleNotFoundError: pip3 install <the missing package only>, then re-run.\n"
     "4. Verify: list_files ~/Desktop/ to confirm output files were saved.\n"
     "5. If error: read_file the script → find the EXACT bug → edit_file to fix → run_command again.\n"
     "   NEVER re-run the same command without fixing the code first!\n"
@@ -5691,17 +5781,28 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
             # Ask user confirmation for destructive tools
             if tool_name in _CONFIRM_TOOLS:
                 try:
-                    if not _confirm_tool_execution(tool_name, tc["params"]):
+                    if not _confirm_tool_execution(
+                            tool_name, tc["params"],
+                            config_policy=_ACTIVE_COMMAND_POLICY[0]):
                         ollama_cancelled = True
                         if HAS_RICH:
                             console.print("\n  [dim]Cancelled[/dim]")
                         break
+                    # Persist "Allow & set balanced" choice
+                    if tc["params"].pop("_upgrade_policy", False):
+                        _ACTIVE_COMMAND_POLICY[0] = "balanced"
+                        if HAS_RICH:
+                            console.print("  [dim]策略已升级为 balanced（本会话）[/dim]")
                 except KeyboardInterrupt:
                     ollama_cancelled = True
                     break
 
             try:
                 tool_t0 = time.time()
+                # Inject current policy for run_command so post-approval execution
+                # isn't re-blocked by the default "safe" policy
+                if tool_name == "run_command" and "policy" not in tc["params"]:
+                    tc["params"]["policy"] = _ACTIVE_COMMAND_POLICY[0]
                 result = execute_local_tool(tool_name, tc["params"])
                 tool_dt = time.time() - tool_t0
             except KeyboardInterrupt:
@@ -6473,7 +6574,10 @@ def _print_tool_result(tool_name: str, result: dict, elapsed: float = 0, params:
         elif tool_name == "list_files":
             count = data.get("count", 0)
             if HAS_RICH:
-                console.print(f" [dim]{count} items{time_suffix}[/dim]")
+                if count == 0:
+                    console.print(f" [yellow]0 items — 未找到匹配文件{time_suffix}[/yellow]")
+                else:
+                    console.print(f" [dim]{count} items{time_suffix}[/dim]")
             else:
                 print(f" {count} items{time_suffix}")
         elif tool_name == "search_code":
@@ -14752,11 +14856,22 @@ class ArtheraTerminal:
                 if tool_name in _CONFIRM_TOOLS:
                     _stop_live()
                     try:
-                        if not _confirm_tool_execution(tool_name, tool_params):
+                        _cfg_policy = self.config.get("command_policy", "safe")
+                        if not _confirm_tool_execution(tool_name, tool_params,
+                                                       config_policy=_cfg_policy):
                             cancelled_by_user = True
                             if HAS_RICH:
                                 console.print("\n  [dim]Cancelled[/dim]")
                             break
+                        # If user chose "Allow & set balanced", persist to config
+                        if tool_params.pop("_upgrade_policy", False):
+                            self.config["command_policy"] = "balanced"
+                            try:
+                                save_config(self.config)
+                                if HAS_RICH:
+                                    console.print("  [dim]策略已升级为 balanced 并保存[/dim]")
+                            except Exception:
+                                pass
                     except KeyboardInterrupt:
                         cancelled_by_user = True
                         break
@@ -14767,6 +14882,10 @@ class ArtheraTerminal:
                 try:
                     tool_start = time.time()
                     if tool_name in LOCAL_TOOLS:
+                        # Inject current config policy for run_command
+                        # (avoids double-blocking after user approval)
+                        if tool_name == "run_command" and "policy" not in tool_params:
+                            tool_params["policy"] = self.config.get("command_policy", "safe")
                         # Local tools: show spinner for slower ones
                         _slow_local = {"write_file", "edit_file", "run_command", "search_code"}
                         if tool_name in _slow_local and HAS_RICH:
