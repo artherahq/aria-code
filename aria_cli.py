@@ -43,8 +43,123 @@ import uuid
 import threading
 from datetime import datetime
 from typing import Optional, Dict, Any, List, Callable
-from command_safety import evaluate_command_policy
+from change_store import ChangeConflictError, GLOBAL_CHANGE_STORE
+from safety import evaluate_command_policy
 from plan_utils import parse_plan_steps
+from privacy import FeedbackRecord, FeedbackStore, PrivacySettings
+from runtime import (
+    AgentErrorPresentation,
+    AgentTurnState,
+    ApprovalDecision,
+    RuntimeTrace,
+    ToolTurnPlan,
+    ToolExecutor,
+    apply_approval_decision,
+    run_parallel_tools,
+    run_serial_tool,
+)
+from workspace import VerificationPlanner, WorkspaceFiles, WorkspaceSecurity
+from apps.cli.commands.catalog import VISIBLE_SLASH_COMMANDS
+from apps.cli.commands.market_context import build_analyze_context, build_analyze_prompt
+from apps.cli.commands.market import parse_symbols, parse_technical_args, try_top_level_route
+from ui.render.market import print_quote_result, print_ta_result
+from apps.cli.commands.report import (
+    all_agents_failed,
+    build_markdown_report_prompt,
+    export_report_pdf,
+    generate_html_report,
+    parse_report_args,
+    report_agent_names,
+    report_file_size_kb,
+    save_markdown_report,
+    update_report_index,
+)
+from apps.cli.commands.team import (
+    parse_team_args,
+    resolve_team_symbols,
+    run_team_analysis,
+    save_team_report,
+    team_agent_names,
+)
+from ui.render.team import (
+    VERDICT_STYLE,
+    build_team_table_rows,
+    calc_column_widths,
+    render_team_rows_plain,
+    render_team_table,
+    render_verdict_banner,
+    team_mode_label,
+)
+from ui.render.finance import (
+    render_finance_result,
+    render_macro_result,
+    render_cb_rates,
+    render_econ_calendar,
+    render_options_chain,
+    render_quality_scores,
+    render_ichimoku,
+    render_fear_greed,
+    render_funding_rates,
+    render_peer_comparison,
+    render_house_price,
+    render_reits_list,
+    render_rental_yield,
+    render_property_val,
+    render_multi_city,
+    render_asset_score,
+    render_corr_matrix,
+    render_portfolio_bt,
+    render_sql_result,
+    render_alerts,
+)
+from apps.cli.direct import dispatch_direct_command, is_watchable_direct_command
+from apps.cli.tools.system_tools import (
+    tool_run_command as _src_run_command,
+    tool_web_fetch   as _src_web_fetch,
+    tool_github      as _src_github,
+)
+from apps.cli.tools.notebook_tools import (
+    tool_glob          as _src_glob,
+    tool_notebook_read as _src_notebook_read,
+    tool_notebook_edit as _src_notebook_edit,
+)
+from apps.cli.tools.market_tools import (
+    tool_get_market_data as _src_get_market_data,
+    tool_broker_query    as _src_broker_query,
+    tool_broker_order    as _src_broker_order,
+)
+from apps.cli.handlers.broker_handlers import handle_broker_query as _src_handle_broker_query
+from apps.cli.handlers.realty_handlers import handle_realty_query as _src_handle_realty_query
+from apps.cli.handlers.chart_handlers import (
+    handle_stock_chart_analysis_direct as _src_chart_analysis_direct,
+    handle_stock_chart_analysis        as _src_chart_analysis,
+)
+from apps.cli.utils.market_detect import (  # noqa: F401 — re-exported
+    _re_sym, _STOCK_PATTERN,
+    _CRYPTO_WORDS, _COMPANY_TO_TICKER,
+    _BROKER_INTENT_KW, _is_broker_intent,
+    _FINANCIAL_TERMS_BLOCKLIST,
+    _extract_market_symbol, _extract_market_symbols, _extract_symbol_from_history,
+    _is_stock_chart_analysis_request,
+    _UNRESOLVED_CO_INDICATORS, _has_unresolved_company_mention,
+    _REALTY_QUERY_KEYWORDS, _CN_CITIES, _INTL_CITIES, _STOCK_ONLY_MARKET_WORDS,
+    _is_realty_query,
+    _is_market_snapshot_request,
+    _format_compact_market_cap, _market_snapshot_trend,
+)
+
+from apps.cli.commands.broker_cmds import BrokerCommandsMixin
+from apps.cli.commands.backtest_cmds import BacktestCommandsMixin
+from apps.cli.commands.workspace_cmds import WorkspaceCommandsMixin
+from apps.cli.commands.model_cmds import ModelCommandsMixin
+from apps.cli.commands.market_cmds import MarketCommandsMixin
+from apps.cli.commands.portfolio_cmds import PortfolioCommandsMixin
+from apps.cli.handlers.market_handlers import (
+    _try_prefetch_market_data  as _src_prefetch_market_data,
+    _try_handle_multi_market_snapshot  as _src_multi_snapshot,
+    _try_handle_market_snapshot_analysis  as _src_market_snapshot_analysis,
+)
+
 
 # ── New modules: local LLM provider stack, finance tools, MCP, ariarc ──────
 try:
@@ -67,6 +182,12 @@ try:
     _HAS_MDC = True
 except ImportError:
     _HAS_MDC = False
+
+# Session-level TA cache: persists across multiple /analyze calls in a session,
+# so a single yfinance rate-limit hit doesn't wipe all indicator data.
+# Structure: {symbol: {"data": <ti_dict>, "ts": float}}
+_TA_SESSION_CACHE: dict = {}
+_TA_SESSION_CACHE_TTL = 600  # 10 minutes
 
 try:
     from financial_agents import run_team_analysis as _run_team
@@ -95,6 +216,26 @@ except ImportError:
     _HAS_ARIARC = False
 
 try:
+    from brokers import (
+        get_registry as _get_broker_registry,
+        list_broker_configs as _list_broker_configs,
+        get_broker_config as _get_broker_cfg,
+        add_broker_config as _add_broker_cfg,
+        remove_broker_config as _remove_broker_cfg,
+        set_default_broker as _set_default_broker,
+        validate_broker_config as _validate_broker_cfg,
+        supported_broker_types as _supported_broker_types,
+        get_config_template as _get_broker_template,
+        BROKERS_CONFIG_PATH as _BROKERS_CONFIG_PATH,
+    )
+    _HAS_BROKERS = True
+except ImportError:
+    _HAS_BROKERS = False
+    def _get_broker_registry(): return None   # type: ignore
+    def _list_broker_configs(): return []      # type: ignore
+    _BROKERS_CONFIG_PATH = None
+
+try:
     from plugin_loader import register_plugin_tools, find_plugin_file, PluginWatcher
     _HAS_PLUGIN = True
     _plugin_watcher: Optional["PluginWatcher"] = None
@@ -104,12 +245,21 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.WARNING)
+logging.getLogger("yfinance").setLevel(logging.CRITICAL)
+logging.getLogger("curl_cffi").setLevel(logging.CRITICAL)
 
 # ============================================================================
 # Rich Console (graceful fallback to ANSI if not installed)
 # ============================================================================
 
-try:
+# ── UI layer — console, flags, ESC watcher ────────────────────────────────────
+from ui.console import (
+    console, HAS_RICH, HAS_PT, _SYNTAX_THEME,
+    _EscWatcher, _esc_watcher, _HAS_TERMIOS,
+)
+from ui.robot import RobotState, set_robot_state
+# Rich re-exports (used directly in this file)
+if HAS_RICH:
     from rich.console import Console
     from rich.markdown import Markdown
     from rich.live import Live
@@ -119,333 +269,18 @@ try:
     from rich.panel import Panel
     from rich.rule import Rule
     from rich import box as rich_box
-    HAS_RICH = True
-except ImportError:
-    HAS_RICH = False
-
-# prompt_toolkit for interactive input (slash command dropdown, placeholder, toolbar)
-try:
+# prompt_toolkit re-exports
+if HAS_PT:
     from prompt_toolkit import PromptSession
-    from prompt_toolkit.completion import Completer, Completion
     from prompt_toolkit.formatted_text import HTML
     from prompt_toolkit.history import FileHistory
-    from prompt_toolkit.styles import Style as PTStyle
-    HAS_PT = True
-except ImportError:
-    HAS_PT = False
-
-if HAS_RICH:
-    console = Console(highlight=False)
-    # Syntax highlight theme — override via config "syntax_theme" key
-    _SYNTAX_THEME: str = "monokai"
-else:
-    _SYNTAX_THEME: str = "monokai"
-    class _FallbackConsole:
-        def print(self, *a, **kw): print(*[str(x) for x in a])
-        def input(self, prompt=""): return input(prompt)
-        def status(self, msg):
-            class _Ctx:
-                def __enter__(self): print(msg); return self
-                def __exit__(self, *a): pass
-                def update(self, msg): print(msg)
-            return _Ctx()
-    console = _FallbackConsole()
-
-# Terminal raw-mode for ESC key detection (macOS / Linux)
-try:
+# termios — already imported inside ui.console; alias for local use
+if _HAS_TERMIOS:
     import termios, tty, select as _select
-    _HAS_TERMIOS = True
-except ImportError:
-    _HAS_TERMIOS = False
 
 
-class _EscWatcher:
-    """Background thread that watches for ESC key press to cancel operations."""
+from ui.picker import arrow_select as _arrow_select, run_picker_in_thread as _run_picker_in_thread
 
-    def __init__(self):
-        self._active = False
-        self._paused = False
-        self._thread: Optional[threading.Thread] = None
-        self._old_settings = None
-        self._cancel_event: Optional[asyncio.Event] = None
-        self._fd: Optional[int] = None
-
-    def start(self, cancel_event: asyncio.Event):
-        """Start watching for ESC. Call before streaming begins."""
-        if not _HAS_TERMIOS or not sys.stdin.isatty():
-            return
-        self._cancel_event = cancel_event
-        self._fd = sys.stdin.fileno()
-        try:
-            self._old_settings = termios.tcgetattr(self._fd)
-            tty.setcbreak(self._fd)
-        except Exception:
-            self._old_settings = None
-            return
-        self._active = True
-        self._paused = False
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
-
-    def pause(self):
-        """Pause watching and restore terminal for input prompts."""
-        self._paused = True
-        if self._old_settings and self._fd is not None:
-            try:
-                termios.tcsetattr(self._fd, termios.TCSADRAIN, self._old_settings)
-            except Exception:
-                pass
-
-    def resume(self):
-        """Resume watching after input prompt completes."""
-        if not self._active or not _HAS_TERMIOS or self._fd is None:
-            return
-        if self._cancel_event and self._cancel_event.is_set():
-            return
-        try:
-            termios.tcflush(self._fd, termios.TCIFLUSH)
-            self._old_settings = termios.tcgetattr(self._fd)
-            tty.setcbreak(self._fd)
-        except Exception:
-            return
-        self._paused = False
-
-    def stop(self):
-        """Stop watching and restore terminal settings."""
-        self._active = False
-        self._paused = False
-        if self._old_settings and self._fd is not None:
-            try:
-                termios.tcsetattr(self._fd, termios.TCSADRAIN, self._old_settings)
-            except Exception:
-                pass
-            self._old_settings = None
-        if self._thread:
-            self._thread.join(timeout=0.3)
-            self._thread = None
-
-    def _run(self):
-        fd = self._fd
-        try:
-            while self._active:
-                if self._paused:
-                    time.sleep(0.1)
-                    continue
-                try:
-                    ready, _, _ = _select.select([fd], [], [], 0.15)
-                except (ValueError, OSError):
-                    break
-                if not self._active or self._paused:
-                    continue
-                if ready:
-                    try:
-                        ch = os.read(fd, 1)
-                    except OSError:
-                        break
-                    if ch == b'\x1b':
-                        # Distinguish standalone ESC from escape sequences (arrow keys etc)
-                        try:
-                            r2, _, _ = _select.select([fd], [], [], 0.05)
-                        except (ValueError, OSError):
-                            break
-                        if r2:
-                            try:
-                                os.read(fd, 16)  # consume rest of escape sequence
-                            except OSError:
-                                pass
-                        else:
-                            # Standalone ESC key → cancel
-                            if self._cancel_event:
-                                self._cancel_event.set()
-                            self._active = False
-        except Exception:
-            pass
-
-
-_esc_watcher = _EscWatcher()
-
-
-# ============================================================================
-# Arrow-key selector — replaces numbered input prompts
-# ============================================================================
-
-def _arrow_select(options: list, selected: int = 0, title: str = "",
-                  max_visible: int = 10) -> int:
-    """Interactive arrow-key selector with scrolling window.
-
-    Args:
-        options:     list of (label, description) tuples or plain strings
-        selected:    initially highlighted index
-        title:       optional header shown above the list
-        max_visible: max rows rendered at once; scrolls when list is larger
-    Returns:
-        index of chosen option, or -1 if cancelled / no selection
-    """
-    if not options:
-        return -1
-
-    # ── Non-interactive fallback (no TTY or no termios) ─────────────────────
-    if not _HAS_TERMIOS or not sys.stdin.isatty():
-        if title:
-            print(f"\n  {title}\n")
-        for i, opt in enumerate(options):
-            label = opt[0] if isinstance(opt, tuple) else opt
-            marker = "❯" if i == selected else " "
-            print(f"  {marker} {i + 1:2d}. {label}")
-        try:
-            c = input("\n  Enter number (or Enter to keep current): ").strip()
-            if not c:
-                return selected
-            idx = int(c) - 1
-            return idx if 0 <= idx < len(options) else -1
-        except (ValueError, EOFError, KeyboardInterrupt):
-            return -1
-
-    n = len(options)
-    visible = min(max_visible, n)          # rows actually drawn
-    scroll  = max(0, selected - visible + 1)  # first visible index
-
-    fd = sys.stdin.fileno()
-    old_settings = termios.tcgetattr(fd)
-
-    # Terminal column count — needed for physical-line calculation
-    try:
-        _tcols = os.get_terminal_size(fd).columns
-    except Exception:
-        _tcols = 80
-
-    def _display_width(s: str) -> int:
-        """Display column width of s: CJK/full-width chars count as 2."""
-        import re as _re
-        # Strip ANSI escape sequences before measuring
-        clean = _re.sub(r'\x1b\[[0-9;]*[mJKHABCDfGrs]', '', s)
-        w = 0
-        for ch in clean:
-            cp = ord(ch)
-            if (0x1100 <= cp <= 0x115F or 0x2E80 <= cp <= 0xA4CF or
-                    0xAC00 <= cp <= 0xD7AF or 0xF900 <= cp <= 0xFAFF or
-                    0xFE10 <= cp <= 0xFE1F or 0xFE30 <= cp <= 0xFE4F or
-                    0xFF01 <= cp <= 0xFF60 or 0xFFE0 <= cp <= 0xFFE6 or
-                    0x3000 <= cp <= 0x303F):
-                w += 2
-            else:
-                w += 1
-        return w
-
-    def _physical_lines(text: str) -> int:
-        """How many terminal rows does text occupy (accounting for CJK wrap)."""
-        dw = _display_width(text)
-        return max(1, (dw + _tcols - 1) // _tcols)
-
-    # Write raw bytes directly — bypasses Rich / prompt_toolkit buffering
-    def _raw(s: str):
-        os.write(1, s.encode())
-
-    def _render():
-        nonlocal scroll
-        # Keep selected inside the visible window
-        if selected < scroll:
-            scroll = selected
-        elif selected >= scroll + visible:
-            scroll = selected - visible + 1
-
-        buf = ""
-        # On re-render: move cursor back to top of the drawn block.
-        # Use the ACTUAL physical height from the last render (not just
-        # the logical visible count) so CJK label wraps don't drift the cursor.
-        if _render.drawn:
-            buf += f"\033[{_render.last_phys_height}A"
-
-        phys_height = 0
-        for row in range(visible):
-            idx = scroll + row
-            opt   = options[idx]
-            label = opt[0] if isinstance(opt, tuple) else opt
-            desc  = opt[1] if isinstance(opt, tuple) and len(opt) > 1 else ""
-            if idx == selected:
-                line = f"  \033[1m\033[38;2;192;128;80m❯\033[0m \033[1m{label}\033[0m"
-                if desc:
-                    line += f"  \033[2m{desc}\033[0m"
-            else:
-                line = f"    {label}"
-                if desc:
-                    line += f"  \033[2m{desc}\033[0m"
-            buf += f"\033[2K{line}\n"
-            phys_height += _physical_lines(line)
-
-        # Scroll indicator — always exactly 1 row, always below the list
-        if n > visible:
-            hint = f"  \033[2m{selected + 1}/{n}\033[0m"
-            buf += f"\033[2K{hint}\n"
-        else:
-            buf += f"\033[2K\n"   # blank placeholder keeps cursor math stable
-        phys_height += 1  # hint/blank line
-
-        _render.last_phys_height = phys_height
-        _raw(buf)
-        _render.drawn = True
-
-    _render.drawn = False
-    _render.last_phys_height = visible + 1  # safe initial value
-
-    try:
-        # Pause ESC watcher so it doesn't consume \x1b[A/B arrow escape sequences
-        _esc_watcher.pause()
-        tty.setcbreak(fd)
-        sys.stdout.flush()
-        if title:
-            _raw(f"\n  \033[1m{title}\033[0m  \033[2m↑↓/j·k  Enter  q=cancel\033[0m\n\n")
-        else:
-            _raw(f"\n  \033[2m↑↓/j·k  Enter  q=cancel\033[0m\n\n")
-
-        _render()
-
-        while True:
-            ch = os.read(fd, 1)
-            if ch == b'\x1b':
-                seq = b''
-                if _select.select([fd], [], [], 0.05)[0]:
-                    seq = os.read(fd, 2)
-                if seq == b'[A':        # ↑ Up arrow
-                    selected = (selected - 1) % n
-                    _render()
-                elif seq == b'[B':      # ↓ Down arrow
-                    selected = (selected + 1) % n
-                    _render()
-                elif seq == b'[5~':     # Page Up
-                    selected = max(0, selected - visible)
-                    _render()
-                elif seq == b'[6~':     # Page Down
-                    selected = min(n - 1, selected + visible)
-                    _render()
-                elif not seq:           # Bare ESC — cancel
-                    return -1
-            elif ch in (b'\r', b'\n'):  # Enter
-                return selected
-            elif ch == b'q':
-                return -1
-            elif ch == b'k':            # vim ↑
-                selected = (selected - 1) % n
-                _render()
-            elif ch == b'j':            # vim ↓
-                selected = (selected + 1) % n
-                _render()
-            elif ch == b'g':            # vim G top
-                selected = 0
-                _render()
-            elif ch == b'G':            # vim G bottom
-                selected = n - 1
-                _render()
-            elif ch == b'\x03':         # Ctrl+C
-                return -1
-            elif ch == b'\x04':         # Ctrl+D
-                return -1
-    except (EOFError, KeyboardInterrupt, OSError):
-        return -1
-    finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-        _esc_watcher.resume()
-        _raw("\n")
 
 
 # ============================================================================
@@ -497,6 +332,7 @@ _DATA_KEY_MAP: Dict[str, str] = {
     "finnhub":      "FINNHUB_API_KEY",       # Real-time stock data + news (free tier: 60/min)
     "newsapi":      "NEWS_API_KEY",           # Financial news aggregator (free: 100/day)
     "brave":        "BRAVE_SEARCH_API_KEY",   # Web search (free: 2000/month)
+    "tavily":       "TAVILY_API_KEY",         # AI-optimised web search (free: 1000/month)
     "coingecko":    "COINGECKO_API_KEY",      # Crypto data Pro (basic tier is free)
     "alphavantage": "ALPHA_VANTAGE_API_KEY",  # Stock history (free: 25/day)
     "polygon":      "POLYGON_API_KEY",        # US market data (free tier available)
@@ -509,6 +345,7 @@ _DATA_SIGNUP_URLS: Dict[str, str] = {
     "finnhub":      "https://finnhub.io/register",
     "newsapi":      "https://newsapi.org/register",
     "brave":        "https://api.search.brave.com/app/keys",
+    "tavily":       "https://app.tavily.com",
     "coingecko":    "https://www.coingecko.com/en/api",
     "alphavantage": "https://www.alphavantage.co/support/#api-key",
     "polygon":      "https://polygon.io/signup",
@@ -615,7 +452,13 @@ DEFAULT_CONFIG = {
     "last_session_id": None,
     "auto_save_sessions": True,
     "command_policy": "safe",   # safe | balanced | full
+    "permission_mode": "workspace-write",  # read-only | workspace-write | full-access
+    "network_enabled": True,
+    "data_sharing": False,
+    "feedback_upload": False,
     "write_policy": "desktop_only",  # desktop_only | confirm_outside | always_confirm
+    "input_style": "panel",    # panel | box | plain
+    "input_theme": "auto",     # auto | dark | light
     "local_mode": False,        # True = skip AWS, always use Ollama
     "conversation_history": [],
 }
@@ -624,12 +467,16 @@ DEFAULT_CONFIG = {
 # Used by standalone tool functions without terminal access.
 _ACTIVE_WRITE_POLICY = ["desktop_only"]  # list so closures can mutate it
 _ACTIVE_COMMAND_POLICY = ["safe"]
+_ACTIVE_PERMISSION_MODE = ["workspace-write"]
+_ACTIVE_NETWORK_ENABLED = [True]
 
 
 def _sync_write_policy(config: dict):
     """Sync module-level write/command policies from config dict."""
     _ACTIVE_WRITE_POLICY[0] = config.get("write_policy", "desktop_only")
     _ACTIVE_COMMAND_POLICY[0] = config.get("command_policy", "safe")
+    _ACTIVE_PERMISSION_MODE[0] = config.get("permission_mode", "workspace-write")
+    _ACTIVE_NETWORK_ENABLED[0] = bool(config.get("network_enabled", True))
 
 
 def _run_event_hook(event: str, env_extra: dict = None):
@@ -1105,7 +952,7 @@ SKILLS = [
             "5. Trading outlook and key levels to watch\n"
             "{extra}"
         ),
-        "tools_hint": ["get_market_indices", "get_sector_performance", "analyze_news"],
+        "tools_hint": ["web_search", "get_market_indices", "get_sector_performance", "analyze_news"],
     },
     {
         "command": "/deep-analysis",
@@ -1121,7 +968,7 @@ SKILLS = [
             "4. Risk Assessment: VaR, beta, max drawdown potential\n"
             "5. Verdict: Bull/Bear/Neutral with confidence level and price targets"
         ),
-        "tools_hint": ["get_market_data", "calculate_factors", "analyze_news", "get_risk_metrics"],
+        "tools_hint": ["web_search", "get_market_data", "calculate_factors", "analyze_news", "peer_comparison", "piotroski_fscore", "get_risk_metrics"],
     },
     {
         "command": "/trade-idea",
@@ -1139,7 +986,7 @@ SKILLS = [
             "5. Timeframe (swing/position/day)\n"
             "6. Confidence level (1-10)"
         ),
-        "tools_hint": ["get_market_data", "analyze_news", "recommend_strategy"],
+        "tools_hint": ["web_search", "get_market_data", "analyze_news", "recommend_strategy"],
     },
     {
         "command": "/risk-report",
@@ -1190,7 +1037,7 @@ SKILLS = [
             "5. Key risks: geopolitical, financial, systemic\n"
             "6. Asset class implications: equities, bonds, commodities, crypto"
         ),
-        "tools_hint": ["get_world_bank_reports", "get_bonds_data", "analyze_news"],
+        "tools_hint": ["web_search", "get_world_bank_reports", "get_bonds_data", "analyze_news"],
     },
     {
         "command": "/factor-screen",
@@ -1391,49 +1238,7 @@ def _is_safe_path(resolved: pathlib.Path) -> bool:
     Blocks: /etc, /sys, /proc, /dev, and any path that resolves through a
     symlink to outside those roots (symlink traversal prevention).
     """
-    home = pathlib.Path.home().resolve()
-    allowed = [home, pathlib.Path("/tmp").resolve()]
-    # macOS temp directories (resolve both with and without /private prefix)
-    for tmp_candidate in ["/var/folders", "/private/tmp", "/private/var/folders",
-                          "/var/tmp", "/private/var/tmp"]:
-        try:
-            allowed.append(pathlib.Path(tmp_candidate).resolve())
-        except Exception:
-            pass
-    # Also include the system temp dir at runtime
-    import tempfile as _tempfile
-    try:
-        allowed.append(pathlib.Path(_tempfile.gettempdir()).resolve())
-    except Exception:
-        pass
-
-    blocked_prefixes = [
-        pathlib.Path("/etc"),
-        pathlib.Path("/sys"),
-        pathlib.Path("/proc"),
-        pathlib.Path("/dev"),
-        pathlib.Path("/boot"),
-        pathlib.Path("/root"),
-    ]
-    for blocked in blocked_prefixes:
-        try:
-            resolved.relative_to(blocked.resolve())
-            return False
-        except ValueError:
-            pass
-    for root in allowed:
-        try:
-            resolved.relative_to(root)
-            return True
-        except ValueError:
-            pass
-    # Also allow current working directory and its subtree
-    try:
-        resolved.relative_to(pathlib.Path.cwd().resolve())
-        return True
-    except ValueError:
-        pass
-    return False
+    return WorkspaceSecurity().is_safe_path(resolved)
 
 
 def _tool_read_file(params: dict) -> dict:
@@ -1442,37 +1247,12 @@ def _tool_read_file(params: dict) -> dict:
     if not path:
         return {"success": False, "error": "Missing 'path' parameter"}
     try:
-        p = pathlib.Path(path).expanduser().resolve()
-        if not p.exists():
-            return {"success": False, "error": f"File not found: {p}"}
-        if not p.is_file():
-            return {"success": False, "error": f"Not a file: {p}"}
-        if not _is_safe_path(p):
-            return {"success": False, "error": f"Access denied: path '{p}' is outside allowed directories"}
-        _MAX_FILE_BYTES = 2_000_000   # 2 MB hard limit
-        _LARGE_FILE_DEFAULT_LINES = 500  # auto-cap for files > 500 KB
-
-        if p.stat().st_size > _MAX_FILE_BYTES:
-            return {"success": False, "error": f"File too large: {p.stat().st_size:,} bytes (max 2 MB). Use offset/limit parameters to read sections."}
-        content = p.read_text(errors="replace")
-        lines = content.splitlines()
-        total_lines = len(lines)
-        offset = params.get("offset", 0)
-        limit = params.get("limit", 0)
-        # Auto-limit large files when no range specified
-        if not offset and not limit and p.stat().st_size > 500_000:
-            limit = _LARGE_FILE_DEFAULT_LINES
-        if offset or limit:
-            end = offset + limit if limit else total_lines
-            lines = lines[offset:end]
-            content = "\n".join(f"{i+offset+1:4d}│ {l}" for i, l in enumerate(lines))
-            if limit and end < total_lines:
-                content += f"\n... [{len(lines)} of {total_lines} lines shown — use offset/limit to read more]"
-        else:
-            content = "\n".join(f"{i+1:4d}│ {l}" for i, l in enumerate(lines))
+        offset = int(params.get("offset", 0) or 0)
+        limit = int(params.get("limit", 0) or 0)
+        result = WorkspaceFiles().read_file(path, offset=offset, limit=limit)
         return {"success": True, "data": {
-            "path": str(p), "lines": len(lines),
-            "content": content[:30000]
+            "path": result.path, "lines": result.lines,
+            "content": result.content
         }}
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -1515,11 +1295,15 @@ def _auto_fix_python(content: str, path: str) -> str:
         if stripped.startswith("import ") or stripped.startswith("from "):
             # Extract module name
             if stripped.startswith("import "):
-                mod = stripped.split()[1].split(".")[0].split(",")[0]
-                imports_present.add(mod)
+                _parts = stripped.split()
+                if len(_parts) >= 2:
+                    mod = _parts[1].split(".")[0].split(",")[0]
+                    imports_present.add(mod)
             elif stripped.startswith("from "):
-                mod = stripped.split()[1].split(".")[0]
-                imports_present.add(mod)
+                _parts = stripped.split()
+                if len(_parts) >= 2:
+                    mod = _parts[1].split(".")[0]
+                    imports_present.add(mod)
     # Detect needed imports by scanning code usage
     code_text = content
     needed = []
@@ -1660,6 +1444,7 @@ def _tool_write_file(params: dict) -> dict:
     path = params.get("path", "")
     content = params.get("content", "")
     skip_confirm = params.get("_skip_confirm", False)  # internal flag for scaffold
+    stage_only = bool(params.get("stage_only", False))
     if not path:
         return {"success": False, "error": "Missing 'path' parameter"}
     if not content:
@@ -1725,10 +1510,28 @@ def _tool_write_file(params: dict) -> dict:
                 return {"success": False, "error": "Write cancelled by user.",
                         "data": {"cancelled": True}}
 
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(content)
+        change = GLOBAL_CHANGE_STORE.stage(p, content, source="write_file")
         lines = content.count("\n") + 1
         action = "Updated" if existed else "Created"
+        if stage_only:
+            action_label = "Staged update" if existed else "Staged create"
+            if HAS_RICH:
+                console.print(f"  [dim]{action_label} {p} ({lines} lines, change {change.change_id})[/dim]")
+            else:
+                print(f"  {action_label} {p} ({lines} lines, change {change.change_id})")
+            return {"success": True, "data": {
+                "path": str(p), "action": "staged",
+                "lines": lines, "change_id": change.change_id,
+                "before_hash": change.before_hash,
+                "after_hash": change.after_hash,
+                "diff": change.diff,
+                "staged": True,
+                "applied": False,
+            }}
+        try:
+            applied = GLOBAL_CHANGE_STORE.apply(change.change_id)
+        except ChangeConflictError as exc:
+            return {"success": False, "error": str(exc), "data": {"change_id": change.change_id}}
         if HAS_RICH:
             console.print(f"  [dim]{action} {p} ({lines} lines)[/dim]")
         else:
@@ -1740,6 +1543,12 @@ def _tool_write_file(params: dict) -> dict:
         return {"success": True, "data": {
             "path": str(p), "action": action.lower(),
             "lines": lines, "size_bytes": _size_bytes,
+            "change_id": applied.change_id,
+            "before_hash": applied.before_hash,
+            "after_hash": applied.after_hash,
+            "diff": applied.diff,
+            "staged": True,
+            "applied": True,
         }}
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -1750,6 +1559,7 @@ def _tool_edit_file(params: dict) -> dict:
     path = params.get("path", "")
     old_str = params.get("old_string", params.get("old_str", ""))
     new_str = params.get("new_string", params.get("new_str", ""))
+    stage_only = bool(params.get("stage_only", False))
     if not path:
         return {"success": False, "error": "Missing 'path' parameter"}
     if not old_str:
@@ -1771,9 +1581,28 @@ def _tool_edit_file(params: dict) -> dict:
                     f"HINT: Use read_file to see the actual content, then retry edit_file with the correct old_string. "
                     f"Or use write_file to overwrite the entire file."}
         new_content = content.replace(old_str, new_str, 1)
-        p.write_text(new_content)
+        change = GLOBAL_CHANGE_STORE.stage(p, new_content, source="edit_file")
         added = len(new_str.splitlines())
         removed = len(old_str.splitlines())
+        if stage_only:
+            if HAS_RICH:
+                console.print(f"  [dim]Staged edit {p} (change {change.change_id})[/dim]")
+            else:
+                print(f"  Staged edit {p} (change {change.change_id})")
+            return {"success": True, "data": {
+                "path": str(p), "replacements": 1,
+                "lines": new_content.count("\n") + 1,
+                "change_id": change.change_id,
+                "before_hash": change.before_hash,
+                "after_hash": change.after_hash,
+                "diff": change.diff,
+                "staged": True,
+                "applied": False,
+            }}
+        try:
+            applied = GLOBAL_CHANGE_STORE.apply(change.change_id)
+        except ChangeConflictError as exc:
+            return {"success": False, "error": str(exc), "data": {"change_id": change.change_id}}
         if HAS_RICH:
             summary = []
             if added > 0:
@@ -1785,7 +1614,13 @@ def _tool_edit_file(params: dict) -> dict:
             print(f"  Applied (+{added}, -{removed} lines)")
         return {"success": True, "data": {
             "path": str(p), "replacements": 1,
-            "lines": new_content.count("\n") + 1
+            "lines": new_content.count("\n") + 1,
+            "change_id": applied.change_id,
+            "before_hash": applied.before_hash,
+            "after_hash": applied.after_hash,
+            "diff": applied.diff,
+            "staged": True,
+            "applied": True,
         }}
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -1796,21 +1631,10 @@ def _tool_list_files(params: dict) -> dict:
     path = params.get("path", ".")
     pattern = params.get("pattern", "*")
     try:
-        p = pathlib.Path(path).expanduser().resolve()
-        if not p.exists():
-            return {"success": False, "error": f"Path not found: {p}"}
-        if p.is_file():
-            return _tool_read_file({"path": str(p)})
-        matches = sorted(p.glob(pattern))[:100]
-        items = []
-        for m in matches:
-            rel = m.relative_to(p) if m.is_relative_to(p) else m
-            kind = "dir" if m.is_dir() else "file"
-            size = m.stat().st_size if m.is_file() else 0
-            items.append({"name": str(rel), "type": kind, "size": size})
+        data = WorkspaceFiles().list_files(path, pattern)
         return {"success": True, "data": {
-            "path": str(p), "pattern": pattern,
-            "count": len(items), "items": items
+            "path": data["path"], "pattern": data["pattern"],
+            "count": data["count"], "items": data["items"]
         }}
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -1824,698 +1648,54 @@ def _tool_search_code(params: dict) -> dict:
     if not pattern:
         return {"success": False, "error": "Missing 'pattern' parameter"}
     try:
-        p = pathlib.Path(path).expanduser().resolve()
-        matches = []
-        regex = re_module.compile(pattern, re_module.IGNORECASE)
-        for fpath in sorted(p.glob(file_glob))[:200]:
-            if not fpath.is_file() or fpath.stat().st_size > 5_000_000:  # 5 MB search limit
-                continue
-            try:
-                lines = fpath.read_text(errors="replace").splitlines()
-                for i, line in enumerate(lines, 1):
-                    if regex.search(line):
-                        matches.append({
-                            "file": str(fpath.relative_to(p) if fpath.is_relative_to(p) else fpath),
-                            "line": i,
-                            "content": line.strip()[:200],
-                        })
-                        if len(matches) >= 50:
-                            break
-            except Exception:
-                continue
-            if len(matches) >= 50:
-                break
+        data = WorkspaceFiles().search_code(pattern, path, file_glob)
         return {"success": True, "data": {
-            "pattern": pattern, "path": str(p),
-            "count": len(matches), "matches": matches
+            "pattern": data["pattern"], "path": data["path"],
+            "count": data["count"], "matches": data["matches"]
         }}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
 
 def _tool_run_command(params: dict) -> dict:
-    """Run a shell command and return output."""
-    command = params.get("command", "")
-    if not command:
-        return {"success": False, "error": "Missing 'command' parameter"}
+    """Run a shell command — thin wrapper supplying global defaults."""
+    params.setdefault("permission_mode", _ACTIVE_PERMISSION_MODE[0])
+    params.setdefault("network_enabled", _ACTIVE_NETWORK_ENABLED[0])
+    return _src_run_command(params, console=console, has_rich=HAS_RICH)
 
-    # If the user explicitly approved this command in the confirmation picker,
-    # use "balanced" as the effective policy so medium-risk commands are not
-    # double-blocked after the user already said yes.
-    effective_policy = params.get("policy", "safe")
-    if params.get("user_approved") and effective_policy == "safe":
-        effective_policy = "balanced"
-
-    decision = evaluate_command_policy(command, effective_policy)
-    command = decision.normalized_command
-
-    # Safety: always block truly dangerous commands regardless of approval
-    dangerous = ["rm -rf /", "mkfs", "dd if=", "> /dev/", ":(){ :", "fork bomb"]
-    for d in dangerous:
-        if d in command:
-            return {"success": False, "error": f"Blocked dangerous command: {command}"}
-
-    if params.get("dry_run"):
-        return {"success": True, "data": {"command": command, "risk": decision.risk, "policy": decision.policy, "dry_run": True}}
-    if not decision.allowed:
-        return {"success": False, "error": decision.reason}
-    try:
-        cwd = params.get("cwd", None)
-        timeout = min(params.get("timeout", 120), 300)
-        use_shell = True
-        argv = None
-        # For low-risk commands, prefer argv execution to reduce shell injection surface.
-        if decision.risk == "low":
-            has_shell_meta = any(ch in command for ch in ["|", "&", ";", "<", ">", "$", "`", "\n"])
-            if not has_shell_meta:
-                try:
-                    argv = shlex.split(command)
-                    if argv:
-                        use_shell = False
-                except ValueError:
-                    use_shell = True
-                    argv = None
-
-        result = subprocess.run(
-            argv if (argv and not use_shell) else command,
-            shell=use_shell,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            cwd=cwd,
-        )
-        output = result.stdout[-5000:] if len(result.stdout) > 5000 else result.stdout
-        stderr = result.stderr[-2000:] if len(result.stderr) > 2000 else result.stderr
-
-        # ---- HARNESS-LEVEL AUTO-FIX (v3.8: multi-round, up to 3 retries) ----
-        # If python3 script failed, try to auto-fix common errors and re-run
-        MAX_AUTO_FIX_ROUNDS = 3
-        if result.returncode != 0 and command.strip().startswith("python3 "):
-            script_path = command.strip().split("python3 ", 1)[1].strip().split()[0]
-            script_p = pathlib.Path(script_path).expanduser().resolve()
-
-            for _fix_round in range(MAX_AUTO_FIX_ROUNDS):
-                combined_err = (output + " " + stderr).strip()
-                auto_fixed = False
-
-                if not (script_p.exists() and script_p.suffix == ".py"):
-                    break
-                script_content = script_p.read_text(errors="replace")
-
-                # Auto-fix: NameError — missing import
-                name_match = re_module.search(r"NameError: name ['\"](\w+)['\"] is not defined", combined_err)
-                if name_match and not auto_fixed:
-                    missing = name_match.group(1)
-                    import_map = {
-                        "os": "import os", "sys": "import sys", "re": "import re",
-                        "json": "import json", "math": "import math", "time": "import time",
-                        "np": "import numpy as np", "pd": "import pandas as pd",
-                        "yf": "import yfinance as yf", "plt": "import matplotlib.pyplot as plt",
-                        "mpf": "import mplfinance as mpf", "datetime": "from datetime import datetime, timedelta",
-                        "Path": "from pathlib import Path", "timedelta": "from datetime import datetime, timedelta",
-                        "go": "import plotly.graph_objects as go", "px": "import plotly.express as px",
-                        "ta": "import pandas_ta as ta", "warnings": "import warnings",
-                        "make_subplots": "from plotly.subplots import make_subplots",
-                        "bt": "import backtrader as bt", "vbt": "import vectorbt as vbt",
-                        "ccxt": "import ccxt", "requests": "import requests",
-                        "BeautifulSoup": "from bs4 import BeautifulSoup",
-                        "tqdm": "from tqdm import tqdm",
-                        "xgb": "import xgboost as xgb",
-                        "Prophet": "from prophet import Prophet",
-                        "arch": "from arch import arch_model",
-                        "statsmodels": "import statsmodels.api as sm",
-                        "sm": "import statsmodels.api as sm",
-                    }
-                    fix_import = import_map.get(missing)
-                    if fix_import and fix_import not in script_content:
-                        lines = script_content.split("\n")
-                        insert_at = 0
-                        for i, l in enumerate(lines):
-                            if l.strip().startswith("#!") or l.strip().startswith("# -*-"):
-                                insert_at = i + 1
-                            else:
-                                break
-                        lines.insert(insert_at, fix_import)
-                        if missing == "plt" and "matplotlib.use" not in script_content:
-                            lines.insert(insert_at, "import matplotlib; matplotlib.use('Agg')")
-                        script_p.write_text("\n".join(lines))
-                        auto_fixed = True
-                        if HAS_RICH:
-                            console.print(f"  [#C08050]Auto-fix[{_fix_round+1}/{MAX_AUTO_FIX_ROUNDS}]:[/#C08050] [dim]added '{fix_import}'[/dim]")
-
-                # Auto-fix: matplotlib.use() ordering
-                if not auto_fixed and ("cannot be resolved at runtime" in combined_err.lower() or
-                   ("matplotlib" in combined_err and "backend" in combined_err.lower())):
-                    if "matplotlib.use" not in script_content and "matplotlib.pyplot" in script_content:
-                        script_content = script_content.replace(
-                            "import matplotlib.pyplot as plt",
-                            "import matplotlib; matplotlib.use('Agg')\nimport matplotlib.pyplot as plt"
-                        )
-                        script_p.write_text(script_content)
-                        auto_fixed = True
-                        if HAS_RICH:
-                            console.print(f"  [#C08050]Auto-fix[{_fix_round+1}]:[/#C08050] [dim]added matplotlib.use('Agg')[/dim]")
-
-                # Auto-fix: yfinance MultiIndex KeyError
-                key_match = re_module.search(r"KeyError: ['\"]?(Close|Open|High|Low|Volume|Adj Close)", combined_err)
-                if key_match and not auto_fixed and "yfinance" in script_content:
-                    if "columns.droplevel" not in script_content:
-                        fix_line = (
-                            "\n# Fix yfinance MultiIndex columns\n"
-                            "if isinstance(df.columns, pd.MultiIndex):\n"
-                            "    df.columns = df.columns.droplevel(1)\n"
-                        )
-                        dl_match = re_module.search(r'(.*=\s*yf\.download\([^)]+\))', script_content)
-                        if dl_match:
-                            script_content = script_content.replace(
-                                dl_match.group(0), dl_match.group(0) + fix_line
-                            )
-                            script_p.write_text(script_content)
-                            auto_fixed = True
-                            if HAS_RICH:
-                                console.print(f"  [#C08050]Auto-fix[{_fix_round+1}]:[/#C08050] [dim]MultiIndex column fix[/dim]")
-
-                # Auto-fix: AttributeError common patterns
-                attr_match = re_module.search(r"AttributeError: '(\w+)' object has no attribute '(\w+)'", combined_err)
-                if attr_match and not auto_fixed:
-                    obj_type, attr_name = attr_match.group(1), attr_match.group(2)
-                    # DataFrame.append → pd.concat
-                    if obj_type == "DataFrame" and attr_name == "append":
-                        script_content = re_module.sub(
-                            r'(\w+)\.append\(([^)]+)\)',
-                            r'pd.concat([\1, \2], ignore_index=True)',
-                            script_content
-                        )
-                        script_p.write_text(script_content)
-                        auto_fixed = True
-                        if HAS_RICH:
-                            console.print(f"  [#C08050]Auto-fix[{_fix_round+1}]:[/#C08050] [dim]DataFrame.append→pd.concat[/dim]")
-
-                # Auto-fix: TypeError common patterns (e.g., yfinance parameter changes)
-                if not auto_fixed and "TypeError" in combined_err:
-                    # yfinance: auto_adjust parameter removed in newer versions
-                    if "auto_adjust" in combined_err and "auto_adjust" in script_content:
-                        script_content = re_module.sub(r',\s*auto_adjust\s*=\s*(True|False)', '', script_content)
-                        script_p.write_text(script_content)
-                        auto_fixed = True
-                        if HAS_RICH:
-                            console.print(f"  [#C08050]Auto-fix[{_fix_round+1}]:[/#C08050] [dim]removed deprecated auto_adjust param[/dim]")
-
-                # Auto-fix: ModuleNotFoundError — auto pip3 install
-                mod_match = re_module.search(r"No module named ['\"]?(\w+)", combined_err)
-                if mod_match and not auto_fixed:
-                    missing_mod = mod_match.group(1)
-                    pip_map = {
-                        "mplfinance": "mplfinance", "plotly": "plotly",
-                        "pandas_ta": "pandas_ta", "ta": "ta",
-                        "sklearn": "scikit-learn", "cv2": "opencv-python",
-                        "bs4": "beautifulsoup4", "PIL": "Pillow",
-                        "backtrader": "backtrader", "vectorbt": "vectorbt",
-                        "ccxt": "ccxt", "prophet": "prophet",
-                        "arch": "arch", "xgboost": "xgboost",
-                        "lightgbm": "lightgbm", "statsmodels": "statsmodels",
-                        "akshare": "akshare", "tushare": "tushare",
-                        "empyrical": "empyrical", "pyfolio": "pyfolio",
-                        "seaborn": "seaborn", "openpyxl": "openpyxl",
-                    }
-                    pip_pkg = pip_map.get(missing_mod, missing_mod)
-                    if HAS_RICH:
-                        console.print(f"  [#C08050]Auto-fix[{_fix_round+1}]:[/#C08050] [dim]pip3 install {pip_pkg}[/dim]")
-                    pip_result = subprocess.run(
-                        f"pip3 install {pip_pkg}", shell=True, capture_output=True,
-                        text=True, timeout=60
-                    )
-                    if pip_result.returncode == 0:
-                        auto_fixed = True
-
-                # If auto-fixed, re-run and check again (loop continues)
-                if auto_fixed:
-                    if HAS_RICH:
-                        console.print(f"  [dim]Re-running after auto-fix (round {_fix_round+1}/{MAX_AUTO_FIX_ROUNDS})...[/dim]")
-                    result = subprocess.run(
-                        command, shell=True, capture_output=True, text=True,
-                        timeout=timeout, cwd=cwd,
-                    )
-                    output = result.stdout[-5000:] if len(result.stdout) > 5000 else result.stdout
-                    stderr = result.stderr[-2000:] if len(result.stderr) > 2000 else result.stderr
-                    if result.returncode == 0:
-                        break  # Success! Exit fix loop
-                else:
-                    break  # No fix found, stop trying
-        # ---- END AUTO-FIX ----
-
-        if HAS_RICH:
-            if result.returncode == 0:
-                console.print(f"  [green]Command completed[/green] [dim](exit {result.returncode})[/dim]")
-            else:
-                console.print(f"  [dim]Command exited {result.returncode}[/dim]")
-            # Show stdout/stderr preview
-            out_preview = output.strip().splitlines()[:6]
-            for ol in out_preview:
-                console.print(f"    [dim]{ol[:120]}[/dim]")
-            if len(output.strip().splitlines()) > 6:
-                console.print(f"    [dim]...truncated[/dim]")
-            if stderr.strip() and result.returncode != 0:
-                for el in stderr.strip().splitlines()[:3]:
-                    console.print(f"    [red]{el[:120]}[/red]")
-        else:
-            print(f"  Command exit: {result.returncode}")
-        return {"success": True, "data": {
-            "command": command, "exit_code": result.returncode,
-            "stdout": output, "stderr": stderr,
-        }}
-    except subprocess.TimeoutExpired:
-        return {"success": False, "error": f"Command timed out ({timeout}s)"}
-    except KeyboardInterrupt:
-        if HAS_RICH:
-            console.print(f"  [dim]Command interrupted[/dim]")
-        return {"success": False, "error": "Command interrupted by user (Ctrl+C)"}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-
-# ─── Extended tools: web_fetch, github, glob, notebook, multi_edit ────────────
 
 def _tool_web_fetch(params: dict) -> dict:
-    """Fetch the text content of any URL (web page, GitHub raw, docs, APIs).
-
-    Returns cleaned plain-text suitable for LLM context.
-    """
-    url = params.get("url", "").strip()
-    if not url:
-        return {"success": False, "error": "Missing 'url' parameter"}
-    if not url.startswith(("http://", "https://")):
-        url = "https://" + url
-    max_chars = min(int(params.get("max_chars", 12000)), 40000)
-    timeout   = min(int(params.get("timeout", 15)), 30)
-    try:
-        import urllib.request as _ur, ssl as _ssl, re as _re
-        _prx = _ur.getproxies()
-        headers = {
-            "User-Agent": (
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/124.0 Safari/537.36"
-            ),
-            "Accept": "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8",
-        }
-        # GitHub: convert HTML page URLs to raw.githubusercontent.com for cleaner text
-        _gh = _re.match(
-            r"https://github\.com/([^/]+/[^/]+)/blob/([^?#]+)", url
-        )
-        if _gh:
-            url = f"https://raw.githubusercontent.com/{_gh.group(1)}/{_gh.group(2)}"
-
-        import requests as _req
-        s = _req.Session()
-        s.proxies = _prx
-        s.verify = False
-        r = s.get(url, headers=headers, timeout=timeout)
-        r.raise_for_status()
-        raw = r.text
-
-        # Detect if JSON
-        ct = r.headers.get("content-type", "")
-        if "json" in ct or raw.lstrip().startswith(("{", "[")):
-            return {"success": True, "data": {
-                "url": url, "content_type": ct,
-                "text": raw[:max_chars], "length": len(raw),
-            }}
-
-        # Strip HTML → plain text
-        text = _re.sub(r"<script[^>]*>.*?</script>", " ", raw, flags=_re.DOTALL | _re.I)
-        text = _re.sub(r"<style[^>]*>.*?</style>",   " ", text, flags=_re.DOTALL | _re.I)
-        text = _re.sub(r"<[^>]+>",     " ", text)
-        text = _re.sub(r"&nbsp;",      " ", text)
-        text = _re.sub(r"&amp;",       "&", text)
-        text = _re.sub(r"&lt;",        "<", text)
-        text = _re.sub(r"&gt;",        ">", text)
-        text = _re.sub(r"&quot;",      '"', text)
-        text = _re.sub(r"\s{3,}",      "\n", text)
-        text = text.strip()
-
-        return {"success": True, "data": {
-            "url": url, "content_type": ct,
-            "text": text[:max_chars], "length": len(text),
-            "truncated": len(text) > max_chars,
-        }}
-    except Exception as e:
-        return {"success": False, "error": f"web_fetch failed: {e}"}
+    return _src_web_fetch(params)
 
 
 def _tool_github(params: dict) -> dict:
-    """GitHub API / gh CLI integration.
-
-    actions:
-      list_prs          - list open pull requests
-      list_issues       - list open issues
-      view_pr N         - view PR #N (title, body, diff summary)
-      view_issue N      - view issue #N
-      create_pr         - create a new PR (requires title, body, branch, base)
-      list_commits [N]  - recent N commits (default 10)
-      read_file path    - read a file from GitHub (owner/repo@ref:path)
-      search q          - search code/issues on GitHub
-    All read-only operations use gh CLI; create_pr also uses gh.
-    """
-    action = params.get("action", "list_prs").lower().replace("-", "_")
-    cwd    = params.get("cwd") or None
-    policy = "safe"
-
-    # ── Helper: run gh CLI ─────────────────────────────────────────────
-    def _gh(cmd: str, timeout: int = 20) -> dict:
-        import shutil
-        if not shutil.which("gh"):
-            return {"success": False,
-                    "error": "gh CLI not found. Install: brew install gh && gh auth login"}
-        return _tool_run_command({"command": cmd, "cwd": cwd, "timeout": timeout,
-                                   "policy": policy})
-
-    # ── list_prs ───────────────────────────────────────────────────────
-    if action in ("list_prs", "prs", "pull_requests"):
-        state = params.get("state", "open")
-        limit = int(params.get("limit", 20))
-        return _gh(f"gh pr list --state {state} --limit {limit} --json number,title,author,state,headRefName,url")
-
-    # ── list_issues ────────────────────────────────────────────────────
-    if action in ("list_issues", "issues"):
-        state = params.get("state", "open")
-        limit = int(params.get("limit", 20))
-        label = f' --label "{params["label"]}"' if params.get("label") else ""
-        return _gh(f"gh issue list --state {state} --limit {limit}{label} --json number,title,author,state,labels,url")
-
-    # ── view_pr ────────────────────────────────────────────────────────
-    if action in ("view_pr", "pr"):
-        number = params.get("number") or params.get("pr")
-        if not number:
-            return {"success": False, "error": "Missing 'number' parameter"}
-        r = _gh(f"gh pr view {number} --json number,title,body,state,headRefName,baseRefName,additions,deletions,files,url")
-        return r
-
-    # ── view_issue ─────────────────────────────────────────────────────
-    if action in ("view_issue", "issue"):
-        number = params.get("number") or params.get("issue")
-        if not number:
-            return {"success": False, "error": "Missing 'number' parameter"}
-        return _gh(f"gh issue view {number} --json number,title,body,state,labels,comments,url")
-
-    # ── create_pr ─────────────────────────────────────────────────────
-    if action == "create_pr":
-        title  = params.get("title", "")
-        body   = params.get("body", "")
-        branch = params.get("branch", "")
-        base   = params.get("base", "main")
-        if not title:
-            return {"success": False, "error": "Missing 'title' for create_pr"}
-        b_flag = f"--head {shlex.quote(branch)}" if branch else ""
-        cmd = (
-            f"gh pr create --title {shlex.quote(title)} "
-            f"--body {shlex.quote(body)} "
-            f"--base {shlex.quote(base)} {b_flag}"
-        )
-        return _gh(cmd, timeout=30)
-
-    # ── list_commits ───────────────────────────────────────────────────
-    if action in ("list_commits", "commits", "log"):
-        limit = int(params.get("limit", 10))
-        return _gh(f"gh api repos/{{owner}}/{{repo}}/commits?per_page={limit} "
-                   f"--jq '[.[] | {{sha: .sha[:7], message: .commit.message | split(\"\\n\")[0], author: .commit.author.name, date: .commit.author.date}}]'")
-
-    # ── search ─────────────────────────────────────────────────────────
-    if action == "search":
-        q = params.get("q") or params.get("query", "")
-        kind = params.get("kind", "code")  # code / issues / repos
-        if not q:
-            return {"success": False, "error": "Missing 'q' parameter"}
-        return _gh(f"gh search {kind} {shlex.quote(q)} --limit 10 --json url,path,textMatches", timeout=15)
-
-    # ── read_file (via raw.githubusercontent.com) ──────────────────────
-    if action in ("read_file", "file"):
-        ref = params.get("ref", "")       # e.g. "owner/repo@main:path/to/file"
-        file_path = params.get("path", "")
-        if ref:
-            # Parse "owner/repo@ref:path" format
-            import re as _re2
-            m = _re2.match(r"([^@:]+)@([^:]+):(.+)", ref)
-            if m:
-                repo, branch, fp = m.groups()
-                url = f"https://raw.githubusercontent.com/{repo}/{branch}/{fp}"
-                return _tool_web_fetch({"url": url, "max_chars": 20000})
-        if file_path:
-            return _gh(f"gh api repos/{{owner}}/{{repo}}/contents/{file_path} --jq '.content' | base64 -d")
-        return {"success": False, "error": "Provide 'ref' (owner/repo@branch:path) or 'path'"}
-
-    # ── pr_diff ────────────────────────────────────────────────────────
-    if action in ("pr_diff", "diff"):
-        number = params.get("number") or params.get("pr")
-        if not number:
-            return {"success": False, "error": "Missing 'number' parameter"}
-        return _gh(f"gh pr diff {number}", timeout=30)
-
-    # ── pr_checks ─────────────────────────────────────────────────────
-    if action in ("pr_checks", "checks", "ci"):
-        number = params.get("number") or params.get("pr")
-        return _gh(f"gh pr checks {number or ''}")
-
-    return {"success": False, "error": f"Unknown GitHub action: '{action}'. "
-            "Use: list_prs, list_issues, view_pr, view_issue, create_pr, list_commits, search, read_file, pr_diff, pr_checks"}
+    params.setdefault("permission_mode", _ACTIVE_PERMISSION_MODE[0])
+    params.setdefault("network_enabled", _ACTIVE_NETWORK_ENABLED[0])
+    return _src_github(params, console=console, has_rich=HAS_RICH)
 
 
 def _tool_glob(params: dict) -> dict:
-    """Fast file-pattern search across the project.
-
-    Returns a flat list of matching file paths, sorted.
-    Supports ** recursive globs. Faster and more focused than list_files.
-    """
-    pattern = params.get("pattern", "**/*")
-    root    = params.get("path", ".").strip() or "."
-    limit   = min(int(params.get("limit", 200)), 1000)
-    try:
-        p = pathlib.Path(root).expanduser().resolve()
-        if not p.is_dir():
-            return {"success": False, "error": f"Directory not found: {p}"}
-        results = sorted(
-            str(fp.relative_to(p) if fp.is_relative_to(p) else fp)
-            for fp in p.glob(pattern)
-            if fp.is_file()
-        )[:limit]
-        return {"success": True, "data": {
-            "pattern": pattern, "root": str(p),
-            "count": len(results), "files": results,
-        }}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+    return _src_glob(params)
 
 
 def _tool_notebook_read(params: dict) -> dict:
-    """Read a Jupyter notebook (.ipynb) and return cells as text.
-
-    Returns each cell's source + outputs formatted for LLM context.
-    """
-    path = params.get("path", "")
-    if not path:
-        return {"success": False, "error": "Missing 'path' parameter"}
-    try:
-        p = pathlib.Path(path).expanduser().resolve()
-        if not p.exists():
-            return {"success": False, "error": f"File not found: {p}"}
-        if p.suffix != ".ipynb":
-            return {"success": False, "error": f"Not a notebook: {p}"}
-        if not _is_safe_path(p):
-            return {"success": False, "error": f"Access denied: {p}"}
-        nb = json.loads(p.read_text(errors="replace"))
-        cells = nb.get("cells", [])
-        lines = []
-        for i, cell in enumerate(cells):
-            ct   = cell.get("cell_type", "code")
-            src  = "".join(cell.get("source", []))
-            prefix = f"[Cell {i+1} | {ct}]"
-            lines.append(f"{prefix}\n{src}")
-            if ct == "code":
-                for out in cell.get("outputs", []):
-                    text = out.get("text") or out.get("data", {}).get("text/plain", [])
-                    if isinstance(text, list):
-                        text = "".join(text)
-                    if text:
-                        lines.append(f"  # Output: {text[:300].strip()}")
-        content = "\n\n".join(lines)
-        return {"success": True, "data": {
-            "path": str(p), "cell_count": len(cells),
-            "content": content[:30000],
-        }}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+    return _src_notebook_read(params)
 
 
 def _tool_notebook_edit(params: dict) -> dict:
-    """Edit a cell in a Jupyter notebook by cell index.
+    return _src_notebook_edit(params)
 
-    params: path, cell_index (0-based), new_source
-    """
-    path       = params.get("path", "")
-    cell_index = int(params.get("cell_index", 0))
-    new_source = params.get("new_source") or params.get("source", "")
-    if not path:
-        return {"success": False, "error": "Missing 'path'"}
-    if not new_source:
-        return {"success": False, "error": "Missing 'new_source'"}
-    try:
-        p = pathlib.Path(path).expanduser().resolve()
-        if not _is_safe_path(p):
-            return {"success": False, "error": f"Access denied: {p}"}
-        nb = json.loads(p.read_text(errors="replace"))
-        cells = nb.get("cells", [])
-        if cell_index < 0 or cell_index >= len(cells):
-            return {"success": False, "error": f"Cell index {cell_index} out of range (0–{len(cells)-1})"}
-        cells[cell_index]["source"] = [new_source]
-        # Clear outputs for the edited cell
-        if cells[cell_index].get("cell_type") == "code":
-            cells[cell_index]["outputs"] = []
-            cells[cell_index]["execution_count"] = None
-        p.write_text(json.dumps(nb, indent=1, ensure_ascii=False) + "\n")
-        return {"success": True, "data": {
-            "path": str(p), "cell_index": cell_index,
-            "message": f"Cell {cell_index} updated successfully",
-        }}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+
+def _tool_broker_query(params: dict) -> dict:
+    return _src_broker_query(params)
+
+
+def _tool_broker_order(params: dict) -> dict:
+    return _src_broker_order(params)
 
 
 def _tool_get_market_data(params: dict) -> dict:
-    """
-    Fetch real-time market data (quote + technical indicators) for a stock/ETF/crypto.
-    Supports A-shares (6-digit code), HK (.HK), US (AAPL), crypto (BTC).
-    Primary: yfinance / MarketDataClient. Fallback: Finnhub.
-    Returns structured data for LLM consumption.
-    """
-    symbol = str(params.get("symbol", "")).strip().upper()
-    if not symbol:
-        return {"success": False, "error": "symbol is required"}
-
-    # ── 1. Quote ──────────────────────────────────────────────────────────────
-    quote: dict = {"success": False, "error": "market data client unavailable"}
-    if _HAS_MDC:
-        import time as _t
-        mdc = _get_mdc()
-        for _att in range(3):
-            try:
-                quote = mdc.quote(symbol)
-                if quote.get("success"):
-                    break
-                _e = str(quote.get("error", "")).lower()
-                if ("rate" in _e or "429" in _e) and _att < 2:
-                    _t.sleep(2 ** _att)
-                    continue
-                break
-            except Exception as exc:
-                _es = str(exc).lower()
-                if ("rate" in _es or "429" in _es) and _att < 2:
-                    _t.sleep(2 ** _att)
-                    continue
-                # Clean up raw Python exception strings
-                _raw = str(exc)
-                if "Connection aborted" in _raw or "RemoteDisconnected" in _raw:
-                    quote = {"success": False, "error": "网络连接中断，请稍后重试"}
-                elif "Connection refused" in _raw:
-                    quote = {"success": False, "error": "连接被拒绝，数据服务暂时不可用"}
-                elif "timeout" in _raw.lower():
-                    quote = {"success": False, "error": "连接超时，请稍后重试"}
-                else:
-                    quote = {"success": False, "error": _raw}
-                break
-
-    # Finnhub fallback for US/global symbols
-    if not quote.get("success"):
-        _fh_key = _get_provider_key("finnhub")
-        if _fh_key:
-            try:
-                import requests as _rq
-                _r = _rq.get(
-                    f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={_fh_key}",
-                    timeout=6,
-                )
-                if _r.status_code == 200:
-                    _fh = _r.json()
-                    if _fh.get("c"):
-                        _pc = _fh.get("pc") or _fh["c"]
-                        quote = {
-                            "success": True, "symbol": symbol,
-                            "price": round(_fh["c"], 4),
-                            "change_pct": round((_fh["c"] - _pc) / _pc * 100, 2) if _pc else 0,
-                            "high": round(_fh.get("h", 0), 4),
-                            "low": round(_fh.get("l", 0), 4),
-                            "currency": "USD", "provider": "finnhub",
-                        }
-            except Exception:
-                pass
-
-    if not quote.get("success"):
-        return quote  # propagate error with clean message
-
-    result = {
-        "success":    True,
-        "symbol":     symbol,
-        "name":       quote.get("name") or symbol,
-        "price":      quote.get("price"),
-        "change_pct": quote.get("change_pct"),
-        "high":       quote.get("high"),
-        "low":        quote.get("low"),
-        "volume":     quote.get("volume"),
-        "market_cap": quote.get("market_cap"),
-        "currency":   quote.get("currency") or "USD",
-        "provider":   quote.get("provider") or "market_data_client",
-    }
-
-    # ── 2. Technical indicators ───────────────────────────────────────────────
-    ti: dict = {}
-    if _HAS_MDC:
-        try:
-            ti = mdc.technical_indicators(symbol, days=120) or {}
-        except Exception:
-            ti = {}
-
-    if not ti.get("success") or ti.get("rsi") is None:
-        try:
-            import yfinance as _yf, numpy as _np
-            _yf_sym = symbol
-            if symbol.isdigit() and len(symbol) == 6:
-                _yf_sym = symbol + (".SS" if symbol.startswith("6") else ".SZ")
-            _hist = _yf.Ticker(_yf_sym).history(period="6mo")
-            if len(_hist) >= 20:
-                _c = _hist["Close"]
-                _v = _hist["Volume"]
-                _d = _c.diff()
-                _g = _d.clip(lower=0).rolling(14).mean()
-                _l = (-_d.clip(upper=0)).rolling(14).mean()
-                _rsi = float((100 - 100 / (1 + _g / _l.replace(0, _np.nan))).iloc[-1])
-                _ema12 = _c.ewm(span=12).mean()
-                _ema26 = _c.ewm(span=26).mean()
-                _macd  = _ema12 - _ema26
-                _mhist = float((_macd - _macd.ewm(span=9).mean()).iloc[-1])
-                _ma20  = _c.rolling(20).mean()
-                _std20 = _c.rolling(20).std()
-                _ma60  = _c.rolling(60).mean() if len(_c) >= 60 else _ma20
-                ti = {
-                    "success":   True,
-                    "rsi":       round(_rsi, 2) if not _np.isnan(_rsi) else None,
-                    "macd_hist": round(_mhist, 4),
-                    "ma20":      round(float(_ma20.iloc[-1]), 2),
-                    "ma60":      round(float(_ma60.iloc[-1]), 2),
-                    "bb_upper":  round(float((_ma20 + 2*_std20).iloc[-1]), 2),
-                    "bb_lower":  round(float((_ma20 - 2*_std20).iloc[-1]), 2),
-                }
-                if result.get("volume") is None:
-                    _rv = _v.iloc[-1]
-                    if not _np.isnan(_rv):
-                        result["volume"] = int(_rv)
-        except Exception:
-            pass
-
-    if ti.get("success"):
-        for _k in ("rsi", "macd_hist", "ma20", "ma60", "bb_upper", "bb_lower"):
-            if ti.get(_k) is not None:
-                result[_k] = ti[_k]
-
-    return result
+    return _src_get_market_data(params)
 
 
 # Local tool registry: name → (handler, description, for display)
@@ -2535,7 +1715,20 @@ LOCAL_TOOLS = {
     "notebook_edit":  (_tool_notebook_edit,  "Edit a cell in a Jupyter notebook"),
     # ── Market data ─────────────────────────────────────────────────────────
     "get_market_data": (_tool_get_market_data, "Fetch real-time quote + technical indicators for any stock/ETF/crypto"),
+    # ── Broker account data ──────────────────────────────────────────────────
+    "broker_query": (_tool_broker_query, "Query connected broker: account balance, positions, or orders"),
+    "broker_order": (_tool_broker_order, "Propose a trade order — requires explicit user confirmation before execution"),
 }
+
+# ── Register computer-use tools (browser automation + desktop control) ──────
+_HAS_COMPUTER_USE = False
+try:
+    from computer_use_tools import COMPUTER_USE_TOOLS, COMPUTER_USE_SCHEMAS as _CU_SCHEMAS
+    LOCAL_TOOLS.update(COMPUTER_USE_TOOLS)
+    _HAS_COMPUTER_USE = True
+    logger.info("Registered %d computer-use tools", len(COMPUTER_USE_TOOLS))
+except ImportError:
+    _CU_SCHEMAS: list = []
 
 # ── Register local finance fallback tools (yfinance / akshare / ccxt) ──────
 # These fill in for remote Aria tools when local_mode=True or backend offline.
@@ -2783,16 +1976,106 @@ LOCAL_TOOL_SCHEMAS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "broker_query",
+            "description": (
+                "Query a connected brokerage account for account balance, current holdings (positions), "
+                "or order history. Use this when the user asks about their portfolio, cash balance, "
+                "unrealized P&L, or recent orders. This tool is READ-ONLY — it never places or cancels orders. "
+                "Call with query='account' for cash/balance, query='positions' for holdings, "
+                "query='orders' for order history."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "enum": ["account", "positions", "orders"],
+                        "description": "What to query: 'account' = cash/balance, 'positions' = holdings, 'orders' = order list",
+                    },
+                    "broker_id": {
+                        "type": "string",
+                        "description": "Optional broker id from ~/.arthera/brokers.json. Omit to use the active/default broker.",
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": ["all", "open", "filled", "cancelled"],
+                        "description": "For orders query: filter by status. Default 'all'.",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max number of orders to return (default 20).",
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "broker_order",
+            "description": (
+                "Propose a trade order (buy or sell). "
+                "IMPORTANT: This tool requires explicit user confirmation. "
+                "When called without confirmed=true, it returns an order preview with a "
+                "confirmation prompt. Only set confirmed=true after the user has explicitly "
+                "said '确认下单', 'confirm order', or equivalent in this conversation turn. "
+                "NEVER set confirmed=true on your own initiative."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "symbol": {
+                        "type": "string",
+                        "description": "Stock/ETF ticker symbol, e.g. AAPL, 600519, 0700.HK",
+                    },
+                    "side": {
+                        "type": "string",
+                        "enum": ["buy", "sell"],
+                        "description": "Trade direction: 'buy' to purchase, 'sell' to liquidate",
+                    },
+                    "quantity": {
+                        "type": "integer",
+                        "description": "Number of shares/units to trade (positive integer)",
+                    },
+                    "price": {
+                        "type": "number",
+                        "description": "Limit price. Omit for market orders.",
+                    },
+                    "order_type": {
+                        "type": "string",
+                        "enum": ["limit", "market"],
+                        "description": "Order type: 'limit' (default) or 'market'",
+                    },
+                    "confirmed": {
+                        "type": "boolean",
+                        "description": "Set to true ONLY after the user explicitly confirmed the order in this turn.",
+                    },
+                },
+                "required": ["symbol", "side", "quantity"],
+            },
+        },
+    },
 ]
+
+# Append computer-use schemas if the module loaded successfully
+if _HAS_COMPUTER_USE:
+    LOCAL_TOOL_SCHEMAS.extend(_CU_SCHEMAS)
 
 
 # Tools that require user confirmation before execution
 _CONFIRM_TOOLS = {"write_file", "edit_file", "run_command"}
-_auto_approve_session = False  # Set True when user chooses "Yes, allow all"
-
+# In bot mode (ARIA_BOT_MODE=1): auto-approve all tools and suppress visual output
+_ARIA_BOT_MODE: bool = bool(os.environ.get("ARIA_BOT_MODE"))
+_auto_approve_session: bool = _ARIA_BOT_MODE  # Set True when user chooses "Yes, allow all"
 
 def _show_edit_preview(params: dict):
     """Show a diff preview for edit_file (Claude Code style, Panel-boxed)."""
+    if _ARIA_BOT_MODE:
+        return
     path = params.get("path", "")
     old_str = params.get("old_string", params.get("old_str", ""))
     new_str = params.get("new_string", params.get("new_str", ""))
@@ -2867,6 +2150,8 @@ def _show_edit_preview(params: dict):
 
 def _show_write_preview(params: dict):
     """Show a content preview for write_file (Claude Code style, Panel-boxed)."""
+    if _ARIA_BOT_MODE:
+        return
     path = params.get("path", "")
     content = params.get("content", "")
     if not path:
@@ -2910,31 +2195,37 @@ def _show_write_preview(params: dict):
     ))
 
 
-def _confirm_tool_execution(tool_name: str, params: dict,
-                            config_policy: str = None) -> bool:
+def _apply_tool_approval(params: dict, decision: ApprovalDecision) -> dict:
+    """Apply approval state to CLI globals and execution params."""
+    global _auto_approve_session
+    if decision.auto_approve_session:
+        _auto_approve_session = True
+    return apply_approval_decision(params, decision)
+
+
+def _confirm_tool_execution_decision(tool_name: str, params: dict,
+                                     config_policy: str = None) -> ApprovalDecision:
     """Ask user to confirm before executing a destructive tool.
-    Returns True if approved, False if denied.
+    Returns a structured approval decision.
 
     For run_command: pre-flight policy check happens HERE, before showing the
     picker. If the command would be blocked even with user approval (high-risk),
     show error immediately. If medium-risk with 'safe' policy, offer to upgrade
     policy inline so the user can act without leaving the flow.
     """
-    global _auto_approve_session
     if config_policy is None:
         config_policy = _ACTIVE_COMMAND_POLICY[0]
     if _auto_approve_session:
         # Still inject policy so run_command doesn't re-block
         if tool_name == "run_command":
-            params["policy"] = config_policy
-            params["user_approved"] = True
-        return True
+            return ApprovalDecision.allow(policy=config_policy, user_approved=True)
+        return ApprovalDecision.allow()
     if tool_name not in _CONFIRM_TOOLS:
-        return True
+        return ApprovalDecision.allow()
 
     # ── Pre-flight for run_command ────────────────────────────────────────────
     if tool_name == "run_command":
-        from command_safety import evaluate_command_policy, classify_command_risk
+        from safety import classify_command_risk
         cmd = params.get("command", "")
         risk = classify_command_risk(cmd)
 
@@ -2948,7 +2239,7 @@ def _confirm_tool_execution(tool_name: str, params: dict,
                 ))
             else:
                 print(f"  ✗ 高风险命令已拒绝: {cmd[:80]}")
-            return False
+            return ApprovalDecision.deny("high-risk command")
 
         if risk == "medium" and config_policy == "safe":
             # Show a richer picker that includes a "Allow & upgrade policy" option
@@ -2967,21 +2258,21 @@ def _confirm_tool_execution(tool_name: str, params: dict,
             ]
             choice = _arrow_select(options, selected=0, title="")
             if choice == 0:
-                params["policy"] = "balanced"
-                params["user_approved"] = True
-                return True
+                return ApprovalDecision.allow(policy="balanced", user_approved=True)
             if choice == 1:
                 # Persist to config if possible
-                params["policy"] = "balanced"
-                params["user_approved"] = True
-                params["_upgrade_policy"] = True   # caller can read and save config
-                return True
+                return ApprovalDecision.allow(
+                    policy="balanced",
+                    user_approved=True,
+                    upgrade_policy=True,
+                )
             if choice == 2:
-                _auto_approve_session = True
-                params["policy"] = "balanced"
-                params["user_approved"] = True
-                return True
-            return False   # No
+                return ApprovalDecision.allow(
+                    policy="balanced",
+                    user_approved=True,
+                    auto_approve_session=True,
+                )
+            return ApprovalDecision.deny("user denied")   # No
 
     # ── Default confirmation for write_file / edit_file / low-risk run ────────
     if tool_name == "edit_file":
@@ -2990,8 +2281,7 @@ def _confirm_tool_execution(tool_name: str, params: dict,
         _show_write_preview(params)
     elif tool_name == "run_command":
         # Header already printed by on_tool_call — just pass through policy
-        params["policy"] = config_policy
-        params["user_approved"] = True
+        pass
 
     options = [
         ("Yes",          ""),
@@ -3002,22 +2292,33 @@ def _confirm_tool_execution(tool_name: str, params: dict,
 
     if choice == 0:
         if tool_name == "run_command":
-            params["user_approved"] = True
-        return True
+            return ApprovalDecision.allow(policy=config_policy, user_approved=True)
+        return ApprovalDecision.allow()
     if choice == 1:
-        _auto_approve_session = True
         if tool_name == "run_command":
-            params["user_approved"] = True
-        return True
-    return False
+            return ApprovalDecision.allow(
+                policy=config_policy,
+                user_approved=True,
+                auto_approve_session=True,
+            )
+        return ApprovalDecision.allow(auto_approve_session=True)
+    return ApprovalDecision.deny("user denied")
+
+
 
 
 def execute_local_tool(tool_name: str, params: dict) -> dict:
     """Execute a local tool by name."""
-    if tool_name in LOCAL_TOOLS:
-        handler, _ = LOCAL_TOOLS[tool_name]
-        return handler(params)
-    return {"success": False, "error": f"Unknown local tool: {tool_name}"}
+    executor = ToolExecutor(
+        LOCAL_TOOLS,
+        hook=_run_hook,
+        config={
+            "command_policy": _ACTIVE_COMMAND_POLICY[0],
+            "permission_mode": _ACTIVE_PERMISSION_MODE[0],
+            "network_enabled": _ACTIVE_NETWORK_ENABLED[0],
+        },
+    )
+    return executor.execute_local(tool_name, params)
 
 
 def _run_hook(hook_type: str, tool_name: str, params: dict, result: dict = None) -> None:
@@ -3138,529 +2439,28 @@ async def execute_aria_tool(base_url: str, tool_name: str, params: dict,
 # Ollama Local Client (fallback when AWS unavailable)
 # ============================================================================
 
-CODING_SYSTEM_PROMPT = (
-    "You are Aria, an elite quantitative finance AI agent with direct file system access on macOS.\n"
-    "You are a full-stack quant developer: you write production-grade Python code for financial analysis, "
-    "charting, backtesting, report generation, and interactive dashboards.\n\n"
+from apps.cli.prompts.coding import CODING_SYSTEM_PROMPT  # noqa: F401 — extracted
 
-    "## ABSOLUTE RULES\n"
-    "EVERY response MUST contain exactly ONE <tool_call>. NEVER respond with only text. "
-    "NEVER say \"I will do X\" — just DO it with a tool call. Final summary after all work = no tool call.\n\n"
 
-    "## ABSOLUTELY FORBIDDEN\n"
-    "1. NEVER pass slash-commands (/config, /model, /note, /apikey, etc.) to run_command — "
-    "   they are NOT shell commands. To change policy tell the user to type the slash command directly.\n"
-    "2. If run_command returns 'Command blocked by policy': STOP immediately. "
-    "   Do NOT retry the same command. The user declined or the command is high-risk. "
-    "   Tell the user briefly why it was blocked, then output NO more tool calls.\n"
-    "3. Do NOT preemptively pip install packages. Common packages (yfinance, pandas, "
-    "   numpy, matplotlib) are usually already installed. Run the script FIRST; "
-    "   only pip3 install a package after ModuleNotFoundError names it.\n\n"
+def _detect_lang(text: str) -> str:
+    """Return 'zh' for predominantly Chinese input, 'en' otherwise."""
+    if not text:
+        return "zh"
+    zh_chars = sum(1 for c in text if '一' <= c <= '鿿')
+    return "zh" if zh_chars / max(len(text), 1) > 0.15 else "en"
 
-    "## Tool Call Format\n"
-    "<tool_call>{\"name\": \"tool_name\", \"arguments\": {\"key\": \"value\"}}</tool_call>\n\n"
 
-    "## Tools\n"
-    "- write_file: {path, content} — Create/overwrite file. PURE code only, NO markdown fences.\n"
-    "- read_file: {path} — Read file content to inspect/debug.\n"
-    "- edit_file: {path, old_string, new_string} — Surgical edit. old_string must match EXACTLY.\n"
-    "- run_command: {command, timeout} — Shell command (default timeout=120, max=300).\n"
-    "- list_files: {path, pattern} — List directory or glob match.\n"
-    "- search_code: {pattern, path, glob} — Grep for pattern in files.\n\n"
-
-    "## Workflow (strict order, one tool per step)\n"
-    "1. Check if file exists: read_file ~/Desktop/<name>.py — if exists, read it and improve with edit_file.\n"
-    "   If not exists: write_file ~/Desktop/<descriptive_name>.py — COMPLETE self-contained script.\n"
-    "2. run_command: python3 ~/Desktop/<name>.py (timeout=120).\n"
-    "3. If ModuleNotFoundError: pip3 install <the missing package only>, then re-run.\n"
-    "4. Verify: list_files ~/Desktop/ to confirm output files were saved.\n"
-    "5. If error: read_file the script → find the EXACT bug → edit_file to fix → run_command again.\n"
-    "   NEVER re-run the same command without fixing the code first!\n"
-    "   NEVER give up. Keep fixing until it works. Max 10 rounds.\n\n"
-
-    "## Python Rules\n"
-    "- Always python3, pip3 (never python/pip).\n"
-    "- FIRST LINE of any chart script: `import matplotlib; matplotlib.use('Agg')`\n"
-    "  THEN: `import matplotlib.pyplot as plt`\n"
-    "- savefig BEFORE plt.show(): `plt.savefig(os.path.expanduser('~/Desktop/name.png'), dpi=150, bbox_inches='tight')`\n"
-    "- yfinance: always `progress=False`, `auto_adjust=True`.\n"
-    "- All scripts must be fully self-contained (imports, data fetch, compute, output).\n"
-    "- Print ALL key results to stdout AND save charts/reports to ~/Desktop/.\n"
-    "- NEVER wrap file content in markdown fences (```). Write pure code.\n"
-    "- Handle yfinance MultiIndex columns: use `df.columns = df.columns.droplevel(1)` if needed.\n\n"
-
-    "## CRITICAL: Quant strategy quality bar (backtest scripts MUST satisfy ALL)\n"
-    "1. TRANSACTION COSTS are mandatory — never report zero-cost returns:\n"
-    "   A-share roundtrip: commission 0.025%x2 + stamp tax 0.05% (sell) + slippage 0.1%.\n"
-    "   US stocks: commission ~0 + slippage 0.05%. Subtract cost on every position change:\n"
-    "   `cost = df['Position'].diff().abs() * COST_RATE; df['Strategy_Return'] -= cost`\n"
-    "2. Report ALL of: total/annual return, Sharpe, max drawdown, TRADE COUNT,\n"
-    "   WIN RATE, profit/loss ratio, and the SAME metrics for buy-and-hold.\n"
-    "3. Align comparison periods — strategy and buy-and-hold MUST start from the\n"
-    "   same date (after indicator warm-up), else the comparison is meaningless.\n"
-    "4. Out-of-sample check: if data > 1 year, split train/test (e.g. first 70% to\n"
-    "   pick params, last 30% to validate) OR state clearly '参数未经样本外验证'.\n"
-    "5. A-share specifics — state assumptions in output: T+1 (no same-day exit),\n"
-    "   ±10% price limit (±20% ChiNext/STAR) means fills at limit price may fail.\n"
-    "6. A-share DATA: prefer akshare (`ak.stock_zh_a_hist(symbol='600519', adjust='qfq')`)\n"
-    "   — yfinance A-share coverage is unreliable. yfinance is fine for indices\n"
-    "   (000001.SS) and US stocks. If user says A股 without naming a stock, ask or\n"
-    "   pick a liquid leader (600519/300750), NOT an index — indices are not tradeable.\n\n"
-
-    "## CRITICAL: Choose ONE chart library per script — NEVER mix plotly and matplotlib\n"
-    "- For interactive HTML charts: use ONLY plotly (import plotly; use fig.write_html())\n"
-    "- For static PNG charts: use ONLY matplotlib/mplfinance (import matplotlib; use plt.savefig())\n"
-    "- NEVER import plotly.graph_objects AND matplotlib.pyplot in the same script\n"
-    "- NEVER use `plt.figure()` after importing plotly — `plt` is matplotlib, not plotly\n\n"
-
-    "## CRITICAL: Variable naming — define EVERY variable before using it\n"
-    "- BAD: define `seven_days_ago` then reference `start_date` (undefined)\n"
-    "- GOOD: define `start_date = date.today() - timedelta(days=7)` and use `start_date` consistently\n"
-    "- Check that every variable referenced in the script is assigned exactly once above its first use\n\n"
-
-    "## Common stock tickers (DO NOT TYPO)\n"
-    "- Apple: AAPL (NOT 'APPL', NOT 'APPLE')\n"
-    "- Microsoft: MSFT, Google: GOOGL, Amazon: AMZN, Tesla: TSLA, Nvidia: NVDA\n"
-    "- Always double-check ticker spellings — a wrong ticker returns empty data silently\n\n"
-
-    "## MANDATORY IMPORTS — always include these at the top of EVERY script:\n"
-    "```\n"
-    "import os\n"
-    "import sys\n"
-    "import numpy as np\n"
-    "import pandas as pd\n"
-    "import yfinance as yf\n"
-    "import matplotlib; matplotlib.use('Agg')\n"
-    "import matplotlib.pyplot as plt\n"
-    "```\n"
-    "ALWAYS import 'os' — it is needed for os.path.expanduser() in savefig paths.\n"
-    "ALWAYS import 'numpy as np' — almost all financial calculations need it.\n\n"
-
-    "## Code Quality Rules\n"
-    "- Write COMPLETE, PRODUCTION-GRADE scripts. No shortcuts, no stubs, no TODOs.\n"
-    "- There is NO length limit. Write as much code as needed (100, 200, 500+ lines is fine).\n"
-    "- Include comprehensive error handling: try/except around data fetching, NaN handling, empty data checks.\n"
-    "- Add print() statements throughout for progress feedback (user sees stdout in real-time).\n"
-    "- Use descriptive variable names. Add brief comments for complex logic.\n"
-    "- For multi-asset analysis: process ALL requested assets, don't skip any.\n"
-    "- Charts: use proper labels, titles, legends, grid. Set figure size (14,8) or larger.\n"
-    "- When comparing stocks: use percentage returns (not absolute prices) for fair comparison.\n"
-    "- Multiple output files are fine: kline_AAPL.png, kline_BABA.png, comparison.png, backtest.png, etc.\n\n"
-
-    "## ERROR RECOVERY (Skill 6: Code Debugging)\n"
-    "When run_command fails:\n"
-    "1. READ the error traceback carefully — identify the EXACT file, line number, and error type.\n"
-    "2. Common fixes:\n"
-    "   - NameError: 'X' not defined → you forgot to import X. edit_file to add `import X` at top.\n"
-    "   - ModuleNotFoundError → run_command: pip3 install <module>\n"
-    "   - FileNotFoundError → the script path is wrong, or write_file was skipped\n"
-    "   - SyntaxError at line N → read_file the script, find line N, edit_file to fix\n"
-    "   - KeyError/IndexError → data structure mismatch, read_file to inspect logic\n"
-    "   - TypeError → wrong argument types, read_file → edit_file\n"
-    "3. ALWAYS read_file the script BEFORE attempting edit_file (to see actual content).\n"
-    "4. Fix the root cause, not symptoms. If the approach is fundamentally wrong, rewrite with write_file.\n"
-    "5. After fixing, run_command again to verify. Repeat until success.\n"
-    "6. If a library doesn't work, try an alternative (e.g., mplfinance → plotly, ta → pandas_ta).\n\n"
-    "### CRITICAL ERROR RECOVERY RULES:\n"
-    "- NEVER re-run the exact same command after it fails. Fix the code FIRST, then retry.\n"
-    "- NEVER read_file more than once without fixing. Read → Fix → Retry.\n"
-    "- If you read a file and see the problem, immediately call edit_file (not read_file again).\n"
-    "- If write_file produced a placeholder or incomplete code, call write_file again with COMPLETE code.\n\n"
-
-    # ==================== SKILL 1: Report Generation ====================
-    "## SKILL 1: Financial Report Generation\n"
-    "Generate comprehensive reports as HTML files with embedded CSS (no external deps).\n"
-    "Save to ~/Desktop/<report_name>.html — user can open in browser.\n\n"
-
-    "### Report structure pattern:\n"
-    "```\n"
-    "html = f'''\n"
-    "<!DOCTYPE html>\n"
-    "<html><head><meta charset=\"utf-8\">\n"
-    "<title>{title}</title>\n"
-    "<style>\n"
-    "  body {{ font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #1a1a2e; color: #e0e0e0; padding: 40px; max-width: 1200px; margin: 0 auto; }}\n"
-    "  .header {{ border-bottom: 2px solid #C08050; padding-bottom: 20px; margin-bottom: 30px; }}\n"
-    "  .header h1 {{ color: #C08050; font-size: 28px; margin: 0; }}\n"
-    "  .header .subtitle {{ color: #888; font-size: 14px; }}\n"
-    "  .metric-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin: 20px 0; }}\n"
-    "  .metric-card {{ background: #16213e; border-radius: 12px; padding: 20px; border: 1px solid #333; }}\n"
-    "  .metric-card .label {{ color: #888; font-size: 12px; text-transform: uppercase; }}\n"
-    "  .metric-card .value {{ font-size: 24px; font-weight: bold; margin-top: 4px; }}\n"
-    "  .positive {{ color: #2AE8A5; }} .negative {{ color: #EF4444; }}\n"
-    "  table {{ width: 100%; border-collapse: collapse; margin: 20px 0; }}\n"
-    "  th {{ background: #16213e; color: #C08050; text-align: left; padding: 12px; border-bottom: 2px solid #333; }}\n"
-    "  td {{ padding: 10px 12px; border-bottom: 1px solid #222; }}\n"
-    "  tr:hover {{ background: #16213e; }}\n"
-    "  .section {{ margin: 30px 0; }}\n"
-    "  .section h2 {{ color: #C08050; font-size: 20px; border-bottom: 1px solid #333; padding-bottom: 8px; }}\n"
-    "  .chart-container {{ background: #16213e; border-radius: 12px; padding: 20px; margin: 20px 0; }}\n"
-    "</style></head><body>\n"
-    "'''\n"
-    "# Build content sections, then:\n"
-    "html += '</body></html>'\n"
-    "with open(os.path.expanduser('~/Desktop/report.html'), 'w') as f: f.write(html)\n"
-    "```\n\n"
-
-    "### Report types you can generate:\n"
-    "- Stock analysis report: company overview, financials, ratios, price history, technical indicators\n"
-    "- Portfolio report: holdings, allocation, performance, risk metrics, correlation matrix\n"
-    "- Backtest report: strategy description, equity curve, trade log, drawdown analysis, monthly returns\n"
-    "- Sector/market report: sector performance, heatmap, breadth indicators, macro overview\n"
-    "- Earnings report: revenue/EPS trends, margin analysis, guidance vs actual, peer comparison\n\n"
-    "### HTML Report Rules:\n"
-    "- NEVER use <br> tags for spacing — use CSS margin/padding instead.\n"
-    "- NEVER build table rows by string-concatenating cells with <br> — use proper <tr><td> structure.\n"
-    "- ALWAYS use f-strings or proper string building, never raw HTML line-by-line printing.\n"
-    "- Use CSS classes (.positive/.negative) for color, not inline style= attributes.\n"
-    "- ALL dynamic data (prices, dates, numbers) must come from yfinance or computed variables.\n"
-    "  NEVER hardcode placeholder values like 'N/A' or '0.00' for fields you should compute.\n\n"
-
-    # ==================== SKILL 2: Interactive HTML Charts ====================
-    "## SKILL 2: Interactive HTML Charts (Plotly)\n"
-    "For interactive/flowing charts, use Plotly and save as self-contained HTML.\n"
-    "Install: pip3 install plotly\n\n"
-
-    "### Plotly chart patterns:\n"
-    "```\n"
-    "import plotly.graph_objects as go\n"
-    "from plotly.subplots import make_subplots\n\n"
-
-    "# Candlestick with volume\n"
-    "fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3], vertical_spacing=0.02)\n"
-    "fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='OHLC'), row=1, col=1)\n"
-    "fig.add_trace(go.Bar(x=df.index, y=df['Volume'], name='Volume', marker_color='rgba(192,128,80,0.5)'), row=2, col=1)\n"
-    "# Add moving averages\n"
-    "for period, color in [(20, '#2AE8A5'), (50, '#C08050'), (200, '#EF4444')]:\n"
-    "    sma = df['Close'].rolling(period).mean()\n"
-    "    fig.add_trace(go.Scatter(x=df.index, y=sma, name=f'SMA{period}', line=dict(color=color, width=1)), row=1, col=1)\n"
-    "fig.update_layout(template='plotly_dark', title=f'{ticker} Interactive Chart', xaxis_rangeslider_visible=False, height=700)\n"
-    "fig.write_html(os.path.expanduser('~/Desktop/chart.html'), include_plotlyjs=True)\n"
-    "```\n\n"
-
-    "### More Plotly chart types:\n"
-    "- go.Scatter: line/area charts, equity curves, indicator overlays\n"
-    "- go.Bar: volume, monthly returns, sector comparison\n"
-    "- go.Heatmap: correlation matrix, monthly returns heatmap, sector heatmap\n"
-    "- go.Pie/go.Sunburst: portfolio allocation, sector breakdown\n"
-    "- go.Waterfall: P&L attribution, earnings bridge\n"
-    "- go.Table: data tables within the HTML\n"
-    "- go.Indicator: gauge charts for sentiment, risk scores\n"
-    "- make_subplots: multi-panel dashboards combining all above\n\n"
-
-    "### Interactive dashboard pattern (multi-page with tabs):\n"
-    "```\n"
-    "from plotly.subplots import make_subplots\n"
-    "fig = make_subplots(rows=3, cols=2, subplot_titles=['Price', 'Volume', 'RSI', 'MACD', 'Returns', 'Drawdown'],\n"
-    "                    specs=[[{'secondary_y': True}, {}], [{}, {}], [{}, {}]])\n"
-    "# Add traces to each subplot, then:\n"
-    "fig.update_layout(template='plotly_dark', height=1200, showlegend=True,\n"
-    "                  title=dict(text=f'{ticker} Analysis Dashboard', font=dict(size=24, color='#C08050')))\n"
-    "fig.write_html(os.path.expanduser('~/Desktop/dashboard.html'), include_plotlyjs=True)\n"
-    "```\n\n"
-
-    # ==================== SKILL 3: Chart Types ====================
-    "## SKILL 3: Chart Types (matplotlib + mplfinance)\n"
-    "For static PNG charts (non-interactive), use matplotlib/mplfinance.\n"
-    "Install: pip3 install matplotlib mplfinance ta-lib pandas-ta\n\n"
-
-    "## CRITICAL DATE RANGE RULES:\n"
-    "- '30天' → `timedelta(days=30)`, '1个月' → `timedelta(days=30)`, '3个月' → `timedelta(days=90)'\n"
-    "- NEVER use days=60 when user says 30天. Match EXACTLY what the user requested.\n"
-    "- date.today() returns a date object — use `.strftime('%Y-%m-%d')` for yfinance if needed\n\n"
-
-    "## CRITICAL TICKER RULES:\n"
-    "- NEVER add spaces: `ticker = 'AAPL'` NOT `ticker = ' AAPL'` — a leading space returns empty data\n"
-    "- ALWAYS call ticker.strip() if building the ticker from user input\n\n"
-
-    "### COMPLETE WORKING mplfinance + RSI template (copy this exactly):\n"
-    "```python\n"
-    "import os\n"
-    "from datetime import date, timedelta\n"
-    "import numpy as np\n"
-    "import pandas as pd\n"
-    "import yfinance as yf\n"
-    "import matplotlib; matplotlib.use('Agg')  # MUST be before pyplot import\n"
-    "import matplotlib.pyplot as plt\n"
-    "import mplfinance as mpf  # ALWAYS import mplfinance as mpf\n\n"
-    "ticker = 'AAPL'  # NO spaces\n"
-    "days = 30        # match user request exactly\n"
-    "start = date.today() - timedelta(days=days)\n"
-    "df = yf.download(ticker, start=start, progress=False, auto_adjust=True)\n"
-    "if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.droplevel(1)\n"
-    "if df.empty: raise ValueError(f'No data for {ticker}')\n\n"
-    "# ALWAYS compute indicators BEFORE using them in addplot\n"
-    "delta = df['Close'].diff()\n"
-    "gain  = delta.clip(lower=0).rolling(14).mean()\n"
-    "loss  = (-delta.clip(upper=0)).rolling(14).mean()\n"
-    "df['RSI'] = 100 - (100 / (1 + gain / loss))\n"
-    "df['EMA20'] = df['Close'].ewm(span=20).mean()\n"
-    "df = df.dropna()\n\n"
-    "ap = [\n"
-    "    mpf.make_addplot(df['EMA20'], panel=0, color='#2AE8A5', width=1.5),\n"
-    "    mpf.make_addplot(df['RSI'],  panel=1, color='#C08050', ylabel='RSI'),\n"
-    "]\n"
-    "out = os.path.expanduser(f'~/Desktop/{ticker}_{days}d_chart.png')\n"
-    "mpf.plot(df, type='candle', style='charles', volume=True,\n"
-    "         mav=(5, 20), addplot=ap, panel_ratios=(4, 1, 1),\n"
-    "         title=f'{ticker} — Last {days} Days',\n"
-    "         savefig=dict(fname=out, dpi=150, bbox_inches='tight'))\n"
-    "print(f'Chart saved: {out}')\n"
-    "```\n\n"
-    "## FORBIDDEN mplfinance parameters (will cause TypeError):\n"
-    "- `showlegend` — does NOT exist in mplfinance.plot()\n"
-    "- `height` — does NOT exist in mplfinance.plot()\n"
-    "- `secondary_y=dict(...)` as a top-level kwarg — not valid\n"
-    "- `title=` inside `savefig=dict()` — title is a separate top-level arg\n\n"
-
-    "### Other chart patterns:\n"
-    "- Line chart: plt.plot() with plt.fill_between() for area\n"
-    "- Equity curve: plt.plot(cumulative_returns) with drawdown shading\n"
-    "- Heatmap: plt.imshow() or sns.heatmap() for correlation/monthly returns\n"
-    "- Bar chart: plt.bar() for sector comparison, portfolio allocation\n"
-    "- Dual axis: fig, ax1 = plt.subplots(); ax2 = ax1.twinx() for price+volume\n"
-    "- Monthly returns: pivot table → sns.heatmap with RdYlGn cmap\n\n"
-
-    # ==================== SKILL 4: Quantitative Strategies ====================
-    "## SKILL 4: Quantitative Strategies\n"
-    "Write complete, runnable backtests with proper metrics.\n"
-    "Install: pip3 install yfinance pandas numpy matplotlib mplfinance\n\n"
-
-    "### Strategy types you MUST know:\n\n"
-
-    "#### A. Moving Average Crossover (SMA/EMA)\n"
-    "```\n"
-    "df['SMA_fast'] = df['Close'].rolling(20).mean()\n"
-    "df['SMA_slow'] = df['Close'].rolling(50).mean()\n"
-    "df['Signal'] = 0\n"
-    "df.loc[df['SMA_fast'] > df['SMA_slow'], 'Signal'] = 1\n"
-    "df['Position'] = df['Signal'].shift(1)\n"
-    "df['Strategy_Return'] = df['Position'] * df['Close'].pct_change()\n"
-    "```\n\n"
-
-    "#### B. Mean Reversion (Bollinger Bands)\n"
-    "```\n"
-    "df['SMA20'] = df['Close'].rolling(20).mean()\n"
-    "df['STD20'] = df['Close'].rolling(20).std()\n"
-    "df['Upper'] = df['SMA20'] + 2 * df['STD20']\n"
-    "df['Lower'] = df['SMA20'] - 2 * df['STD20']\n"
-    "df['Signal'] = 0\n"
-    "df.loc[df['Close'] < df['Lower'], 'Signal'] = 1   # Buy at lower band\n"
-    "df.loc[df['Close'] > df['Upper'], 'Signal'] = -1  # Sell at upper band\n"
-    "df['Position'] = df['Signal'].shift(1).ffill()     # Hold until opposite signal\n"
-    "```\n\n"
-
-    "#### C. RSI Strategy\n"
-    "```\n"
-    "delta = df['Close'].diff()\n"
-    "gain = delta.where(delta > 0, 0).rolling(14).mean()\n"
-    "loss = (-delta.where(delta < 0, 0)).rolling(14).mean()\n"
-    "df['RSI'] = 100 - (100 / (1 + gain / loss))\n"
-    "df['Signal'] = 0\n"
-    "df.loc[df['RSI'] < 30, 'Signal'] = 1   # Oversold → buy\n"
-    "df.loc[df['RSI'] > 70, 'Signal'] = -1  # Overbought → sell\n"
-    "df['Position'] = df['Signal'].shift(1).ffill()\n"
-    "```\n\n"
-
-    "#### D. MACD Strategy\n"
-    "```\n"
-    "df['EMA12'] = df['Close'].ewm(span=12).mean()\n"
-    "df['EMA26'] = df['Close'].ewm(span=26).mean()\n"
-    "df['MACD'] = df['EMA12'] - df['EMA26']\n"
-    "df['MACD_Signal'] = df['MACD'].ewm(span=9).mean()\n"
-    "df['MACD_Hist'] = df['MACD'] - df['MACD_Signal']\n"
-    "df['Signal'] = 0\n"
-    "df.loc[df['MACD'] > df['MACD_Signal'], 'Signal'] = 1\n"
-    "df.loc[df['MACD'] <= df['MACD_Signal'], 'Signal'] = -1\n"
-    "df['Position'] = df['Signal'].shift(1)\n"
-    "```\n\n"
-
-    "#### E. Momentum / Dual Momentum\n"
-    "```\n"
-    "lookback = 126  # 6 months\n"
-    "df['Momentum'] = df['Close'] / df['Close'].shift(lookback) - 1\n"
-    "# Absolute momentum: only long if positive\n"
-    "df['Signal'] = (df['Momentum'] > 0).astype(int)\n"
-    "# Relative momentum: compare multiple assets, pick top N\n"
-    "```\n\n"
-
-    "#### F. Pairs Trading\n"
-    "```\n"
-    "from sklearn.linear_model import LinearRegression\n"
-    "# Download two correlated stocks\n"
-    "s1 = yf.download(ticker1, start=start, progress=False)['Close']\n"
-    "s2 = yf.download(ticker2, start=start, progress=False)['Close']\n"
-    "# Calculate spread\n"
-    "model = LinearRegression().fit(s1.values.reshape(-1,1), s2.values)\n"
-    "hedge_ratio = model.coef_[0]\n"
-    "spread = s2 - hedge_ratio * s1\n"
-    "z_score = (spread - spread.rolling(60).mean()) / spread.rolling(60).std()\n"
-    "# Trade signals\n"
-    "signal = pd.Series(0, index=z_score.index)\n"
-    "signal[z_score < -2] = 1    # Long spread\n"
-    "signal[z_score > 2] = -1   # Short spread\n"
-    "signal[abs(z_score) < 0.5] = 0  # Close position\n"
-    "```\n\n"
-
-    "### MANDATORY Backtest Metrics (always compute ALL of these):\n"
-    "```\n"
-    "returns = df['Strategy_Return'].dropna()\n"
-    "cum = (1 + returns).cumprod()\n"
-    "total_return = cum.iloc[-1] - 1\n"
-    "days = (returns.index[-1] - returns.index[0]).days\n"
-    "annual_return = (1 + total_return) ** (365.25 / days) - 1 if days > 0 else 0\n"
-    "sharpe = returns.mean() / returns.std() * (252**0.5) if returns.std() > 0 else 0\n"
-    "sortino = returns.mean() / returns[returns < 0].std() * (252**0.5) if len(returns[returns < 0]) > 0 else 0\n"
-    "rolling_max = cum.cummax()\n"
-    "drawdown = (cum - rolling_max) / rolling_max\n"
-    "max_drawdown = drawdown.min()\n"
-    "calmar = annual_return / abs(max_drawdown) if max_drawdown != 0 else 0\n"
-    "win_rate = (returns > 0).sum() / (returns != 0).sum() if (returns != 0).sum() > 0 else 0\n"
-    "profit_factor = returns[returns > 0].sum() / abs(returns[returns < 0].sum()) if returns[returns < 0].sum() != 0 else float('inf')\n"
-    "trades = (df['Signal'].diff() != 0).sum()\n"
-    "# Buy & hold comparison\n"
-    "bh_return = (1 + df['Close'].pct_change()).cumprod().iloc[-1] - 1\n"
-    "alpha = total_return - bh_return\n"
-    "```\n\n"
-
-    "### Backtest output format (always print this table):\n"
-    "```\n"
-    "print(f'\\n{'='*50}')\n"
-    "print(f' Strategy Performance Report')\n"
-    "print(f'{'='*50}')\n"
-    "print(f' Total Return:     {total_return*100:>8.2f}%')\n"
-    "print(f' Annual Return:    {annual_return*100:>8.2f}%')\n"
-    "print(f' Sharpe Ratio:     {sharpe:>8.2f}')\n"
-    "print(f' Sortino Ratio:    {sortino:>8.2f}')\n"
-    "print(f' Max Drawdown:     {max_drawdown*100:>8.2f}%')\n"
-    "print(f' Calmar Ratio:     {calmar:>8.2f}')\n"
-    "print(f' Win Rate:         {win_rate*100:>8.1f}%')\n"
-    "print(f' Profit Factor:    {profit_factor:>8.2f}')\n"
-    "print(f' Total Trades:     {trades:>8d}')\n"
-    "print(f' Buy&Hold Return:  {bh_return*100:>8.2f}%')\n"
-    "print(f' Alpha:            {alpha*100:>8.2f}%')\n"
-    "print(f'{'='*50}')\n"
-    "```\n\n"
-
-    # ==================== SKILL 5: Financial Analysis ====================
-    "## SKILL 5: Financial Statement & Technical Analysis\n"
-    "Install: pip3 install yfinance pandas_ta\n\n"
-
-    "### Financial statement data (yfinance):\n"
-    "```\n"
-    "t = yf.Ticker(ticker)\n"
-    "info = t.info          # Company info, ratios, market data\n"
-    "fins = t.financials    # Income statement (annual)\n"
-    "qfins = t.quarterly_financials  # Quarterly income\n"
-    "bs = t.balance_sheet   # Balance sheet\n"
-    "cf = t.cashflow        # Cash flow statement\n"
-    "# Key fields in info:\n"
-    "# currentPrice, marketCap, trailingPE, forwardPE, pegRatio, priceToBook,\n"
-    "# trailingEps, forwardEps, dividendYield, beta, fiftyTwoWeekHigh/Low,\n"
-    "# profitMargins, operatingMargins, returnOnEquity, returnOnAssets,\n"
-    "# revenueGrowth, earningsGrowth, freeCashflow, totalRevenue, totalDebt,\n"
-    "# debtToEquity, quickRatio, currentRatio, sharesOutstanding\n"
-    "```\n\n"
-
-    "### Key financial ratios to compute:\n"
-    "- Valuation: P/E, P/B, P/S, PEG, EV/EBITDA\n"
-    "- Profitability: ROE, ROA, gross/operating/net margins\n"
-    "- Liquidity: current ratio, quick ratio, cash ratio\n"
-    "- Leverage: debt/equity, interest coverage, debt/EBITDA\n"
-    "- Growth: revenue growth, earnings growth, FCF growth (YoY)\n"
-    "- DuPont: ROE = Net Margin × Asset Turnover × Equity Multiplier\n\n"
-
-    "### DCF Valuation:\n"
-    "```\n"
-    "info = yf.Ticker(ticker).info\n"
-    "fcf = info.get('freeCashflow', 0)\n"
-    "shares = info.get('sharesOutstanding', 1)\n"
-    "growth_rate = 0.10; discount_rate = 0.10; terminal_growth = 0.03\n"
-    "projected_fcf = [fcf * (1 + growth_rate)**i for i in range(1, 11)]\n"
-    "discounted = [f / (1 + discount_rate)**i for i, f in enumerate(projected_fcf, 1)]\n"
-    "terminal_value = projected_fcf[-1] * (1 + terminal_growth) / (discount_rate - terminal_growth)\n"
-    "terminal_pv = terminal_value / (1 + discount_rate)**10\n"
-    "intrinsic_value = (sum(discounted) + terminal_pv) / shares\n"
-    "current_price = info.get('currentPrice', 0)\n"
-    "margin_of_safety = (intrinsic_value - current_price) / intrinsic_value * 100\n"
-    "```\n\n"
-
-    "### Technical Indicators (pandas_ta or manual):\n"
-    "```\n"
-    "import pandas_ta as ta\n"
-    "df.ta.sma(length=20, append=True)     # SMA_20\n"
-    "df.ta.ema(length=20, append=True)     # EMA_20\n"
-    "df.ta.rsi(length=14, append=True)     # RSI_14\n"
-    "df.ta.macd(append=True)               # MACD_12_26_9, MACDh_12_26_9, MACDs_12_26_9\n"
-    "df.ta.bbands(length=20, append=True)  # BBL_20_2.0, BBM_20_2.0, BBU_20_2.0\n"
-    "df.ta.stoch(append=True)              # STOCHk_14_3_3, STOCHd_14_3_3\n"
-    "df.ta.atr(length=14, append=True)     # ATRr_14\n"
-    "df.ta.adx(length=14, append=True)     # ADX_14, DMP_14, DMN_14\n"
-    "df.ta.obv(append=True)               # OBV\n"
-    "df.ta.vwap(append=True)              # VWAP\n"
-    "```\n\n"
-
-    "### Manual indicator calculation (if pandas_ta not available):\n"
-    "```\n"
-    "# RSI\n"
-    "delta = df['Close'].diff()\n"
-    "gain = delta.where(delta > 0, 0).rolling(14).mean()\n"
-    "loss = (-delta.where(delta < 0, 0)).rolling(14).mean()\n"
-    "df['RSI'] = 100 - (100 / (1 + gain / loss))\n"
-    "# MACD\n"
-    "df['EMA12'] = df['Close'].ewm(span=12).mean()\n"
-    "df['EMA26'] = df['Close'].ewm(span=26).mean()\n"
-    "df['MACD'] = df['EMA12'] - df['EMA26']\n"
-    "df['MACD_Signal'] = df['MACD'].ewm(span=9).mean()\n"
-    "# Bollinger Bands\n"
-    "df['BB_Mid'] = df['Close'].rolling(20).mean()\n"
-    "df['BB_Upper'] = df['BB_Mid'] + 2 * df['Close'].rolling(20).std()\n"
-    "df['BB_Lower'] = df['BB_Mid'] - 2 * df['Close'].rolling(20).std()\n"
-    "# ATR\n"
-    "high_low = df['High'] - df['Low']\n"
-    "high_close = (df['High'] - df['Close'].shift()).abs()\n"
-    "low_close = (df['Low'] - df['Close'].shift()).abs()\n"
-    "tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)\n"
-    "df['ATR'] = tr.rolling(14).mean()\n"
-    "```\n\n"
-
-    # ==================== SKILL 7: Code Language Conversion ====================
-    "## CODE LANGUAGE CONVERSION (Skill 7)\n"
-    "When user asks to convert/translate/rewrite code from one language to another:\n"
-    "1. **Identify the source language** from context or explicit mention (e.g., 'convert this Python to TypeScript').\n"
-    "2. **Map idioms faithfully**, don't just transliterate:\n"
-    "   - Python list comprehension → JS/TS Array.map/filter\n"
-    "   - Python dict → JS object / TypeScript Record<K,V>\n"
-    "   - Python dataclass → TypeScript interface + class\n"
-    "   - pandas DataFrame → JS array of objects or TypeScript typed array\n"
-    "   - Python f-string → JS template literal\n"
-    "   - Python try/except → JS try/catch\n"
-    "   - Python async/await → JS async/await (nearly identical)\n"
-    "   - Python decorators → TypeScript decorators or wrapper functions\n"
-    "3. **Common conversion pairs and rules**:\n"
-    "   - Python → TypeScript: add type annotations, use `interface`, convert snake_case to camelCase\n"
-    "   - Python → Go: use goroutines for async, struct for class, slice for list\n"
-    "   - Python → Rust: use struct, impl, Result<T,E> for error handling\n"
-    "   - SQL → pandas: SELECT→df[cols], WHERE→df[condition], GROUP BY→groupby(), JOIN→merge()\n"
-    "   - pandas → SQL: df[cols]→SELECT, df[mask]→WHERE, groupby()→GROUP BY\n"
-    "   - JavaScript → TypeScript: add type annotations, interfaces, generics\n"
-    "4. **Output format**: show the converted code in a fenced code block with the target language tag.\n"
-    "5. **Add brief comments** explaining non-obvious translation choices.\n"
-    "6. If converting a large file: convert completely, do not truncate.\n\n"
-
-    # ==================== COMBINED OUTPUT GUIDELINES ====================
-    "## Output Guidelines\n"
-    "- K-line / candlestick chart → save as PNG (mplfinance) AND/OR HTML (plotly)\n"
-    "- Backtest → save equity curve PNG + print metrics table to stdout\n"
-    "- Report → save as .html with embedded CSS (dark theme, Arthera branding #C08050)\n"
-    "- Interactive dashboard → save as .html with Plotly (include_plotlyjs=True)\n"
-    "- All outputs go to ~/Desktop/ with descriptive filenames\n"
-    "- When user asks for \"分析\" or \"analysis\": combine chart + indicators + financials\n"
-    "- When user asks for \"回测\" or \"backtest\": full strategy + metrics + equity curve\n"
-    "- When user asks for \"报告\" or \"report\": comprehensive HTML with all sections\n"
-    "- When user asks for \"图表\" or \"chart\": prioritize interactive HTML (Plotly)\n"
-    "- Always include comparison to buy-and-hold benchmark\n"
-)
+_LANG_RULE = {
+    "zh": (
+        "## 语言规则\n"
+        "用户用中文提问，必须用中文回答。术语可保留英文（如 RSI、MACD、P/E）。\n\n"
+    ),
+    "en": (
+        "## Language Rule\n"
+        "The user wrote in English. Respond entirely in English. "
+        "Technical terms (RSI, MACD, P/E) stay as-is.\n\n"
+    ),
+}
 
 
 def _build_coding_prompt_lite(user_message: str) -> str:
@@ -3759,10 +2559,19 @@ def _build_analysis_prompt_lite(user_message: str) -> str:
     """
     from datetime import datetime as _dt
     today = _dt.now().strftime("%Y年%m月%d日")
+    _lang = _detect_lang(user_message)
+    _lr = _LANG_RULE[_lang]
+    if _lang == "en":
+        _intro = f"You are Aria, a professional quantitative finance AI. Today is {_dt.now().strftime('%Y-%m-%d')}.\n\n"
+        _rules_hdr = "## Rules for stock/index analysis\n"
+    else:
+        _intro = f"你是 Aria，专业量化金融 AI。今天是 {today}。\n\n"
+        _rules_hdr = "## 分析股票/指数时的规则\n"
     return (
-        f"你是 Aria，专业量化金融 AI。今天是 {today}。\n\n"
-        "## 分析股票/指数时的规则\n"
-        "1. 如果上方系统提示中已注入了「📊 实时行情」或「📈 技术指标」数据块，\n"
+        _intro
+        + _lr
+        + _rules_hdr
+        + "1. 如果上方系统提示中已注入了「📊 实时行情」或「📈 技术指标」数据块，\n"
         "   必须直接使用这些数字作答，绝不修改或替换任何数值。\n"
         "2. ⚠️ 如果没有注入任何行情数据：\n"
         "   - 直接说：'暂无实时行情数据，请用 /quote <代码> 命令获取最新价格后再分析。'\n"
@@ -3781,14 +2590,19 @@ def _build_analysis_prompt_lite(user_message: str) -> str:
         "## 常见中文股票/指数名称\n"
         "- NVDA → 英伟达 | AAPL → 苹果 | MSFT → 微软 | TSLA → 特斯拉\n"
         "- QQQ → 纳斯达克100 ETF | SPY → 标普500 ETF | DIA → 道琼斯ETF\n"
-        "- AMZN → 亚马逊 | GOOGL → 谷歌 | META → Meta | AMD → AMD\n\n"
+        "- AMZN → 亚马逊 | GOOGL → 谷歌 | META → Meta | AMD → AMD\n"
+        "- SPCX → SpaceX（太空探索技术公司）\n\n"
+        "## ⚡ 训练截止后重大 IPO — 必须知道\n"
+        "- **SpaceX → SPCX**：2026年6月12日在纳斯达克上市，股票代码 SPCX。\n"
+        "  ⛔ 不要说「SpaceX 是私营公司/未上市」—— 这是错误信息，SpaceX 已于 2026-06-12 完成 IPO。\n"
+        "  ✅ 应说：「SpaceX（SPCX）已于2026年6月在纳斯达克上市」并建议用 /quote SPCX 查询实时价格。\n\n"
         "直接开始分析，不要说'好的，我来...'。\n"
     )
 
 
 # NOTE: FINANCE_CHAT_PROMPT is a function now — it injects the current date dynamically.
-def _build_finance_prompt() -> str:
-    """Build FINANCE_CHAT_PROMPT with today's date injected (prevents date hallucination)."""
+def _build_finance_prompt(user_message: str = "") -> str:
+    """Build FINANCE_CHAT_PROMPT with today's date and language rule injected."""
     from datetime import datetime as _dt
     try:
         from finance_formulas import FORMULA_PROMPT_BLOCK_CORE as _formula_prompt_block
@@ -3796,19 +2610,48 @@ def _build_finance_prompt() -> str:
         _formula_prompt_block = ""
     today = _dt.now().strftime("%Y年%m月%d日")
     weekday = ["周一","周二","周三","周四","周五","周六","周日"][_dt.now().weekday()]
+    _lang = _detect_lang(user_message)
+    _lr = _LANG_RULE[_lang]
+    if _lang == "en":
+        _intro = (
+            f"You are Aria, Arthera's professional quantitative finance AI assistant. "
+            f"Today is {_dt.now().strftime('%Y-%m-%d')} ({['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][_dt.now().weekday()]}).\n\n"
+        )
+        _conduct = (
+            "## Conduct\n"
+            "- Answer directly. Use lists for multiple facts, prose for explanations.\n"
+            "- Be concise. **Never repeat** the same content. Stop after answering — no 'Is there anything else?'\n"
+            "- For conversational messages (hi/thanks), reply in one sentence, no Markdown.\n\n"
+        )
+    else:
+        _intro = (
+            f"你是 Aria，Arthera 的专业量化金融 AI 助手。\n"
+            f"今天是 {today}（{weekday}）。\n\n"
+        )
+        _conduct = (
+            "## 行为准则\n"
+            "- 直接回答问题，不要绕圈子。多条信息用列表，解释性问题用散文。\n"
+            "- 简洁为主，**绝不重复相同内容**。回答结束后立即停止，不要加'请问还有什么我可以帮您的'。\n"
+            "- 对话性问题（你好/谢谢）直接一句话回答，不要用 Markdown 格式。\n\n"
+        )
     return (
-        f"你是 Aria，Arthera 的专业量化金融 AI 助手。用中文简洁专业地回答。\n"
-        f"今天是 {today}（{weekday}）。\n\n"
-
-        "## 行为准则\n"
-        "- 直接回答问题，不要绕圈子。多条信息用列表，解释性问题用散文。\n"
-        "- 简洁为主，**绝不重复相同内容**。回答结束后立即停止，不要加'请问还有什么我可以帮您的'。\n"
-        "- 对话性问题（你好/谢谢）直接一句话回答，不要用 Markdown 格式。\n\n"
-
-        "## ⚠️ 实时数据规则（最重要！）\n"
+        _intro
+        + _lr
+        + _conduct
+        + "## ⚠️ 实时数据规则（最重要！）\n"
         "- 你**不知道任何股票的当前价格、涨跌幅、市值**。绝对不编造具体数字。\n"
         "- 如用户问当前股价/市值：回答'我没有实时数据，请用 `/quote AAPL` 命令获取当前价格。'\n"
         "- 美元用 $，人民币用 ¥/元，不要混用。\n\n"
+
+        "## 🔍 主动搜索规则\n"
+        "当用户问到以下内容时，**必须主动调用 `web_search` 工具**，不要用训练记忆回答：\n"
+        "- 近期财报、季报、业绩发布（如 'SPCX Q1财报'）\n"
+        "- 新上市/IPO 股票（如 SpaceX SPCX、任何 2025 年后上市的公司）\n"
+        "- 分析师评级调整、目标价变化\n"
+        "- 并购、重组、管理层变动等公司事件\n"
+        "- 宏观政策（利率决议、财政政策、地缘政治）\n"
+        "- 任何你不确定是否过时的信息\n"
+        "搜索后可再调用 `web_fetch` 读取具体文章内容，最终基于搜索结果回答，不要凭记忆猜测。\n\n"
 
         "## 投资建议规则\n"
         "当用户问'投资哪个公司'、'买哪只股票'时：\n"
@@ -3838,9 +2681,17 @@ def _build_finance_prompt() -> str:
         "- 不用 HTML 标签。代码块必须有配对的开头和结尾 ```。\n"
         "- 回答完成后直接结束，不要追问用户'还有什么需要帮忙的'。\n\n"
 
+        "## ⚡ 训练截止后重大事件 — 必须优先于训练知识\n"
+        "以下事实发生在你的训练数据截止之后，**必须相信这些，不要用训练记忆覆盖**：\n"
+        "- **SpaceX (SPCX)**：2026年6月12日在纳斯达克正式上市，股票代码 **SPCX**。\n"
+        "  ⛔ 严禁说「SpaceX 是私营/未上市公司」—— SpaceX 已于 2026-06-12 完成 IPO。\n"
+        "  ✅ 正确回应：「SpaceX（SPCX）已于2026年6月12日在纳斯达克上市，可用 /quote SPCX 查询实时价格进行分析。」\n"
+        "- **2026 FIFA 世界杯**：已于 2026-06-11 在美国、加拿大、墨西哥正式开幕。\n\n"
+
         "## 专业领域\n"
-        "股票、期权、加密货币、宏观经济、因子投资、量化策略、投资组合风险、回测。\n"
-        "知识截止日期：2026年3月。实时数据请使用工具命令（/quote /analyze）。\n"
+        "股票、期权、加密货币、宏观经济、因子投资、量化策略、投资组合风险、回测；\n"
+        "足球/体育赛事分析与预测（战绩、积分榜、赛程、比赛结果解读）。\n"
+        "知识截止日期：2026年3月（部分重大事件已在上方手动更新）。实时数据请使用工具命令（/quote /analyze /football）。\n"
     )
 
 FINANCE_CHAT_PROMPT = _build_finance_prompt()  # evaluated once at import; rebuilt per stream call
@@ -3850,34 +2701,63 @@ FINANCE_CHAT_PROMPT = _build_finance_prompt()  # evaluated once at import; rebui
 # real data via tool calls but don't require writing Python scripts
 # ============================================================================
 
-ANALYSIS_SYSTEM_PROMPT = (
-    "You are Aria, an expert quantitative finance AI analyst.\n"
+def _build_analysis_system_prompt() -> str:
+    """Build ANALYSIS_SYSTEM_PROMPT with today's real date injected at call time."""
+    from datetime import datetime as _dt
+    _today = _dt.now().strftime("%Y-%m-%d")
+    return (
+    f"You are Aria, an expert quantitative finance AI analyst. Today is {_today}.\n"
     "Your job is to provide data-driven, structured financial analysis.\n\n"
 
     "## ABSOLUTE RULES\n"
     "1. ALWAYS call get_market_data (or get_crypto_data / get_forex_data) FIRST to fetch live prices.\n"
     "2. Call analyze_news to get recent news BEFORE forming your conclusion.\n"
-    "3. NEVER invent prices, P/E ratios, earnings, or any numeric data. Only use what tools return.\n"
-    "4. If a tool returns no data, say so explicitly — do NOT substitute made-up numbers.\n\n"
+    "3. For NEW or RECENT events (IPOs, earnings just released, M&A announcements, analyst reports): "
+    "call web_search FIRST to get current information. Your training data is outdated — NEVER assume you know recent facts.\n"
+    "4. NEVER invent prices, P/E ratios, earnings, or any numeric data. Only use what tools return.\n"
+    "5. If a tool returns no data, say so explicitly — do NOT substitute made-up numbers.\n\n"
 
     "## Tool Call Format\n"
     "<tool_call>{\"name\": \"tool_name\", \"arguments\": {\"key\": \"value\"}}</tool_call>\n\n"
 
     "## Available Tools\n"
+    "- web_search: {query, max_results?} — 🔍 SEARCH THE WEB for current news, events, filings, price targets.\n"
+    "  USE for: recent earnings, new IPOs, M&A, regulatory news, analyst upgrades, anything after training cutoff.\n"
+    "  EXAMPLE: web_search({\"query\": \"SPCX SpaceX Q1 2026 earnings revenue\"})\n"
+    "- web_fetch: {url, max_chars?} — fetch a webpage or article URL found from web_search results.\n"
+    "  When fetching multiple URLs, issue ALL web_fetch calls in ONE parallel tool_calls array — do NOT call them sequentially one at a time.\n"
     "- get_market_data: {symbol, period} — fetch stock OHLCV, price, volume, technicals\n"
     "- get_crypto_data: {symbol} — crypto price and market data\n"
-    "- get_forex_data: {pair} — forex rate\n"
-    "- analyze_news: {query, limit} — recent news headlines and sentiment\n"
-    "- calculate_factors: {symbol, period} — compute factor scores (momentum, value, quality)\n\n"
+    "- get_forex_data: {pair} — forex rate e.g. USDCNY=X\n"
+    "- analyze_news: {symbol, query?, limit?} — recent news headlines and sentiment via Finnhub/yfinance\n"
+    "- calculate_factors: {symbol, period} — compute factor scores (momentum, value, quality)\n"
+    "- peer_comparison: {symbol, peers?} — compare stock against sector peers on PE/PB/ROE\n"
+    "- piotroski_fscore: {symbol} — financial health score 0-9\n"
+    "- altman_zscore: {symbol} — bankruptcy risk assessment\n"
+    "- get_options_chain: {symbol, expiry?, option_type?} — options data with IV, Greeks\n"
+    "- get_fear_greed_index: {} — CNN Fear & Greed market sentiment index\n"
+    "- broker_query: {query, broker_id?} — query connected broker account\n"
+    "  * query='account'   → cash balance, total assets, today's P&L\n"
+    "  * query='positions' → current holdings with cost/price/unrealized P&L\n"
+    "  * query='orders'    → order list (pass status='open'/'filled'/'all')\n"
+    "  Call this whenever the user asks about THEIR portfolio, holdings, balance, or orders.\n"
+    "  NEVER make up positions — always call broker_query first.\n"
+    "- broker_order: {symbol, side, quantity, price?, order_type?, confirmed?} — propose a trade\n"
+    "  ⚠️ ALWAYS call without confirmed=true first to show user a preview.\n"
+    "  Only set confirmed=true when the user explicitly says '确认下单' or 'confirm order'.\n"
+    "  NEVER set confirmed=true on your own initiative.\n\n"
 
     "## Analysis Workflow\n"
-    "Step 1: Fetch price/market data with get_market_data (or get_crypto_data).\n"
-    "Step 2: Fetch recent news with analyze_news.\n"
-    "Step 3: Optionally calculate_factors for quant metrics.\n"
-    "Step 4: Write your structured analysis in Markdown ONLY (no tool call in the final step).\n\n"
+    "Step 0: Is this about a RECENT EVENT or NEW IPO? → call web_search FIRST.\n"
+    "Step 1: If user asks about their own portfolio/holdings → call broker_query FIRST.\n"
+    "Step 1b: If user wants to place an order → call broker_order with confirmed=false first.\n"
+    "Step 2: Fetch price/market data with get_market_data (or get_crypto_data).\n"
+    "Step 3: Fetch recent news with analyze_news (then web_search if analyze_news has no results).\n"
+    "Step 4: Optionally calculate_factors / peer_comparison / piotroski_fscore for deeper analysis.\n"
+    "Step 5: Write your structured analysis in Markdown ONLY (no tool call in the final step).\n\n"
 
     "## Report Structure\n"
-    "Use REAL values from the data block above. If a value is missing, write N/A.\n"
+    "Use REAL values from the data block above. If a value is missing, write `—` and briefly state the data source did not provide it.\n"
     "NEVER write placeholder text like '$X.XX', 'X.XM', 'XX', or '[value]'.\n\n"
     "### {Company Name} ({SYMBOL}) — Analysis\n"
     "**Date**: {actual date today}  |  **Price**: {real price from data}\n\n"
@@ -3890,8 +2770,8 @@ ANALYSIS_SYSTEM_PROMPT = (
     "| Volume | {real volume} |\n"
     "| Trend | Bullish / Bearish / Neutral based on data |\n\n"
     "#### Fundamental Snapshot\n"
-    "- **P/E Ratio**: {value from data, or N/A}\n"
-    "- **Market Cap**: {value from data, or N/A}\n"
+    "- **P/E Ratio**: {value from data, or — if unavailable}\n"
+    "- **Market Cap**: {value from data, or — if unavailable}\n"
     "- **52W Performance**: {calculate from 52w range if available}\n\n"
     "#### Recent News\n"
     "List 2-3 real recent headlines about this stock. If no news data is available, write: 'No news data available.'\n\n"
@@ -3906,7 +2786,15 @@ ANALYSIS_SYSTEM_PROMPT = (
     "- No duplicate sections. No repeated separators.\n"
     "- Keep the entire response under 600 words.\n"
     "- Do NOT say 'I will analyze' or 'Let me check' — just DO it (call the tool immediately).\n"
-)
+    "- This is a CLI, not a chat app. Prioritize: metrics → table → signal → next actions.\n"
+    "- Skip preamble like 'Here is the analysis…'. Jump straight to data.\n"
+    "- End every analysis with a 'Next' section: 2-3 specific follow-up commands the user can run.\n"
+    "- DO NOT explain what AI/LLM is doing. Say 'loading data', 'running model', 'computing risk'.\n"
+    )
+
+# Backwards-compatible alias — callers that reference ANALYSIS_SYSTEM_PROMPT directly
+# get a freshly-dated string each time (avoids stale dates from module-load time).
+ANALYSIS_SYSTEM_PROMPT = property(lambda self: _build_analysis_system_prompt()) if False else _build_analysis_system_prompt()
 
 
 def _build_prefetched_analysis_prompt(nano: bool = False) -> str:
@@ -3925,7 +2813,7 @@ def _build_prefetched_analysis_prompt(nano: bool = False) -> str:
             "用户消息前半部分已经包含真实行情数据；可能还包含技术指标数据。\n"
             "只做最终分析，不解释数据获取过程。\n"
             "输出五行以内：当前价/涨跌幅、RSI、MACD、支撑/阻力、短期建议。\n"
-            "如果某项没有数据，写 N/A。不要写示例、占位符、Python、JSON 或工具调用。\n"
+            "如果某项没有数据，写 `—` 并说明数据缺失；不要写示例、占位符、Python、JSON 或工具调用。\n"
             "RSI 规则：>70 为超买风险，<30 为超卖反弹可能，30-70 为中性。\n"
             "MACD 规则：hist>0 偏多，hist<0 偏空。\n"
         )
@@ -3943,7 +2831,7 @@ def _build_prefetched_analysis_prompt(nano: bool = False) -> str:
         "3. RSI 解读：<30 超卖、>70 超买、30-70 中性——基于消息中的实际值判断。\n"
         "4. MACD 解读：hist > 0 多头金叉，hist < 0 空头死叉——基于消息中的实际值。\n"
         "5. 短期建议：给出买入/观望/做空之一，并说明依据（引用具体数值）。\n"
-        "6. 如果消息中没有某个数值，写 N/A，不要猜测。\n\n"
+        "6. 如果消息中没有某个数值，写 `—` 并说明数据缺失，不要猜测。\n\n"
 
         "## 输出格式\n"
         "以 Markdown 输出：\n"
@@ -4087,6 +2975,13 @@ _GENERAL_KNOWLEDGE_KEYWORDS = (
     "如何理解", "是什么", "为什么", "区别", "difference between",
     "tell me about", "describe", "how to", "注册", "成立", "公司",
     "基本概念", "简介", "举例", "example", "例子",
+    # Sports / football
+    "足球", "篮球", "网球", "棒球", "橄榄球", "排球", "乒乓球", "羽毛球",
+    "世界杯", "欧冠", "英超", "德甲", "西甲", "意甲", "法甲", "bundesliga",
+    "比赛", "赛事", "比分", "进球", "射门", "门将", "球队", "球员", "教练",
+    "联赛", "积分榜", "赛程", "晋级", "淘汰赛", "决赛", "半决赛",
+    "football", "soccer", "match", "goal", "league", "champion",
+    "nba", "nfl", "mlb", "f1", "赛车", "奥运", "olympic",
 )
 
 # Finance/quant concepts — must NOT be classified as "general knowledge" even
@@ -4138,6 +3033,34 @@ def _is_general_knowledge(message: str) -> bool:
     return any(k in low for k in _GENERAL_KNOWLEDGE_KEYWORDS)
 
 
+_SPORTS_KEYWORDS = (
+    "足球", "世界杯", "欧冠", "英超", "德甲", "西甲", "意甲", "法甲",
+    "篮球", "nba", "网球", "f1", "赛车", "奥运", "olympic",
+    "比赛", "赛事", "比分", "进球", "球队", "球员", "联赛",
+    "football", "soccer", "world cup", "champions league",
+    "match", "score", "league", "premier league", "bundesliga",
+)
+
+
+def _is_sports_query(message: str) -> bool:
+    """Return True if the message is about sports/football."""
+    low = message.lower()
+    return any(k in low for k in _SPORTS_KEYWORDS)
+
+
+def _try_prefetch_sports_data(message: str) -> str:
+    """
+    Attempt to fetch live sports data relevant to the query.
+    Returns a formatted context string (may be empty if API unavailable).
+    """
+    try:
+        from football_data_client import get_sports_context_for_query
+        ctx = get_sports_context_for_query(message)
+        return ctx or ""
+    except Exception:
+        return ""
+
+
 def _is_coding_request(message: str) -> bool:
     """Return True if message looks like a coding/file-generation task."""
     low = message.lower()
@@ -4152,15 +3075,18 @@ def _is_coding_request(message: str) -> bool:
 def _is_analysis_request(message: str) -> bool:
     """Return True if message is a stock/crypto technical analysis request (not coding).
 
-    Excludes real-estate and pure macro-economy questions: those match keywords
-    like '分析'/'走势' but should use the finance chat prompt, not the stock
-    technical-analysis template (which requires injected market data to be useful).
+    Excludes real-estate, pure macro, and sports questions: those match keywords
+    like '分析'/'走势' but should NOT use the stock technical-analysis template
+    (which requires injected market data to be useful).
     """
     if _is_coding_request(message):
         return False
     low = message.lower()
     # Real-estate / macro-only topics → NOT a stock analysis request
     if any(k in low for k in _ANALYSIS_NON_STOCK_TOPICS):
+        return False
+    # Sports / tournament queries → route to general (handled by sports injection)
+    if _is_sports_query(message):
         return False
     return any(k in low for k in _ANALYSIS_KEYWORDS)
 
@@ -4352,233 +3278,74 @@ def _compact_messages(messages: list, max_chars: int = 0, model_key: str = "qwen
     return compacted
 
 
-import re as _re_sym
-
-# Regex to find stock symbols in a message: e.g. "AAPL", "苹果AAPL", "TSLA股票", "BTC"
-_STOCK_PATTERN = _re_sym.compile(
-    r'\b([A-Z]{1,5}(?:\.(?:HK|SH|SZ))?)(?:\s*(?:股票|股价|价格|现在|今天|行情|涨跌))?\b'
-    r'|(?:(?:苹果|特斯拉|英伟达|谷歌|亚马逊|微软|腾讯|阿里|百度|字节)).*?(\b[A-Z]{2,5}\b)',
-    _re_sym.UNICODE
-)
-_CRYPTO_WORDS = {"比特币":"BTC","以太坊":"ETH","狗狗币":"DOGE","索拉纳":"SOL","BTC":"BTC","ETH":"ETH"}
-_COMPANY_TO_TICKER = {
-    # US stocks
-    "苹果": "AAPL", "特斯拉": "TSLA", "英伟达": "NVDA", "谷歌": "GOOGL",
-    "亚马逊": "AMZN", "微软": "MSFT", "META": "META", "奈飞": "NFLX",
-    "苹果公司": "AAPL", "特斯拉公司": "TSLA",
-    # HK / China stocks
-    "腾讯": "0700.HK", "阿里": "BABA", "百度": "BIDU", "小米": "1810.HK",
-    # A股个股（裸6位代码，market_data_client 原生支持）
-    "贵州茅台": "600519", "茅台": "600519", "五粮液": "000858",
-    "宁德时代": "300750", "宁德": "300750", "比亚迪": "002594",
-    "寒武纪": "688256", "中芯国际": "688981", "海光信息": "688041",
-    "韦尔股份": "603501", "中科曙光": "603019", "澜起科技": "688008",
-    "科大讯飞": "002230", "海康威视": "002415", "东方财富": "300059",
-    "工业富联": "601138", "汇川技术": "300124", "阳光电源": "300274",
-    "招商银行": "600036", "平安银行": "000001", "中国平安": "601318",
-    "华泰证券": "601688", "中信证券": "600030", "兴业银行": "601166",
-    "工商银行": "601398", "建设银行": "601939", "中国银行": "601988",
-    "美的集团": "000333", "美的": "000333", "格力电器": "000651", "格力": "000651",
-    "海天味业": "603288", "伊利股份": "600887", "伊利": "600887",
-    "恒瑞医药": "600276", "迈瑞医疗": "300760", "爱尔眼科": "300015",
-    "复星医药": "600196", "药明康德": "603259", "片仔癀": "600436",
-    "中国神华": "601088", "紫金矿业": "601899", "赣锋锂业": "002460",
-    "长江电力": "600900", "中国石油": "601857", "中国石化": "600028",
-    "长城汽车": "601633", "上汽集团": "600104", "隆基绿能": "601012",
-    "京东方": "000725", "立讯精密": "002475", "歌尔股份": "002241",
-    "三一重工": "600031", "万华化学": "600309", "中国中免": "601888",
-    # US indices & ETFs
-    "纳斯达克100": "QQQ", "纳斯达克": "QQQ", "纳指": "QQQ",
-    "标普500": "SPY", "标普": "SPY", "S&P500": "SPY",
-    "道琼斯": "DIA", "道指": "DIA",
-    "罗素2000": "IWM",
-    # China indices (via yfinance)
-    "沪深300": "000300.SS", "上证": "000001.SS", "上证指数": "000001.SS",
-    "深证": "399001.SZ", "创业板": "399006.SZ", "科创板": "000688.SS",
-    "中证500": "000905.SS",
-    # HK index
-    "恒生": "^HSI", "恒指": "^HSI", "恒生指数": "^HSI",
-}
 
 
-def _try_prefetch_market_data(message: str, history: list = None) -> str:
+def _build_broker_context_block() -> str:
     """
-    Pre-fetch real market data and inject it into the system prompt so local
-    models always answer with real numbers instead of hallucinating.
+    Return a compact broker context block for injection into the system prompt.
+    Called once per message when a broker is connected, so the LLM knows the
+    user's live financial position without needing a tool call for every question.
 
-    For technical-analysis queries (support/resistance/RSI/MACD) also fetches
-    technical indicators and computes key price levels from the data.
-
-    跟进问题支持：当前消息无标的但含市场关键词时，从会话历史继承最近标的
-    （如上一轮问"寒武纪趋势"，这一轮问"现在的股票和趋势呢"）。
-
-    Returns "" if no market query detected or fetch fails.
+    Returns "" if no broker is connected or data fetch fails.
     """
-    # Trigger for any market / analysis query
-    _market_kw = (
-        "股票","股价","价格","涨跌","市值","行情","市场","现在多少","现价","今天价格",
-        "分析","走势","技术面","基本面","估值","涨跌幅",
-        "支撑","阻力","支撑位","阻力位","技术指标","技术分析",
-        "stock","price","quote","analyze","analysis","crypto",
-        "btc","eth","比特币","以太坊","rsi","macd","bollinger",
-    )
-    msg_low = message.lower()
-    if not any(k in msg_low for k in _market_kw):
+    if not _HAS_BROKERS:
         return ""
-
-    # Detect if this is a technical analysis request
-    _tech_kw = ("技术面","技术分析","技术指标","支撑","阻力","支撑位","阻力位",
-                 "rsi","macd","bollinger","均线","走势","趋势","technical")
-    _is_tech_query = any(k in msg_low for k in _tech_kw)
-
-    symbol = None
-    # 1. Known Chinese company / index name → ticker (longest match first)
-    for cn, tick in sorted(_COMPANY_TO_TICKER.items(), key=lambda x: -len(x[0])):
-        if cn in message:
-            symbol = tick
-            break
-    # 2. Crypto name → symbol
-    if not symbol:
-        for cn, tick in _CRYPTO_WORDS.items():
-            if cn in message:
-                symbol = tick
-                break
-    # 3. Uppercase ticker pattern
-    if not symbol:
-        m = _re_sym.search(r'\b([A-Z]{2,5}(?:\.(?:HK|SH|SZ))?)\b', message)
-        if m:
-            symbol = m.group(1)
-
-    # 4. 跟进问题：从会话历史继承最近提到的标的
-    if not symbol and history:
-        symbol = _extract_symbol_from_history(history) or None
-
-    if not symbol:
-        return ""
-
-    if not _HAS_MDC:
-        return (
-            f"\n## 实时行情状态\n"
-            f"- 标的：{symbol}\n"
-            f"- 状态：本地 market_data_client 未加载，无法获取实时行情。\n"
-            f"- 输出要求：明确说明数据不可用，并建议用户执行 `/quote {symbol}`；"
-            "不要输出示例价格、占位符或技术指标。\n"
-        )
-
     try:
-        mdc = _get_mdc()
-        r = mdc.quote(symbol)
-        if not r.get("success"):
-            return (
-                f"\n## 实时行情状态\n"
-                f"- 标的：{symbol}\n"
-                f"- 状态：当前数据服务无法获取该标的的实时行情。\n"
-                f"- 可用操作：运行 `/quote {symbol}` 重试。\n"
-                f"- 输出要求：不要输出示例价格、占位符、RSI、MACD 或支撑阻力位。\n"
+        reg = _get_broker_registry()
+        if not reg:
+            return ""
+        broker = reg.active()
+        if not broker or not broker.is_connected:
+            return ""
+
+        parts = [f"## 券商账户实时快照 [{broker.label}]"]
+
+        # Account
+        try:
+            acct = broker.account_info()
+            parts.append(
+                f"- 账户: {acct.masked_account}  货币: {acct.currency}\n"
+                f"- 总资产: {acct.total_assets:,.2f}  可用现金: {acct.cash:,.2f}"
+                f"  持仓市值: {acct.market_value:,.2f}"
             )
-        price    = r.get("price", "N/A")
-        chg      = r.get("change_pct", 0)
-        name     = r.get("name", symbol)
-        currency = r.get("currency", "USD")
-        high     = r.get("high", "N/A")
-        low      = r.get("low", "N/A")
-        vol      = r.get("volume", "N/A")
-        mktcap   = r.get("market_cap")
-        cap_str  = ""
-        if mktcap:
-            if mktcap >= 1e12:
-                cap_str = f"${mktcap/1e12:.2f}T"
-            elif mktcap >= 1e9:
-                cap_str = f"${mktcap/1e9:.1f}B"
-        sign = "+" if chg >= 0 else ""
-        provider = r.get("provider", "API")
+            if acct.pnl_today:
+                parts.append(f"- 当日盈亏: {acct.pnl_today:+,.2f}")
+        except Exception:
+            pass
 
-        block = (
-            f"\n## 📊 {symbol} 实时行情（来源：{provider}）\n"
-            f"- **名称**：{name}\n"
-            f"- **最新价**：{currency} {price}\n"
-            f"- **涨跌幅**：{sign}{chg:.2f}%\n"
-            f"- **今日高/低**：{high} / {low}\n"
-            f"- **成交量**：{vol}\n"
-            + (f"- **市值**：{cap_str}\n" if cap_str else "")
-        )
-
-        # For technical analysis queries: fetch indicators and compute support/resistance
-        if _is_tech_query:
-            try:
-                ti = mdc.technical_indicators(symbol, days=120)
-                if ti.get("success"):
-                    rsi   = ti.get("rsi")
-                    macd  = ti.get("macd")
-                    msig  = ti.get("macd_signal")
-                    mhist = ti.get("macd_hist")
-                    bbu   = ti.get("bb_upper")
-                    bbm   = ti.get("bb_mid")
-                    bbl   = ti.get("bb_lower")
-                    ma20  = ti.get("ma20")
-                    ma60  = ti.get("ma60")
-                    ma5   = ti.get("ma5")
-
-                    # Derive support / resistance from MAs and Bollinger Bands
-                    supports    = sorted([v for v in [ma20, ma60, bbl] if v], reverse=False)
-                    resistances = sorted([v for v in [bbu, bbm] if v], reverse=False)
-                    if isinstance(price, (int, float)):
-                        # Primary support = nearest MA below current price
-                        supports    = [f"{currency} {v:.2f}" for v in supports if v < price]
-                        resistances = [f"{currency} {v:.2f}" for v in resistances if v > price]
-                    else:
-                        supports    = [f"{currency} {v:.2f}" for v in supports]
-                        resistances = [f"{currency} {v:.2f}" for v in resistances]
-
-                    # Pre-compute signal labels so the model doesn't need to interpret
-                    rsi_str = f"{rsi:.1f}" if rsi is not None else "N/A"
-                    if rsi is not None:
-                        if rsi >= 70:
-                            rsi_signal = f"⚠️ 超买 (RSI={rsi:.1f} ≥ 70，回调风险)"
-                        elif rsi <= 30:
-                            rsi_signal = f"⚠️ 超卖 (RSI={rsi:.1f} ≤ 30，反弹机会)"
-                        else:
-                            rsi_signal = f"中性 (RSI={rsi:.1f}，30-70区间，无超买超卖)"
-                    else:
-                        rsi_signal = "N/A"
-
-                    # Show MACD histogram prominently (not the MACD line)
-                    if mhist is not None:
-                        macd_hist_str = f"{mhist:.4f}"
-                        macd_signal = "金叉/多头" if mhist > 0 else "死叉/空头"
-                        macd_label = f"MACD hist={macd_hist_str}，信号：{macd_signal}"
-                    else:
-                        macd_hist_str = "N/A"
-                        macd_signal = "N/A"
-                        macd_label = "N/A"
-
-                    block += (
-                        f"\n## 📈 技术分析数据（基于120日历史，已预计算信号）\n\n"
-                        f"### 技术指标与信号\n"
-                        f"| 指标 | 数值 | 信号判断 |\n"
-                        f"| --- | --- | --- |\n"
-                        f"| RSI(14) | {rsi_str} | {rsi_signal} |\n"
-                        f"| MACD hist(12,26,9) | {macd_hist_str} | {macd_signal}（hist{'>'if mhist and mhist>0 else '<'}0） |\n"
-                        + (f"| MA5 | {currency} {ma5:.2f} | 短期均线 |\n" if ma5 else "")
-                        + (f"| MA20 | {currency} {ma20:.2f} | 中期支撑/压力 |\n" if ma20 else "")
-                        + (f"| MA60 | {currency} {ma60:.2f} | 长期支撑/压力 |\n" if ma60 else "")
-                        + (f"| BB Upper | {currency} {bbu:.2f} | 上轨阻力 |\n" if bbu else "")
-                        + (f"| BB Lower | {currency} {bbl:.2f} | 下轨支撑 |\n" if bbl else "")
-                        + f"\n### 关键价位（直接引用这些数字）\n"
-                        + f"- **支撑位**：{', '.join(supports) if supports else '无（当前价已在主要支撑下方）'}\n"
-                        + f"- **阻力位**：{', '.join(resistances) if resistances else '无（当前价已突破布林上轨）'}\n"
-                        + f"\n### 技术信号汇总\n"
-                        + f"- RSI：{rsi_signal}\n"
-                        + f"- MACD：{macd_label}\n"
+        # Positions (compact, top 10 by market value)
+        try:
+            positions = broker.positions()
+            if positions:
+                positions_sorted = sorted(positions, key=lambda p: -abs(p.market_value))[:10]
+                parts.append("\n持仓明细（市值降序，最多10条）：")
+                for p in positions_sorted:
+                    pnl_str = f"  盈亏 {p.pnl:+,.2f} ({p.pnl_pct:+.2f}%)" if p.pnl else ""
+                    parts.append(
+                        f"  {p.symbol} {p.name[:8] if p.name else ''}  "
+                        f"持仓 {p.quantity:.0f}  成本 {p.cost_price:.3f}  "
+                        f"现价 {p.current_price:.3f}  市值 {p.market_value:,.2f}{pnl_str}"
                     )
-            except Exception:
-                pass  # Technical fetch failure is non-fatal; basic quote still injected
+        except Exception:
+            pass
 
-        block += f"\n*⚠️ 以上均为真实市场数据。请严格基于这些数字作答，不要修改或编造任何价格/指标数值。货币单位：{currency}。*\n"
-        return block
+        if len(parts) <= 1:
+            return ""
+
+        parts.append("\n(以上为实时账户数据，无需再调用 broker_query 获取基本账户/持仓信息，可直接引用。)")
+        return "\n".join(parts)
 
     except Exception:
         return ""
+
+
+
+
+
+
+def _try_prefetch_market_data(message: str, history: list = None) -> str:
+    """Thin wrapper — real implementation in apps.cli.handlers.market_handlers."""
+    return _src_prefetch_market_data(message, history)
 
 
 import re as _re_fi
@@ -4666,471 +3433,56 @@ def _check_memory_trigger(text: str) -> Optional[str]:
     return None
 
 
-def _extract_market_symbol(message: str) -> str:
-    """Extract a likely market symbol from Chinese company names or tickers."""
-    # 最长名称优先（避免"美的"抢先匹配"美的集团"）
-    for cn, tick in sorted(_COMPANY_TO_TICKER.items(), key=lambda x: -len(x[0])):
-        if cn in message:
-            return tick
-    # A股裸6位代码（600519 / sh600519 / 688256.SH）
-    m = _re_sym.search(r'(?<!\d)(?:[sS][hHzZ])?([036]\d{5}|68\d{4})(?:\.(?:SH|SZ|SS))?(?!\d)', message)
-    if m:
-        return m.group(1)
-    m = _re_sym.search(r'\b([A-Z]{1,5}(?:\.(?:HK|SH|SZ))?)\b', message)
-    if m:
-        return m.group(1)
-    # Chinese text immediately after a ticker ("AAPL的市场") prevents \b from
-    # matching because Unicode word-boundary rules treat 的 as a word char.
-    m = _re_sym.search(r'(?<![A-Za-z])([A-Z]{1,5}(?:\.(?:HK|SH|SZ))?)(?![A-Za-z])', message)
-    if m:
-        return m.group(1)
-    return ""
+# Financial/analytical terms that look like tickers but are NOT stock symbols.
+# Prevents the regex from matching "DCF", "EPS", "RSI", etc. as ticker codes.
 
 
-def _extract_symbol_from_history(history: list, max_lookback: int = 8) -> str:
-    """从最近的会话历史中提取标的（跟进问题继承上下文，如"现在的股票和趋势呢"）。
-
-    倒序扫描最近 max_lookback 条消息，返回最先命中的标的代码。
-    user 消息优先于 assistant 消息（用户提到的标的意图最明确）。
-    """
-    if not history:
-        return ""
-    recent = history[-max_lookback:]
-    # 先扫 user 消息（倒序）
-    for msg in reversed(recent):
-        if msg.get("role") != "user":
-            continue
-        content = msg.get("content", "")
-        if isinstance(content, list):   # 多模态消息取 text 部分
-            content = " ".join(p.get("text", "") for p in content
-                               if isinstance(p, dict) and p.get("type") == "text")
-        sym = _extract_market_symbol(content)
-        if sym:
-            return sym
-    # 再扫 assistant 消息（倒序）
-    for msg in reversed(recent):
-        if msg.get("role") != "assistant":
-            continue
-        sym = _extract_market_symbol(str(msg.get("content", "")))
-        if sym:
-            return sym
-    return ""
 
 
-def _is_stock_chart_analysis_request(message: str) -> bool:
-    """Return True for clear stock analysis requests that also ask for a chart."""
-    low = message.lower()
-    has_chart = any(k in low for k in ("图表", "走势图", "k线", "k-line", "kline", "chart", "plot"))
-    has_analysis = any(k in low for k in ("分析", "研究", "走势", "技术面", "analyze", "analysis"))
-    has_stock = any(k in low for k in ("股票", "stock", "股价")) or bool(_extract_market_symbol(message))
-    return has_chart and has_analysis and has_stock
 
 
-_UNRESOLVED_CO_INDICATORS = (
-    # 中文公司后缀
-    "公司", "集团", "股份", "有限", "控股", "科技", "电子", "能源", "银行",
-    "汽车", "制药", "医疗", "传媒", "文化", "地产", "金融", "基金", "证券",
-    # 外国品牌/公司名常见关键词（未进入字典的）
-    "路易", "奔驰", "宝马", "大众", "爱马仕", "香奈儿", "耐克", "阿迪",
-    "三星", "索尼", "丰田", "本田", "日产", "空客", "波音", "壳牌", "埃克森",
-    "高盛", "摩根", "花旗", "巴克莱", "德银", "瑞信", "瑞银",
-    "奈飞", "推特", "脸书", "优步", "滴滴", "字节", "快手", "拼多多",
-)
 
 
-def _has_unresolved_company_mention(message: str) -> bool:
-    """Return True if message names a company/brand that _extract_market_symbol couldn't resolve.
-
-    Used to block silent history inheritance: if user says "路易斯威登怎么看" and we
-    can't resolve it, we should NOT fall back to the last queried ticker (e.g. 300124).
-    """
-    if _extract_market_symbol(message):
-        return False  # already resolved — no problem
-    return any(kw in message for kw in _UNRESOLVED_CO_INDICATORS)
 
 
-def _is_market_snapshot_request(message: str, history: list = None) -> bool:
-    """Return True for simple quote / market snapshot analysis requests.
 
-    跟进问题（"现在的股票和趋势呢"）：当前消息无标的时回溯会话历史继承。
-    但如果消息中包含未能识别的公司名，则不视为跟进问题（不继承历史标的）。
-    """
-    if _is_coding_request(message) or _is_stock_chart_analysis_request(message):
-        return False
-    low = message.lower()
-    has_market_word = any(k in low for k in (
-        "市场", "行情", "股价", "价格", "涨跌", "涨幅", "现价", "今天",
-        "现在", "最新", "分析", "走势", "趋势", "market", "quote", "price",
-    ))
-    if not has_market_word:
-        return False
-    if _extract_market_symbol(message):
-        return True
-    # Only inherit history if the message doesn't name an unresolvable company
-    if _has_unresolved_company_mention(message):
-        return False
-    return bool(history and _extract_symbol_from_history(history))
+
+
+
+
+
+
+
+
+
+
+
+
+
+# _fetch_snapshot_row_for_symbol is now in apps.cli.handlers.market_handlers
+# (kept as local alias for any direct callers in this file)
+from apps.cli.handlers.market_handlers import _fetch_snapshot_row_for_symbol  # noqa
+
+
+def _try_handle_multi_market_snapshot(message: str, symbols: list) -> dict:
+    """Thin wrapper — real implementation in apps.cli.handlers.market_handlers."""
+    return _src_multi_snapshot(message, symbols)
+
+
+def _try_handle_realty_query(message: str) -> dict:
+    return _src_handle_realty_query(
+        message,
+        is_realty_query=_is_realty_query,
+        cn_cities=_CN_CITIES,
+        intl_cities=_INTL_CITIES,
+    )
 
 
 def _try_handle_market_snapshot_analysis(message: str, history: list = None) -> dict:
-    """Deterministic path for simple market analysis.
-
-    Local small models tend to mangle injected quote fields into fragments like
-    "N/A/N/A/-1.24%".  For snapshot requests, format the data directly.
-    """
-    if not _is_market_snapshot_request(message, history):
-        return {"success": False, "error": "not_market_snapshot"}
-
-    _msg_sym = _extract_market_symbol(message)
-    _hist_sym = (_extract_symbol_from_history(history) if history else "") if not _msg_sym else ""
-
-    # Guard: if message names an unrecognised company, don't silently use history symbol
-    if not _msg_sym and _has_unresolved_company_mention(message):
-        return {
-            "success": True,
-            "response": (
-                "## ❓ 无法识别的股票\n\n"
-                "未能将消息中提到的公司/品牌解析为已知股票代码。\n\n"
-                "请提供具体代码后重试，例如：\n"
-                "- A股：`/quote 600519`（贵州茅台）\n"
-                "- 港股：`/quote 0700.HK`（腾讯）\n"
-                "- 美股：`/quote AAPL`\n"
-                "- 欧洲：`/quote MC.PA`（LVMH/路易威登）\n\n"
-                "*提示：如需全局搜索，可输入 `/ta <代码>` 获取完整技术分析。*"
-            ),
-            "tools_used": ["market_snapshot"],
-        }
-
-    symbol = _msg_sym or _hist_sym or "AAPL"
-    if not _HAS_MDC:
-        return {
-            "success": True,
-            "response": (
-                f"## {symbol} 市场快照\n\n"
-                "当前本地行情客户端未加载，无法获取实时行情。\n\n"
-                f"可运行 `/quote {symbol}` 重试。"
-            ),
-            "tools_used": ["market_snapshot"],
-        }
-
-    import time as _time_snap
-
-    quote = {"success": False, "error": "未初始化"}
-    for _attempt in range(3):
-        try:
-            mdc = _get_mdc()
-            quote = mdc.quote(symbol)
-            if quote.get("success"):
-                break
-            # Detect rate limit and back off
-            _err_str = str(quote.get("error", "")).lower()
-            if ("rate" in _err_str or "429" in _err_str or "too many" in _err_str) and _attempt < 2:
-                _time_snap.sleep(2 ** _attempt)  # 2s, 4s
-                continue
-            break
-        except Exception as exc:
-            _exc_str = str(exc).lower()
-            if ("rate" in _exc_str or "429" in _exc_str or "too many" in _exc_str) and _attempt < 2:
-                _time_snap.sleep(2 ** _attempt)
-                continue
-            _raw_exc = str(exc)
-            if "Connection aborted" in _raw_exc or "RemoteDisconnected" in _raw_exc:
-                _clean_err = "网络连接中断，请检查网络后重试"
-            elif "Connection refused" in _raw_exc:
-                _clean_err = "连接被拒绝，数据服务暂时不可用"
-            elif "timeout" in _raw_exc.lower():
-                _clean_err = "连接超时，请稍后重试"
-            else:
-                _clean_err = _raw_exc
-            quote = {"success": False, "error": _clean_err}
-            break
-
-    # Finnhub fallback when primary data source (yfinance) failed or rate-limited
-    # _get_provider_key reads both env vars AND ~/.arthera/providers.json
-    # NOTE: do NOT use dir() — it returns local scope, not module globals.
-    _fh_key = _get_provider_key("finnhub")
-    _fh_tried = False
-    if not quote.get("success") and _fh_key:
-        _fh_tried = True
-        try:
-            import requests as _rq
-            _fh_r = _rq.get(
-                f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={_fh_key}",
-                timeout=6
-            )
-            if _fh_r.status_code == 200:
-                _fh = _fh_r.json()
-                if _fh.get("c"):  # current price present
-                    quote = {
-                        "success": True, "symbol": symbol,
-                        "price": round(_fh["c"], 2),
-                        "change_pct": round((_fh["c"] - _fh["pc"]) / _fh["pc"] * 100, 2) if _fh.get("pc") else 0,
-                        "high": round(_fh.get("h", 0), 2),
-                        "low":  round(_fh.get("l", 0), 2),
-                        "currency": "USD", "provider": "finnhub",
-                    }
-        except Exception:
-            pass
-
-    def _num(v):
-        try:
-            if v in (None, "", "N/A", "-", "nan"):
-                return None
-            return float(v)
-        except Exception:
-            return None
-
-    price = _num(quote.get("price"))
-    if not quote.get("success") or price is None:
-        err = quote.get("error") or "当前数据源未返回有效价格"
-        if "NoneType" in str(err):
-            err = "当前数据源未返回有效价格"
-        is_rate_limit = "rate" in str(err).lower() or "429" in str(err) or "too many" in str(err).lower()
-        if is_rate_limit:
-            if _fh_tried:
-                # Finnhub was tried but also failed — both sources exhausted
-                _hint = "\n\n[提示] yfinance 和 Finnhub 均触发频率限制，请稍等 30 秒后重试。"
-            elif _fh_key:
-                # Key configured but Finnhub wasn't tried (shouldn't happen, but defensive)
-                _hint = "\n\n[提示] 数据源请求频率受限，请稍等 30 秒后重试。"
-            else:
-                # No Finnhub key — suggest configuring one
-                _hint = (
-                    "\n\n[提示] 数据源请求频率受限：请稍等 30 秒后重试，"
-                    "或配置 Finnhub key 使用备用数据源：`/apikey set finnhub <key>`"
-                    "（注册：https://finnhub.io/register）"
-                )
-        else:
-            _hint = ""
-        return {
-            "success": True,
-            "response": (
-                f"## {symbol} 市场快照\n\n"
-                f"当前无法获取有效行情：{err}{_hint}\n\n"
-                f"可运行 `/quote {symbol}` 重试；在数据恢复前不输出 RSI、MACD 或支撑/阻力位。"
-            ),
-            "tools_used": ["market_snapshot"],
-            "rate_limited": is_rate_limit,
-        }
-
-    name = quote.get("name") or symbol
-    currency = quote.get("currency") or "USD"
-    chg = _num(quote.get("change_pct"))
-    high = _num(quote.get("high"))
-    low = _num(quote.get("low"))
-    volume = quote.get("volume")
-    provider = quote.get("provider") or "market_data_client"
-    sign = "+" if (chg or 0) >= 0 else ""
-    chg_str = f"{sign}{chg:.2f}%" if chg is not None else "N/A"
-    range_str = f"{currency} {low:,.2f} - {currency} {high:,.2f}" if low is not None and high is not None else "N/A"
-
-    # ── Technical indicators: try mdc first, fall back to direct yfinance ──
-    ti = {}
-    try:
-        ti = mdc.technical_indicators(symbol, days=120)
-    except Exception:
-        ti = {}
-
-    # If mdc returned nothing useful (all None), try yfinance directly
-    if not ti.get("success") or ti.get("rsi") is None:
-        try:
-            import yfinance as _yf
-            import numpy as _np
-            # A股裸6位代码需要 yfinance 后缀：6/68开头→.SS，其余→.SZ
-            _yf_sym = symbol
-            if symbol.isdigit() and len(symbol) == 6:
-                _yf_sym = symbol + (".SS" if symbol.startswith("6") else ".SZ")
-            _hist = _yf.Ticker(_yf_sym).history(period="6mo")
-            if len(_hist) >= 20:
-                _close = _hist["Close"]
-                _vol   = _hist["Volume"]
-                # RSI(14)
-                _d = _close.diff()
-                _g = _d.clip(lower=0).rolling(14).mean()
-                _l = (-_d.clip(upper=0)).rolling(14).mean()
-                _rs = _g / _l.replace(0, _np.nan)
-                _rsi = float((100 - 100 / (1 + _rs)).iloc[-1])
-                # MACD hist
-                _ema12  = _close.ewm(span=12).mean()
-                _ema26  = _close.ewm(span=26).mean()
-                _macd   = _ema12 - _ema26
-                _signal = _macd.ewm(span=9).mean()
-                _mhist  = float((_macd - _signal).iloc[-1])
-                # Bollinger Bands & MA
-                _ma20  = _close.rolling(20).mean()
-                _std20 = _close.rolling(20).std()
-                _ma60  = _close.rolling(60).mean() if len(_close) >= 60 else _ma20
-                ti = {
-                    "success":   True,
-                    "rsi":       round(_rsi, 2) if not _np.isnan(_rsi) else None,
-                    "macd_hist": round(_mhist, 4),
-                    "ma20":      round(float(_ma20.iloc[-1]), 2),
-                    "ma60":      round(float(_ma60.iloc[-1]), 2),
-                    "bb_upper":  round(float((_ma20 + 2 * _std20).iloc[-1]), 2),
-                    "bb_lower":  round(float((_ma20 - 2 * _std20).iloc[-1]), 2),
-                    "provider":  "yfinance_direct",
-                }
-                # Back-fill volume if missing from quote
-                if volume is None or str(volume) in ("None", "N/A", ""):
-                    _recent_vol = _vol.iloc[-1]
-                    if not _np.isnan(_recent_vol):
-                        volume = int(_recent_vol)
-        except Exception:
-            pass
-
-    # Finnhub candle fallback: when price came from Finnhub but yfinance TA failed,
-    # fetch 6-month daily candles from Finnhub to compute RSI/MACD/MA.
-    # Only attempted for US-style symbols (no A-share 6-digit codes, no .HK).
-    _is_us_sym = bool(symbol and not symbol.isdigit() and "." not in symbol)
-    if (not ti.get("success") or ti.get("rsi") is None) and _fh_key and _is_us_sym:
-        try:
-            import requests as _rq2, time as _t2
-            _to_ts = int(_t2.time())
-            _from_ts = _to_ts - 180 * 86400   # ~6 months
-            _cr = _rq2.get(
-                f"https://finnhub.io/api/v1/stock/candle"
-                f"?symbol={symbol}&resolution=D&from={_from_ts}&to={_to_ts}&token={_fh_key}",
-                timeout=8,
-            )
-            if _cr.status_code == 200:
-                _cd = _cr.json()
-                if _cd.get("s") == "ok" and _cd.get("c") and len(_cd["c"]) >= 20:
-                    import numpy as _np2
-                    _c = _cd["c"]   # close prices list
-                    _v = _cd.get("v", [])
-                    import statistics as _st
-                    # RSI(14) — simple loop (no pandas needed)
-                    _gains, _losses = [], []
-                    for i in range(1, len(_c)):
-                        _delta = _c[i] - _c[i-1]
-                        _gains.append(max(_delta, 0))
-                        _losses.append(max(-_delta, 0))
-                    _ag = sum(_gains[:14]) / 14
-                    _al = sum(_losses[:14]) / 14
-                    for i in range(14, len(_gains)):
-                        _ag = (_ag * 13 + _gains[i]) / 14
-                        _al = (_al * 13 + _losses[i]) / 14
-                    _rsi_fh = (100 - 100 / (1 + _ag / _al)) if _al else 100
-                    # MACD(12,26,9)
-                    def _ema_list(prices, span):
-                        k, result_ema = 2/(span+1), [prices[0]]
-                        for p in prices[1:]: result_ema.append(p*k + result_ema[-1]*(1-k))
-                        return result_ema
-                    _ema12_fh = _ema_list(_c, 12)
-                    _ema26_fh = _ema_list(_c, 26)
-                    _macd_fh  = [a - b for a, b in zip(_ema12_fh, _ema26_fh)]
-                    _sig_fh   = _ema_list(_macd_fh, 9)
-                    _mhist_fh = _macd_fh[-1] - _sig_fh[-1]
-                    # MA20 / MA60
-                    _ma20_fh = sum(_c[-20:]) / 20
-                    _ma60_fh = sum(_c[-60:]) / 60 if len(_c) >= 60 else _ma20_fh
-                    # Bollinger Bands
-                    _std20_fh = _st.stdev(_c[-20:])
-                    ti = {
-                        "success":   True,
-                        "rsi":       round(_rsi_fh, 2),
-                        "macd_hist": round(_mhist_fh, 4),
-                        "ma20":      round(_ma20_fh, 2),
-                        "ma60":      round(_ma60_fh, 2),
-                        "bb_upper":  round(_ma20_fh + 2*_std20_fh, 2),
-                        "bb_lower":  round(_ma20_fh - 2*_std20_fh, 2),
-                        "provider":  "finnhub_candle",
-                    }
-                    if volume is None and _v:
-                        volume = int(_v[-1]) if _v[-1] else None
-        except Exception:
-            pass
-
-    rsi = _num(ti.get("rsi"))
-    mhist = _num(ti.get("macd_hist"))
-    ma20 = _num(ti.get("ma20"))
-    ma60 = _num(ti.get("ma60"))
-    bbu = _num(ti.get("bb_upper"))
-    bbl = _num(ti.get("bb_lower"))
-
-    if rsi is None:
-        rsi_view = "N/A"
-    elif rsi >= 70:
-        rsi_view = f"{rsi:.1f}，超买风险"
-    elif rsi <= 30:
-        rsi_view = f"{rsi:.1f}，超卖反弹可能"
-    else:
-        rsi_view = f"{rsi:.1f}，中性"
-
-    if mhist is None:
-        macd_view = "N/A"
-    else:
-        macd_view = f"{mhist:.4f}，{'偏多' if mhist > 0 else '偏空'}"
-
-    supports = [v for v in (bbl, ma60, ma20) if v is not None and v < price]
-    resistances = [v for v in (ma20, ma60, bbu) if v is not None and v > price]
-    supports = sorted(set(round(v, 2) for v in supports), reverse=True)[:3]
-    resistances = sorted(set(round(v, 2) for v in resistances))[:3]
-    support_str = ", ".join(f"{currency} {v:,.2f}" for v in supports) or "N/A"
-    resistance_str = ", ".join(f"{currency} {v:,.2f}" for v in resistances) or "N/A"
-
-    # ── 短期判断门控：核心技术指标（RSI / MACD）至少有一个才输出信号 ────
-    # 成交量、支撑/阻力是辅助字段，缺失不影响判断
-    _enough_data = (rsi is not None) or (mhist is not None)
-    _na_count = sum([
-        rsi is None,
-        mhist is None,
-        volume is None or str(volume) in ("None", "N/A", ""),
-        len(supports) == 0,
-        len(resistances) == 0,
-    ])
-
-    if _enough_data:
-        if rsi is not None and rsi >= 70:
-            stance = "偏谨慎，等待回调或确认突破"
-        elif rsi is not None and rsi <= 30:
-            stance = "超卖区域，关注企稳信号"
-        elif mhist is not None and mhist < 0 and (chg or 0) < 0:
-            stance = "短线偏弱，先观察支撑是否守住"
-        elif mhist is not None and mhist > 0 and (chg or 0) >= 0:
-            stance = "短线偏强，但仍需控制仓位"
-        else:
-            stance = "震荡观察，等待更明确方向"
-        stance_line = f"**短期判断**：{stance}。\n\n"
-    else:
-        stance_line = (
-            f"> ⚠ 技术指标数据不足（{_na_count}/5 项缺失），无法生成可靠信号。\n"
-            f"> 运行 `/ta {symbol}` 或稍后重试获取完整数据。\n\n"
-        )
-
-    # ── 仅显示有数据的行 ──────────────────────────────────────────────────
-    lines = [f"## {name} ({symbol}) 市场快照\n"]
-    lines.append(f"- **最新价**：{currency} {price:,.2f}（{chg_str}）")
-    if range_str != "N/A":
-        lines.append(f"- **日内区间**：{range_str}")
-    _vol_str = _fmt_int(volume)
-    if _vol_str != "N/A":
-        lines.append(f"- **成交量**：{_vol_str}")
-    if rsi_view != "N/A":
-        lines.append(f"- **RSI(14)**：{rsi_view}")
-    if macd_view != "N/A":
-        lines.append(f"- **MACD hist**：{macd_view}")
-    if support_str != "N/A":
-        lines.append(f"- **支撑位**：{support_str}")
-    if resistance_str != "N/A":
-        lines.append(f"- **阻力位**：{resistance_str}")
-
-    weekday = datetime.now().weekday()
-    session_note = "美股周末/休市时，此处为最近可用行情。" if weekday >= 5 else "盘中/盘后状态以数据源返回为准。"
-    ti_provider = ti.get("provider", "")
-    data_note = f"{provider}" + (f" + {ti_provider}" if ti_provider and ti_provider != provider else "")
-
-    response = "\n".join(lines) + "\n\n" + stance_line + f"*数据源：{data_note}。{session_note}*"
-    return {"success": True, "response": response, "tools_used": ["market_snapshot"]}
+    """Thin wrapper — real implementation in apps.cli.handlers.market_handlers."""
+    return _src_market_snapshot_analysis(message, history)
 
 
-def _fmt_num(value, digits: int = 2, prefix: str = "") -> str:
-    try:
-        if value is None or (hasattr(value, "__class__") and str(value) == "nan"):
-            return "N/A"
-        return f"{prefix}{float(value):,.{digits}f}"
-    except Exception:
-        return "N/A"
 
 
 def _fmt_int(value) -> str:
@@ -5138,6 +3490,19 @@ def _fmt_int(value) -> str:
         return f"{int(float(value)):,}"
     except Exception:
         return "N/A"
+
+
+def _display_value(value, digits: int = 2, suffix: str = "") -> str:
+    try:
+        if value in (None, "", "N/A", "-", "nan"):
+            return "—"
+        if isinstance(value, (int, float)):
+            return f"{float(value):,.{digits}f}{suffix}"
+        return str(value)
+    except Exception:
+        return "—"
+
+
 
 
 def _generate_chart_sync(symbol: str) -> dict:
@@ -5153,1247 +3518,37 @@ def _generate_chart_sync(symbol: str) -> dict:
         else:
             sym_yf = symbol + ".SZ"
 
-    # 构造一个虚假的"图表分析消息"来复用现有函数
-    fake_msg = f"analyze stock chart {sym_yf} price trend technical analysis"
-    result = _try_handle_stock_chart_analysis.__wrapped__(sym_yf) \
-        if hasattr(_try_handle_stock_chart_analysis, "__wrapped__") \
-        else _try_handle_stock_chart_analysis_direct(sym_yf)
-    return result
+    return _try_handle_stock_chart_analysis_direct(sym_yf)
+
+
+def _try_handle_broker_query(message: str) -> dict:
+    return _src_handle_broker_query(
+        message,
+        has_brokers=_HAS_BROKERS,
+        is_broker_intent=_is_broker_intent,
+        get_broker_registry=_get_broker_registry,
+    )
 
 
 def _try_handle_stock_chart_analysis_direct(symbol: str) -> dict:
-    """直接调用图表逻辑（不经过消息解析）"""
-    import html as _html, re as _re
-    try:
-        import pandas as _pd
-        import yfinance as _yf
-    except Exception as exc:
-        return {"success": False, "error": f"缺少依赖: {exc}"}
-
-    ticker = _yf.Ticker(symbol)
-    try:
-        hist = ticker.history(period="1y", interval="1d", auto_adjust=False)
-    except Exception:
-        hist = None
-
-    if hist is None or hist.empty:
-        return {"success": False, "error": f"无法获取 {symbol} 行情数据"}
-
-    hist = hist.dropna(subset=["Close"]).copy()
-    hist["MA20"] = hist["Close"].rolling(20).mean()
-    hist["MA50"] = hist["Close"].rolling(50).mean()
-    delta = hist["Close"].diff()
-    gain  = delta.clip(lower=0).rolling(14).mean()
-    loss  = (-delta.clip(upper=0)).rolling(14).mean()
-    hist["RSI14"] = 100 - (100 / (1 + gain / loss.replace(0, _pd.NA)))
-    ema12 = hist["Close"].ewm(span=12, adjust=False).mean()
-    ema26 = hist["Close"].ewm(span=26, adjust=False).mean()
-    hist["MACD"]        = ema12 - ema26
-    hist["MACD_SIGNAL"] = hist["MACD"].ewm(span=9, adjust=False).mean()
-
-    last       = hist.iloc[-1]
-    last_close = float(last["Close"])
-    info = {}
-    try:
-        info = ticker.get_info() or {}
-    except Exception:
-        pass
-
-    name    = info.get("longName") or info.get("shortName") or symbol
-    currency = info.get("currency", "USD")
-
-    out_dir = pathlib.Path.home() / "Desktop" / "Arthera" / "reports" / "stock_charts"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    safe_sym = re.sub(r"[^A-Za-z0-9_.-]+", "_", symbol)
-    out_file = out_dir / f"{safe_sym}_chart_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
-
-    x        = [idx.strftime("%Y-%m-%d") for idx in hist.index]
-    close_v  = [None if _pd.isna(v) else round(float(v), 4) for v in hist["Close"]]
-    ma20_v   = [None if _pd.isna(v) else round(float(v), 4) for v in hist["MA20"]]
-    ma50_v   = [None if _pd.isna(v) else round(float(v), 4) for v in hist["MA50"]]
-    rsi_v    = [None if _pd.isna(v) else round(float(v), 1) for v in hist["RSI14"]]
-    macd_v   = [None if _pd.isna(v) else round(float(v), 4) for v in hist["MACD"]]
-    macd_s_v = [None if _pd.isna(v) else round(float(v), 4) for v in hist["MACD_SIGNAL"]]
-
-    rsi14  = float(last["RSI14"]) if _pd.notna(last.get("RSI14")) else None
-    ma20   = float(last["MA20"]) if _pd.notna(last.get("MA20")) else None
-    ma50   = float(last["MA50"]) if _pd.notna(last.get("MA50")) else None
-    macd_l = float(last["MACD"]) if _pd.notna(last.get("MACD")) else None
-    macd_s = float(last["MACD_SIGNAL"]) if _pd.notna(last.get("MACD_SIGNAL")) else None
-
-    trend    = ("偏多" if ma20 and ma50 and last_close > ma20 > ma50 else
-                "偏空" if ma20 and ma50 and last_close < ma20 < ma50 else "震荡")
-    rsi_view = ("超买" if rsi14 and rsi14 >= 70 else "超卖" if rsi14 and rsi14 <= 30 else "中性")
-    momentum = "MACD偏多" if macd_l and macd_s and macd_l > macd_s else "MACD偏弱"
-
-    html_doc = f"""<!doctype html>
-<html lang="zh-CN"><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{_html.escape(name)} 分析图表</title>
-<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
-<style>
-  body{{margin:0;font-family:-apple-system,sans-serif;background:#f7f8fa;color:#17202a}}
-  main{{max-width:1100px;margin:0 auto;padding:24px}}
-  h1{{margin:0 0 4px;font-size:24px}} .meta{{color:#667085;font-size:13px;margin-bottom:16px}}
-  .grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px;margin:12px 0}}
-  .card{{background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:12px}}
-  .lbl{{color:#667085;font-size:11px}} .val{{font-size:17px;font-weight:650;margin-top:3px}}
-  .green{{color:#16a34a}} .red{{color:#dc2626}} .note{{color:#9ca3af;font-size:12px;margin-top:12px}}
-</style></head>
-<body><main>
-<h1>{_html.escape(name)} ({_html.escape(symbol)})</h1>
-<p class="meta">生成时间: {datetime.now():%Y-%m-%d %H:%M} | 数据来源: Yahoo Finance | Aria Code</p>
-<div class="grid">
-  <div class="card"><div class="lbl">最新收盘</div>
-    <div class="val">{currency} {last_close:,.2f}</div></div>
-  <div class="card"><div class="lbl">MA20</div>
-    <div class="val {'green' if ma20 and last_close > ma20 else 'red'}">{f'{ma20:,.2f}' if ma20 else 'N/A'}</div></div>
-  <div class="card"><div class="lbl">MA50</div>
-    <div class="val {'green' if ma50 and last_close > ma50 else 'red'}">{f'{ma50:,.2f}' if ma50 else 'N/A'}</div></div>
-  <div class="card"><div class="lbl">RSI(14)</div>
-    <div class="val {'red' if rsi14 and rsi14>=70 else 'green' if rsi14 and rsi14<=30 else ''}">{f'{rsi14:.1f}' if rsi14 else 'N/A'} {rsi_view}</div></div>
-  <div class="card"><div class="lbl">趋势</div><div class="val">{trend}</div></div>
-  <div class="card"><div class="lbl">动能</div><div class="val">{momentum}</div></div>
-</div>
-<div id="price-chart"></div>
-<div id="rsi-chart" style="margin-top:8px"></div>
-<div id="macd-chart" style="margin-top:8px"></div>
-<p class="note">⚠️ 本图表仅供参考，不构成投资建议。</p>
-</main>
-<script>
-const x={x};
-Plotly.newPlot('price-chart',[
-  {{x,y:{close_v},type:'scatter',name:'收盘价',line:{{color:'#2563eb',width:2}}}},
-  {{x,y:{ma20_v}, type:'scatter',name:'MA20', line:{{color:'#f59e0b',width:1.5,dash:'dot'}}}},
-  {{x,y:{ma50_v}, type:'scatter',name:'MA50', line:{{color:'#ef4444',width:1.5,dash:'dot'}}}}
-],{{title:'{_html.escape(symbol)} 价格走势',height:340,plot_bgcolor:'#fff',
-   paper_bgcolor:'#fff',xaxis:{{showgrid:true,gridcolor:'#f3f4f6'}},
-   yaxis:{{showgrid:true,gridcolor:'#f3f4f6',title:'价格 ({currency})'}}}},
-  {{responsive:true,displaylogo:false}});
-Plotly.newPlot('rsi-chart',[
-  {{x,y:{rsi_v},type:'scatter',name:'RSI(14)',line:{{color:'#8b5cf6',width:1.5}}}}
-],{{title:'RSI(14)',height:180,plot_bgcolor:'#fff',paper_bgcolor:'#fff',
-   shapes:[{{type:'line',x0:x[0],x1:x[x.length-1],y0:70,y1:70,
-              line:{{color:'#dc2626',width:1,dash:'dot'}}}},
-             {{type:'line',x0:x[0],x1:x[x.length-1],y0:30,y1:30,
-              line:{{color:'#16a34a',width:1,dash:'dot'}}}}]}},
-  {{responsive:true,displaylogo:false}});
-Plotly.newPlot('macd-chart',[
-  {{x,y:{macd_v},  type:'scatter',name:'MACD', line:{{color:'#2563eb',width:1.5}}}},
-  {{x,y:{macd_s_v},type:'scatter',name:'Signal',line:{{color:'#f59e0b',width:1.5,dash:'dot'}}}}
-],{{title:'MACD',height:180,plot_bgcolor:'#fff',paper_bgcolor:'#fff'}},
-  {{responsive:true,displaylogo:false}});
-</script></body></html>"""
-
-    out_file.write_text(html_doc, encoding="utf-8")
-    return {
-        "success":    True,
-        "chart_path": str(out_file),
-        "response":   f"图表已生成：{out_file.name}",
-        "symbol":     symbol,
-        "last_close": last_close,
-        "trend":      trend,
-        "rsi":        rsi14,
-        "momentum":   momentum,
-    }
+    return _src_chart_analysis_direct(symbol)
 
 
 def _try_handle_stock_chart_analysis(message: str) -> dict:
-    """Deterministic path for stock analysis + chart requests.
-
-    This avoids weak local models writing fake scripts or leaking pseudo tool
-    calls. It fetches historical data, computes common indicators, writes a
-    standalone HTML chart, and returns a concise Markdown analysis.
-    """
-    if not _is_stock_chart_analysis_request(message):
-        return {"success": False, "error": "not_stock_chart_analysis"}
-
-    symbol = _extract_market_symbol(message) or "AAPL"
-    period = "1y"
-    interval = "1d"
-
-    try:
-        import html as _html
-        import pandas as _pd
-        import yfinance as _yf
-    except Exception as exc:
-        return {
-            "success": False,
-            "error": f"缺少图表分析依赖：{exc}",
-            "response": "当前环境缺少 `yfinance` 或 `pandas`，无法生成股票图表。",
-        }
-
-    provider = "Yahoo Finance"
-    ticker = None
-    try:
-        ticker = _yf.Ticker(symbol)
-        hist = ticker.history(period=period, interval=interval, auto_adjust=False)
-    except Exception as exc:
-        hist = None
-        yahoo_error = str(exc)
-    else:
-        yahoo_error = ""
-
-    if hist is None or hist.empty:
-        try:
-            import requests as _requests
-            period2 = int(time.time())
-            period1 = period2 - 370 * 86400
-            url = (
-                f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
-                f"?period1={period1}&period2={period2}&interval=1d"
-                f"&events=history&includeAdjustedClose=true"
-            )
-            resp = _requests.get(url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
-            resp.raise_for_status()
-            payload = resp.json()
-            result = (payload.get("chart", {}).get("result") or [None])[0]
-            if result:
-                ts = result.get("timestamp") or []
-                quote = ((result.get("indicators") or {}).get("quote") or [{}])[0]
-                dates = _pd.to_datetime(ts, unit="s")
-                hist = _pd.DataFrame({
-                    "Open": quote.get("open", []),
-                    "High": quote.get("high", []),
-                    "Low": quote.get("low", []),
-                    "Close": quote.get("close", []),
-                    "Volume": quote.get("volume", []),
-                }, index=dates).dropna(subset=["Close"])
-                meta = result.get("meta") or {}
-                if meta.get("currency"):
-                    provider_currency = meta.get("currency")
-                else:
-                    provider_currency = None
-                provider = "Yahoo Chart API"
-            else:
-                provider_currency = None
-        except Exception as exc:
-            hist = None
-            chart_error = str(exc)
-        else:
-            chart_error = ""
-
-    if hist is None or hist.empty:
-        try:
-            stooq_symbol = symbol.lower()
-            if "." not in stooq_symbol:
-                stooq_symbol = f"{stooq_symbol}.us"
-            url = f"https://stooq.com/q/d/l/?s={stooq_symbol}&i=d"
-            hist = _pd.read_csv(url)
-            if hist is not None and not hist.empty:
-                hist["Date"] = _pd.to_datetime(hist["Date"])
-                hist = hist.set_index("Date").sort_index().tail(260)
-                provider = "Stooq"
-        except Exception as exc:
-            return {
-                "success": False,
-                "error": f"获取 {symbol} 历史行情失败：Yahoo={yahoo_error or 'empty'}; YahooChart={chart_error or 'empty'}; Stooq={exc}",
-                "response": f"无法获取 {symbol} 历史行情，图表未生成。请稍后重试，或检查网络/数据源访问。",
-            }
-
-    if hist is None or hist.empty or "Close" not in hist.columns:
-        return {
-            "success": False,
-            "error": f"{symbol} 历史行情为空：Yahoo={yahoo_error or 'empty'}",
-            "response": f"没有拿到 {symbol} 的可用历史行情，图表未生成。请稍后重试，或检查网络/数据源访问。",
-        }
-
-    hist = hist.dropna(subset=["Close"]).copy()
-    hist["MA20"] = hist["Close"].rolling(20).mean()
-    hist["MA50"] = hist["Close"].rolling(50).mean()
-    hist["MA200"] = hist["Close"].rolling(200).mean()
-    delta = hist["Close"].diff()
-    gain = delta.clip(lower=0).rolling(14).mean()
-    loss = (-delta.clip(upper=0)).rolling(14).mean()
-    rs = gain / loss.replace(0, _pd.NA)
-    hist["RSI14"] = 100 - (100 / (1 + rs))
-    ema12 = hist["Close"].ewm(span=12, adjust=False).mean()
-    ema26 = hist["Close"].ewm(span=26, adjust=False).mean()
-    hist["MACD"] = ema12 - ema26
-    hist["MACD_SIGNAL"] = hist["MACD"].ewm(span=9, adjust=False).mean()
-
-    last = hist.iloc[-1]
-    first_close = hist["Close"].iloc[0]
-    last_close = float(last["Close"])
-    ytd_like_return = (last_close / float(first_close) - 1) * 100 if first_close else 0
-    ma20 = float(last["MA20"]) if _pd.notna(last["MA20"]) else None
-    ma50 = float(last["MA50"]) if _pd.notna(last["MA50"]) else None
-    ma200 = float(last["MA200"]) if _pd.notna(last["MA200"]) else None
-    rsi14 = float(last["RSI14"]) if _pd.notna(last["RSI14"]) else None
-    macd = float(last["MACD"]) if _pd.notna(last["MACD"]) else None
-    macd_sig = float(last["MACD_SIGNAL"]) if _pd.notna(last["MACD_SIGNAL"]) else None
-    high_52w = float(hist["High"].max()) if "High" in hist else float(hist["Close"].max())
-    low_52w = float(hist["Low"].min()) if "Low" in hist else float(hist["Close"].min())
-
-    info = {}
-    try:
-        if ticker is None:
-            ticker = _yf.Ticker(symbol)
-        info = ticker.get_info() or {}
-    except Exception:
-        info = {}
-    name = info.get("longName") or info.get("shortName") or symbol
-    pe = info.get("trailingPE")
-    market_cap = info.get("marketCap")
-    currency = info.get("currency") or locals().get("provider_currency") or "USD"
-
-    if ma20 and ma50 and last_close > ma20 > ma50:
-        trend = "偏多"
-    elif ma20 and ma50 and last_close < ma20 < ma50:
-        trend = "偏空"
-    else:
-        trend = "震荡/中性"
-    momentum = "MACD偏多" if macd is not None and macd_sig is not None and macd > macd_sig else "MACD偏弱"
-    rsi_view = "超买" if rsi14 is not None and rsi14 >= 70 else ("超卖" if rsi14 is not None and rsi14 <= 30 else "中性")
-
-    out_dir = pathlib.Path.home() / "Desktop" / "Arthera" / "reports" / "stock_charts"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    safe_symbol = re.sub(r"[^A-Za-z0-9_.-]+", "_", symbol)
-    out_file = out_dir / f"{safe_symbol}_analysis_chart_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
-
-    x = [idx.strftime("%Y-%m-%d") for idx in hist.index]
-    close = [None if _pd.isna(v) else round(float(v), 4) for v in hist["Close"]]
-    volume = [None if _pd.isna(v) else int(float(v)) for v in hist.get("Volume", _pd.Series(index=hist.index, dtype=float))]
-    ma20_arr = [None if _pd.isna(v) else round(float(v), 4) for v in hist["MA20"]]
-    ma50_arr = [None if _pd.isna(v) else round(float(v), 4) for v in hist["MA50"]]
-    rsi_arr = [None if _pd.isna(v) else round(float(v), 4) for v in hist["RSI14"]]
-
-    html_doc = f"""<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{_html.escape(symbol)} 股票分析图表</title>
-  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
-  <style>
-    body {{ margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f7f8fa; color: #17202a; }}
-    main {{ max-width: 1180px; margin: 0 auto; padding: 28px; }}
-    h1 {{ margin: 0 0 6px; font-size: 28px; }}
-    .meta {{ color: #667085; margin-bottom: 18px; }}
-    .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin: 18px 0; }}
-    .metric {{ background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px; }}
-    .label {{ color: #667085; font-size: 12px; }}
-    .value {{ font-size: 18px; font-weight: 650; margin-top: 4px; }}
-    #chart {{ background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 8px; }}
-    .note {{ color: #667085; font-size: 13px; margin-top: 14px; }}
-  </style>
-</head>
-<body>
-<main>
-  <h1>{_html.escape(name)} ({_html.escape(symbol)})</h1>
-  <div class="meta">生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} · 数据：{_html.escape(provider)} · 周期：{period}</div>
-  <section class="grid">
-    <div class="metric"><div class="label">最新收盘</div><div class="value">{currency} {_fmt_num(last_close)}</div></div>
-    <div class="metric"><div class="label">近一年区间</div><div class="value">{_fmt_num(low_52w)} - {_fmt_num(high_52w)}</div></div>
-    <div class="metric"><div class="label">MA20 / MA50</div><div class="value">{_fmt_num(ma20)} / {_fmt_num(ma50)}</div></div>
-    <div class="metric"><div class="label">RSI14</div><div class="value">{_fmt_num(rsi14)}</div></div>
-    <div class="metric"><div class="label">P/E</div><div class="value">{_fmt_num(pe)}</div></div>
-    <div class="metric"><div class="label">成交量</div><div class="value">{_fmt_int(last.get("Volume"))}</div></div>
-  </section>
-  <div id="chart"></div>
-  <p class="note">图表包含收盘价、MA20、MA50、成交量和 RSI14。该文件为本地 HTML，可直接在浏览器打开。</p>
-</main>
-<script>
-const x = {json.dumps(x)};
-const close = {json.dumps(close)};
-const volume = {json.dumps(volume)};
-const ma20 = {json.dumps(ma20_arr)};
-const ma50 = {json.dumps(ma50_arr)};
-const rsi = {json.dumps(rsi_arr)};
-const data = [
-  {{x, y: close, type: "scatter", mode: "lines", name: "Close", line: {{color: "#2563eb", width: 2}}, yaxis: "y"}},
-  {{x, y: ma20, type: "scatter", mode: "lines", name: "MA20", line: {{color: "#f59e0b", width: 1.5}}, yaxis: "y"}},
-  {{x, y: ma50, type: "scatter", mode: "lines", name: "MA50", line: {{color: "#10b981", width: 1.5}}, yaxis: "y"}},
-  {{x, y: volume, type: "bar", name: "Volume", marker: {{color: "rgba(100,116,139,0.35)"}}, yaxis: "y2"}},
-  {{x, y: rsi, type: "scatter", mode: "lines", name: "RSI14", line: {{color: "#dc2626", width: 1.5}}, yaxis: "y3"}}
-];
-const layout = {{
-  height: 720,
-  margin: {{l: 62, r: 30, t: 28, b: 42}},
-  paper_bgcolor: "#fff",
-  plot_bgcolor: "#fff",
-  hovermode: "x unified",
-  legend: {{orientation: "h", y: 1.04}},
-  xaxis: {{domain: [0, 1], rangeslider: {{visible: false}}, gridcolor: "#eef2f7"}},
-  yaxis: {{domain: [0.36, 1], title: "Price", gridcolor: "#eef2f7"}},
-  yaxis2: {{domain: [0.18, 0.31], title: "Volume", gridcolor: "#eef2f7"}},
-  yaxis3: {{domain: [0, 0.13], title: "RSI", range: [0, 100], gridcolor: "#eef2f7"}},
-  shapes: [
-    {{type: "line", xref: "paper", x0: 0, x1: 1, yref: "y3", y0: 70, y1: 70, line: {{color: "#ef4444", dash: "dot"}}}},
-    {{type: "line", xref: "paper", x0: 0, x1: 1, yref: "y3", y0: 30, y1: 30, line: {{color: "#22c55e", dash: "dot"}}}}
-  ]
-}};
-Plotly.newPlot("chart", data, layout, {{responsive: true, displaylogo: false}});
-</script>
-</body>
-</html>
-"""
-    out_file.write_text(html_doc, encoding="utf-8")
-
-    market_cap_text = "N/A"
-    if market_cap:
-        market_cap_text = f"{currency} {market_cap / 1e12:.2f}T" if market_cap >= 1e12 else f"{currency} {market_cap / 1e9:.1f}B"
-
-    response = (
-        f"## {name} ({symbol}) 股票分析\n\n"
-        f"已生成图表：[{out_file.name}]({out_file})\n\n"
-        f"| 指标 | 数值 |\n"
-        f"| --- | --- |\n"
-        f"| 最新收盘 | {currency} {_fmt_num(last_close)} |\n"
-        f"| 近一年涨跌幅 | {ytd_like_return:+.2f}% |\n"
-        f"| 近一年高/低 | {_fmt_num(high_52w)} / {_fmt_num(low_52w)} |\n"
-        f"| MA20 / MA50 / MA200 | {_fmt_num(ma20)} / {_fmt_num(ma50)} / {_fmt_num(ma200)} |\n"
-        f"| RSI14 | {_fmt_num(rsi14)}（{rsi_view}） |\n"
-        f"| MACD | {_fmt_num(macd)} / signal {_fmt_num(macd_sig)}（{momentum}） |\n"
-        f"| P/E / 市值 | {_fmt_num(pe)} / {market_cap_text} |\n\n"
-        f"**结论**：当前技术结构为 **{trend}**。"
-        f"RSI 处于{rsi_view}区间，{momentum}。"
-        f"若价格能稳定站上 MA20 和 MA50，短线结构会更健康；若跌破 MA50 或放量下行，需要降低仓位和预期。\n\n"
-        f"**风险**：该分析基于 {provider} 历史行情和常用技术指标，不构成投资建议；财报、产品周期、利率和大盘风险都会影响股价。"
+    return _src_chart_analysis(
+        message,
+        is_chart_request=_is_stock_chart_analysis_request,
+        extract_symbol=_extract_market_symbol,
     )
-    return {
-        "success": True,
-        "response": response,
-        "provider": "deterministic",
-        "tools_used": ["yfinance", "html_chart"],
-        "chart_path": str(out_file),
-    }
 
 
-async def stream_ollama(ollama_url: str, message: str, history: list,
-                        model: str = "qwen2.5:7b",
-                        on_token=None, on_thinking=None,
-                        on_tool_call=None, on_tool_result=None,
-                        cancel_event: asyncio.Event = None,
-                        enable_tools: bool = True) -> dict:
-    """Stream chat via local Ollama with tool calling support (native + text-based)."""
-    import aiohttp
-
-    # ── Response cache: skip Ollama for repeated stateless queries ───────────
-    # Only cache when there is no conversation history (stateless), the query
-    # is short (likely a simple quote/concept), and no tools are being called.
-    _should_cache = not history and len(message) < 300
-    if _should_cache:
-        _ck = _cache_key(model, message)
-        _cached = _cache_get(_ck)
-        if _cached:
-            if on_token:
-                on_token(_cached)
-            return {"success": True, "response": _cached,
-                    "provider": "ollama_cache", "usage": {}}
-
-    _models_probe, _ollama_err = detect_ollama_models_rich(ollama_url)
-    if _ollama_err:
-        if _is_simple_greeting(message):
-            return _offline_greeting_response()
-        return _ollama_unavailable_result(ollama_url, _ollama_err)
-
-    # ── 模型自动解析：确保请求的模型在 Ollama 中存在 ─────────────────────────
-    try:
-        from local_llm_provider import resolve_model_async
-        _resolved = await resolve_model_async(ollama_url, model)
-        if _resolved != model:
-            model = _resolved   # silently remap to available model
-    except Exception:
-        pass  # resolution failed — proceed with original model name
-
-    # ── 模型分级守卫：小模型不能处理 coding/analysis/complex-finance 任务 ──────
-    # 如果分配到的模型是 small/nano 级别，但任务需要代码生成、复杂分析或长文本，
-    # 自动升级到 Ollama 中最优可用模型，防止低质量/模板化输出。
-    try:
-        from model_capability import get_model_capability, is_router_only, can_handle_coding
-        _cap_check = get_model_capability(model)
-        _task_needs_upgrade = (
-            is_router_only(_cap_check)
-            or (not can_handle_coding(_cap_check) and _is_coding_request(message))
-            # Small (1-4B) models also struggle with complex finance questions:
-            # they ignore detailed system prompts and output template garbage.
-            # Upgrade when the question is non-trivial and the model is "small".
-            # Use 8 as the minimum length threshold (works for both Chinese and English):
-            # Chinese "比特币值得投资吗" = 9 chars, English "buy or sell?" = 12 chars.
-            or (_cap_check.size_class == "small" and len(message) > 8
-                and not _is_simple_greeting(message))
-        )
-        if _task_needs_upgrade and _models_probe:
-            # 按优先级寻找可用的升级模型
-            # NOTE: gpt-oss 排在 deepseek-v3.1 前面，因为 deepseek-v3.1:671b-cloud
-            # 在 Ollama 实例中有时超时，而 gpt-oss:120b-cloud 响应稳定。
-            _upgrade_prefixes = [
-                "aria-sonata-3b", "qwen2.5-coder:7b", "qwen2.5-coder:3b",
-                "qwen2.5:7b", "qwen2.5:3b", "llama3.2:3b", "mistral",
-                # Cloud models registered in this Ollama instance (remote but available)
-                "gpt-oss", "deepseek-v3.1",
-            ]
-            # _models_probe is a list of dicts: {"name": str, "size_label": str, ...}
-            # Must extract "name" field — do NOT call .startswith() on the dict.
-            _probe_names = [
-                m["name"] if isinstance(m, dict) else m
-                for m in _models_probe
-            ]
-            for _pref in _upgrade_prefixes:
-                _candidate = next(
-                    (m for m in _probe_names if m.startswith(_pref)), None
-                )
-                if _candidate and _candidate != model:
-                    model = _candidate
-                    break
-    except Exception:
-        pass
-
-    # ── 五档路由：通过 Prelude 意图分类器（或关键词 fallback）决定 prompt ────
-    # Always rebuild finance prompt to get today's date
-    _finance_prompt = _build_finance_prompt()
-
-    try:
-        from intent_classifier import (
-            classify_intent_async,
-            INTENT_CODING, INTENT_ANALYSIS, INTENT_REALTIME,
-            INTENT_GENERAL, INTENT_FINANCE,
-        )
-        _intent = await classify_intent_async(message, ollama_url)
-    except Exception:
-        # Fallback to legacy keyword detection if intent_classifier unavailable
-        if _is_coding_request(message):
-            _intent = "coding"
-        elif _is_analysis_request(message):
-            _intent = "analysis"
-        elif _is_general_knowledge(message):
-            _intent = "general"
-        else:
-            _intent = "finance"
-
-    _is_general = (_intent == "general")
-
-    # ── Select prompt size based on model capability ─────────────────────────
-    # Small / nano models (≤3B) cannot effectively use the full CODING_SYSTEM_PROMPT
-    # (6000+ tokens of examples they mostly ignore).  Send a condensed version that
-    # keeps the essential rules and the single complete working template.
-    #
-    # Analysis: always use the LITE prompt in Ollama mode, even for medium/large
-    # cloud models relayed through Ollama.  The full ANALYSIS_SYSTEM_PROMPT
-    # instructs the model to call `get_market_data`, which is a cloud-only tool
-    # not available in the LOCAL_TOOLS registry — leading to "Unknown local tool"
-    # errors and an infinite retry loop.  The lite prompt explicitly refuses to
-    # output N/A templates when no data is injected, which is the correct
-    # behaviour in local mode.
-    try:
-        from model_capability import get_model_capability as _gmc
-        _model_size = _gmc(model).size_class
-    except Exception:
-        _model_size = "medium"
-    _use_lite_prompt = _model_size in ("nano", "small")
-
-    if _intent == "coding":
-        _base_prompt = _build_coding_prompt_lite(message) if _use_lite_prompt else CODING_SYSTEM_PROMPT
-    elif _intent == "analysis":
-        # Always use lite analysis prompt in Ollama — the full prompt triggers
-        # get_market_data tool calls that are not available locally.
-        _base_prompt = _build_analysis_prompt_lite(message)
-    elif _intent == "general":
-        # 纯知识/概念问题：注入日期，但不注入工具 schema
-        from datetime import datetime as _dt2
-        _today_str = _dt2.now().strftime("%Y年%m月%d日")
-        _base_prompt = (
-            f"你是 Aria，专业金融AI助手。今天是 {_today_str}。\n"
-            "用中文简洁、准确地回答问题。\n"
-            "- 使用 Markdown（**粗体**、## 标题、- 列表、表格）\n"
-            "- 不要编造任何实时数据（股价/汇率等），不要主动调用工具\n"
-            "- 简洁，避免重复相同内容\n"
-        )
-    else:
-        # realtime / finance: use full finance prompt with tool access
-        _base_prompt = _finance_prompt
-
-    # Project context injection: skip or condense for small/nano models.
-    # A 1.5B model with a 4000-token README injected into its context will
-    # either copy the README into its response or hallucinate beyond recovery.
-    _small_model = _model_size in ("nano", "small")
-    if not _is_general:
-        if not _small_model and _PROJECT_CONTEXT:
-            system_prompt = _base_prompt + _PROJECT_CONTEXT
-        else:
-            # For small models: skip the full README, only keep a 2-line summary
-            _ctx_brief = ""
-            if _PROJECT_CONTEXT:
-                _first_lines = [l for l in _PROJECT_CONTEXT.split("\n") if l.strip()][:3]
-                _ctx_brief = "\n# Context: " + " | ".join(_first_lines[:2]) + "\n"
-            system_prompt = _base_prompt + _ctx_brief
-    else:
-        system_prompt = _base_prompt
-
-    # Append ariarc project context if available — small models skip this
-    if _HAS_ARIARC and not _is_general and not _small_model:
-        try:
-            _arc = get_ariarc()
-            _arc_block = _arc.build_system_prompt_block()
-            if _arc_block:
-                # Hard-cap ariarc block at 800 chars to prevent context overflow
-                _arc_short = _arc_block[:800] + ("…" if len(_arc_block) > 800 else "")
-                system_prompt = system_prompt + "\n\n" + _arc_short
-        except Exception:
-            pass
-
-    url = f"{ollama_url}/api/chat"
-    _mcfg = get_model_cfg(model)
-
-    if _HAS_MODEL_CAP:
-        _cap         = get_model_capability(model)
-        _num_ctx     = _cap.context_window
-        _temperature = _cap.temperature
-    else:
-        _num_ctx     = _mcfg.get("num_ctx", 16384)
-        _temperature = _mcfg.get("temperature", 0.3)
-    _max_tokens = _mcfg.get("max_tokens", min(_mcfg.get("num_ctx", 8192) // 4, 8192))
-    _mkey = resolve_model_key(model)
-
-    # ── 上下文硬截断：小模型（≤3B）严格限制历史长度，防止溢出 ─────────────
-    _ctx_chars_limit = max((_num_ctx * 3) - len(system_prompt) - len(message) - 512, 1000)
-    # 从最新历史往前选，确保总字符数不超限
-    _trimmed_history: list = []
-    _hist_chars = 0
-    for _hm in reversed(history):
-        _hm_len = len(_hm.get("content",""))
-        if _hist_chars + _hm_len > _ctx_chars_limit:
-            break
-        _trimmed_history.insert(0, _hm)
-        _hist_chars += _hm_len
-
-    messages = [{"role": "system", "content": system_prompt}]
-    for msg in _trimmed_history:
-        messages.append({"role": msg["role"], "content": msg["content"]})
-    messages.append({"role": "user", "content": message})
-
-    # ── 工具注入：通识问答跳过，同时跳过无法可靠调用工具的小模型 ──────────
-    # 判断模型是否具备工具调用能力（text_only / format不支持的都跳过）
-    _model_can_use_tools = False
-    if _HAS_MODEL_CAP and enable_tools and LOCAL_TOOL_SCHEMAS and not _is_general:
-        _tool_cap = get_model_capability(model)
-        # 只有明确支持工具且 context_window >= 8192 的模型才注入 tool schema
-        _model_can_use_tools = (
-            _tool_cap.format != "text_only"
-            and _tool_cap.context_window >= 8192
-        )
-        if _model_can_use_tools:
-            _tool_sys = build_tool_system_prompt(LOCAL_TOOL_SCHEMAS, model)
-            if _tool_sys and messages:
-                if messages[0].get("role") == "system":
-                    messages[0]["content"] += _tool_sys
-                else:
-                    messages.insert(0, {"role": "system", "content": _tool_sys.strip()})
-
-    # ── 实时数据预取：始终为分析/报价查询预取真实市场数据注入 prompt ──────────
-    # 无论模型是否支持工具调用，都注入真实数据，防止模型生成占位符（$X.XX）
-    # 策略：
-    #   1. system prompt 替换为"数据已预取"专用 prompt
-    #   2. 数据同时注入到用户消息开头（本地模型对最近的 user message 最敏感）
-    if _HAS_MDC and not _is_general:
-        _market_inject = _try_prefetch_market_data(message, history)
-        if _market_inject:
-            # 过程可见化：让用户看到实时数据已注入（类似工具调用展示）
-            _inj_m = _re_sym.search(r'## 📊 (\S+) 实时行情（来源：(\S+)）', _market_inject)
-            if _inj_m and HAS_RICH:
-                console.print(
-                    f"  [bold #C08050]market_data[/bold #C08050] "
-                    f"[dim]{_inj_m.group(1)} · 实时行情已注入 · {_inj_m.group(2)}[/dim]"
-                )
-            # Replace system prompt with data-first prompt.
-            # Use nano variant for 1-3B models (no template placeholders).
-            _is_nano_model = _use_lite_prompt or _model_size in ("nano", "small")
-            _prefetched_sys = _build_prefetched_analysis_prompt(nano=_is_nano_model)
-            if messages and messages[0].get("role") == "system":
-                messages[0]["content"] = _prefetched_sys
-            else:
-                messages.insert(0, {"role": "system", "content": _prefetched_sys})
-            # Prepend real data to the user message so the model sees it last
-            # (most recent = highest attention weight for local models).
-            _augmented_user = (
-                _market_inject
-                + "\n---\n"
-                "上面是真实实时数据。请只使用这些具体数字作答，不要引用训练记忆中的历史价格。\n\n"
-                + message
-            )
-            for _mi in reversed(messages):
-                if _mi.get("role") == "user":
-                    _mi["content"] = _augmented_user
-                    break
-
-    # ── 文件路径自动注入：若用户消息引用了本地文件，预读并注入内容 ────────────
-    # 无论意图是什么，只要消息里有可读的文件路径就注入（coding / analysis 均有效）
-    _file_inject = _try_inject_file_paths(message)
-    if _file_inject:
-        for _mi in reversed(messages):
-            if _mi.get("role") == "user":
-                _mi["content"] = _file_inject + _mi["content"]
-                break
-
-    # ── Token budget 分级策略 ────────────────────────────────────────────────
-    # 小模型（<8K ctx）防止无限延伸；通识问答分两档：
-    #   · 纯问候/一句话问题 → 200 tokens（快速）
-    #   · 知识解释问题（"什么是X", "如何…"） → 1500 tokens（保证完整性）
-    #   · 正常问题 → 模型 max_tokens 配置值
-    _is_small_model = _HAS_MODEL_CAP and get_model_capability(model).context_window < 8192
-    _is_greeting    = _is_general and len(message.strip()) < 25
-    if _is_greeting:
-        _effective_max_tokens = 200
-    elif _is_general:
-        _effective_max_tokens = 1500   # 足够完整回答概念解释，不截断
-    elif _use_lite_prompt:
-        # Small/nano model: coding tasks need more room for complete scripts;
-        # analysis/finance keep a tighter cap to prevent runaway echo generation.
-        if _intent == "coding":
-            _effective_max_tokens = 2000
-        else:
-            _effective_max_tokens = 512
-    elif _is_small_model:
-        _effective_max_tokens = min(_max_tokens, 2048)
-    else:
-        _effective_max_tokens = _max_tokens
-
-    # 停止词：覆盖常见 hallucination 模式
-    # 包含：英文求助模板、工具执行幻觉、"任务就绪"尾部幻觉（中文小模型常见）
-    _stop_seqs = [
-        # ── 英文求助/拒绝模板 ─────────────────────────────────────────────
-        "I'm sorry, as an AI",
-        "I'm sorry for any confusion",
-        "I cannot perform",
-        "I can't perform",
-        "Do You Need Help",
-        "Are There Specific Areas",
-        "Let us brainstorm together",
-        "AWAITING FEEDBACK",
-        "Would love more context",
-        "Please provide more details",
-        "Could you please provide",
-        "Without knowing those specifics",
-        "os.system('pip install",
-        "git clone https://github.com",
-        "Let's download these libraries",
-        # ── 中文"任务就绪"尾部幻觉（小模型在回答结束后常产生） ────────────
-        "好的，我将开始执行任务",
-        "好的，我已经准备好了要做的工作",
-        "请告诉我您希望我在接下来做什么",
-        "请问有什么我可以帮助您的吗",
-        "请告诉我你需要什么帮助",
-        "我会尽快为您完成这项任务",
-        "如果您有任何其他问题，请随时告诉我",
-        "如果你有其他问题，请随时提问",
-        # ── 英文任务就绪幻觉 ─────────────────────────────────────────────
-        "I'm ready to help with your next",
-        "Let me know if you need anything else",
-        "Is there anything else you'd like me to",
-        "Feel free to ask if you have more questions",
-        # ── 工具调用幻觉（声称已调用但实际没有 tool_call 事件）────────────
-        "I have already called `get_market_data`",
-        "I have already called `get_stock_price`",
-        "I have already called get_market_data",
-        "I have already fetched",
-        "I have already retrieved",
-        "我已经调用了",
-        "我已调用工具",
-        "我已经获取了最新数据",
-        # ── 模板占位符输出（模型把 system prompt 模板当内容输出）────────────
-        "${real_price_from_data",
-        "${data['day_range']}",
-        "{actual date today}",
-        "{real price from data}",
-        "List real recent headlines",
-    ]
-
-    payload = {
-        "model": model, "messages": messages, "stream": True,
-        "options": {
-            "num_ctx":        _num_ctx,
-            "temperature":    _temperature,
-            "top_p":          0.9,
-            "repeat_penalty": 1.4,
-            "repeat_last_n":  256,
-            "num_predict":    _effective_max_tokens,
-        },
-        "stop": _stop_seqs,
-    }
-    # Only inject native Ollama tools field for capable models.
-    # Small (≤4K ctx) or text_only models must never receive tool schemas —
-    # they produce malformed partial JSON that leaks into the output stream.
-    if _model_can_use_tools:
-        _cap2 = get_model_capability(model) if _HAS_MODEL_CAP else None
-        if _cap2 and _cap2.tool_calls and _cap2.format == "ollama_native":
-            payload["tools"] = LOCAL_TOOL_SCHEMAS
-
-    full_response = ""
-    tools_used = []
-    tool_calls_pending = []
-    max_tool_rounds = 10
-    usage = {"prompt_tokens": 0, "completion_tokens": 0, "thinking_tokens": 0}
-    _last_tool_had_error = False  # Track if previous tool failed
-    _in_error_recovery = False    # Stays True until run_command succeeds (not reset by read_file)
-    _nudge_count = 0  # Limit error recovery nudges
-    _consecutive_reads = 0  # Track repeated read_file without fixing
-    _last_failed_cmd = ""  # Track last failed run_command to detect repeats
-    _consecutive_cmd_failures = 0  # Count consecutive failures of same command
-    # Repetition loop detection — check every 80 chars (was 200, too slow for 200-token responses)
-    _rep_check_interval = 80
-    _rep_token_count = [0]     # mutable for closure
-    _rep_cancelled = [False]   # signals loop to stop
-
-    def _check_repetition(text: str) -> bool:
-        """Return True if the response is looping.
-
-        Covers three patterns:
-          A. Paragraph-level loop: same long block (50-400 chars) reappears
-          B. Sentence-level tail loop: short sentence (15-50 chars) appears
-             2+ times at the END — catches "好的，我已经准备好了" × 2 style tails
-          C. Beginning-restart loop: model generates the full response, then
-             starts again from the very beginning. Detects when the opening
-             80 chars of the accumulated response reappear after the midpoint.
-             This is the most common 1.5B model failure mode.
-        """
-        if len(text) < 100:
-            return False
-
-        # Pattern C: restart-from-beginning (fast path, checked first)
-        if len(text) > 300:
-            _opening = text[:80].strip()
-            if _opening and len(_opening) >= 20:
-                _after_half = text[len(text) // 2:]
-                if _opening in _after_half:
-                    return True
-
-        tail = text[-4000:]
-
-        # Pattern A: medium-to-large probe in trailing window
-        for sub_len in (400, 250, 150, 80, 50):
-            if len(tail) < sub_len * 2:
-                continue
-            probe = tail[-sub_len:].strip()
-            if len(probe) < 20:
-                continue
-            if tail[:-sub_len].count(probe) >= 1:
-                return True
-
-        # Pattern B: short sentence repetition at tail (boilerplate hallucination)
-        # Split by Chinese sentence-ending punctuation + newlines
-        import re as _re2
-        # Common non-looping phrases that legitimately repeat (disclaimers, transitions)
-        _B_IGNORE = {
-            "本内容不构成投资建议", "不构成投资建议", "请注意风险",
-            "以上仅供参考", "仅供参考", "请以官方数据为准",
-            "如有问题请咨询专业人士", "投资有风险，入市需谨慎",
-            "好的", "当然", "当然可以", "明白了", "好的，我来",
-        }
-        sentences = [s.strip() for s in _re2.split(r'[。！？\n]+', tail) if s.strip()]
-        if len(sentences) >= 4:
-            # Check if any sentence in the last 3 also appears before it in the tail
-            for sent in sentences[-3:]:
-                if len(sent) < 15:          # raised from 10 → less hair-trigger
-                    continue
-                if sent in _B_IGNORE:
-                    continue
-                # Require 3+ occurrences (raised from 2) to reduce false positives
-                if tail.count(sent) >= 3:
-                    return True
-
-        return False
-
-    for tool_round in range(max_tool_rounds):
-        # Context compaction: compress older messages if context too large
-        if tool_round > 0:
-            payload["messages"] = _compact_messages(payload["messages"], model_key=_mkey)
-
-        full_response = ""
-        tool_calls_this_round = []
-
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, json=payload,
-                                        timeout=aiohttp.ClientTimeout(total=300)) as resp:
-                    if resp.status != 200:
-                        try:
-                            _body = await resp.text()
-                            _json = json.loads(_body) if _body.strip().startswith("{") else {}
-                            _ollama_err = _json.get("error") or _body[:200]
-                        except Exception:
-                            _ollama_err = f"HTTP {resp.status}"
-                        # Invalidate model cache so next call re-probes
-                        try:
-                            from local_llm_provider import _model_cache
-                            _model_cache.clear()
-                        except Exception:
-                            pass
-                        return {"success": False, "error": f"Ollama {resp.status}: {_ollama_err}"}
-                    async for line in resp.content:
-                        if cancel_event and cancel_event.is_set():
-                            return {"success": True, "response": full_response,
-                                    "cancelled": True, "provider": "ollama", "usage": usage}
-                        text = line.decode("utf-8", errors="ignore").strip()
-                        if not text:
-                            continue
-                        try:
-                            data = json.loads(text)
-                        except json.JSONDecodeError:
-                            continue
-
-                        # Check for native tool calls from Ollama
-                        msg = data.get("message", {})
-                        if msg.get("tool_calls"):
-                            for tc in msg["tool_calls"]:
-                                fn = tc.get("function", {})
-                                tool_name = fn.get("name", "")
-                                tool_args = fn.get("arguments", {})
-                                if isinstance(tool_args, str):
-                                    try:
-                                        tool_args = json.loads(tool_args)
-                                    except json.JSONDecodeError:
-                                        tool_args = {}
-                                tool_calls_this_round.append({"tool": tool_name, "params": tool_args})
-                                tools_used.append(tool_name)
-                                if on_tool_call:
-                                    on_tool_call(tool_name, tool_args)
-
-                        if data.get("done"):
-                            # Capture Ollama usage stats from final message
-                            usage["prompt_tokens"] += data.get("prompt_eval_count", 0)
-                            usage["completion_tokens"] += data.get("eval_count", 0)
-                            break
-
-                        token = msg.get("content", "")
-                        if token:
-                            full_response += token
-                            # 重复检测：先检测再流出，避免重复内容流到用户终端
-                            _rep_token_count[0] += len(token)
-                            if _rep_token_count[0] >= _rep_check_interval:
-                                _rep_token_count[0] = 0
-                                if _check_repetition(full_response):
-                                    # 定位重复起始点：找到最长不重复前缀
-                                    _fr = full_response
-                                    _cut = len(_fr) // 2
-                                    # 尝试精确裁切：找重复开始的位置
-                                    for _probe_len in (300, 200, 150, 100):
-                                        if len(_fr) < _probe_len * 2:
-                                            continue
-                                        _probe = _fr[-_probe_len:]
-                                        _pos = _fr[:-_probe_len].find(_probe)
-                                        if _pos > 0:
-                                            _cut = _pos
-                                            break
-                                    full_response = _fr[:_cut].rstrip()
-                                    _rep_cancelled[0] = True
-                                    if cancel_event:
-                                        cancel_event.set()
-                                    break
-                            # 流出 token — 过滤条件：
-                            # 1. 以 <tool_call 开头的 XML 工具调用（内部处理，不显示）
-                            # 2. 以 { 开头的裸 JSON 工具调用（小模型幻觉，直接屏蔽）
-                            _fr_lstrip = full_response.lstrip()
-                            _looks_like_tool_json = (
-                                _fr_lstrip.startswith("{")
-                                and ('"name"' in full_response or '"function"' in full_response)
-                                and '"arguments"' in full_response
-                            )
-                            # 3. 孤立的 ``` 围栏（未配对的代码块标记，过滤掉）
-                            _stripped_tok = token.strip()
-                            _is_orphan_fence = (
-                                _stripped_tok.startswith("```")
-                                and len(_stripped_tok) <= 6   # just ``` or ```py etc
-                                and full_response.count("```") % 2 == 1   # unpaired
-                            )
-                            if on_token and not _fr_lstrip.startswith("<tool_call") \
-                                       and not _looks_like_tool_json \
-                                       and not _is_orphan_fence:
-                                on_token(token)
-        except Exception as e:
-            err_msg = str(e) or type(e).__name__
-            if any(x in err_msg.lower() for x in ("cannot connect", "connect call failed", "connection refused", "errno 61")):
-                return _ollama_unavailable_result(ollama_url, err_msg)
-            return {"success": False, "error": f"Ollama: {err_msg}"}
-
-        # Fallback: parse text-based tool calls if no native ones found
-        if not tool_calls_this_round and full_response.strip():
-            text_calls = _parse_text_tool_calls(full_response)
-            if text_calls:
-                tool_calls_this_round = text_calls
-                for tc in text_calls:
-                    tools_used.append(tc["tool"])
-                    if on_tool_call:
-                        on_tool_call(tc["tool"], tc["params"])
-
-        # If repetition was detected, truncate and return cleanly
-        if _rep_cancelled[0]:
-            # Remove the repeated tail — keep only the first clean portion
-            lines = full_response.strip().splitlines()
-            # Find where repetition started: keep up to the point where unique content ends
-            seen_paragraphs = set()
-            clean_lines = []
-            for line in lines:
-                key = line.strip()
-                if key and len(key) > 20:
-                    if key in seen_paragraphs:
-                        break  # Hit a repeated paragraph — stop here
-                    seen_paragraphs.add(key)
-                clean_lines.append(line)
-            full_response = "\n".join(clean_lines).rstrip()
-            if on_token:
-                # The repetition note is appended as a final token
-                on_token("\n\n*[model stopped — repetition detected]*")
-                full_response += "\n\n*[model stopped — repetition detected]*"
-            return {
-                "success": True, "response": full_response,
-                "tools_used": tools_used, "sources": [],
-                "tool_calls_pending": [], "usage": usage, "provider": "ollama",
-            }
-
-        # If no tool calls this round
-        if not tool_calls_this_round:
-            clean_text = full_response.strip().lower()
-
-            # Detect "intent without action" — model says it will do something
-            # but didn't output a tool call
-            _intent_words = [
-                "let me", "i will", "i'll", "let's", "让我", "我会", "我将",
-                "让我们", "我来", "接下来", "下面", "我们来", "我需要",
-                "再次", "重新", "检查", "修复", "fix", "retry", "check",
-            ]
-            has_intent = any(w in clean_text for w in _intent_words)
-            should_nudge = (_in_error_recovery or _last_tool_had_error or has_intent) and _nudge_count < 5
-
-            if should_nudge and tool_round < max_tool_rounds - 1:
-                _nudge_count += 1
-                if _in_error_recovery:
-                    nudge = (
-                        "SYSTEM: You are in error recovery mode. The script FAILED and is NOT yet fixed. "
-                        "You MUST call a tool NOW to fix it:\n"
-                        "- If you already read the file: call edit_file to fix the specific error, or write_file to rewrite.\n"
-                        "- If you haven't read it: call read_file first.\n"
-                        "- After fixing: call run_command to retry.\n"
-                        "Do NOT output text. Output ONLY a <tool_call>."
-                    )
-                elif _last_tool_had_error:
-                    nudge = (
-                        "SYSTEM: The previous step FAILED. Fix it NOW by calling a tool:\n"
-                        "1. read_file to see the code.\n"
-                        "2. edit_file or write_file to fix.\n"
-                        "3. run_command to retry.\n"
-                        "Output a <tool_call> NOW."
-                    )
-                else:
-                    nudge = (
-                        "SYSTEM: You said you would do something but did not call a tool. "
-                        "Do NOT describe what you will do — just DO it. "
-                        "Output a <tool_call> NOW to take the next action."
-                    )
-                payload["messages"].append({"role": "assistant", "content": full_response})
-                payload["messages"].append({"role": "user", "content": nudge})
-                continue
-
-            # Truly done. Tokens were already streamed above; do not print the
-            # accumulated response again or the terminal shows duplicate blocks.
-            break
-
-        # Tool calls present — suppress model text (tool UI provides feedback)
-        # Safety: only execute ONE tool call per round (force sequential execution)
-        if len(tool_calls_this_round) > 1:
-            tool_calls_this_round = tool_calls_this_round[:1]
-
-        # Execute tool calls locally and feed results back
-        clean_text = _strip_tool_call_tags(full_response)
-        payload["messages"].append({"role": "assistant", "content": clean_text,
-                                     "tool_calls": [{"function": {"name": tc["tool"], "arguments": tc["params"]}}
-                                                     for tc in tool_calls_this_round]})
-
-        ollama_cancelled = False
-        for tc in tool_calls_this_round:
-            # Check cancel between tools
-            if cancel_event and cancel_event.is_set():
-                ollama_cancelled = True
-                break
-
-            tool_name = tc["tool"]
-            # Note: _print_tool_call already called by on_tool_call during streaming
-
-            # Ask user confirmation for destructive tools
-            if tool_name in _CONFIRM_TOOLS:
-                try:
-                    if not _confirm_tool_execution(
-                            tool_name, tc["params"],
-                            config_policy=_ACTIVE_COMMAND_POLICY[0]):
-                        ollama_cancelled = True
-                        if HAS_RICH:
-                            console.print("\n  [dim]Cancelled[/dim]")
-                        break
-                    # Persist "Allow & set balanced" choice
-                    if tc["params"].pop("_upgrade_policy", False):
-                        _ACTIVE_COMMAND_POLICY[0] = "balanced"
-                        if HAS_RICH:
-                            console.print("  [dim]策略已升级为 balanced（本会话）[/dim]")
-                except KeyboardInterrupt:
-                    ollama_cancelled = True
-                    break
-
-            try:
-                tool_t0 = time.time()
-                # Inject current policy for run_command so post-approval execution
-                # isn't re-blocked by the default "safe" policy
-                if tool_name == "run_command" and "policy" not in tc["params"]:
-                    tc["params"]["policy"] = _ACTIVE_COMMAND_POLICY[0]
-                result = execute_local_tool(tool_name, tc["params"])
-                tool_dt = time.time() - tool_t0
-            except KeyboardInterrupt:
-                ollama_cancelled = True
-                break
-            _print_tool_result(tool_name, result, tool_dt)
-
-            summary = _format_tool_summary(tool_name, result)
-
-            # Track if this tool had an error (for nudge logic)
-            _last_tool_had_error = not result.get("success", False)
-            if result.get("success") and tool_name == "run_command":
-                exit_code = result.get("data", {}).get("exit_code", 0)
-                _last_tool_had_error = (exit_code != 0)
-
-            # Error recovery state machine
-            if _last_tool_had_error:
-                _in_error_recovery = True
-                _consecutive_reads = 0
-                # Detect repeated failed run_command (same command failing 2+ times)
-                if tool_name == "run_command":
-                    cmd_str = tc["params"].get("command", "")
-                    if cmd_str == _last_failed_cmd:
-                        _consecutive_cmd_failures += 1
-                    else:
-                        _last_failed_cmd = cmd_str
-                        _consecutive_cmd_failures = 1
-                    if _consecutive_cmd_failures >= 2:
-                        summary += ("\n\nSYSTEM: You have run the SAME command and it FAILED again with the same error. "
-                                    "STOP re-running it. You MUST fix the code first:\n"
-                                    "1. read_file to see the script content\n"
-                                    "2. edit_file to fix the specific error (or write_file to rewrite entirely)\n"
-                                    "3. THEN run_command to retry.\n"
-                                    "Do NOT run the same command again until you have fixed the code.")
-            elif tool_name in ("read_file", "list_files", "search_code"):
-                # Diagnostic tools do NOT exit error recovery
-                _consecutive_reads += 1
-                # If model read the file 2+ times without fixing, inject directive
-                if _in_error_recovery and _consecutive_reads >= 2:
-                    summary += ("\n\nSYSTEM: You have read this file multiple times without fixing it. "
-                                "STOP reading. Use edit_file to fix the specific error, "
-                                "or use write_file to rewrite the entire script. Then run_command to retry.")
-            elif tool_name in ("edit_file", "write_file"):
-                # Fix was applied — stay in recovery until run_command succeeds
-                _consecutive_reads = 0
-                _consecutive_cmd_failures = 0  # Reset — code was changed
-                _last_failed_cmd = ""
-            elif tool_name == "run_command" and not _last_tool_had_error:
-                # run_command succeeded — exit error recovery
-                _in_error_recovery = False
-                _consecutive_reads = 0
-                _consecutive_cmd_failures = 0
-                _last_failed_cmd = ""
-                _nudge_count = 0
-
-            if on_tool_result:
-                on_tool_result(tool_name, summary)
-
-            # Feed tool result back to Ollama for next round
-            payload["messages"].append({
-                "role": "tool",
-                "content": summary,
-            })
-
-        if ollama_cancelled:
-            return {"success": True, "response": full_response,
-                    "cancelled": True, "tools_used": tools_used,
-                    "sources": [], "thinking": "", "provider": "ollama", "usage": usage}
-
-        # Continue streaming with tool results in context
-        if HAS_RICH:
-            console.print()  # newline before next AI response
-
-    # Write successful stateless response to cache for future reuse
-    if _should_cache and full_response and not tools_used:
-        _cache_set(_ck, full_response)
-
-    # ── Code-block executor fallback ─────────────────────────────────────────
-    # Small models often ignore the <tool_call> instruction and write plain code
-    # blocks instead.  When the intent is "coding" and the model produced a
-    # Python block but zero tool calls, auto-extract the code and queue
-    # write_file + run_command so the outer agentic loop executes it.
-    _auto_tool_calls: list = []
-    if _intent == "coding" and not tools_used and full_response:
-        import re as _re
-        # Accept both complete (``` closed) and truncated (unclosed) code blocks
-        _py_blocks = _re.findall(r"```python\n(.*?)```", full_response, _re.DOTALL)
-        if not _py_blocks:
-            # Fallback: grab everything after the opening fence (handles truncation)
-            _m = _re.search(r"```python\n(.*)", full_response, _re.DOTALL)
-            if _m:
-                _py_blocks = [_m.group(1)]
-        if _py_blocks:
-            _code = _py_blocks[-1].strip()
-            # Basic sanitisation: strip leading spaces from ticker assignments
-            _code = _re.sub(
-                r"""(ticker\s*=\s*['"])(\s+)([A-Z]{1,10})(['"])""",
-                r"\1\3\4", _code
-            )
-            # Auto-add missing `import mplfinance as mpf` when mpf is used
-            if "mpf." in _code and "import mplfinance" not in _code:
-                _code = "import mplfinance as mpf\n" + _code
-            # Auto-add `import matplotlib.pyplot as plt` when plt is used
-            if "plt." in _code and "import matplotlib.pyplot as plt" not in _code:
-                _code = (
-                    "import matplotlib; matplotlib.use('Agg')\n"
-                    "import matplotlib.pyplot as plt\n" + _code
-                )
-            # Try to extract user-specified filename from the original message
-            _fname_match = _re.search(
-                r'保存(?:到|为|成)?\s*([^\s，,。]+\.py)'
-                r'|save\s+(?:to\s+|as\s+)?([^\s,]+\.py)'
-                r'|(?:named?|called?|filename?)\s+([^\s,]+\.py)',
-                message, _re.IGNORECASE
-            )
-            if _fname_match:
-                _fname = next(g for g in _fname_match.groups() if g)
-                # Strip any path prefix from the extracted name
-                _fname = os.path.basename(_fname)
-            else:
-                _fname = f"aria_generated_{int(time.time())}.py"
-            _fpath = f"~/Desktop/{_fname}"
-
-            # Validate Python syntax before writing — prepend warning comment if broken
-            import py_compile as _pyc, tempfile as _tf2
-            try:
-                with _tf2.NamedTemporaryFile(suffix=".py", mode="w", delete=False) as _stmp:
-                    _stmp.write(_code)
-                    _stmp_path = _stmp.name
-                _pyc.compile(_stmp_path, doraise=True)
-                os.unlink(_stmp_path)
-            except _pyc.PyCompileError as _pce:
-                # Surface the error prominently; file is still saved so user can fix it
-                _err_line = str(_pce).replace(str(_stmp_path), _fname)
-                _code = f"# ⚠️ SYNTAX ERROR (fix before running):\n# {_err_line}\n\n" + _code
-                try:
-                    os.unlink(_stmp_path)
-                except Exception:
-                    pass
-            except Exception:
-                pass
-
-            _auto_tool_calls = [
-                {"tool": "write_file",  "params": {"path": _fpath, "content": _code}},
-                {"tool": "run_command", "params": {"command": f"python3 {os.path.expanduser(_fpath)}", "timeout": 120}},
-            ]
-            if on_tool_call:
-                on_tool_call("write_file",  _auto_tool_calls[0]["params"])
-                on_tool_call("run_command", _auto_tool_calls[1]["params"])
-
-    if _auto_tool_calls:
-        return {"success": True, "response": full_response,
-                "tool_calls_pending": _auto_tool_calls,
-                "tools_used": tools_used, "sources": [], "thinking": "",
-                "provider": "ollama", "usage": usage}
-
-    return {"success": True, "response": full_response,
-            "tools_used": tools_used, "sources": [], "thinking": "", "provider": "ollama",
-            "usage": usage}
-
+from apps.cli.providers.llm.ollama_stream import stream_ollama as _stream_ollama_src
+import types as _types_rebind
+stream_ollama = _types_rebind.FunctionType(
+    _stream_ollama_src.__code__, globals(), "stream_ollama",
+    _stream_ollama_src.__defaults__, _stream_ollama_src.__closure__
+)
+del _types_rebind
 
 # ============================================================================
 # Aria SSE Stream Client — cancel + auth + user context
@@ -6615,10 +3770,15 @@ def _build_user_context(config: dict) -> Optional[dict]:
 # Tool Output Formatters
 # ============================================================================
 
+def _clean_tool_error_message(error: object) -> str:
+    from ui.render.output import clean_tool_error_message as _ctm
+    return _ctm(error)
+
+
 def _format_tool_summary(tool_name: str, result: dict) -> str:
     """Format tool result into a concise summary for AI follow-up context."""
     if not result.get("success"):
-        return f"Error: {result.get('error', 'failed')}"
+        return f"Error: {_clean_tool_error_message(result.get('error', 'failed'))}"
     data = result.get("data", {})
     if tool_name == "run_command":
         exit_code = data.get("exit_code", -1)
@@ -6747,7 +3907,12 @@ def _format_tool_params(tool_name: str, params: dict) -> str:
     if tool_name == "backtest_strategy":
         return f"{params.get('strategy', '')} {params.get('symbol', '')}"
     if tool_name == "web_search":
-        return params.get("query", "")[:50]
+        return params.get("query", "")[:60]
+    if tool_name == "web_fetch":
+        url = params.get("url", "")
+        # Trim scheme + show only meaningful part of URL
+        short = url.replace("https://", "").replace("http://", "")
+        return short[:60] + ("…" if len(short) > 60 else "")
     if tool_name == "analyze_news":
         return params.get("symbol", params.get("query", ""))
     # Fallback: show first value
@@ -6757,20 +3922,71 @@ def _format_tool_params(tool_name: str, params: dict) -> str:
     return ""
 
 
+_TOOL_ACTION_LABELS: dict = {
+    # Market data
+    "get_market_data":           "loading market data",
+    "get_quote":                 "fetching quote",
+    "get_ohlcv":                 "loading price history",
+    "get_fundamental_data":      "loading fundamentals",
+    "get_news":                  "fetching news",
+    "get_earnings":              "loading earnings data",
+    "get_crypto_data":           "loading crypto data",
+    "get_forex_data":            "loading forex rates",
+    "get_commodity_data":        "loading commodity data",
+    # Technical / quant
+    "get_technical_indicators":  "computing technical indicators",
+    "calculate_factors":         "running factor model",
+    "calculate_risk_metrics":    "calculating risk metrics",
+    "get_options_chain":         "loading options chain",
+    "get_peer_comparison":       "running peer comparison",
+    "calculate_correlation":     "computing correlation matrix",
+    # Backtest / strategy
+    "run_backtest":              "running backtest simulation",
+    "run_walk_forward":          "running walk-forward analysis",
+    "portfolio_backtest":        "running portfolio simulation",
+    "optimize_portfolio":        "optimizing portfolio weights",
+    # Research / reports
+    "generate_report":           "generating research report",
+    "get_market_snapshot":       "scanning market",
+    "get_sector_flow":           "loading sector flow data",
+    "get_limit_up_pool":         "scanning limit-up pool",
+    "get_north_bound_flow":      "loading north-bound capital flow",
+    # File / code
+    "read_file":                 "reading file",
+    "write_file":                "writing file",
+    "edit_file":                 "editing file",
+    "list_files":                "listing files",
+    "search_code":               "searching codebase",
+    "run_command":               "executing command",
+    # Macro / realty
+    "get_macro_data":            "loading macro indicators",
+    "get_house_price_index":     "loading house price data",
+    "get_reits_data":            "loading REITs data",
+    # Broker
+    "get_account_info":          "fetching account info",
+    "get_positions":             "loading positions",
+    "get_orders":                "loading orders",
+    "place_order":               "preparing order",
+    # SQL / data
+    "sql_query":                 "running SQL query",
+    "export_to_excel":           "exporting to Excel",
+}
+
+
 def _print_tool_call(tool_name: str, params: dict):
-    """Print tool call header — Claude Code style with copper branding."""
+    """Print tool call header — Codex-style ● bullet tree."""
+    if _ARIA_BOT_MODE:
+        return
     hint = _format_tool_params(tool_name, params)
+    action = _TOOL_ACTION_LABELS.get(tool_name, tool_name.replace("_", " "))
     if HAS_RICH:
-        console.print(Rule(characters="·", style="dim"))
         if hint:
-            console.print(f"  [bold #C08050]{tool_name}[/bold #C08050] [dim]{hint}[/dim]")
+            console.print(f"\n  [cyan]●[/cyan]  {action}  [dim]{hint}[/dim]")
         else:
-            console.print(f"  [bold #C08050]{tool_name}[/bold #C08050]")
+            console.print(f"\n  [cyan]●[/cyan]  {action}")
     else:
-        if hint:
-            print(f"\n  {tool_name} {hint}", end="", flush=True)
-        else:
-            print(f"\n  {tool_name}", end="", flush=True)
+        label = f"{action}  {hint}" if hint else action
+        print(f"\n  ● {label}", end="", flush=True)
 
 
 def _fuzzy_match(query: str, candidates: list, max_results: int = 3) -> list:
@@ -6795,76 +4011,121 @@ def _fuzzy_match(query: str, candidates: list, max_results: int = 3) -> list:
 
 
 def _error_hint(error: str, context: str = "") -> str:
-    """Return actionable recovery hint based on error type."""
-    err_lower = error.lower() if error else ""
+    from ui.render.output import error_hint as _eh
+    return _eh(error, context)
 
-    if "connection" in err_lower or "refused" in err_lower or "unreachable" in err_lower:
-        return "Hint: Backend unreachable. Try /health or check your network."
-    if "timeout" in err_lower or "timed out" in err_lower:
-        return "Hint: Request timed out. Try again or check /health."
-    if "401" in err_lower or "unauthorized" in err_lower or "auth" in err_lower:
-        return "Hint: Authentication required. Run /login to sign in."
-    if "403" in err_lower or "forbidden" in err_lower:
-        return "Hint: Access denied. Check your subscription or /login again."
-    if "429" in err_lower or "rate" in err_lower:
-        return "Hint: Rate limited. Wait a moment and try again."
 
-    # Ollama model-not-found — must come BEFORE generic 404 check
-    if ("ollama" in err_lower or "ollama http" in err_lower) and (
-        "not found" in err_lower or "404" in err_lower
-    ):
-        # Try to extract the model name from the error message
-        import re as _re
-        m = _re.search(r"model ['\"]?([^'\"]+)['\"]? not found", err_lower)
-        model_hint = m.group(1) if m else "the requested model"
-        # List available models as a suggestion
-        try:
-            from local_llm_provider import list_ollama_models
-            available = list_ollama_models("http://localhost:11434")
-            if available:
-                suggestion = available[0]
-                return (
-                    f"Hint: Ollama model '{model_hint}' not found.\n"
-                    f"  Available: {', '.join(available[:4])}\n"
-                    f"  Run: /config model {suggestion}"
-                )
-        except Exception:
-            pass
-        return (
-            f"Hint: Ollama model not found. Run `ollama list` to see available models.\n"
-            f"  Or pull one: ollama pull qwen2.5-coder:7b"
+class _null_ctx:
+    """No-op context manager used when HAS_RICH is False and we can't use console.status."""
+    def __enter__(self): return self
+    def __exit__(self, *_): pass
+
+
+def _print_broker_account(acct: "AccountInfo"):
+    """Render AccountInfo in a Rich Panel."""
+    if not HAS_RICH:
+        print(f"{acct.label}  总资产:{acct.total_assets:,.2f}  可用:{acct.cash:,.2f}  市值:{acct.market_value:,.2f}")
+        return
+    pnl_color = "green" if acct.pnl_today >= 0 else "red"
+    pnl_sign  = "+" if acct.pnl_today >= 0 else ""
+    body = (
+        f"[dim]账户:[/dim]  [bold]{acct.masked_account}[/bold]  [dim]({acct.broker_type})[/dim]\n\n"
+        f"  总资产       [bold]{acct.currency} {acct.total_assets:>14,.2f}[/bold]\n"
+        f"  持仓市值     [bold]{acct.market_value:>14,.2f}[/bold]\n"
+        f"  可用现金     [bold]{acct.cash:>14,.2f}[/bold]\n"
+        f"  冻结资金     [dim]{acct.frozen:>14,.2f}[/dim]\n"
+        f"  当日盈亏     [{pnl_color}]{pnl_sign}{acct.pnl_today:>14,.2f}[/{pnl_color}]\n"
+    )
+    if acct.pnl_total:
+        tp_color = "green" if acct.pnl_total >= 0 else "red"
+        body += f"  累计盈亏     [{tp_color}]{pnl_sign}{acct.pnl_total:>14,.2f}[/{tp_color}]\n"
+    console.print(Panel(body, title=f"[bold]{acct.label}[/bold]",
+                        border_style="dim", box=rich_box.ROUNDED, padding=(0, 1)))
+
+
+def _print_broker_positions(positions: list, broker_label: str, currency: str = "CNY"):
+    """Render Position list as a Rich Table."""
+    if not HAS_RICH:
+        for p in positions:
+            print(f"  {p.symbol:<8} {p.name:<12} 持仓:{p.quantity}  市值:{p.market_value:,.2f}  盈亏:{p.pnl:+,.2f} ({p.pnl_pct:+.2f}%)")
+        return
+    if not positions:
+        console.print(f"[dim]{broker_label} — 当前无持仓[/dim]")
+        return
+    from rich.table import Table
+    tbl = Table(title=f"[bold]{broker_label}[/bold] 持仓", show_header=True, header_style="bold")
+    tbl.add_column("代码",   style="bold", no_wrap=True)
+    tbl.add_column("名称",   max_width=12)
+    tbl.add_column("持仓",   justify="right")
+    tbl.add_column("可卖",   justify="right", style="dim")
+    tbl.add_column("成本",   justify="right", style="dim")
+    tbl.add_column("现价",   justify="right")
+    tbl.add_column("市值",   justify="right")
+    tbl.add_column("盈亏",   justify="right")
+    tbl.add_column("盈亏%",  justify="right")
+    total_mv = sum(p.market_value for p in positions)
+    total_pnl= sum(p.pnl         for p in positions)
+    for p in sorted(positions, key=lambda x: -abs(x.market_value)):
+        pnl_color = "green" if p.pnl >= 0 else "red"
+        pnl_sign  = "+" if p.pnl >= 0 else ""
+        tbl.add_row(
+            p.symbol, p.name[:12] or "—",
+            f"{p.quantity:,.0f}", f"{p.available_qty:,.0f}",
+            f"{p.cost_price:.3f}", f"{p.current_price:.3f}",
+            f"{p.market_value:,.2f}",
+            f"[{pnl_color}]{pnl_sign}{p.pnl:,.2f}[/{pnl_color}]",
+            f"[{pnl_color}]{pnl_sign}{p.pnl_pct:.2f}%[/{pnl_color}]",
         )
+    console.print(tbl)
+    pnl_color = "green" if total_pnl >= 0 else "red"
+    console.print(
+        f"  [dim]共 {len(positions)} 只  总市值 {total_mv:,.2f}  "
+        f"总盈亏 [{pnl_color}]{'+' if total_pnl>=0 else ''}{total_pnl:,.2f}[/{pnl_color}][/dim]"
+    )
 
-    if "404" in err_lower or "not found" in err_lower:
-        if context == "tool":
-            return "Hint: Tool not available. Check /tools for available tools."
-        if context == "session":
-            return "Hint: Session not found. Run /sessions to list available."
-        return "Hint: Resource not found. Check the symbol or path."
-    if "no data" in err_lower or "no result" in err_lower:
-        return "Hint: No data returned. Verify the symbol spelling."
-    if "500" in err_lower or "internal" in err_lower:
-        return "Hint: Server error. Try again in a moment or /health to check."
-    if context == "login":
-        return "Hint: Check email/password. Usage: /login email password"
-    return ""
+
+def _print_broker_orders(orders: list, broker_label: str, status_filter: str = "all"):
+    """Render Order list as a Rich Table."""
+    if not HAS_RICH:
+        for o in orders:
+            print(f"  {o.order_id[:8]} {o.symbol:<8} {o.side:<4} {o.quantity:>8.0f} @ {o.price:.3f}  {o.status}")
+        return
+    if not orders:
+        console.print(f"[dim]{broker_label} — 无 {status_filter} 订单[/dim]")
+        return
+    from rich.table import Table
+    tbl = Table(title=f"[bold]{broker_label}[/bold] 订单 [dim]({status_filter})[/dim]",
+                show_header=True, header_style="bold")
+    tbl.add_column("订单号",  style="dim",   max_width=12)
+    tbl.add_column("代码",    style="bold",  no_wrap=True)
+    tbl.add_column("名称",    max_width=10)
+    tbl.add_column("方向",    justify="center")
+    tbl.add_column("类型",    style="dim")
+    tbl.add_column("委托量",  justify="right")
+    tbl.add_column("成交量",  justify="right")
+    tbl.add_column("委托价",  justify="right", style="dim")
+    tbl.add_column("均价",    justify="right")
+    tbl.add_column("状态")
+    tbl.add_column("时间",    style="dim", max_width=16)
+    _STATUS_STYLE = {"filled":"[green]成交[/green]","partial":"[yellow]部成[/yellow]",
+                     "open":"[cyan]委托中[/cyan]","cancelled":"[dim]已撤[/dim]"}
+    _SIDE_STYLE   = {"buy":"[green]买入[/green]","sell":"[red]卖出[/red]"}
+    for o in orders:
+        tbl.add_row(
+            o.order_id[-8:], o.symbol, o.name[:10] or "—",
+            _SIDE_STYLE.get(o.side, o.side),
+            o.order_type,
+            f"{o.quantity:,.0f}", f"{o.filled_qty:,.0f}",
+            f"{o.price:.3f}", f"{o.avg_price:.3f}" if o.avg_price else "—",
+            _STATUS_STYLE.get(o.status, o.status),
+            o.created_at[:16] if o.created_at else "—",
+        )
+    console.print(tbl)
 
 
 def _print_error(msg: str, context: str = ""):
-    """Print error message with recovery hint — Panel style."""
-    if HAS_RICH:
-        hint = _error_hint(msg, context)
-        body = f"[red]{msg}[/red]"
-        if hint:
-            body += f"\n[dim]{hint}[/dim]"
-        console.print(Panel(
-            body,
-            border_style="red",
-            box=rich_box.ROUNDED,
-            padding=(0, 1),
-        ))
-    else:
-        print(msg)
+    from ui.render.output import print_error as _pe
+    _pe(msg, context, console=console, has_rich=HAS_RICH, rich_box=rich_box)
 
 
 from contextlib import contextmanager as _contextmanager
@@ -6873,6 +4134,118 @@ from contextlib import contextmanager as _contextmanager
 def _null_ctx():
     """No-op context manager for conditional `with` blocks."""
     yield
+
+
+# ── Verdict banner ─────────────────────────────────────────────────────────────
+
+# Alias kept for any internal references that pre-date the move to team_render.
+_VERDICT_STYLE: dict = VERDICT_STYLE
+
+
+def _print_verdict_banner(verdict: str, subtitle: str = "", confidence: float = None) -> None:
+    """Thin wrapper — rendering logic lives in team_render.render_verdict_banner."""
+    render_verdict_banner(verdict, subtitle, confidence,
+                          console=console, has_rich=HAS_RICH)
+
+
+def _print_agent_table(sym: str, results: list, use_full: bool = False) -> None:
+    """Thin wrapper — rendering logic lives in team_render.render_team_table."""
+    import shutil as _shutil
+    rows = build_team_table_rows(results)
+    tw   = getattr(console, "width", None) or _shutil.get_terminal_size().columns
+    render_team_table(sym, rows, use_full,
+                      console=console, terminal_width=tw, has_rich=HAS_RICH)
+
+
+def _team_live_price(data_bundle) -> Optional[float]:
+    """Extract a usable live/reference price from a DataBundle-like object."""
+    try:
+        quote = getattr(data_bundle, "quote", {}) or {}
+        value = quote.get("price") or quote.get("current_price") or quote.get("regular_market_price")
+        if value is None:
+            return None
+        value = float(value)
+        return value if value > 0 else None
+    except Exception:
+        return None
+
+
+
+
+_TEAM_DOLLAR_RE = re.compile(r"(?<![A-Za-z0-9])\$\s*([0-9][0-9,]*(?:\.\d+)?)")
+
+
+def _team_conflicting_prices(text: str, live_price: Optional[float]) -> list[float]:
+    """Find dollar prices that are clearly incompatible with current quote.
+
+    This is intentionally conservative: it only inspects explicit "$123" style
+    figures and only flags values far outside the live-price range. The goal is
+    to catch split-adjusted/stale LLM output such as NVDA $945 when live price is
+    around $205, without rejecting normal support/target ranges nearby.
+    """
+    if not text or not live_price or live_price <= 0:
+        return []
+    conflicts: list[float] = []
+    for raw in _TEAM_DOLLAR_RE.findall(text):
+        try:
+            value = float(raw.replace(",", ""))
+        except ValueError:
+            continue
+        if value <= 0:
+            continue
+        ratio = value / live_price
+        if ratio >= 1.8 or ratio <= 0.35:
+            conflicts.append(value)
+    return conflicts[:8]
+
+
+def _sanitize_team_result_with_market_data(team_result, data_bundle) -> list[str]:
+    """Validate /team output against live data and mark stale/hallucinated parts."""
+    notes: list[str] = []
+    live_price = _team_live_price(data_bundle)
+    if not team_result or not live_price:
+        return notes
+
+    for result in getattr(team_result, "results", []) or []:
+        text = "\n".join([
+            str(getattr(result, "analysis", "") or ""),
+            "\n".join(str(p) for p in (getattr(result, "key_points", []) or [])),
+        ])
+        conflicts = _team_conflicting_prices(text, live_price)
+        if not conflicts:
+            continue
+        result.analysis = (
+            "该 Agent 输出包含与当前行情明显冲突的价格，已从报告正文中移除。\n\n"
+            f"- 当前参考价: {live_price:.2f}\n"
+            f"- 冲突价格: {', '.join(f'${v:g}' for v in conflicts)}\n"
+            "- 请重新运行 /team，或先运行 /doctor 检查数据源与模型上下文。"
+        )
+        result.key_points = [f"数据冲突: 输出价格与当前参考价 {live_price:.2f} 不一致"]
+        result.signal = "HOLD"
+        result.confidence = min(float(getattr(result, "confidence", 0.0) or 0.0), 0.2)
+        result.error = "stale_or_conflicting_price"
+        notes.append(
+            f"{getattr(result, 'agent', 'agent')}: removed stale/conflicting prices "
+            f"({', '.join(f'${v:g}' for v in conflicts)})"
+        )
+
+    conflicts = _team_conflicting_prices(getattr(team_result, "synthesis", "") or "", live_price)
+    if conflicts:
+        team_result.synthesis = (
+            "综合结论已降级：原始综合结论包含与当前行情明显冲突的价格，"
+            "因此不应作为投资依据。\n\n"
+            f"- 当前参考价: {live_price:.2f}\n"
+            f"- 冲突价格: {', '.join(f'${v:g}' for v in conflicts)}\n"
+            "- 建议先确认数据源健康，再重新运行 /team 或 /ta。"
+        )
+        team_result.final_signal = "HOLD"
+        team_result.confidence = min(float(getattr(team_result, "confidence", 0.0) or 0.0), 0.2)
+        notes.append(
+            "synthesis: replaced stale/conflicting conclusion "
+            f"({', '.join(f'${v:g}' for v in conflicts)})"
+        )
+    return notes
+    console.print()
 
 
 def _is_ashare_symbol(symbol: str) -> bool:
@@ -6885,431 +4258,207 @@ def _is_ashare_symbol(symbol: str) -> bool:
     )
 
 
-_FINANCE_TOOL_NAMES = frozenset({
-    "get_market_data", "get_crypto_data", "get_forex_data",
-    "get_commodities_data", "get_futures_data", "calculate_factors",
-    "backtest_strategy", "cloud_backtest", "get_risk_metrics",
-    "optimize_positions", "get_sector_performance", "get_northbound_flow",
-    "screen_ashare", "get_limit_up_pool", "get_market_indices",
-    "analyze_news", "get_bonds_data", "get_ai_signal",
-    "get_market_insights", "get_predictions",
-})
+# A-share code → Chinese name lookup with on-disk JSON cache (7-day TTL)
+_ASHARE_NAMES_CACHE: dict = {}
+_ASHARE_NAMES_LOADED: bool = False
+_ASHARE_NAMES_FAIL_TS: float = 0.0  # timestamp of last fetch failure; retry after 5 min
+_ASHARE_NAMES_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "research", ".cache", "ashare_names.json")
+
+
+def _ensure_ashare_names_loaded() -> dict:
+    """Load (and auto-refresh) the A-share code→Chinese name mapping."""
+    global _ASHARE_NAMES_CACHE, _ASHARE_NAMES_LOADED, _ASHARE_NAMES_FAIL_TS
+    if _ASHARE_NAMES_LOADED:
+        return _ASHARE_NAMES_CACHE
+
+    import json as _json
+    import time as _time
+
+    # Back off for 5 minutes after a network failure to avoid hammering AKShare
+    if _ASHARE_NAMES_FAIL_TS and _time.time() - _ASHARE_NAMES_FAIL_TS < 300:
+        return _ASHARE_NAMES_CACHE
+
+    cache_path = _ASHARE_NAMES_PATH
+    cache_dir  = os.path.dirname(cache_path)
+
+    # Try reading existing cache
+    if os.path.exists(cache_path):
+        try:
+            mtime = os.path.getmtime(cache_path)
+            if _time.time() - mtime < 7 * 86400:  # 7-day TTL
+                with open(cache_path, encoding="utf-8") as _f:
+                    _ASHARE_NAMES_CACHE = _json.load(_f)
+                _ASHARE_NAMES_LOADED = True
+                return _ASHARE_NAMES_CACHE
+        except Exception:
+            pass
+
+    # Cache missing or stale — rebuild from akshare
+    try:
+        import akshare as _ak  # type: ignore
+        df = _ak.stock_info_a_code_name()
+        if df is not None and not df.empty:
+            mapping: dict = {}
+            for _, row in df.iterrows():
+                code = str(row.get("code", row.iloc[0])).zfill(6)
+                name = str(row.get("name", row.iloc[1]))
+                mapping[code] = name
+            _ASHARE_NAMES_CACHE = mapping
+            # Persist to disk
+            try:
+                os.makedirs(cache_dir, exist_ok=True)
+                with open(cache_path, "w", encoding="utf-8") as _f:
+                    _json.dump(mapping, _f, ensure_ascii=False)
+            except Exception:
+                pass
+            _ASHARE_NAMES_LOADED = True
+    except Exception:
+        _ASHARE_NAMES_FAIL_TS = _time.time()  # retry after 5-min backoff, not permanently locked
+
+    return _ASHARE_NAMES_CACHE
+
+
+def _ashare_code_to_name(symbol: str) -> str:
+    """Return the Chinese company name for a 6-digit A-share code, or empty string."""
+    # Normalise to bare 6-digit code
+    code = symbol.upper().strip()
+    code = code.replace(".SS", "").replace(".SZ", "")
+    code = code.lstrip("SH").lstrip("SZ") if not code[:2].isdigit() else code
+    code = code.zfill(6) if code.isdigit() else code
+
+    names = _ensure_ashare_names_loaded()
+    return names.get(code, "")
+
+
+from ui.render.output import FINANCE_TOOL_NAMES as _FINANCE_TOOL_NAMES
 
 
 def _print_tool_result(tool_name: str, result: dict, elapsed: float = 0, params: dict = None):
-    """Print tool result summary — Claude Code style with timing and diffs."""
-    time_suffix = f" {elapsed:.1f}s" if elapsed >= 0.1 else ""
-    params = params or {}
+    from ui.render.output import print_tool_result as _ptr
+    _ptr(
+        tool_name, result, elapsed, params,
+        console=console, has_rich=HAS_RICH, rich_box=rich_box,
+        print_finance_fn=_print_finance_result,
+        bot_mode=_ARIA_BOT_MODE,
+    )
 
-    # Route finance tools to the rich finance formatter
-    if tool_name in _FINANCE_TOOL_NAMES:
-        if time_suffix and HAS_RICH:
-            console.print(f"  [dim]{tool_name}{time_suffix}[/dim]")
-        _print_finance_result(tool_name, result)
-        return
 
-    if result.get("success"):
-        data = result.get("data", {})
-        if tool_name == "write_file":
-            path = params.get("path", data.get("path", ""))
-            # Prefer result.data for line count (accurate); fall back to computing from params
-            _res_lines = data.get("lines")
-            _res_size  = data.get("size_bytes")
-            if _res_lines is not None:
-                lines = _res_lines
-            else:
-                content = params.get("content", "")
-                lines = content.count("\n") + 1 if content else 0
-            if _res_size is not None:
-                size = _res_size
-            else:
-                content = params.get("content", "")
-                size = len(content.encode("utf-8")) if content else 0
-            size_str = f"{size}B" if size < 1024 else f"{size//1024}KB"
-            label = f"{path}  {lines} lines  {size_str}{time_suffix}"
-            if HAS_RICH:
-                console.print(Panel(
-                    f"[green]✓[/green] [dim]{label}[/dim]",
-                    border_style="dim",
-                    box=rich_box.ROUNDED,
-                    padding=(0, 1),
-                ))
-            else:
-                print(f" {label}")
-        elif tool_name == "edit_file":
-            old = params.get("old_string", "")
-            new = params.get("new_string", "")
-            if old and new and HAS_RICH:
-                import difflib
-                old_lines = old.splitlines(keepends=True)
-                new_lines = new.splitlines(keepends=True)
-                diff = list(difflib.unified_diff(old_lines, new_lines, lineterm=""))
-                if diff:
-                    console.print()
-                    for line in diff[2:]:  # skip @@/--- +++ header
-                        if line.startswith("+"):
-                            console.print(f"    [green]{line.rstrip()}[/green]")
-                        elif line.startswith("-"):
-                            console.print(f"    [red]{line.rstrip()}[/red]")
-                        else:
-                            console.print(f"    [dim]{line.rstrip()}[/dim]")
-            if time_suffix and HAS_RICH:
-                console.print(f"  [dim]{time_suffix.strip()}[/dim]")
-            elif time_suffix:
-                print(f" {time_suffix.strip()}")
-        elif tool_name == "run_command":
-            stdout = data.get("stdout", "").strip()
-            returncode = data.get("returncode", 0)
-            if HAS_RICH:
-                rc_color = "green" if returncode == 0 else "red"
-                rc_icon  = "✓" if returncode == 0 else "✗"
-                lines_str = ""
-                if stdout:
-                    out_lines = stdout.splitlines()
-                    preview = "\n".join(
-                        f"[dim]{ol[:120]}[/dim]" for ol in out_lines[:6]
-                    )
-                    if len(out_lines) > 6:
-                        preview += f"\n[dim]… (+{len(out_lines)-6} lines)[/dim]"
-                    lines_str = "\n" + preview
-                console.print(Panel(
-                    f"[{rc_color}]{rc_icon} exit {returncode}[/{rc_color}][dim]{time_suffix}[/dim]{lines_str}",
-                    border_style=rc_color,
-                    box=rich_box.ROUNDED,
-                    padding=(0, 1),
-                ))
-            else:
-                print(f" exit {returncode}{time_suffix}")
-        elif tool_name == "read_file":
-            lines = data.get("lines", 0)
-            content = data.get("content", "")
-            path = params.get("path", "")
-            if HAS_RICH:
-                preview_str = ""
-                if content:
-                    preview_lines = content.splitlines()[:3]
-                    preview_str = "\n" + "\n".join(
-                        f"[dim]{pl[:100]}{'…' if len(pl) > 100 else ''}[/dim]"
-                        for pl in preview_lines
-                    )
-                    if lines > 3:
-                        preview_str += f"\n[dim]… (+{lines-3} more lines)[/dim]"
-                console.print(Panel(
-                    f"[dim]{path}  {lines} lines{time_suffix}[/dim]{preview_str}",
-                    border_style="dim",
-                    box=rich_box.ROUNDED,
-                    padding=(0, 1),
-                ))
-            else:
-                print(f" {lines} lines{time_suffix}")
-        elif tool_name == "list_files":
-            count = data.get("count", 0)
-            if HAS_RICH:
-                if count == 0:
-                    console.print(f" [yellow]0 items — 未找到匹配文件{time_suffix}[/yellow]")
-                else:
-                    console.print(f" [dim]{count} items{time_suffix}[/dim]")
-            else:
-                print(f" {count} items{time_suffix}")
-        elif tool_name == "search_code":
-            matches = len(data.get("matches", []))
-            if HAS_RICH:
-                console.print(f" [dim]{matches} matches{time_suffix}[/dim]")
-            else:
-                print(f" {matches} matches{time_suffix}")
-        else:
-            # Remote tools — show concise summary in a dim Panel
-            summary = json.dumps(data, ensure_ascii=False)
-            short = (summary[:80] + "…") if len(summary) > 80 else summary
-            if HAS_RICH:
-                console.print(Panel(
-                    f"[dim]{tool_name} · {short}{time_suffix}[/dim]",
-                    border_style="dim",
-                    box=rich_box.ROUNDED,
-                    padding=(0, 1),
-                ))
-            else:
-                print(f" done{time_suffix}")
-    else:
-        error = result.get("error", "failed")
-        hint = _error_hint(str(error), context="tool")
+# ─────────────────────────────────────────────────────────────────────────────
+# Finance rendering — implementation lives in apps/cli/commands/finance_render.py
+# These thin wrappers supply the module-level console / HAS_RICH / _ARIA_BOT_MODE.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _print_finance_result(tool_name: str, result: dict) -> None:
+    render_finance_result(tool_name, result,
+                          console=console, has_rich=HAS_RICH,
+                          bot_mode=_ARIA_BOT_MODE)
+
+
+def _render_macro_result(r: dict, title: str) -> None:
+    render_macro_result(r, title, console=console, has_rich=HAS_RICH)
+
+
+def _render_cb_rates(r: dict) -> None:
+    render_cb_rates(r, console=console, has_rich=HAS_RICH)
+
+
+def _render_econ_calendar(r: dict) -> None:
+    render_econ_calendar(r, console=console, has_rich=HAS_RICH)
+
+
+def _render_options_chain(r: dict) -> None:
+    render_options_chain(r, console=console, has_rich=HAS_RICH)
+
+
+def _render_quality_scores(symbol: str, f_r: dict, z_r: dict) -> None:
+    render_quality_scores(symbol, f_r, z_r, console=console, has_rich=HAS_RICH)
+
+
+def _render_ichimoku(r: dict) -> None:
+    render_ichimoku(r, console=console, has_rich=HAS_RICH)
+
+
+def _render_fear_greed(r: dict) -> None:
+    render_fear_greed(r, console=console, has_rich=HAS_RICH)
+
+
+def _render_funding_rates(r: dict) -> None:
+    render_funding_rates(r, console=console, has_rich=HAS_RICH)
+
+
+def _render_peer_comparison(r: dict) -> None:
+    render_peer_comparison(r, console=console, has_rich=HAS_RICH)
+
+
+def _render_house_price(r: dict) -> None:
+    render_house_price(r, console=console, has_rich=HAS_RICH)
+
+
+def _render_reits_list(r: dict) -> None:
+    render_reits_list(r, console=console, has_rich=HAS_RICH)
+
+
+def _render_rental_yield(r: dict) -> None:
+    render_rental_yield(r, console=console, has_rich=HAS_RICH)
+
+
+def _render_property_val(r: dict) -> None:
+    render_property_val(r, console=console, has_rich=HAS_RICH)
+
+
+def _render_multi_city(r: dict) -> None:
+    render_multi_city(r, console=console, has_rich=HAS_RICH)
+
+
+def _render_asset_score(r: dict) -> None:
+    render_asset_score(r, console=console, has_rich=HAS_RICH)
+
+
+def _render_corr_matrix(r: dict) -> None:
+    render_corr_matrix(r, console=console, has_rich=HAS_RICH)
+
+
+def _render_portfolio_bt(r: dict) -> None:
+    render_portfolio_bt(r, console=console, has_rich=HAS_RICH)
+
+
+def _render_sql_result(r: dict) -> None:
+    render_sql_result(r, console=console, has_rich=HAS_RICH)
+
+
+def _render_alerts(r: dict) -> None:
+    render_alerts(r, console=console, has_rich=HAS_RICH)
+
+
+def _prompt_float(label: str, default: float) -> float:
+    """交互式数字输入，失败时返回 default。"""
+    try:
         if HAS_RICH:
-            _body = f"[red]{error[:160]}[/red]"
-            if hint:
-                _body += f"\n[dim]{hint}[/dim]"
-            console.print(Panel(
-                _body,
-                border_style="red",
-                box=rich_box.ROUNDED,
-                title=f"[red]{tool_name} failed[/red]",
-                padding=(0, 1),
-            ))
+            from rich.prompt import Prompt
+            raw = Prompt.ask(f"  {label}", default=str(default))
         else:
-            print(f" error: {error[:80]}")
-
-
-def _print_finance_result(tool_name: str, result: dict):
-    """
-    Rich-formatted display for all finance tool results.
-    Shows structured tables instead of raw dicts.
-    """
-    if not result or not isinstance(result, dict):
-        return
-    if not result.get("success"):
-        err = result.get("error") or result.get("message") or "数据暂不可用（服务离线或无数据）"
+            raw = input(f"  {label}") or str(default)
+        return float(raw)
+    except ValueError:
         if HAS_RICH:
-            console.print(Panel(
-                f"[yellow]⚠ {err}[/yellow]",
-                border_style="yellow",
-                box=rich_box.ROUNDED,
-                padding=(0, 1),
-            ))
+            console.print(f"  [yellow]请输入有效数字，已使用默认值 {default}[/yellow]")
         else:
-            print(f"  ⚠ {err}")
-        return
+            print(f"  请输入有效数字，已使用默认值 {default}")
+        return default
+    except KeyboardInterrupt:
+        return default
 
-    provider = result.get("provider", "")
-    prov_tag = f" [dim][{provider}][/dim]" if provider else ""
 
-    # ── Market data / quote ────────────────────────────────────────────
-    if tool_name in ("get_market_data", "get_crypto_data", "get_forex_data"):
-        sym   = result.get("symbol", "")
-        px    = result.get("latest_close", result.get("price", 0))
-        chg   = result.get("change_pct", result.get("change_pct_24h", 0)) or 0
-        vol   = result.get("volume", 0)
-        name  = result.get("name", "")
-        curr  = result.get("currency", "")
-        color = "green" if chg >= 0 else "red"
-        arrow = "▲" if chg >= 0 else "▼"
+def _prompt_str(label: str, default: str) -> str:
+    """交互式字符串输入，失败时返回 default。"""
+    try:
         if HAS_RICH:
-            from rich.table import Table
-            t = Table(show_header=False, box=None, padding=(0, 1))
-            t.add_column(style="dim", width=20)
-            t.add_column()
-            title_str = f"[bold]{sym}[/bold]" + (f"  {name}" if name else "")
-            t.add_row("标的", title_str)
-            px_disp = f"{curr} {px:,.4g}" if curr else f"{px:,.4g}"
-            t.add_row("最新价", f"[bold]{px_disp}[/bold]")
-            t.add_row("涨跌幅", f"[{color}]{arrow} {chg:+.2f}%[/{color}]")
-            _hi = result.get("high"); _lo = result.get("low")
-            if _hi and _lo:
-                t.add_row("日内区间", f"{_lo:,.4g} — {_hi:,.4g}")
-            if vol:
-                t.add_row("成交量", f"{int(vol):,}")
-            # Technical indicators from local tool
-            _rsi = result.get("rsi")
-            if _rsi is not None:
-                _rsi_color = "red" if _rsi >= 70 else ("cyan" if _rsi <= 30 else "white")
-                t.add_row("RSI(14)", f"[{_rsi_color}]{_rsi:.1f}[/{_rsi_color}]")
-            _mh = result.get("macd_hist")
-            if _mh is not None:
-                _mh_color = "green" if _mh > 0 else "red"
-                t.add_row("MACD hist", f"[{_mh_color}]{_mh:+.4f}[/{_mh_color}]")
-            _ma20 = result.get("ma20"); _ma60 = result.get("ma60")
-            if _ma20:
-                t.add_row("MA20", f"{_ma20:,.4g}")
-            if _ma60:
-                t.add_row("MA60", f"{_ma60:,.4g}")
-            # Legacy cloud fields
-            for k in ("high_52w", "low_52w", "bid", "ask"):
-                v = result.get(k)
-                if v is not None:
-                    t.add_row(k.replace("_", " ").title(), f"{v:,.4g}")
-            console.print(t)
-            if prov_tag:
-                console.print(f"  {prov_tag}")
+            from rich.prompt import Prompt
+            return Prompt.ask(f"  {label}", default=default)
         else:
-            print(f"  {sym}: {px} ({chg:+.2f}%)")
-        return
-
-    # ── Commodity data ─────────────────────────────────────────────────
-    if tool_name == "get_commodities_data":
-        sym  = result.get("symbol", "")
-        px   = result.get("latest_close", 0)
-        chg  = result.get("change_pct", 0) or 0
-        unit = result.get("unit", "")
-        color = "green" if chg >= 0 else "red"
-        arrow = "▲" if chg >= 0 else "▼"
-        if HAS_RICH:
-            console.print(
-                f"  [bold]{sym}[/bold]  {px:,.3g} {unit}  "
-                f"[{color}]{arrow} {chg:+.3f}%[/{color}]{prov_tag}"
-            )
-            for k in ("pct_from_52w_high", "pct_from_52w_low", "year_return"):
-                v = result.get(k)
-                if v is not None:
-                    console.print(f"    [dim]{k:<25s}[/dim] {v:+.3%}")
-        else:
-            print(f"  {sym}: {px} ({chg:+.3f}%)")
-        return
-
-    # ── AI signal ──────────────────────────────────────────────────────
-    if tool_name == "get_ai_signal":
-        action = result.get("action", "HOLD")
-        conf   = result.get("confidence", 0)
-        reason = result.get("reasoning", "")
-        sl     = result.get("stop_loss")
-        tp     = result.get("take_profit")
-        color  = {"BUY": "green", "SELL": "red", "HOLD": "yellow"}.get(action, "white")
-        if HAS_RICH:
-            console.print(f"  Signal: [{color}][bold]{action}[/bold][/{color}]  "
-                          f"Confidence: [bold]{conf:.1%}[/bold]{prov_tag}")
-            if reason:
-                console.print(f"  [dim]{reason[:120]}[/dim]")
-            if sl is not None:
-                console.print(f"  [dim]Stop-loss: {sl}   Take-profit: {tp}[/dim]")
-        else:
-            print(f"  {action} ({conf:.1%}) — {reason[:80]}")
-        return
-
-    # ── Factors ────────────────────────────────────────────────────────
-    if tool_name == "calculate_factors":
-        sym = result.get("symbol", "")
-        if HAS_RICH:
-            from rich.table import Table
-            t = Table(title=f"Factors — {sym}", show_header=True, box=None, padding=(0, 1))
-            t.add_column("Factor", style="dim", width=24)
-            t.add_column("Value",  justify="right")
-            t.add_column("Signal", width=6)
-            def _sig(v, neutral_lo=-0.1, neutral_hi=0.1):
-                if v is None: return ""
-                return "[green]▲[/green]" if v > neutral_hi else "[red]▼[/red]" if v < neutral_lo else "[yellow]─[/yellow]"
-            FACTOR_ROWS = [
-                ("rsi_14",          "RSI(14)",         lambda v: "[red]OB[/red]" if v and v > 70 else "[green]OS[/green]" if v and v < 30 else "[dim]─[/dim]"),
-                ("macd_hist",       "MACD Hist",       lambda v: "[green]▲[/green]" if v and v > 0 else "[red]▼[/red]"),
-                ("trend_score",     "Trend Score",     lambda v: _sig(v, -0.2, 0.2)),
-                ("bb_position",     "BB Position",     lambda v: "[red]OB[/red]" if v and v > 0.9 else "[green]OS[/green]" if v and v < 0.1 else "[dim]─[/dim]"),
-                ("ma_20_gap",       "vs MA20",         lambda v: "[green]▲[/green]" if v and v > 0 else "[red]▼[/red]"),
-                ("ma_60_gap",       "vs MA60",         lambda v: "[green]▲[/green]" if v and v > 0 else "[red]▼[/red]"),
-                ("volatility_20d",  "Vol(20d)",        lambda v: ""),
-                ("volume_ratio_20d","Vol Ratio",       lambda v: "[green]⬆[/green]" if v and v > 1.5 else ""),
-                ("return_5d",       "Return 5d",       lambda v: "[green]▲[/green]" if v and v > 0 else "[red]▼[/red]"),
-                ("return_20d",      "Return 20d",      lambda v: "[green]▲[/green]" if v and v > 0 else "[red]▼[/red]"),
-            ]
-            for key, label, sig_fn in FACTOR_ROWS:
-                v = result.get(key)
-                if v is not None:
-                    val_str = f"{v:+.4f}" if isinstance(v, float) else str(v)
-                    t.add_row(label, val_str, sig_fn(v))
-            console.print(t)
-            console.print(f"  {prov_tag}")
-        else:
-            for k, v in result.items():
-                if k not in ("success", "symbol", "provider") and isinstance(v, (int, float)):
-                    print(f"  {k:<25s} {v:.5g}")
-        return
-
-    # ── Backtest ───────────────────────────────────────────────────────
-    if tool_name in ("backtest_strategy", "cloud_backtest"):
-        sym  = result.get("symbol", result.get("symbols", ""))
-        strat = result.get("strategy", result.get("model_type", ""))
-        if HAS_RICH:
-            from rich.table import Table
-            t = Table(title=f"Backtest — {sym}  [{strat}]", show_header=True, box=None)
-            t.add_column("Metric",    style="dim", width=24)
-            t.add_column("Value",     justify="right")
-            PERF_ROWS = [
-                ("total_return",    "Total Return",    lambda v: f"[{'green' if v >= 0 else 'red'}]{v:+.2%}[/]"),
-                ("annual_return",   "Annual Return",   lambda v: f"[{'green' if v >= 0 else 'red'}]{v:+.2%}[/]"),
-                ("sharpe_ratio",    "Sharpe Ratio",    lambda v: f"[{'green' if v >= 1 else 'yellow' if v >= 0.5 else 'red'}]{v:.3f}[/]"),
-                ("sortino_ratio",   "Sortino Ratio",   lambda v: f"{v:.3f}"),
-                ("max_drawdown",    "Max Drawdown",    lambda v: f"[red]{v:.2%}[/red]"),
-                ("win_rate",        "Win Rate",        lambda v: f"{v:.1%}"),
-                ("total_trades",    "Trades",          lambda v: str(int(v))),
-                ("benchmark_return","Benchmark (B&H)", lambda v: f"{v:+.2%}"),
-                ("alpha",           "Alpha",           lambda v: f"[{'green' if v >= 0 else 'red'}]{v:+.2%}[/]"),
-            ]
-            for key, label, fmt_fn in PERF_ROWS:
-                v = result.get(key)
-                if v is not None:
-                    t.add_row(label, fmt_fn(v))
-            console.print(t)
-            console.print(f"  {result.get('start', '')} → {result.get('end', '')}  "
-                          f"[dim]{result.get('bars', '')} bars[/dim]{prov_tag}")
-        else:
-            for k in ("total_return", "sharpe_ratio", "max_drawdown", "win_rate"):
-                v = result.get(k)
-                if v is not None:
-                    print(f"  {k:<20s} {v:.4g}")
-        return
-
-    # ── Predictions ────────────────────────────────────────────────────
-    if tool_name == "get_predictions":
-        preds = result.get("predictions", [])
-        days  = result.get("prediction_days", 5)
-        if HAS_RICH and preds:
-            from rich.table import Table
-            t = Table(title=f"ML Predictions ({days}d)", show_header=True, box=None)
-            t.add_column("Symbol",   style="bold", width=12)
-            t.add_column("Predicted Return", justify="right")
-            t.add_column("Confidence",       justify="right")
-            for p in preds:
-                ret  = p.get("predicted_return", 0)
-                conf = p.get("confidence", 0)
-                color = "green" if ret >= 0 else "red"
-                t.add_row(p["symbol"], f"[{color}]{ret:+.2%}[/{color}]", f"{conf:.0%}")
-            console.print(t)
-            console.print(f"  {prov_tag}")
-        else:
-            for p in preds:
-                print(f"  {p.get('symbol')}: {p.get('predicted_return',0):+.2%}")
-        return
-
-    # ── Northbound flow ────────────────────────────────────────────────
-    if tool_name == "get_northbound_flow":
-        latest = result.get("latest_net_buy_yi", 0)
-        total  = result.get("total_net_buy_yi", 0)
-        trend  = result.get("trend", "")
-        color  = "green" if latest >= 0 else "red"
-        if HAS_RICH:
-            console.print(f"  北向资金  Today: [{color}][bold]{latest:+.2f}亿[/bold][/{color}]  "
-                          f"Period Total: {total:+.2f}亿  [{trend}]{prov_tag}")
-        else:
-            print(f"  北向 Today: {latest:+.2f}亿  Period: {total:+.2f}亿")
-        return
-
-    # ── Market indices ────────────────────────────────────────────────
-    if tool_name == "get_market_indices":
-        indices = result.get("indices", result)
-        if HAS_RICH:
-            from rich.table import Table
-            t = Table(show_header=True, box=None, padding=(0, 1))
-            t.add_column("Index",  style="bold", width=16)
-            t.add_column("Price",  justify="right")
-            t.add_column("Change", justify="right")
-            for idx_name, idx_data in (indices.items() if isinstance(indices, dict) else []):
-                if isinstance(idx_data, dict):
-                    px  = idx_data.get("price", idx_data.get("latest_close", 0))
-                    chg = idx_data.get("change_pct", 0) or 0
-                    color = "green" if chg >= 0 else "red"
-                    t.add_row(idx_name, f"{px:,.2f}", f"[{color}]{chg:+.2f}%[/{color}]")
-            console.print(t)
-        else:
-            print(json.dumps(indices, indent=2, ensure_ascii=False, default=str)[:400])
-        return
-
-    # ── Generic fallback ──────────────────────────────────────────────
-    if HAS_RICH:
-        # Show key=value pairs, skip large nested objects
-        out = Text()
-        for k, v in result.items():
-            if k in ("success", "provider", "history_tail", "equity_curve", "trades"):
-                continue
-            if isinstance(v, (int, float)):
-                color = "green" if v > 0 else "red" if v < 0 else ""
-                out.append(f"  {k.replace('_',' ').title():<24s}", style="dim")
-                out.append(f"{v:,.5g}\n", style=color)
-            elif isinstance(v, str) and len(v) < 80:
-                out.append(f"  {k.replace('_',' ').title():<24s}", style="dim")
-                out.append(f"{v}\n")
-        if str(out):
-            console.print(out)
-        if provider:
-            console.print(f"  {prov_tag}")
-    else:
-        print(json.dumps({k: v for k, v in result.items()
-                          if k not in ("success",) and not isinstance(v, list)},
-                         indent=2, ensure_ascii=False, default=str)[:400])
+            return input(f"  {label}") or default
+    except (ValueError, KeyboardInterrupt):
+        return default
 
 
 def format_quote_output(data: dict):
@@ -7367,42 +4516,6 @@ def format_quote_output(data: dict):
     return out
 
 
-def format_backtest_output(data: dict):
-    """Format backtest results as clean rows."""
-    if not HAS_RICH:
-        return json.dumps(data, indent=2, ensure_ascii=False)
-
-    d = data.get("data", data.get("backtest", data))
-    total_ret = d.get("total_return", 0)
-    ann_ret = d.get("annualized_return", 0)
-    sharpe = d.get("sharpe_ratio", 0)
-    max_dd = d.get("max_drawdown", 0)
-    win_rate = d.get("win_rate", 0)
-    trades = d.get("num_trades", 0)
-    bh_ret = d.get("buy_hold_return", 0)
-    outperf = d.get("outperformance", 0)
-
-    def _c(v): return "green" if v >= 0 else "red"
-
-    out = Text()
-    out.append("  Backtest Results\n", style="bold")
-    out.append(f"  {'Total Return':<18s}", style="dim")
-    out.append(f"{total_ret*100:+.2f}%", style=_c(total_ret))
-    out.append(f"  vs B&H ", style="dim")
-    out.append(f"{bh_ret*100:+.2f}%\n", style=_c(bh_ret))
-    out.append(f"  {'Annualized':<18s}", style="dim")
-    out.append(f"{ann_ret*100:+.2f}%\n")
-    out.append(f"  {'Sharpe Ratio':<18s}", style="dim")
-    out.append(f"{sharpe:.2f}\n")
-    out.append(f"  {'Max Drawdown':<18s}", style="dim")
-    out.append(f"{max_dd*100:.2f}%\n", style="red")
-    out.append(f"  {'Win Rate':<18s}", style="dim")
-    out.append(f"{win_rate*100:.1f}%\n")
-    out.append(f"  {'Trades':<18s}", style="dim")
-    out.append(f"{trades}\n")
-    out.append(f"  {'Outperformance':<18s}", style="dim")
-    out.append(f"{outperf*100:+.2f}%\n", style=_c(outperf))
-    return out
 
 
 def format_sparkline(prices: list, width: int = 30) -> str:
@@ -7509,112 +4622,68 @@ class ArtheraCompleter:
             return None
 
 
-if HAS_PT:
-    class AriaPTCompleter(Completer):
-        """prompt_toolkit completer: slash commands + skills with category labels."""
-
-        def __init__(self, commands_dict: dict, skills: list, watchlist: list):
-            self.commands = commands_dict
-            self.skills = skills
-            self.symbols = sorted(set([
-                "AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA", "META", "NFLX",
-                "AMD", "INTC", "SPY", "QQQ", "DIA", "IWM", "BTC", "ETH", "SOL",
-                "JPM", "BAC", "GS", "V", "MA", "UNH", "JNJ", "PFE", "XOM", "CVX",
-            ] + list(watchlist)))
-
-        def get_completions(self, document, complete_event):
-            text = document.text_before_cursor.lstrip()
-            word = document.get_word_before_cursor(WORD=True)
-
-            # Only show completions when input starts with /
-            if not text.startswith("/"):
-                return
-
-            prefix = word if word.startswith("/") else "/" + word
-
-            # Built-in commands first
-            for name, (_, desc) in self.commands.items():
-                if name.startswith(prefix) or prefix == "/":
-                    yield Completion(
-                        name, start_position=-len(prefix),
-                        display=name,
-                        display_meta=desc,
-                    )
-
-            # Skills
-            for s in self.skills:
-                cmd = s["command"]
-                if cmd.startswith(prefix) or prefix == "/":
-                    yield Completion(
-                        cmd, start_position=-len(prefix),
-                        display=cmd,
-                        display_meta=s["description"],
-                    )
-
-    # prompt_toolkit style — uses ANSI colors only (adapts to light/dark terminals)
-    ARIA_PT_STYLE = PTStyle.from_dict({
-        "prompt": "bold #C08050",
-        "placeholder": "#888888 italic",
-        "bottom-toolbar": "#888888",
-        "bottom-toolbar.text": "#888888",
-        "completion-menu": "bg:#2a2a2a #cccccc",
-        "completion-menu.completion": "bg:#2a2a2a #cccccc",
-        "completion-menu.completion.current": "bg:#555555 #ffffff bold",
-        "completion-menu.meta": "bg:#2a2a2a #888888",
-        "completion-menu.meta.current": "bg:#555555 #cccccc",
-        "scrollbar.background": "bg:#2a2a2a",
-        "scrollbar.button": "bg:#555555",
-    })
+from ui.completer import AriaPTCompleter, ARIA_PT_STYLE
 
 
-# ============================================================================
-# Interactive model picker
-# Runs _arrow_select inside run_in_executor so it gets its own thread and
-# doesn't conflict with the prompt_toolkit event loop or kqueue on macOS.
-# ============================================================================
-
-async def _run_picker_in_thread(options: list, current_idx: int,
-                                title: str, max_visible: int = 14) -> int:
-    """
-    Run _arrow_select in a dedicated executor thread.
-
-    Why a thread and not run_async / app.run:
-      • prompt_toolkit Application.run_async() calls loop.add_reader(stdin_fd)
-        which fails on macOS (kqueue rejects TTY fds) → OSError EINVAL
-      • Calling _arrow_select synchronously in the async context races against
-        prompt_toolkit's terminal-cleanup thread → arrows land in the wrong reader
-      • run_in_executor gives _arrow_select full TTY ownership in its own thread,
-        matching exactly how _pt_session.prompt() works (no conflict)
-    """
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(
-        None,
-        lambda: _arrow_select(options, current_idx, title, max_visible),
-    )
 
 
 # ============================================================================
 # Slash Commands
 # ============================================================================
 
-class SlashCommands:
+import types as _types
+
+def _rebind_mixin_globals(mixin_cls):
+    """Point mixin methods' __globals__ to this module's namespace so bare names resolve."""
+    for _attr_name, _attr in list(vars(mixin_cls).items()):
+        if isinstance(_attr, _types.FunctionType):
+            _new_fn = _types.FunctionType(
+                _attr.__code__, globals(), _attr.__name__,
+                _attr.__defaults__, _attr.__closure__
+            )
+            setattr(mixin_cls, _attr_name, _new_fn)
+
+_rebind_mixin_globals(BrokerCommandsMixin)
+_rebind_mixin_globals(BacktestCommandsMixin)
+_rebind_mixin_globals(WorkspaceCommandsMixin)
+_rebind_mixin_globals(ModelCommandsMixin)
+_rebind_mixin_globals(MarketCommandsMixin)
+_rebind_mixin_globals(PortfolioCommandsMixin)
+
+class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommandsMixin, ModelCommandsMixin, MarketCommandsMixin, PortfolioCommandsMixin):
     """Claude Code-style slash command system."""
 
     def __init__(self, terminal: 'ArtheraTerminal'):
         self.terminal = terminal
         self.commands = {
             "/help":      (self.cmd_help,      "Show all commands and skills"),
+            "/artifacts": (self.cmd_artifacts, "List generated reports, backtests, and data files"),
             "/quote":     (self.cmd_quote,     "Quick quote: /quote AAPL MSFT"),
             "/analyze":   (self.cmd_analyze,   "AI analysis: /analyze AAPL"),
-            "/backtest":  (self.cmd_backtest,  "Backtest: /backtest momentum SPY [start] [end]"),
+            "/backtest":  (self.cmd_backtest,  "Backtest + HTML chart: /backtest momentum SPY --period 1y"),
             "/wf":        (self.cmd_walk_forward, "Walk-Forward: /wf SPY [momentum] [rolling]"),
             "/compare":   (self.cmd_compare,   "Strategy compare: /compare SPY [start] [end]"),
+            "/macro":     (self.cmd_macro,     "宏观数据: /macro [us|cn|rates|calendar] [indicator]"),
+            "/options":   (self.cmd_options,   "期权链: /options AAPL [calls|puts] [expiry]"),
+            "/quality":   (self.cmd_quality,   "质量评分: /quality AAPL  (Piotroski + Altman Z)"),
+            "/ichimoku":  (self.cmd_ichimoku,  "一目均衡表: /ichimoku AAPL"),
+            "/feargreed":  (self.cmd_fear_greed,"加密恐惧贪婪指数: /feargreed"),
+            "/funding":   (self.cmd_funding,   "永续资金费率: /funding [BTC ETH SOL] [exchange]"),
+            "/peer":      (self.cmd_peer,      "同行对比: /peer AAPL [MSFT GOOGL META]"),
+            "/realty":    (self.cmd_realty,    "不动产: /realty [market|reit|valuation|rent|compare|invest] [参数]"),
+            "/football":  (self.cmd_football,  "足球分析: /football [standings|fixtures|predict|team|h2h] [参数]"),
+            "/data":      (self.cmd_data,      "数据分析: /data [sql|export|load] [参数]"),
+            "/alert":     (self.cmd_alert,     "价格预警: /alert [add|list|delete|check] AAPL gt 200"),
+            "/corr":      (self.cmd_corr,      "相关性矩阵: /corr AAPL MSFT TSLA SPY"),
+            "/ptbt":      (self.cmd_portfolio_bt, "组合回测: /ptbt AAPL MSFT GOOG [权重] [2y]"),
             "/watch":     (self.cmd_watch,     "Watchlist: /watch add AAPL | /watch list"),
-            "/portfolio": (self.cmd_portfolio, "Portfolio risk assessment"),
+            "/portfolio": (self.cmd_portfolio, "组合分析: /portfolio [analyze|rebalance] [symbols]"),
+            "/journal":  (self.cmd_journal,  "持仓账本: /journal [add|trades|pnl|realized|export|delete]"),
             "/screen":    (self.cmd_screen,    "Screen stocks: /screen tech"),
             "/model":     (self.cmd_model,     "Select AI model (interactive picker)"),
             "/thinking":  (self.cmd_thinking,  "Toggle thinking: /thinking on"),
             "/tools":     (self.cmd_tools,     "List all Aria tools"),
+            "/packages":  (self.cmd_packages,  "Aria/Arthera packages: /packages [connect arthera]"),
             "/services":  (self.cmd_services,  "Show CLI service tiers and workflows"),
             "/plan":      (self.cmd_plan,      "Draft executable plan: /plan step1 ; step2"),
             "/apply-plan":(self.cmd_apply_plan,"Execute pending plan steps"),
@@ -7622,6 +4691,8 @@ class SlashCommands:
             "/git":       (self.cmd_git,       "Git helper: /git status|diff|summary"),
             "/gh":        (self.cmd_gh,        "GitHub CLI: /gh prs|issues|pr N|create-pr|search"),
             "/skills":    (self.cmd_skills,    "List all available skills"),
+            "/status":    (self.cmd_status,    "Runtime status: engine · model · tools · context"),
+            "/trace":     (self.cmd_trace,     "Show runtime tool trace"),
             "/health":    (self.cmd_health,    "Check backend health"),
             "/clear":     (self.cmd_clear,     "Clear conversation"),
             "/history":   (self.cmd_history,   "Show conversation history"),
@@ -7642,18 +4713,24 @@ class SlashCommands:
             "/load":      (self.cmd_load,      "Load session: /load <id>"),
             "/rename":    (self.cmd_rename,     'Rename session: /rename "title"'),
             "/export":    (self.cmd_export,    "Export: /export json|csv|md [file]"),
-            "/feedback":  (self.cmd_feedback,  "Feedback last reply: /feedback up|down"),
+            "/feedback":  (self.cmd_feedback,  "Local feedback: /feedback good|bad|note <text>"),
+            "/privacy":   (self.cmd_privacy,   "Privacy controls: /privacy status|opt-in|opt-out|export|delete"),
             "/code":      (self.cmd_code,      "Generate & save code: /code <description> [--save file.py]"),
             "/scaffold":  (self.cmd_scaffold,  "Scaffold project: /scaffold <name> [--template strategy|analysis|pipeline]"),
             "/read":      (self.cmd_read,      "Read file: /read <path> [offset] [limit]"),
-            "/write":     (self.cmd_write,     "Write file: /write <path> (then paste content)"),
+            "/write":     (self.cmd_write,     "Write file: /write [--stage] <path>"),
             "/edit":      (self.cmd_edit,      "Edit file: /edit <path>"),
             "/ls":        (self.cmd_ls,        "List files: /ls [path] [pattern]"),
             "/search":    (self.cmd_search,    "Search code: /search <pattern> [path] [glob]"),
             "/run":       (self.cmd_run,       "Run command: /run <command>"),
+            "/verify":    (self.cmd_verify,    "Infer and run focused checks: /verify [--dry-run] [paths...]"),
+            "/changes":   (self.cmd_changes,   "List staged file changes"),
+            "/apply-change": (self.cmd_apply_change, "Apply staged change: /apply-change <id>"),
+            "/reject-change": (self.cmd_reject_change, "Reject staged change: /reject-change <id>"),
             "/apply":     (self.cmd_apply,     "Extract & save code from last AI response"),
             "/news":      (self.cmd_news,      "Latest news: /news [topic|symbol]"),
             "/config":    (self.cmd_config,    "Show/set config: /config set key=value"),
+            "/input":     (self.cmd_input,     "Input UI: /input panel|plain|box|theme auto|dark|light"),
             "/context":   (self.cmd_context,   "Show current AI context & session"),
             "/crypto":    (self.cmd_crypto,    "Crypto data: /crypto BTC ETH"),
             "/forex":     (self.cmd_forex,     "Forex rates: /forex EUR/USD"),
@@ -7694,6 +4771,11 @@ class SlashCommands:
             "/ta":        (self.cmd_ta,        "技术指标: /ta NVDA [days=120]"),
             # ── 策略金库 ───────────────────────────────────────────────────────
             "/strategy":  (self.cmd_strategy,  "策略版本管理: /strategy save|list|diff|load|review"),
+            # ── 券商账户 ──────────────────────────────────────────────────────────
+            "/broker":    (self.cmd_broker,    "券商管理: /broker list|connect|disconnect|add|status"),
+            "/account":   (self.cmd_account,   "账户资金: /account [broker_id]"),
+            "/positions": (self.cmd_positions, "当前持仓: /positions [broker_id]"),
+            "/orders":    (self.cmd_orders,    "订单记录: /orders [open|filled|all] [broker_id]"),
             # ── 记忆 / 项目引导 / 代码审查 ────────────────────────────────────
             "/note":      (self.cmd_note,      "追加笔记到 ARIA.md: /note <内容>"),
             "/memory":    (self.cmd_memory,    "记忆管理: /memory [show|add <内容>|clear|search]"),
@@ -7705,6 +4787,8 @@ class SlashCommands:
             # ── 量化专属（Aria 独有）────────────────────────────────────────────
             "/auto-strategy": (self.cmd_auto_strategy, "AI 策略自动优化闭环: /auto-strategy momentum SPY --target sharpe=1.5"),
             "/factor-lab":    (self.cmd_factor_lab,    "因子分析工作台: /factor-lab AAPL [days=252]"),
+            "/execution":     (self.cmd_execution,     "执行算法对比: /execution AAPL buy 100000 [algo=compare]"),
+            "/stat-arb":      (self.cmd_stat_arb,      "配对统计套利检验: /stat-arb GLD SLV"),
             # ── financial-services 风格 workflow 命令 ────────────────────────────
             "/research":  (self.cmd_research,  "Market Researcher 工作流: /research <symbol>"),
             "/earnings":  (self.cmd_earnings_workflow, "财报分析工作流: /earnings <symbol> [quarter]"),
@@ -7718,7 +4802,19 @@ class SlashCommands:
             "/load-fork":     (self.cmd_load_fork,    "Restore forked conversation: /load-fork <id>"),
             # ── Vision / image input ──────────────────────────────────────────
             "/vision":    (self.cmd_vision,    "Load image for visual analysis: /vision <path>"),
+            # ── Browser + desktop control ─────────────────────────────────────
+            "/browser":    (self.cmd_browser,    "Browser: /browser <url> | /browser screenshot <url>"),
+            "/screenshot": (self.cmd_screenshot, "Capture desktop screenshot for vision analysis"),
+            # ── File analysis (multi-format, multi-layer) ─────────────────────
+            "/file":      (self.cmd_file,      "文件分析: /file load|analyze|ask|list|clear <参数>"),
+            # ── Project folder analysis (Claude Code / Codex style) ───────────
+            "/project":   (self.cmd_project,   "项目分析: /project load|tree|grep|ask|task|status|info <参数>"),
         }
+        # ── Visible commands: shown in /help (session/config/state management only)
+        # All other commands still work when typed — just not cluttering /help.
+        # Analysis, data, and market queries are handled by the LLM via tool calling.
+        self._visible_cmds = set(VISIBLE_SLASH_COMMANDS)
+
         # Register skills as slash commands
         self.skill_map = {}
         for skill in SKILLS:
@@ -7738,9 +4834,30 @@ class SlashCommands:
 
         if cmd_name in self.commands:
             handler, _ = self.commands[cmd_name]
-            result = handler(args)
-            if asyncio.iscoroutine(result):
-                await result
+            try:
+                result = handler(args)
+                if asyncio.iscoroutine(result):
+                    await result
+            except KeyboardInterrupt:
+                if HAS_RICH:
+                    console.print("\n[dim]已取消[/dim]")
+                else:
+                    print("\n已取消")
+            except Exception as _cmd_err:
+                import traceback as _tb
+                _tb_str = _tb.format_exc()
+                if HAS_RICH:
+                    from rich.panel import Panel as _P
+                    from rich import box as _rbox
+                    console.print(_P(
+                        f"[red]{type(_cmd_err).__name__}: {_cmd_err}[/red]\n"
+                        f"[dim]{_tb_str.strip()[-800:]}[/dim]",
+                        title=f"[red]{cmd_name} 崩溃[/red]",
+                        border_style="red",
+                        box=_rbox.ROUNDED,
+                    ))
+                else:
+                    print(f"\n  ✗ {cmd_name} error: {_cmd_err}\n{_tb_str}")
         elif cmd_name in self.skill_map:
             await self._execute_skill(self.skill_map[cmd_name], args)
         else:
@@ -7760,7 +4877,7 @@ class SlashCommands:
     _COMMAND_HELP = {
         "/quote":     ("Usage: /quote [SYMBOL...]", ["/quote AAPL", "/quote AAPL MSFT GOOGL", "/quote  (uses watchlist)"]),
         "/analyze":   ("Usage: /analyze [SYMBOL]", ["/analyze AAPL", "/analyze TSLA"]),
-        "/backtest":  ("Usage: /backtest [strategy] [symbol] [start] [end]", ["/backtest momentum SPY", "/backtest mean_reversion AAPL 2024-01-01 2025-01-01"]),
+        "/backtest":  ("Usage: /backtest [strategy] [symbol] [start] [end] [--period 1y] [--fast 20 --slow 60] [--output ./aria-output]", ["/backtest momentum SPY --period 1y", "/backtest sma_cross AAPL --fast 20 --slow 60 --output ./reports"]),
         "/wf":        ("Usage: /wf [symbol] [strategy] [method]", ["/wf SPY momentum rolling", "/wf QQQ breakout anchored"]),
         "/compare":   ("Usage: /compare [symbol] [start] [end]", ["/compare SPY", "/compare AAPL 2022-01-01 2025-01-01"]),
         "/watch":     ("Usage: /watch [add|remove|list] [SYMBOL]", ["/watch add AAPL", "/watch remove TSLA", "/watch list"]),
@@ -7780,9 +4897,16 @@ class SlashCommands:
         "/plan-report":("Usage: /plan-report [md|json] [file] [--open]", ["/plan-report", "/plan-report md plan_report.md --open", "/plan-report json plan_report.json"]),
         "/git":       ("Usage: /git [status|diff|summary|patch|commit <msg>]", ["/git status", "/git patch apps/cli/aria_cli.py", '/git commit "feat: improve planner"']),
         "/gh":        ("Usage: /gh [prs|issues|pr N|issue N|search <q>|create-pr]", ["/gh prs", "/gh issues", "/gh pr 42", "/gh search 'async def'", "/gh create-pr"]),
+        "/verify":    ("Usage: /verify [--dry-run] [path...]", ["/verify --dry-run", "/verify aria_cli.py", "/verify src/App.tsx"]),
+        "/changes":   ("Usage: /changes [--all]", ["/changes", "/changes --all"]),
+        "/apply-change": ("Usage: /apply-change <change_id>", ["/apply-change abc123"]),
+        "/reject-change": ("Usage: /reject-change <change_id>", ["/reject-change abc123"]),
         "/news":      ("Usage: /news [topic|symbol]", ["/news", "/news AAPL", "/news technology"]),
-        "/config":    ("Usage: /config [show] | /config set key=value", ["/config", "/config set model=aria-sonata:4.5"]),
+        "/config":    ("Usage: /config [show] | /config set key=value", ["/config", "/config set model=aria-sonata:4.5", "/config set notify_webhook=https://...", "/config set brave_key=BSAAxxx"]),
+        "/input":     ("Usage: /input [panel|box|plain|reset] | /input theme auto|dark|light", ["/input", "/input panel", "/input theme auto"]),
+        "/privacy":   ("Usage: /privacy [status|opt-in|opt-out|export [path]|delete]", ["/privacy", "/privacy opt-in", "/privacy export"]),
         "/context":   ("Usage: /context", ["/context"]),
+        "/trace":     ("Usage: /trace [--json]", ["/trace", "/trace --json"]),
         "/model":     ("Usage: /model [name|number|id]", ["/model", "/model qwen7b", "/model 2", "/model qwen2.5:7b"]),
         "/thinking":  ("Usage: /thinking [on|off|auto]", ["/thinking on", "/thinking off"]),
         "/login":     ("Usage: /login <email>  (password prompted securely)", ["/login user@example.com"]),
@@ -7793,6 +4917,93 @@ class SlashCommands:
         "/sessions":  ("Usage: /sessions", ["/sessions"]),
         "/clear":     ("Usage: /clear", ["/clear"]),
         "/code":      ("Usage: /code <description> [--save file.py]", ["/code AAPL momentum backtest --save bt.py"]),
+        "/write":     ("Usage: /write [--stage] <file_path>", ["/write report.py", "/write --stage strategy.py"]),
+        # ── Financial analysis ──────────────────────────────────────────────
+        "/team":      ("Usage: /team [SYMBOL] [--agents a,b] [--full]", ["/team NVDA", "/team AAPL --agents technical,risk", "/team watchlist", "/team SPY --full"]),
+        "/ta":        ("Usage: /ta [SYMBOL] [days=N]", ["/ta AAPL", "/ta NVDA days=60"]),
+        "/signal":    ("Usage: /signal [SYMBOL] [market]", ["/signal AAPL", "/signal sh600519 CN"]),
+        "/predict":   ("Usage: /predict [SYMBOL...]", ["/predict sh600519 sh601318"]),
+        "/research":  ("Usage: /research [topic or symbol]", ["/research NVDA AI chips", "/research 600519"]),
+        "/earnings":  ("Usage: /earnings [SYMBOL]", ["/earnings AAPL", "/earnings TSLA"]),
+        "/chart":     ("Usage: /chart [SYMBOL] [period]", ["/chart AAPL", "/chart NVDA 6mo"]),
+        "/options":   ("Usage: /options [SYMBOL]", ["/options AAPL", "/options SPY"]),
+        "/macro":     ("Usage: /macro [topic]", ["/macro", "/macro fed rates"]),
+        "/peer":      ("Usage: /peer [SYMBOL]", ["/peer AAPL", "/peer TSLA"]),
+        "/corr":      ("Usage: /corr [SYMBOL...]", ["/corr AAPL MSFT NVDA", "/corr  (uses watchlist)"]),
+        "/report":    ("Usage: /report [SYMBOL] [--format html|md] [--output ./aria-output]", ["/report AAPL", "/report SPY --format md --output ./reports"]),
+        "/artifacts": ("Usage: /artifacts [limit]", ["/artifacts", "/artifacts 50"]),
+        "/shortterm": ("Usage: /shortterm [SYMBOL]", ["/shortterm AAPL", "/shortterm sh600519"]),
+        "/longterm":  ("Usage: /longterm [SYMBOL]", ["/longterm AAPL", "/longterm sh600519"]),
+        # ── China market ────────────────────────────────────────────────────
+        "/screen-cn": ("Usage: /screen-cn [criteria]", ["/screen-cn momentum", "/screen-cn value"]),
+        "/limitup":   ("Usage: /limitup", ["/limitup"]),
+        "/north":     ("Usage: /north", ["/north"]),
+        "/hot":       ("Usage: /hot [sector]", ["/hot", "/hot tech"]),
+        "/indices":   ("Usage: /indices", ["/indices"]),
+        # ── Portfolio & journal ─────────────────────────────────────────────
+        "/portfolio": ("Usage: /portfolio [analyze|rebalance] [SYMBOL...]", ["/portfolio", "/portfolio analyze AAPL MSFT TSLA", "/portfolio rebalance"]),
+        "/journal":   ("Usage: /journal [add|trades|pnl|realized|export|delete]", ["/journal", "/journal add buy AAPL 100 185.50", "/journal pnl", "/journal realized", "/journal export"]),
+        "/optimize-port": ("Usage: /optimize-port [SYMBOL...]", ["/optimize-port AAPL MSFT NVDA"]),
+        # ── Alerts & screening ──────────────────────────────────────────────
+        "/alert":     ("Usage: /alert [add|list|delete|check] [SYMBOL] [gt|lt] [price]", ["/alert add AAPL gt 200", "/alert list", "/alert check", "/alert delete 1"]),
+        "/screen":    ("Usage: /screen [criteria]", ["/screen tech growth", "/screen value dividend"]),
+        "/watchlist-scan": ("Usage: /watchlist-scan", ["/watchlist-scan"]),
+        # ── Real estate ─────────────────────────────────────────────────────
+        "/realty":    ("Usage: /realty [market CITY] [calc buy|rent|roi] [compare] [trend CITY]", ["/realty market 北京", "/realty calc buy", "/realty compare", "/realty trend 上海"]),
+        # ── Brokers ─────────────────────────────────────────────────────────
+        "/broker":    ("Usage: /broker [list|connect NAME|disconnect|status]", ["/broker list", "/broker connect futu", "/broker status"]),
+        "/account":   ("Usage: /account", ["/account"]),
+        "/positions": ("Usage: /positions", ["/positions"]),
+        "/orders":    ("Usage: /orders [pending|all]", ["/orders", "/orders pending"]),
+        # ── Utilities ───────────────────────────────────────────────────────
+        "/vision":      ("Usage: /vision <image_path>", ["/vision ~/Desktop/chart.png", "/vision /tmp/screenshot.png"]),
+        "/browser":     ("Usage: /browser <url>  or  /browser screenshot <url>", ["/browser https://example.com", "/browser screenshot https://github.com"]),
+        "/screenshot":  ("Usage: /screenshot [monitor]", ["/screenshot", "/screenshot 1"]),
+        "/memory":    ("Usage: /memory [show|add|clear|search]", ["/memory show", "/memory add 我偏好技术分析", "/memory search 风险偏好"]),
+        "/project":   ("Usage: /project [load|analyze|files|symbols|tasks|status|close]", ["/project load .", "/project analyze", "/project files", "/project tasks"]),
+        "/mcp":       ("Usage: /mcp [list|connect|disconnect|tools]", ["/mcp list", "/mcp tools"]),
+        "/skills":    ("Usage: /skills", ["/skills"]),
+        "/tools":     ("Usage: /tools [list|call TOOL_NAME]", ["/tools", "/tools list"]),
+        "/data":      ("Usage: /data [SYMBOL] [field]", ["/data AAPL", "/data sh600519 history"]),
+        "/apikey":    ("Usage: /apikey [set|get|list|delete] [provider] [key]", ["/apikey set openai sk-...", "/apikey list", "/apikey delete groq"]),
+        "/ariarc":    ("Usage: /ariarc [show|init|set key=val]", ["/ariarc show", "/ariarc init", "/ariarc set default_symbols=AAPL,MSFT"]),
+        "/setup":     ("Usage: /setup [mcp|broker|keys|all]", ["/setup", "/setup mcp", "/setup keys"]),
+        "/doctor":    ("Usage: /doctor", ["/doctor"]),
+        "/history":   ("Usage: /history [N]", ["/history", "/history 20"]),
+        "/compact":   ("Usage: /compact", ["/compact"]),
+        "/note":      ("Usage: /note [list|add|delete N]", ["/note add 重要观察点", "/note list", "/note delete 1"]),
+        "/todo":      ("Usage: /todo [add|done|list|clear] [text]", ["/todo add 分析NVDA", "/todo list", "/todo done 1"]),
+        "/copy":      ("Usage: /copy [N]", ["/copy", "/copy 3"]),
+        "/read":      ("Usage: /read <file_path>", ["/read strategy.py", "/read data/prices.csv"]),
+        "/edit":      ("Usage: /edit <file_path>", ["/edit strategy.py"]),
+        "/run":       ("Usage: /run <command>", ["/run python strategy.py", "/run pytest -q"]),
+        "/ls":        ("Usage: /ls [path]", ["/ls", "/ls src/"]),
+        "/search":    ("Usage: /search <query>", ["/search AAPL earnings", "/search momentum strategy"]),
+        "/local":     ("Usage: /local [on|off|status]", ["/local", "/local on", "/local off"]),
+        "/providers": ("Usage: /providers", ["/providers"]),
+        "/feargreed": ("Usage: /feargreed", ["/feargreed"]),
+        "/funding":   ("Usage: /funding [SYMBOL]", ["/funding BTC", "/funding ETH"]),
+        "/quality":   ("Usage: /quality [SYMBOL]", ["/quality AAPL", "/quality 600519"]),
+        "/ichimoku":  ("Usage: /ichimoku [SYMBOL]", ["/ichimoku AAPL", "/ichimoku USDJPY"]),
+        "/factor-lab":("Usage: /factor-lab [SYMBOL]", ["/factor-lab AAPL", "/factor-lab sh600519"]),
+        "/execution": ("Usage: /execution SYMBOL buy|sell QTY [algo=compare] [price=N]", ["/execution AAPL buy 100000", "/execution SPY sell 50000 algo=is"]),
+        "/stat-arb":  ("Usage: /stat-arb SYMBOL_A SYMBOL_B [period=2y]", ["/stat-arb GLD SLV", "/stat-arb SPY QQQ period=1y"]),
+        "/sector-rotation": ("Usage: /sector-rotation", ["/sector-rotation"]),
+        "/auto-strategy":   ("Usage: /auto-strategy [objective] [SYMBOL...]", ["/auto-strategy momentum AAPL", "/auto-strategy mean_reversion SPY"]),
+        "/morning-brief":   ("Usage: /morning-brief", ["/morning-brief"]),
+        "/deep-analysis":   ("Usage: /deep-analysis [SYMBOL]", ["/deep-analysis NVDA"]),
+        "/trade-idea":      ("Usage: /trade-idea [SYMBOL]", ["/trade-idea AAPL"]),
+        "/review":          ("Usage: /review [file_or_code]", ["/review strategy.py", "/review"]),
+        "/init":            ("Usage: /init [template]", ["/init", "/init quant"]),
+        "/scaffold":        ("Usage: /scaffold [type] [name]", ["/scaffold strategy momentum", "/scaffold agent news"]),
+        "/cost":            ("Usage: /cost [session|total|reset]", ["/cost", "/cost session", "/cost reset"]),
+        "/rename":          ("Usage: /rename <new_name>", ['/rename "NVDA Research Session"']),
+        "/feedback":        ("Usage: /feedback <message>", ["/feedback 分析结果不够准确"]),
+        "/hooks":           ("Usage: /hooks [list|enable|disable]", ["/hooks list", "/hooks enable pre_trade"]),
+        "/logout":          ("Usage: /logout", ["/logout"]),
+        "/status":          ("Usage: /status", ["/status"]),
+        "/health":          ("Usage: /health", ["/health"]),
+        "/artifacts":       ("Usage: /artifacts [limit]", ["/artifacts", "/artifacts 50"]),
     }
 
     def cmd_help(self, args: str):
@@ -7831,16 +5042,34 @@ class SlashCommands:
             return
 
         # Full help listing
+        show_all = args.strip().lower() == "all"
+
         if HAS_RICH:
             console.print()
-            console.print("[bold]Commands[/bold]  [dim](/help <command> for details)[/dim]")
+            if show_all:
+                console.print("[bold]全部命令[/bold]  [dim](/help <command> for details)[/dim]")
+            else:
+                console.print("[bold]Commands[/bold]  [dim](/help <command> · /help all 显示全部)[/dim]")
             console.print()
-            for name, (_, desc) in self.commands.items():
+
+            # Show visible commands (or all if /help all)
+            shown = {
+                name: desc
+                for name, (_, desc) in self.commands.items()
+                if show_all or name in self._visible_cmds
+            }
+            for name, desc in shown.items():
                 console.print(f"  [bold #C08050]{name:18s}[/bold #C08050][dim]{desc}[/dim]")
+
+            if not show_all:
+                hidden_count = len(self.commands) - len(shown)
+                console.print(
+                    f"\n  [dim]+ {hidden_count} 个快捷命令已隐藏 · 直接聊天让 AI 完成分析[/dim]"
+                )
             console.print()
 
             # --- Skills (grouped by category) ---
-            categories = {}
+            categories: dict = {}
             for s in SKILLS:
                 cat = s["category"]
                 if cat not in categories:
@@ -7859,259 +5088,595 @@ class SlashCommands:
             console.print("[bold]Keyboard Shortcuts[/bold]")
             console.print()
             shortcuts = [
-                ("ESC",        "Cancel current generation"),
-                ("Ctrl+D",     "Exit"),
-                ("Ctrl+C",     "Cancel / exit"),
-                ("↑  ↓",       "History navigation"),
-                ("Tab",        "Command autocomplete"),
-                ('"""',        "Enter multi-line input mode"),
+                ("ESC",    "Cancel current generation"),
+                ("Ctrl+D", "Exit"),
+                ("Ctrl+C", "Cancel / exit"),
+                ("↑  ↓",   "History navigation"),
+                ("Tab",    "Command autocomplete"),
+                ('"""',    "Enter multi-line input mode"),
             ]
             for key, desc in shortcuts:
                 console.print(f"  [bold #C08050]{key:14s}[/bold #C08050][dim]{desc}[/dim]")
             console.print()
 
             # Footer
-            console.print("[dim]Type any message to chat with Aria · /model to switch models[/dim]")
+            console.print(
+                "[dim]直接输入问题 — AI 会自动分析并调用工具  · "
+                "/model 切换模型 · /help all 查看全部命令[/dim]"
+            )
         else:
+            cmds_to_show = {
+                n: d for n, (_, d) in self.commands.items()
+                if show_all or n in self._visible_cmds
+            }
             print("\nCommands:")
-            for name, (_, desc) in self.commands.items():
+            for name, desc in cmds_to_show.items():
                 print(f"  {name:18s} {desc}")
             print("\nSkills:")
             for s in SKILLS:
                 print(f"  {s['command']:20s} {s['description']}")
 
-    async def cmd_quote(self, args: str):
-        symbols = args.upper().split() if args else self.terminal.config.get("watchlist", ["AAPL"])
+    async def cmd_artifacts(self, args: str):
+        try:
+            limit = int(args.strip()) if args.strip() else 20
+        except Exception:
+            limit = 20
+        from artifacts import artifact_root, recent_artifacts
 
-        # 优先使用 MarketDataClient（真实实时数据，代理绕过）
-        if _HAS_MDC:
-            mdc = _get_mdc()
-            if HAS_RICH:
-                console.print()
-            for symbol in symbols:
-                if HAS_RICH:
-                    with console.status(f"[dim]{symbol}...[/dim]", spinner="dots"):
-                        loop = asyncio.get_event_loop()
-                        r = await loop.run_in_executor(None, mdc.quote, symbol)
-                else:
-                    r = mdc.quote(symbol)
-
-                if r.get("success"):
-                    price   = r.get("price", "-")
-                    chg     = r.get("change_pct", 0)
-                    name    = r.get("name", symbol)
-                    mktcap  = r.get("market_cap")
-                    curr    = r.get("currency","")
-                    cap_str = ""
-                    if mktcap:
-                        cap_str = (f"  Mkt Cap: ${mktcap/1e12:.2f}T" if mktcap >= 1e12
-                                   else f"  Mkt Cap: ${mktcap/1e9:.1f}B" if mktcap >= 1e9
-                                   else f"  Mkt Cap: ¥{mktcap/1e8:.0f}亿" if curr == "CNY"
-                                   else "")
-                    # Format high/low to 2 decimal places
-                    _hi = r.get("high", "-")
-                    _lo = r.get("low", "-")
-                    _hi_str = f"{float(_hi):.2f}" if isinstance(_hi, (int, float)) and _hi else str(_hi)
-                    _lo_str = f"{float(_lo):.2f}" if isinstance(_lo, (int, float)) and _lo else str(_lo)
-                    if HAS_RICH:
-                        color = "green" if chg >= 0 else "red"
-                        sign  = "+" if chg >= 0 else ""
-                        console.print(
-                            f"  [bold]{symbol:<8}[/bold] [dim]{name[:20]:<22}[/dim]"
-                            f"  [bold]{curr} {price}[/bold]"
-                            f"  [{color}]{sign}{chg:.2f}%[/{color}]"
-                            f"  [dim]Hi:{_hi_str}  Lo:{_lo_str}{cap_str}[/dim]"
-                        )
-                    else:
-                        sign = "+" if chg >= 0 else ""
-                        print(f"  {symbol:<8} {price:<10} {sign}{chg:.2f}%  {name}")
-                else:
-                    err = r.get("error", "failed")
-                    if HAS_RICH:
-                        console.print(f"  [red]{symbol}: {err}[/red]")
-                    else:
-                        print(f"  {symbol}: {err}")
-            if HAS_RICH:
-                console.print()
+        root = artifact_root()
+        items = recent_artifacts(limit=limit, root=root)
+        if not items:
+            msg = f"No artifacts found under {root}"
+            console.print(f"[dim]{msg}[/dim]") if HAS_RICH else print(msg)
             return
-
-        # Fallback：原有 Aria 工具
-        for symbol in symbols:
-            if HAS_RICH:
-                with console.status(f"[dim]Fetching {symbol}...[/dim]", spinner="dots"):
-                    result = await execute_aria_tool(self.terminal.api_url, "get_market_data", {
-                        "symbol": symbol, "market": "US", "period": "1mo"
-                    })
-            else:
-                print(f"Fetching {symbol}...")
-                result = await execute_aria_tool(self.terminal.api_url, "get_market_data", {
-                    "symbol": symbol, "market": "US", "period": "1mo"
-                })
-            if result.get("success") and result.get("data"):
-                output = format_quote_output(result)
-                console.print(output)
-            else:
-                _print_error(f"Failed: {result.get('error', 'No data')}")
-
-    async def cmd_analyze(self, args: str):
-        symbol = args.strip().upper() or "AAPL"
-        console.print(f"[dim]Analyzing {symbol}...[/dim]" if HAS_RICH
-                      else f"Analyzing {symbol}...")
-        await self.terminal.send_message(f"Provide a comprehensive analysis of {symbol} stock including technicals, fundamentals, and risk assessment.")
-
-    async def cmd_backtest(self, args: str):
-        """Direct REST backtest → /api/v1/backtest (falls back to Aria tool)."""
-        parts = args.split() if args else ["momentum", "SPY"]
-        strategy = parts[0] if len(parts) > 0 else "momentum"
-        symbol = parts[1].upper() if len(parts) > 1 else "SPY"
-        start_date = parts[2] if len(parts) > 2 else "2023-01-01"
-        today = __import__("datetime").date.today().isoformat()
-        end_date = parts[3] if len(parts) > 3 else today
-
-        label = f"Backtesting {strategy} on {symbol} ({start_date}→{end_date})"
-        api_url = self.terminal.config.get("api_url", "http://localhost:8000")
-
-        async def _do_backtest():
-            import aiohttp
-            payload = {
-                "symbols": [symbol],
-                "strategy_type": strategy,
-                "start_date": start_date,
-                "end_date": end_date,
-                "initial_capital": 100000,
-                "commission_rate": 0.0003,
-                "include_monte_carlo": False,
-            }
-            try:
-                async with aiohttp.ClientSession() as sess:
-                    async with sess.post(f"{api_url}/api/v1/backtest", json=payload, timeout=aiohttp.ClientTimeout(total=60)) as resp:
-                        if resp.status == 200:
-                            body = await resp.json()
-                            return {"success": True, "data": body.get("data", body), "_source": "rest"}
-            except Exception:
-                pass
-            # Fallback to Aria tool
-            return await execute_aria_tool(api_url, "backtest_strategy", {
-                "symbol": symbol, "strategy": strategy,
-                "start_date": start_date, "end_date": end_date,
-                "initial_capital": 100000,
-            })
-
-        if HAS_RICH:
-            with console.status(f"[dim]{label}...[/dim]", spinner="dots"):
-                result = await _do_backtest()
-        else:
-            print(label)
-            result = await _do_backtest()
-
-        if result.get("success"):
-            d = result.get("data", result)
-            src = result.get("_source", "aria")
-            if HAS_RICH:
-                from rich.table import Table
-                tbl = Table(title=f"[bold]{symbol} · {strategy.upper()}[/bold]", show_header=True, header_style="bold")
-                tbl.add_column("Metric", style="dim")
-                tbl.add_column("Value", justify="right")
-                tbl.add_column("vs B&H", justify="right", style="dim")
-                bh = d.get("buy_hold_return", d.get("benchmark_return", 0))
-                rows = [
-                    ("Total Return", f"{d.get('total_return', 0)*100:.1f}%", f"{bh*100:.1f}%"),
-                    ("Ann. Return",  f"{d.get('annualized_return', 0)*100:.1f}%", ""),
-                    ("Sharpe Ratio", f"{d.get('sharpe_ratio', 0):.2f}", ""),
-                    ("Max Drawdown", f"{d.get('max_drawdown', 0)*100:.1f}%", ""),
-                    ("Win Rate",     f"{d.get('win_rate', 0)*100:.1f}%", ""),
-                    ("# Trades",     str(d.get('num_trades', d.get('n_trades', 0))), ""),
-                ]
-                if d.get("calmar_ratio"):
-                    rows.append(("Calmar Ratio", f"{d['calmar_ratio']:.2f}", ""))
-                if d.get("sortino_ratio"):
-                    rows.append(("Sortino Ratio", f"{d['sortino_ratio']:.2f}", ""))
-                for r in rows:
-                    tbl.add_row(*r)
-                console.print(tbl)
-                console.print(f"  [dim]source: {src} · {start_date} → {end_date}[/dim]")
-            else:
-                print(f"Total Return: {d.get('total_return',0)*100:.1f}%  Sharpe: {d.get('sharpe_ratio',0):.2f}  MaxDD: {d.get('max_drawdown',0)*100:.1f}%")
-
-            eq = d.get("equity_curve", [])
-            if eq:
-                strat_vals = [p.get("strategy", p.get("portfolio_value", 0)) for p in eq if isinstance(p, dict)]
-                if strat_vals:
-                    spark = format_sparkline(strat_vals)
-                    console.print(f"  [dim]Equity:[/dim] [green]{spark}[/green]" if HAS_RICH else f"  Equity: {spark}")
-        else:
-            _print_error(f"Backtest failed: {result.get('error', 'Unknown')}", "tool")
-
-    async def cmd_walk_forward(self, args: str):
-        """Walk-Forward 滚动回测 → /api/v1/backtest/walk-forward"""
-        parts = args.split() if args else ["SPY"]
-        symbol = parts[0].upper() if parts else "SPY"
-        strategy = parts[1] if len(parts) > 1 else "momentum"
-        method = parts[2] if len(parts) > 2 else "rolling"
-        api_url = self.terminal.config.get("api_url", "http://localhost:8000")
-
-        label = f"Walk-Forward ({method}) · {strategy} · {symbol}"
-        import aiohttp
-
-        async def _do_wf():
-            payload = {
-                "symbol": symbol, "strategy_type": strategy, "method": method,
-                "start_date": "2020-01-01",
-                "end_date": __import__("datetime").date.today().isoformat(),
-                "train_period_days": 252, "test_period_days": 63, "step_days": 21,
-            }
-            async with aiohttp.ClientSession() as sess:
-                async with sess.post(f"{api_url}/api/v1/backtest/walk-forward", json=payload, timeout=aiohttp.ClientTimeout(total=90)) as resp:
-                    if resp.status != 200:
-                        raise RuntimeError(f"HTTP {resp.status}")
-                    body = await resp.json()
-                    return body.get("data", body)
-
-        if HAS_RICH:
-            with console.status(f"[dim]{label}...[/dim]", spinner="dots"):
-                try:
-                    data = await _do_wf()
-                except Exception as e:
-                    _print_error(str(e), "tool"); return
-        else:
-            print(label)
-            try:
-                data = await _do_wf()
-            except Exception as e:
-                _print_error(str(e), "tool"); return
-
-        summary = data.get("summary", data)
-        folds = data.get("folds", [])
-        verdict = summary.get("verdict", "?")
-        verdict_color = "green" if verdict == "PASS" else "red"
 
         if HAS_RICH:
             from rich.table import Table
-            # Summary
-            console.print(f"\n[bold]{symbol} · {strategy} · {method}[/bold]  Verdict: [bold {verdict_color}]{verdict}[/bold {verdict_color}]")
-            console.print(f"  Folds: {summary.get('n_folds')}  "
-                          f"Avg OOS Sharpe: [bold]{summary.get('avg_oos_sharpe', 0):.3f}[/bold]  "
-                          f"Consistency: {summary.get('consistency_ratio_pct', 0):.0f}%  "
-                          f"Robustness: {summary.get('robustness_score', 0):.3f}  "
-                          f"p-value: {summary.get('p_value', 1):.4f}")
-            # Fold table
-            if folds:
-                tbl = Table(title="Fold Results", show_header=True, header_style="bold dim")
-                for col in ["Fold", "Test Period", "OOS Return", "OOS Sharpe", "OOS MaxDD", "Win%"]:
-                    tbl.add_column(col, justify="right")
-                for f in folds[:12]:
-                    ret = f.get("test_return_pct", 0)
-                    tbl.add_row(
-                        str(f.get("fold_id", "")),
-                        f.get("test_period", ""),
-                        f"{'+'if ret>=0 else ''}{ret:.1f}%",
-                        f"{f.get('test_sharpe', 0):.3f}",
-                        f"{f.get('test_max_drawdown_pct', 0):.1f}%",
-                        f"{f.get('test_win_rate_pct', 0):.0f}%",
-                    )
-                console.print(tbl)
+            table = Table(title=f"Generated artifacts · {root}", show_header=True, header_style="bold")
+            table.add_column("Kind", style="dim")
+            table.add_column("Status")
+            table.add_column("Topic")
+            table.add_column("Path", overflow="fold")
+            for item in items:
+                table.add_row(
+                    str(item.get("kind") or "artifact"),
+                    str(item.get("status") or "unknown"),
+                    str(item.get("topic") or ""),
+                    str(item.get("path") or item.get("metadata_path") or ""),
+                )
+            console.print(table)
         else:
-            print(f"Verdict: {verdict}  Folds: {summary.get('n_folds')}  Avg OOS Sharpe: {summary.get('avg_oos_sharpe',0):.3f}")
+            print(f"Generated artifacts · {root}")
+            for item in items:
+                print(f"- {item.get('kind')} [{item.get('status')}] {item.get('topic')}: {item.get('path')}")
+    async def cmd_analyze(self, args: str):
+        """Deep analysis: fetch real quote + TA + fundamentals, then ask LLM."""
+        symbol = args.strip().upper() or "AAPL"
+        is_cn  = _is_ashare_symbol(symbol)
+
+        if HAS_RICH:
+            with console.status(f"[dim]正在获取 {symbol} 数据...[/dim]", spinner="dots"):
+                ctx = await self._build_analyze_context(symbol, is_cn)
+        else:
+            print(f"Fetching data for {symbol}...")
+            ctx = await self._build_analyze_context(symbol, is_cn)
+
+        await self.terminal.send_message(build_analyze_prompt(symbol, ctx, is_cn))
+
+    async def _build_analyze_context(self, symbol: str, is_cn: bool) -> str:
+        """Fetch real market data and return a structured context string for the LLM."""
+        return await build_analyze_context(
+            symbol,
+            is_cn,
+            has_mdc=_HAS_MDC,
+            get_mdc=_get_mdc if _HAS_MDC else None,
+            ashare_name_lookup=_ashare_code_to_name,
+            has_brokers=_HAS_BROKERS,
+            get_broker_registry=_get_broker_registry if _HAS_BROKERS else None,
+            logger=logger,
+        )
+    # ────────────────────────────────────────────────────────────────────────
+    # New Industry Commands
+    # ────────────────────────────────────────────────────────────────────────
+
+    async def cmd_macro(self, args: str):
+        """/macro [us|cn|rates|calendar] [indicator]  — 宏观经济数据仪表板"""
+        import asyncio as _asyncio
+        parts = args.strip().lower().split() if args.strip() else []
+        region = parts[0] if parts else "all"
+        indicator = parts[1] if len(parts) > 1 else "all"
+
+        try:
+            from macro_tools import get_us_macro, get_cn_macro, get_central_bank_rates, get_economic_calendar
+        except ImportError:
+            if HAS_RICH:
+                console.print("[red]macro_tools 模块未找到[/red]")
+            return
+
+        loop = _asyncio.get_event_loop()
+
+        if region in ("us", "all"):
+            if HAS_RICH:
+                with console.status("[dim]获取美国宏观数据 (FRED)...[/dim]", spinner="dots"):
+                    r = await loop.run_in_executor(None, lambda: get_us_macro(indicator if region == "us" else "all"))
+            else:
+                r = get_us_macro(indicator if region == "us" else "all")
+            _render_macro_result(r, "🇺🇸 美国宏观")
+
+        if region in ("cn", "all"):
+            if HAS_RICH:
+                with console.status("[dim]获取中国宏观数据 (akshare)...[/dim]", spinner="dots"):
+                    r_cn = await loop.run_in_executor(None, lambda: get_cn_macro(indicator if region == "cn" else "all"))
+            else:
+                r_cn = get_cn_macro(indicator if region == "cn" else "all")
+            _render_macro_result(r_cn, "🇨🇳 中国宏观")
+
+        if region in ("rates", "all"):
+            if HAS_RICH:
+                with console.status("[dim]获取央行利率...[/dim]", spinner="dots"):
+                    r_rates = await loop.run_in_executor(None, get_central_bank_rates)
+            else:
+                r_rates = get_central_bank_rates()
+            _render_cb_rates(r_rates)
+
+        if region == "calendar":
+            if HAS_RICH:
+                with console.status("[dim]获取经济日历...[/dim]", spinner="dots"):
+                    r_cal = await loop.run_in_executor(None, lambda: get_economic_calendar(7))
+            else:
+                r_cal = get_economic_calendar(7)
+            _render_econ_calendar(r_cal)
+
+    async def cmd_options(self, args: str):
+        """/options <symbol> [calls|puts] [expiry]  — 期权链查询"""
+        parts = args.strip().split() if args.strip() else []
+        symbol = parts[0].upper() if parts else "AAPL"
+        opt_type = "both"
+        expiry = ""
+        for p in parts[1:]:
+            if p.lower() in ("calls", "puts"):
+                opt_type = p.lower()
+            elif "-" in p and len(p) == 10:
+                expiry = p
+
+        if not _HAS_LOCAL_FINANCE:
+            if HAS_RICH: console.print("[red]local_finance_tools 未加载[/red]")
+            return
+
+        import asyncio as _asyncio
+        loop = _asyncio.get_event_loop()
+        if HAS_RICH:
+            with console.status(f"[dim]获取 {symbol} 期权链...[/dim]", spinner="dots"):
+                from local_finance_tools import _get_options_chain
+                r = await loop.run_in_executor(None, _get_options_chain,
+                                               {"symbol": symbol, "type": opt_type, "expiry": expiry, "limit": 20})
+        else:
+            from local_finance_tools import _get_options_chain
+            r = _get_options_chain({"symbol": symbol, "type": opt_type, "expiry": expiry, "limit": 20})
+
+        if not r.get("success"):
+            if HAS_RICH: console.print(f"[red]{r.get('error')}[/red]")
+            return
+
+        _render_options_chain(r)
+
+        # ── B-S 理论定价附加展示（ATM call + put）──────────────────────────
+        try:
+            spot = r.get("current_price") or r.get("spot_price")
+            if spot and spot > 0:
+                import sys as _sys, pathlib as _pathlib
+                _qe = str(_pathlib.Path(__file__).parents[1] / "Arthera")
+                if _qe not in _sys.path:
+                    _sys.path.insert(0, _qe)
+                from packages.quant_engine.stochastic.options_pricing import (
+                    OptionSpec, black_scholes,
+                )
+                T   = 30 / 365   # 近月合约估算
+                r_f = 0.05
+                # 从返回数据中提取第一个合约的 IV 作为 sigma 估算
+                chain = r.get("calls", []) or r.get("chain", []) or []
+                sigma = 0.25
+                for row in chain[:5]:
+                    iv = row.get("impliedVolatility") or row.get("iv")
+                    if iv and 0.01 < float(iv) < 5.0:
+                        sigma = float(iv)
+                        break
+
+                atm_call = black_scholes(OptionSpec(S=spot, K=round(spot, -1) or spot,
+                                                     T=T, r=r_f, sigma=sigma, option_type="call"))
+                atm_put  = black_scholes(OptionSpec(S=spot, K=round(spot, -1) or spot,
+                                                     T=T, r=r_f, sigma=sigma, option_type="put"))
+                if HAS_RICH:
+                    from rich.table import Table
+                    from rich import box as _box
+                    tbl = Table(title=f"[bold]B-S ATM 理论价格[/bold]  σ={sigma:.0%}  T=30d  r=5%",
+                                box=_box.SIMPLE, show_header=True, header_style="bold dim")
+                    tbl.add_column("", style="dim")
+                    tbl.add_column("理论价", justify="right")
+                    tbl.add_column("Delta", justify="right")
+                    tbl.add_column("Gamma", justify="right")
+                    tbl.add_column("Theta/日", justify="right")
+                    tbl.add_column("Vega/1%", justify="right")
+                    tbl.add_column("Vanna", justify="right")
+                    tbl.add_row("Call", f"{atm_call.price:.2f}", f"{atm_call.delta:+.3f}",
+                                f"{atm_call.gamma:.4f}", f"{atm_call.theta:+.4f}",
+                                f"{atm_call.vega:.4f}", f"{atm_call.vanna:.4f}")
+                    tbl.add_row("Put",  f"{atm_put.price:.2f}",  f"{atm_put.delta:+.3f}",
+                                f"{atm_put.gamma:.4f}",  f"{atm_put.theta:+.4f}",
+                                f"{atm_put.vega:.4f}",  f"{atm_put.vanna:.4f}")
+                    console.print(tbl)
+                else:
+                    print(f"B-S ATM call={atm_call.price:.2f} Δ={atm_call.delta:+.3f}  "
+                          f"put={atm_put.price:.2f} Δ={atm_put.delta:+.3f}  σ={sigma:.0%}")
+        except Exception:
+            pass   # B-S 附加展示失败不阻断主流程
+
+    async def cmd_quality(self, args: str):
+        """/quality <symbol>  — Piotroski F-Score + Altman Z-Score 双维财务质量评估"""
+        symbol = args.strip().upper() if args.strip() else "AAPL"
+        if not _HAS_LOCAL_FINANCE:
+            if HAS_RICH: console.print("[red]local_finance_tools 未加载[/red]")
+            return
+
+        import asyncio as _asyncio
+        loop = _asyncio.get_event_loop()
+        if HAS_RICH:
+            with console.status(f"[dim]计算 {symbol} 财务质量评分...[/dim]", spinner="dots"):
+                from local_finance_tools import _piotroski_fscore, _altman_zscore
+                f_r = await loop.run_in_executor(None, _piotroski_fscore, {"symbol": symbol})
+                z_r = await loop.run_in_executor(None, _altman_zscore,    {"symbol": symbol})
+        else:
+            from local_finance_tools import _piotroski_fscore, _altman_zscore
+            f_r = _piotroski_fscore({"symbol": symbol})
+            z_r = _altman_zscore({"symbol": symbol})
+
+        _render_quality_scores(symbol, f_r, z_r)
+
+    async def cmd_ichimoku(self, args: str):
+        """/ichimoku <symbol>  — 一目均衡表分析"""
+        symbol = args.strip().upper() if args.strip() else "AAPL"
+        if not _HAS_LOCAL_FINANCE:
+            if HAS_RICH: console.print("[red]local_finance_tools 未加载[/red]")
+            return
+
+        import asyncio as _asyncio
+        loop = _asyncio.get_event_loop()
+        if HAS_RICH:
+            with console.status(f"[dim]计算 {symbol} 一目均衡表...[/dim]", spinner="dots"):
+                from local_finance_tools import _calculate_ichimoku
+                r = await loop.run_in_executor(None, _calculate_ichimoku, {"symbol": symbol})
+        else:
+            from local_finance_tools import _calculate_ichimoku
+            r = _calculate_ichimoku({"symbol": symbol})
+
+        _render_ichimoku(r)
+
+    async def cmd_fear_greed(self, args: str):
+        """/feargreed  — 加密货币恐惧贪婪指数"""
+        if not _HAS_LOCAL_FINANCE:
+            if HAS_RICH: console.print("[red]local_finance_tools 未加载[/red]")
+            return
+
+        import asyncio as _asyncio
+        loop = _asyncio.get_event_loop()
+        if HAS_RICH:
+            with console.status("[dim]获取恐惧贪婪指数...[/dim]", spinner="dots"):
+                from local_finance_tools import _get_fear_greed_index
+                r = await loop.run_in_executor(None, _get_fear_greed_index, {})
+        else:
+            from local_finance_tools import _get_fear_greed_index
+            r = _get_fear_greed_index({})
+
+        _render_fear_greed(r)
+
+    async def cmd_funding(self, args: str):
+        """/funding [BTC ETH SOL] [exchange]  — 永续合约资金费率"""
+        parts = args.strip().split() if args.strip() else []
+        exchange = "binance"
+        syms = []
+        for p in parts:
+            if p.lower() in ("binance", "okx", "bybit", "coinbase"):
+                exchange = p.lower()
+            else:
+                syms.append(p.upper() + "/USDT" if "/" not in p else p.upper())
+        if not syms:
+            syms = ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
+
+        if not _HAS_LOCAL_FINANCE:
+            if HAS_RICH: console.print("[red]local_finance_tools 未加载[/red]")
+            return
+
+        import asyncio as _asyncio
+        loop = _asyncio.get_event_loop()
+        if HAS_RICH:
+            with console.status(f"[dim]获取 {exchange} 资金费率...[/dim]", spinner="dots"):
+                from local_finance_tools import _get_funding_rates
+                r = await loop.run_in_executor(None, _get_funding_rates,
+                                               {"exchange": exchange, "symbols": syms})
+        else:
+            from local_finance_tools import _get_funding_rates
+            r = _get_funding_rates({"exchange": exchange, "symbols": syms})
+
+        _render_funding_rates(r)
+
+    # ── /realty 不动产命令 ─────────────────────────────────────────────────────
+    # ── /football 足球分析命令 ────────────────────────────────────────────────
+    async def _run_in_executor(self, fn, *args):
+        import asyncio
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, fn, *args)
+        return result
+
+    # ── /data 数据分析命令 ─────────────────────────────────────────────────────
+
+    async def cmd_data(self, args: str):
+        """
+        /data sql "SELECT ..."     — DuckDB SQL 查询
+        /data export [filename]    — 导出上次结果到 Excel
+        /data load <csv_path>      — 加载 CSV 到 DuckDB
+        /data tables               — 列出已加载的表
+        """
+        import asyncio as _asyncio
+        loop = _asyncio.get_event_loop()
+        parts = args.strip().split(None, 1) if args.strip() else []
+        sub = parts[0].lower() if parts else "help"
+        rest = parts[1] if len(parts) > 1 else ""
+
+        try:
+            from data_analysis_tools import (sql_query, sql_list_tables,
+                                              export_to_excel, load_csv_data)
+        except ImportError as e:
+            if HAS_RICH: console.print(f"[red]data_analysis_tools 未加载: {e}[/red]")
+            return
+
+        if sub == "sql":
+            query = rest.strip().strip('"').strip("'")
+            if not query:
+                if HAS_RICH: console.print("[dim]用法: /data sql \"SELECT ...\"|/dim]")
+                return
+            if HAS_RICH:
+                with console.status("[dim]执行 SQL...[/dim]", spinner="dots"):
+                    r = await loop.run_in_executor(None, sql_query, {"query": query})
+            else:
+                r = sql_query({"query": query})
+            _render_sql_result(r)
+
+        elif sub == "export":
+            # Export the last finance tool result or a placeholder
+            fname = rest.strip() or None
+            # We'll export a sample from watchlist if available
+            watchlist = self.terminal.config.get("watchlist", ["AAPL","MSFT","SPY"])
+            try:
+                import yfinance as _yf
+                raw = _yf.download(watchlist[:5], period="1mo", progress=False, auto_adjust=True)
+                closes = raw["Close"] if hasattr(raw.columns, "levels") else raw
+                export_data = {"价格历史": closes.reset_index().to_dict("records")}
+            except Exception:
+                export_data = {"示例数据": [{"symbol": s, "note": "需 yfinance"} for s in watchlist]}
+            p = {"data": export_data, "filename": fname}
+            if HAS_RICH:
+                with console.status("[dim]生成 Excel...[/dim]", spinner="dots"):
+                    r = await loop.run_in_executor(None, export_to_excel, p)
+            else:
+                r = export_to_excel(p)
+            if r.get("success"):
+                msg = f"✓ 已导出: {r['path']}  ({r['total_rows']} 行)"
+                if HAS_RICH: console.print(f"[green]{msg}[/green]")
+                else: print(msg)
+            else:
+                if HAS_RICH: console.print(f"[red]{r.get('error')}[/red]")
+
+        elif sub == "load":
+            csv_path = rest.strip()
+            if not csv_path:
+                if HAS_RICH: console.print("[dim]用法: /data load <csv文件路径>[/dim]")
+                return
+            if HAS_RICH:
+                with console.status("[dim]加载 CSV...[/dim]", spinner="dots"):
+                    r = await loop.run_in_executor(None, load_csv_data, {"path": csv_path})
+            else:
+                r = load_csv_data({"path": csv_path})
+            if r.get("success"):
+                if HAS_RICH:
+                    console.print(f"[green]✓ 已加载 {r['rows']} 行 → 表 {r['table_name']}[/green]")
+                    console.print(f"[dim]列: {', '.join(r['columns'][:10])}[/dim]")
+                    console.print(f"[dim]现在可以: /data sql \"SELECT * FROM {r['table_name']} LIMIT 10\"[/dim]")
+            else:
+                if HAS_RICH: console.print(f"[red]{r.get('error')}[/red]")
+
+        elif sub == "tables":
+            r = sql_list_tables()
+            if r.get("success"):
+                tables = r.get("tables", [])
+                if HAS_RICH:
+                    if tables:
+                        console.print(f"[bold]已加载表:[/bold] {', '.join(tables)}")
+                    else:
+                        console.print("[dim]暂无已加载的表。使用 /data load <csv> 加载数据[/dim]")
+
+        else:
+            if HAS_RICH:
+                console.print("[dim]用法: /data [sql|export|load|tables][/dim]")
+                console.print("[dim]  /data sql \"SELECT * FROM my_table LIMIT 10\"[/dim]")
+                console.print("[dim]  /data load ~/Desktop/data.csv[/dim]")
+                console.print("[dim]  /data export my_report.xlsx[/dim]")
+                console.print("[dim]  /data tables[/dim]")
+
+    # ── /alert 价格预警 ────────────────────────────────────────────────────────
+
+    async def cmd_alert(self, args: str):
+        """
+        /alert add AAPL gt 200     — 设置预警（gt/lt/cross_up/cross_down）
+        /alert list                 — 列出所有预警
+        /alert delete <id>          — 删除预警
+        /alert check                — 检查所有预警状态
+        """
+        import asyncio as _asyncio
+        loop = _asyncio.get_event_loop()
+        parts = args.strip().split() if args.strip() else []
+        sub = parts[0].lower() if parts else "list"
+
+        try:
+            from data_analysis_tools import (add_price_alert, list_price_alerts,
+                                              delete_price_alert, check_alerts)
+        except ImportError as e:
+            if HAS_RICH: console.print(f"[red]data_analysis_tools 未加载: {e}[/red]")
+            return
+
+        if sub == "add":
+            # /alert add AAPL gt 200 [note...]
+            if len(parts) < 4:
+                if HAS_RICH:
+                    console.print("[dim]用法: /alert add <symbol> <gt|lt|cross_up|cross_down> <price> [备注][/dim]")
+                return
+            sym  = parts[1].upper()
+            cond = parts[2].lower()
+            try:
+                price = float(parts[3])
+            except ValueError:
+                if HAS_RICH: console.print("[red]价格必须是数字[/red]")
+                return
+            note = " ".join(parts[4:]) if len(parts) > 4 else ""
+            r = add_price_alert({"symbol": sym, "condition": cond, "price": price, "note": note})
+            if r.get("success"):
+                msg = r.get("message", "预警已设置")
+                if HAS_RICH: console.print(f"[green]✓ {msg}[/green]")
+                else: print(f"✓ {msg}")
+            else:
+                if HAS_RICH: console.print(f"[red]{r.get('error')}[/red]")
+
+        elif sub == "list":
+            r = list_price_alerts()
+            _render_alerts(r)
+
+        elif sub in ("delete", "del", "remove"):
+            alert_id = parts[1] if len(parts) > 1 else ""
+            if not alert_id:
+                if HAS_RICH: console.print("[dim]用法: /alert delete <预警ID>[/dim]")
+                return
+            r = delete_price_alert({"alert_id": alert_id})
+            if r.get("success"):
+                if HAS_RICH: console.print(f"[green]✓ 已删除预警 {r['deleted_id']}[/green]")
+            else:
+                if HAS_RICH: console.print(f"[red]{r.get('error')}[/red]")
+
+        elif sub == "check":
+            if HAS_RICH:
+                with console.status("[dim]检查价格预警...[/dim]", spinner="dots"):
+                    r = await loop.run_in_executor(None, check_alerts)
+            else:
+                r = check_alerts()
+            triggered = r.get("triggered", [])
+            if triggered:
+                if HAS_RICH:
+                    console.print(f"[bold yellow]🔔 {len(triggered)} 个预警已触发![/bold yellow]")
+                    for a in triggered:
+                        console.print(f"  [yellow]{a['symbol']}[/yellow] {a.get('condition','')} "
+                                      f"{a['price']} → 当前 [bold]{a.get('triggered_price','')}[/bold]")
+            else:
+                msg = r.get("message", "暂无触发的预警")
+                if HAS_RICH: console.print(f"[dim]{msg}[/dim]")
+
+        else:
+            if HAS_RICH:
+                console.print("[dim]用法: /alert [add|list|delete|check][/dim]")
+
+    # ── /corr 相关性矩阵 ───────────────────────────────────────────────────────
+
+    async def cmd_corr(self, args: str):
+        """/corr AAPL MSFT TSLA SPY [1y|2y|6mo]  — 计算相关性矩阵"""
+        import asyncio as _asyncio
+        loop = _asyncio.get_event_loop()
+        parts = args.strip().upper().split() if args.strip() else []
+
+        # Last part can be period
+        period = "1y"
+        if parts and parts[-1].lower() in ("1y","2y","3y","6mo","ytd","5y"):
+            period = parts[-1].lower()
+            parts = parts[:-1]
+
+        symbols = parts if parts else ["AAPL","MSFT","TSLA","SPY","QQQ"]
+
+        try:
+            from data_analysis_tools import calc_correlation_matrix
+        except ImportError as e:
+            if HAS_RICH: console.print(f"[red]data_analysis_tools 未加载: {e}[/red]")
+            return
+
+        if HAS_RICH:
+            with console.status(f"[dim]计算 {', '.join(symbols)} 相关性矩阵...[/dim]", spinner="dots"):
+                r = await loop.run_in_executor(None, calc_correlation_matrix,
+                                               {"symbols": symbols, "period": period})
+        else:
+            r = calc_correlation_matrix({"symbols": symbols, "period": period})
+        _render_corr_matrix(r)
+
+    # ── /ptbt 多资产组合回测 ───────────────────────────────────────────────────
+
+    async def cmd_portfolio_bt(self, args: str):
+        """/ptbt AAPL MSFT GOOG [0.4 0.3 0.3] [2y] [monthly]  — 多资产组合回测"""
+        import asyncio as _asyncio
+        loop = _asyncio.get_event_loop()
+        parts = args.strip().split() if args.strip() else []
+
+        try:
+            from data_analysis_tools import portfolio_backtest
+        except ImportError as e:
+            if HAS_RICH: console.print(f"[red]data_analysis_tools 未加载: {e}[/red]")
+            return
+
+        # Parse: symbols, optional weights (floats < 1), optional period, optional rebalance
+        symbols, weights, period, rebalance = [], [], "2y", "monthly"
+        _PERIODS   = {"1y","2y","3y","5y","6mo","ytd","max"}
+        _REBALANCE = {"monthly","quarterly","none"}
+        for p in parts:
+            pl = p.lower()
+            if pl in _PERIODS:   period = pl; continue
+            if pl in _REBALANCE: rebalance = pl; continue
+            try:
+                f = float(p)
+                if f < 2:   weights.append(f)
+                else:        symbols.append(p.upper())
+            except ValueError:
+                symbols.append(p.upper())
+
+        if not symbols:
+            symbols = ["AAPL","MSFT","GOOGL","SPY"]
+            if HAS_RICH:
+                console.print(f"[dim]未指定标的，使用默认: {symbols}[/dim]")
+
+        p_params = {"symbols": symbols, "period": period, "rebalance": rebalance}
+        if weights: p_params["weights"] = weights
+
+        if HAS_RICH:
+            with console.status(f"[dim]回测 {', '.join(symbols)} ({period})...[/dim]", spinner="dots"):
+                r = await loop.run_in_executor(None, portfolio_backtest, p_params)
+        else:
+            r = portfolio_backtest(p_params)
+        _render_portfolio_bt(r)
+
+    async def cmd_peer(self, args: str):
+        """/peer <symbol> [peer1 peer2 ...]  — 同行估值对比"""
+        parts = args.strip().upper().split() if args.strip() else []
+        symbol = parts[0] if parts else "AAPL"
+        peers  = parts[1:] if len(parts) > 1 else []
+
+        if not _HAS_LOCAL_FINANCE:
+            if HAS_RICH: console.print("[red]local_finance_tools 未加载[/red]")
+            return
+
+        import asyncio as _asyncio
+        loop = _asyncio.get_event_loop()
+        if HAS_RICH:
+            with console.status(f"[dim]获取 {symbol} 同行数据...[/dim]", spinner="dots"):
+                from local_finance_tools import _peer_comparison
+                r = await loop.run_in_executor(None, _peer_comparison,
+                                               {"symbol": symbol, "peers": peers})
+        else:
+            from local_finance_tools import _peer_comparison
+            r = _peer_comparison({"symbol": symbol, "peers": peers})
+
+        _render_peer_comparison(r)
 
     async def cmd_compare(self, args: str):
         """多策略横向对比 → /api/v1/backtest/compare-strategies"""
@@ -8205,449 +5770,6 @@ class SlashCommands:
                     console.print("  [dim]Watchlist: Empty[/dim]")
             else:
                 print(f"Watchlist: {', '.join(watchlist)}")
-
-    async def cmd_portfolio(self, args: str):
-        console.print("[dim]Assessing portfolio risk...[/dim]" if HAS_RICH else "Assessing portfolio risk...")
-        watchlist = self.terminal.config.get("watchlist", ["AAPL", "MSFT", "GOOGL"])
-        result = await execute_aria_tool(self.terminal.api_url, "assess_portfolio_risk", {
-            "symbols": watchlist[:10],
-        })
-        if result.get("success") and result.get("data"):
-            if HAS_RICH:
-                console.print(f"\n  [bold]Portfolio Risk[/bold]\n")
-                console.print(f"[dim]{json.dumps(result['data'], indent=2, ensure_ascii=False)[:1000]}[/dim]")
-            else:
-                print(json.dumps(result.get("data", {}), indent=2, ensure_ascii=False))
-        else:
-            console.print(f"[dim]No data: {result.get('error', '')}[/dim]" if HAS_RICH
-                          else f"No data: {result.get('error', '')}")
-
-    async def cmd_screen(self, args: str):
-        criteria = args.strip() or "tech growth"
-        await self.terminal.send_message(f"Screen stocks matching: {criteria}. Show top 10 with key metrics.")
-
-    async def cmd_model(self, args: str):
-        name = args.strip()
-
-        # ── "provider/model" format (Open Interpreter style) ─────────────────
-        # Examples: /model deepseek/deepseek-chat  /model ollama/qwen2.5:7b
-        #           /model openai/gpt-4o           /model groq/llama-3.3-70b
-        if "/" in name and not name.startswith("http"):
-            _prov, _mod = name.split("/", 1)
-            _prov = _prov.strip().lower()
-            _mod  = _mod.strip()
-            _local_backends = {"ollama", "lmstudio", "vllm", "llamacpp", "jan", "custom"}
-            if _prov not in _local_backends:
-                # Cloud provider — check API key
-                _key = _get_provider_key(_prov)
-                if not _key:
-                    msg = (f"⚠ {_prov} API key 未配置。"
-                           f"运行: /apikey set {_prov} <key>")
-                    console.print(f"[yellow]{msg}[/yellow]") if HAS_RICH else print(msg)
-                    return
-            self.terminal.config["local_provider"] = _prov
-            self.terminal.config["model"] = _mod
-            save_config(self.terminal.config)
-            msg = f"✓ 已切换到 {_prov}/{_mod}"
-            console.print(f"[green]{msg}[/green]") if HAS_RICH else print(msg)
-            return
-
-        # Direct selection by number: /model 1 /model 2 … (Codex style)
-        if name.isdigit():
-            idx = int(name) - 1
-            keys = list(MODELS.keys())
-            if 0 <= idx < len(keys):
-                self._set_model(keys[idx])
-            else:
-                console.print(f"[dim]No model #{name}[/dim]" if HAS_RICH else f"No model #{name}")
-            return
-
-        # Direct selection by key (case-insensitive): /model qwen7b
-        if name.lower() in MODELS:
-            self._set_model(name.lower())
-            return
-
-        # Direct selection by alias: /model st / s / p / coder
-        if name.lower() in MODEL_ALIASES:
-            self._set_model(MODEL_ALIASES[name.lower()])
-            return
-
-        # Direct selection by full Ollama model ID: /model qwen2.5-coder:1.5b
-        if name and ":" in name:
-            self._set_model_by_id(name)
-            return
-
-        # ── Interactive picker (Codex style: numbered list + descriptions) ────
-        ollama_url  = self.terminal.config.get("ollama_url", "http://localhost:11434")
-        current_id  = self.terminal.config.get("model", "qwen2.5:7b")
-
-        rich_models, ollama_err = detect_ollama_models_rich(ollama_url)
-        installed_names = {m["name"] for m in rich_models}
-        aria_ids        = {m["id"] for m in MODELS.values()}
-
-        # ── Print header (Codex style) ─────────────────────────────────────
-        if HAS_RICH:
-            console.print()
-            console.print("  [bold]Select Model[/bold]")
-            if ollama_err:
-                console.print(f"  [yellow dim]Ollama: {ollama_err[:60]}[/yellow dim]")
-            else:
-                n_installed = sum(1 for m in MODELS.values() if m["id"] in installed_names)
-                console.print(
-                    f"  [dim]Use /model <id> or number · "
-                    f"{n_installed}/{len(MODELS)} Aria models installed[/dim]"
-                )
-            console.print()
-
-        def _status_tag(mid: str, badge: str) -> str:
-            """Return short status: ● installed / ○ not installed / ☁ cloud"""
-            if badge == "Cloud":
-                return "☁"
-            return "●" if mid in installed_names else "○"
-
-        # Get terminal width for safe label truncation
-        try:
-            _term_cols = os.get_terminal_size().columns
-        except Exception:
-            _term_cols = 80
-
-        def _cjk_width(s: str) -> int:
-            """Display-column width (CJK = 2 cols each)."""
-            w = 0
-            for ch in s:
-                cp = ord(ch)
-                w += 2 if (0x2E80 <= cp <= 0xA4CF or 0xAC00 <= cp <= 0xD7AF or
-                           0xFF01 <= cp <= 0xFF60 or 0x3000 <= cp <= 0x303F) else 1
-            return w
-
-        def _cjk_truncate(s: str, max_cols: int) -> str:
-            """Truncate s so its display width ≤ max_cols, adding … if cut."""
-            w, out = 0, ""
-            for ch in s:
-                cw = 2 if (0x2E80 <= ord(ch) <= 0xA4CF or
-                           0xAC00 <= ord(ch) <= 0xD7AF or
-                           0xFF01 <= ord(ch) <= 0xFF60 or
-                           0x3000 <= ord(ch) <= 0x303F) else 1
-                if w + cw > max_cols:
-                    return out + "…"
-                out += ch
-                w += cw
-            return out
-
-        def _short_desc(m: dict) -> str:
-            """Single-line description — CJK-aware width limit prevents wrapping."""
-            desc  = m.get("description", "")
-            badge = m.get("badge", "")
-            extras = []
-            if _HAS_MODEL_CAP:
-                cap = get_model_capability(m["id"])
-                ctx = f"ctx={cap.context_window//1024}K"
-                extras.append(ctx)
-                if cap.tool_calls:   extras.append("tools✓")
-                if cap.thinking:     extras.append("think")
-            else:
-                extras.append(f"ctx={m.get('num_ctx', 8192)//1024}K")
-            if badge in ("Fast", "Code", "Think", "Cloud"):
-                extras.insert(0, badge)
-            meta = "  " + " · ".join(extras) if extras else ""
-            # Reserve space for prefix ("  N. ☁ ModelName  ") ≈ 22 cols
-            # + meta ("  Cloud · ctx=128K · tools✓ · think") ≈ 38 cols
-            # Remaining budget for description text
-            _prefix_budget = 22
-            _meta_budget   = len(meta)
-            _desc_budget   = max(10, _term_cols - _prefix_budget - _meta_budget - 4)
-            desc = _cjk_truncate(desc, _desc_budget)
-            return desc + meta
-
-        # Build option list (Codex: numbered, no separators within Aria section)
-        options: list = []   # (label_str, desc_str)  for _arrow_select
-        all_ids: list = []
-
-        # ── Print numbered list only in non-interactive (-p) mode ────────────
-        # In interactive TTY mode the arrow picker below already shows all items.
-        # Printing twice causes the visual duplication seen in the session log.
-        _is_tty = sys.stdin.isatty()
-        idx_counter = 1
-        if not _is_tty:
-            # Non-interactive (-p mode): show static numbered list then return.
-            # The arrow picker cannot run without a TTY.
-            community_list = [cm for cm in rich_models if cm["name"] not in aria_ids]
-            for key, m in MODELS.items():
-                mid    = m["id"]
-                is_cur = mid == current_id
-                status = _status_tag(mid, m.get("badge", ""))
-                cur_tag = "  (current)" if is_cur else ""
-                desc = _short_desc(m)
-                line = f"  {idx_counter}. {status} {m['name']:<14s}  {desc}{cur_tag}"
-                console.print(line) if HAS_RICH else print(line)
-                idx_counter += 1
-            if community_list:
-                console.print() if HAS_RICH else print()
-                lbl = "  Community (Ollama)"
-                console.print(f"[dim]{lbl}[/dim]") if HAS_RICH else print(lbl)
-                for cm in community_list:
-                    mid    = cm["name"]
-                    is_cur = mid == current_id
-                    cur_tag = "  (current)" if is_cur else ""
-                    line = f"  {idx_counter}. ● {mid}{cur_tag}"
-                    console.print(line) if HAS_RICH else print(line)
-                    idx_counter += 1
-            console.print() if HAS_RICH else print()
-            console.print("  [dim]Use /model <id> to switch. E.g. /model deepseek/deepseek-chat[/dim]") if HAS_RICH else print("  Use /model <id> to switch.")
-            return
-
-        # ── Build compact options for _arrow_select ────────────────────────
-        # In TTY mode: include short description (static list is suppressed above).
-        # In non-TTY: descriptions already shown in static list, keep labels short.
-        num = 1
-        for key, m in MODELS.items():
-            mid    = m["id"]
-            status = _status_tag(mid, m.get("badge", ""))
-            is_cur = " ◀" if mid == current_id else ""
-            if _is_tty:
-                desc_part = f"  {_short_desc(m)}"
-            else:
-                desc_part = ""
-            label  = f"  {num}. {status} {m['name']}{is_cur}{desc_part}"
-            options.append((label, ""))
-            all_ids.append(mid)
-            num += 1
-
-        community = [cm for cm in rich_models if cm["name"] not in aria_ids]
-        if community:
-            options.append(("  ── Community ─────────────────", ""))
-            all_ids.append(None)
-            for cm in community:
-                mid    = cm["name"]
-                is_cur = " ◀" if mid == current_id else ""
-                options.append((f"  {num}. ● {mid}{is_cur}", ""))
-                all_ids.append(mid)
-                num += 1
-
-        if ollama_err and not rich_models:
-            options.append(("  ── Ollama unreachable ─────────", ""))
-            all_ids.append(None)
-
-        # ── Run thread-based arrow picker (short labels = no line wrap) ────
-        current_idx = next((i for i, mid in enumerate(all_ids) if mid == current_id), 0)
-
-        while True:
-            choice = await _run_picker_in_thread(
-                options, current_idx,
-                "",                          # _arrow_select already prints ↑↓/j·k hint
-                max_visible=len(options),    # show all models at once
-            )
-            if choice < 0:
-                console.print("[dim]Cancelled[/dim]" if HAS_RICH else "Cancelled")
-                return
-            if all_ids[choice] is None:
-                current_idx = min(choice + 1, len(options) - 1)
-                continue
-            break
-
-        self._set_model_by_id(all_ids[choice])
-
-    def _set_model(self, key: str):
-        """Set model by MODELS key."""
-        m = MODELS[key]
-        self._set_model_by_id(m["id"])
-
-    def _set_model_by_id(self, model_id: str):
-        """Set model by Ollama model ID (works for both built-in and community models)."""
-        self.terminal.config["model"] = model_id
-        self.terminal._actual_model = None  # reset: new config model, no known fallback yet
-        save_config(self.terminal.config)
-        # Pretty label
-        for m in MODELS.values():
-            if m["id"] == model_id:
-                if HAS_RICH:
-                    console.print(f"[bold]Model:[/bold] [bold]{m['name']} {m['version']}[/bold] "
-                                  f"[dim]{m['tag']}[/dim]")
-                else:
-                    print(f"Model: {m['name']} {m['version']} ({m['tag']})")
-                return
-        # Community / unknown model
-        if HAS_RICH:
-            console.print(f"[bold]Model:[/bold] [bold]{model_id}[/bold]  [dim](local)[/dim]")
-        else:
-            print(f"Model: {model_id} (local)")
-
-    def cmd_thinking(self, args: str):
-        mode = args.strip().lower()
-
-        # Direct set: /thinking on
-        if mode in ("on", "thinking"):
-            self.terminal.config["thinking_mode"] = "thinking"
-        elif mode in ("off", "instant"):
-            self.terminal.config["thinking_mode"] = "instant"
-        elif mode == "auto":
-            self.terminal.config["thinking_mode"] = "auto"
-        elif mode:
-            # Unknown mode, show picker
-            pass
-        else:
-            # Interactive picker
-            current = self.terminal.config.get("thinking_mode", "auto")
-            mode_keys = list(THINKING_MODES.keys())
-            current_idx = mode_keys.index(current) if current in mode_keys else 0
-            options = [(info["label"], info["description"]) for info in THINKING_MODES.values()]
-            choice = _arrow_select(options, selected=current_idx, title="Thinking Mode")
-            if 0 <= choice < len(mode_keys):
-                self.terminal.config["thinking_mode"] = mode_keys[choice]
-            else:
-                if HAS_RICH:
-                    console.print("[dim]No change[/dim]")
-                else:
-                    print("No change")
-                return
-
-        save_config(self.terminal.config)
-        result = self.terminal.config["thinking_mode"]
-        info = THINKING_MODES.get(result, {})
-        if HAS_RICH:
-            console.print(f"[green]Thinking: {info.get('label', result)}[/green]  [dim]{info.get('description', '')}[/dim]")
-        else:
-            print(f"Thinking: {result}")
-
-    def cmd_skills(self, args: str):
-        """List all available skills grouped by category."""
-        categories = {}
-        for s in SKILLS:
-            cat = s["category"]
-            if cat not in categories:
-                categories[cat] = []
-            categories[cat].append(s)
-
-        cat_labels = {
-            "research": "Research",
-            "analysis": "Analysis",
-            "strategy": "Strategy",
-            "risk": "Risk Management",
-            "quant": "Quantitative",
-            "crypto": "Crypto",
-            "tools": "Tools",
-            "code": "Code Generation",
-        }
-
-        if HAS_RICH:
-            console.print()
-            for cat, skills in categories.items():
-                label = cat_labels.get(cat, cat.title())
-                console.print(f"  [bold]{label}[/bold]")
-                for s in skills:
-                    args_hint = f"  [dim]{s.get('args', '')}[/dim]" if s.get("args") else ""
-                    console.print(f"    [bold]{s['command']:20s}[/bold][dim]{s['description']}[/dim]{args_hint}")
-                console.print()
-
-            console.print("[dim]  Type a skill command to execute, e.g. /deep-analysis AAPL[/dim]\n")
-        else:
-            print("\nSkills:")
-            for cat, skills in categories.items():
-                label = cat_labels.get(cat, cat.title())
-                print(f"\n  [{label}]")
-                for s in skills:
-                    print(f"    {s['command']:20s} {s['description']}")
-
-    async def _execute_skill(self, skill: dict, args: str):
-        """Execute a skill by expanding its prompt template and sending to AI."""
-        parts = args.strip().upper().split() if args.strip() else []
-        cmd = skill["command"]
-
-        # Build the prompt from template
-        template = skill["prompt"]
-
-        if cmd == "/deep-analysis":
-            symbol = parts[0] if parts else "AAPL"
-            prompt = template.format(symbol=symbol)
-
-        elif cmd == "/trade-idea":
-            context = f" in {' '.join(parts)}" if parts else " in the US market"
-            prompt = template.format(context=context)
-
-        elif cmd == "/risk-report":
-            if parts:
-                symbols = ", ".join(parts)
-            else:
-                symbols = ", ".join(self.terminal.config.get("watchlist", ["AAPL", "MSFT", "GOOGL"]))
-            prompt = template.format(symbols=symbols)
-
-        elif cmd == "/factor-screen":
-            factor = " ".join(parts).lower() if parts else "momentum"
-            prompt = template.format(factor=factor)
-
-        elif cmd == "/backtest-report":
-            strategy = parts[0].lower() if len(parts) > 0 else "momentum"
-            symbol = parts[1] if len(parts) > 1 else "SPY"
-            start = parts[2] if len(parts) > 2 else "2023-01-01"
-            end = parts[3] if len(parts) > 3 else "2025-01-01"
-            prompt = template.format(strategy=strategy, symbol=symbol, start=start, end=end)
-
-        elif cmd == "/morning-brief":
-            extra = f"\nFocus on: {' '.join(parts)}" if parts else ""
-            prompt = template.format(extra=extra)
-
-        elif cmd == "/macro-outlook":
-            context = f" for {' '.join(parts)}" if parts else " for the US and global economy"
-            prompt = template.format(context=context)
-
-        elif cmd == "/crypto-scan":
-            extra = f"\nFocus on: {' '.join(parts)}" if parts else ""
-            prompt = template.format(extra=extra)
-
-        elif cmd == "/watchlist-scan":
-            symbols = ", ".join(self.terminal.config.get("watchlist", ["AAPL", "MSFT", "GOOGL"]))
-            prompt = template.format(symbols=symbols)
-
-        elif cmd == "/sector-rotation":
-            prompt = template
-
-        elif cmd == "/gen-strategy":
-            strategy = parts[0].lower() if len(parts) > 0 else "momentum"
-            symbol = parts[1] if len(parts) > 1 else "SPY"
-            prompt = template.format(strategy=strategy, symbol=symbol)
-
-        elif cmd == "/gen-analysis":
-            topic = " ".join(parts[:2]).lower() if parts else "technical analysis"
-            symbols = ", ".join(parts[2:]) if len(parts) > 2 else "SPY"
-            prompt = template.format(topic=topic, symbols=symbols)
-
-        elif cmd == "/gen-bot":
-            exchange = parts[0].lower() if len(parts) > 0 else "binance"
-            strategy = " ".join(parts[1:]).lower() if len(parts) > 1 else "grid trading"
-            prompt = template.format(exchange=exchange, strategy=strategy)
-
-        else:
-            prompt = template
-
-        # Show skill activation
-        if HAS_RICH:
-            tools = ", ".join(skill.get("tools_hint", [])[:3])
-            console.print(f"[bold]Skill:[/bold] [bold]{skill['name']}[/bold]  [dim]tools: {tools}[/dim]")
-        else:
-            print(f"Skill: {skill['name']}")
-
-        await self.terminal.send_message(prompt)
-
-    def cmd_tools(self, args: str):
-        if HAS_RICH:
-            console.print()
-            console.print("  [bold]Local Tools[/bold] [dim](Code Agent)[/dim]")
-            for i, (name, (_, desc)) in enumerate(LOCAL_TOOLS.items(), 1):
-                console.print(f"    [bold]{name:28s}[/bold][dim]{desc}[/dim]")
-            console.print()
-
-            console.print(f"  [bold]Remote Tools[/bold] [dim]({len(ARIA_TOOLS)})[/dim]")
-            for i, (name, desc) in enumerate(ARIA_TOOLS, 1):
-                console.print(f"    [bold]{name:28s}[/bold][dim]{desc}[/dim]")
-            console.print()
-        else:
-            print("\nLocal Tools (Code Agent):")
-            for i, (name, (_, desc)) in enumerate(LOCAL_TOOLS.items(), 1):
-                print(f"  {i:2d}. {name:30s} {desc}")
-            print("\nRemote Aria Tools (22):")
-            for i, (name, desc) in enumerate(ARIA_TOOLS, 1):
-                print(f"  {i:2d}. {name:30s} {desc}")
-
     def cmd_services(self, args: str):
         """Show CLI service tiers and core workflows."""
         service_groups = [
@@ -8762,110 +5884,6 @@ class SlashCommands:
                 label   = f" [{s.name}]" if s.name else ""
                 print(f"  {s.index}.{label} {s.description}{dep_str}")
             print("Run /apply-plan to execute these steps.\n")
-
-    def cmd_apply_plan(self, args: str):
-        """Execute the pending command plan sequentially."""
-        plan = list(getattr(self.terminal, "pending_plan", []) or [])
-        arg_tokens = args.split()
-        start_idx = 0
-        if "--from" in arg_tokens:
-            idx = arg_tokens.index("--from")
-            if idx + 1 >= len(arg_tokens):
-                msg = "Usage: /apply-plan --from <step_number>"
-                console.print(f"[dim]{msg}[/dim]" if HAS_RICH else msg)
-                return
-            try:
-                start_idx = max(0, int(arg_tokens[idx + 1]) - 1)
-            except ValueError:
-                msg = "Invalid step number for --from"
-                console.print(f"[red]{msg}[/red]" if HAS_RICH else msg)
-                return
-
-        if not plan:
-            console.print("[dim]No pending plan. Use /plan first.[/dim]" if HAS_RICH
-                          else "No pending plan. Use /plan first.")
-            return
-        if start_idx > 0:
-            if start_idx >= len(plan):
-                msg = f"--from {start_idx + 1} exceeds available steps ({len(plan)})"
-                console.print(f"[red]{msg}[/red]" if HAS_RICH else msg)
-                return
-            plan = plan[start_idx:]
-        if "--resume" in arg_tokens and HAS_RICH:
-            console.print(f"[dim]Resuming execution from step 1 of remaining {len(plan)} step(s).[/dim]")
-
-        policy = self.terminal.config.get("command_policy", "safe")
-        results = []
-        failed = None
-        for i, step in enumerate(plan, 1):
-            started_at = time.time()
-            if HAS_RICH:
-                console.print(f"[dim]Step {i}/{len(plan)}:[/dim] [bold]{step}[/bold]")
-            else:
-                print(f"Step {i}/{len(plan)}: {step}")
-
-            step_decision = evaluate_command_policy(step, policy)
-            if step_decision.risk == "high":
-                if not self._confirm_high_risk_command(step_decision.normalized_command, step_decision.risk, policy):
-                    failed = (i, step, "Cancelled by user at high-risk step confirmation")
-                    results.append({
-                        "step": step,
-                        "status": "blocked",
-                        "duration": round(time.time() - started_at, 3),
-                        "exit_code": None,
-                        "error": failed[2],
-                    })
-                    break
-
-            res = _tool_run_command({"command": step, "policy": policy})
-            duration = time.time() - started_at
-            exit_code = res.get("data", {}).get("exit_code", None) if res.get("success") else None
-            status = "completed" if res.get("success") and exit_code == 0 else "failed"
-            results.append({
-                "step": step,
-                "status": status,
-                "duration": round(duration, 3),
-                "exit_code": exit_code,
-                "error": None if status == "completed" else (res.get("error") or f"Command exited {exit_code}"),
-            })
-            if not res.get("success"):
-                failed = (i, step, res.get("error", "Unknown error"))
-                break
-            exit_code = res.get("data", {}).get("exit_code", 0)
-            if exit_code != 0:
-                failed = (i, step, f"Command exited {exit_code}")
-                break
-
-        self.terminal.last_plan_results = results
-
-        if failed:
-            idx, step, err = failed
-            self.terminal.pending_plan = plan[idx - 1:]
-            if HAS_RICH:
-                console.print(f"[red]Plan failed at step {idx}[/red]: [bold]{step}[/bold]")
-                console.print(f"[red]{err}[/red]")
-                console.print("[dim]Recovery hints:[/dim]")
-                if "blocked by policy" in (err or "").lower():
-                    console.print("  [dim]> /run --dry-run <command> to inspect risk[/dim]")
-                    console.print("  [dim]> /config set command_policy=balanced (or full) if needed[/dim]")
-                else:
-                    console.print("  [dim]> Fix code/config, then rerun /apply-plan[/dim]")
-                    console.print("  [dim]> Use /git diff to inspect changes[/dim]")
-            else:
-                print(f"Plan failed at step {idx}: {step}\n{err}")
-                if "blocked by policy" in (err or "").lower():
-                    print("Recovery: /run --dry-run <command> and /config set command_policy=balanced")
-                else:
-                    print("Recovery: fix issue, then rerun /apply-plan")
-        else:
-            if HAS_RICH:
-                console.print(f"[green]Plan completed ({len(plan)} steps)[/green]")
-                for i, row in enumerate(results, 1):
-                    console.print(f"  [dim]{i}. {row['step']} ({row['duration']}s)[/dim]")
-            else:
-                print(f"Plan completed ({len(plan)} steps)")
-            self.terminal.pending_plan = []
-
     def cmd_plan_report(self, args: str):
         """Show or export last plan execution report."""
         rows = list(getattr(self.terminal, "last_plan_results", []) or [])
@@ -9122,6 +6140,109 @@ class SlashCommands:
             os.system(f'start "" {path_q}')
         else:
             os.system(f"xdg-open {path_q} >/dev/null 2>&1")
+
+    async def cmd_status(self, args: str):
+        """Runtime status panel: engine · tools · model · context · risk"""
+        t = self.terminal
+        cfg = t.config
+        model_id  = cfg.get("model", "qwen2.5:7b")
+        tool_count = len(ARIA_TOOLS) + len(LOCAL_TOOLS)
+        skill_count = len(SKILLS)
+
+        # Runtime
+        _lp = t._last_provider or ""
+        _badge = next((v.get("badge","") for v in MODELS.values() if v["id"]==model_id), "")
+        if _lp == "ollama":
+            runtime = "local (Ollama)"
+        elif _lp in ("deepseek","openai","anthropic","groq","dashscope","together"):
+            runtime = f"cloud ({_lp})"
+        elif _badge == "Cloud" or "cloud" in model_id.lower():
+            runtime = "cloud"
+        else:
+            runtime = "local" if getattr(t, "_ollama_alive", False) else "unknown"
+
+        # Context usage
+        conv = t.conversation
+        est_tok = sum(len(m.get("content","")) for m in conv) // 3
+        max_ctx = get_model_cfg(model_id).get("num_ctx", 16384)
+        ctx_pct = min(100, int(est_tok / max_ctx * 100))
+
+        # Model display name
+        mk = next((k for k,v in MODELS.items() if v["id"]==model_id), None)
+        model_display = MODELS[mk]["name"] if mk else model_id
+
+        if HAS_RICH:
+            console.print()
+            console.print("[bold]Runtime Status[/bold]")
+            console.print()
+            rows = [
+                ("runtime",   runtime),
+                ("model",     model_display),
+                ("engine",    "quant engine v3.0"),
+                ("tools",     f"{tool_count} available  ·  {skill_count} skills"),
+                ("risk",      "enabled"),
+                ("context",   f"{est_tok:,} / {max_ctx:,} tokens  ({ctx_pct}%)"),
+            ]
+            # Loaded context sources
+            if getattr(t, "_project_session", None):
+                rows.append(("project", f"{t._project_session.name}  ({t._project_session.stats.get('total_files',0)} files)"))
+            if getattr(t, "_file_session", None) and t._file_session.get_active():
+                fc = t._file_session.get_active()
+                rows.append(("file", f"{fc.filename}  ({fc.size_kb:.0f} KB)"))
+            # Banner mode
+            rows.append(("banner", cfg.get("banner", "full")))
+            rows.append(("workspace", os.getcwd().replace(os.path.expanduser("~"), "~")))
+            for k, v in rows:
+                console.print(f"  [dim]{k:<12}[/dim][cyan]{v}[/cyan]")
+            console.print()
+        else:
+            print("\nRuntime Status")
+            print(f"  runtime  {runtime}")
+            print(f"  model    {model_display}")
+            print(f"  tools    {tool_count}")
+            print(f"  context  {est_tok}/{max_ctx}")
+            print()
+
+    def cmd_trace(self, args: str):
+        """Show runtime trace for recent tool calls."""
+        trace = getattr(self.terminal, "runtime_trace", None)
+        if trace is None:
+            msg = "Runtime trace is unavailable."
+            console.print(f"[dim]{msg}[/dim]" if HAS_RICH else msg)
+            return
+        if "--json" in args.split():
+            payload = json.dumps(trace.to_dict(), ensure_ascii=False, indent=2)
+            if HAS_RICH:
+                console.print(Syntax(payload, "json", theme=_SYNTAX_THEME))
+            else:
+                print(payload)
+            return
+        calls = trace.tool_calls[-20:]
+        if not calls:
+            msg = "No tool calls recorded yet."
+            console.print(f"[dim]{msg}[/dim]" if HAS_RICH else msg)
+            return
+        if HAS_RICH:
+            console.print()
+            console.print("[bold]Runtime Trace[/bold]")
+            console.print()
+            for call in calls:
+                ok = bool(call.result.get("success"))
+                style = "green" if ok else "red"
+                console.print(
+                    f"  [{style}]{'ok' if ok else 'err':<3}[/{style}] "
+                    f"[bold]{call.tool}[/bold] "
+                    f"[dim]{call.elapsed_ms:.0f} ms[/dim]"
+                )
+                if not ok and call.result.get("error"):
+                    console.print(f"      [red]{str(call.result.get('error'))[:180]}[/red]")
+            console.print()
+        else:
+            print("\nRuntime Trace")
+            for call in calls:
+                ok = "ok" if call.result.get("success") else "err"
+                print(f"  {ok:<3} {call.tool} {call.elapsed_ms:.0f} ms")
+            print()
 
     async def cmd_health(self, args: str):
         import aiohttp
@@ -9549,6 +6670,40 @@ class SlashCommands:
 
         Inspired by Claude Code's /doctor command.
         """
+        try:
+            from doctor import run_doctor
+
+            report = run_doctor(
+                self.terminal.config,
+                check_network="--network" in (args or "").split(),
+            )
+            if HAS_RICH:
+                from rich.table import Table as _DoctorTable
+                table = _DoctorTable(title="Aria Code doctor", box=rich_box.ROUNDED)
+                table.add_column("Status", width=8)
+                table.add_column("Check", style="bold")
+                table.add_column("Detail", style="dim")
+                table.add_column("Suggestion", style="dim")
+                icons = {"ok": "[green]OK[/green]", "warn": "[yellow]WARN[/yellow]", "err": "[red]ERR[/red]"}
+                for check in report.checks:
+                    table.add_row(
+                        icons.get(check.status, check.status.upper()),
+                        check.name,
+                        check.detail,
+                        check.suggestion,
+                    )
+                console.print()
+                console.print(table)
+                color = "green" if report.errors == 0 and report.warnings == 0 else ("yellow" if report.errors == 0 else "red")
+                console.print(f"[{color}]{report.passed} passed · {report.warnings} warnings · {report.errors} errors[/{color}]")
+                console.print()
+            else:
+                from doctor import format_doctor_plain
+                print(format_doctor_plain(report))
+            return
+        except Exception as exc:
+            console.print(f"[yellow]doctor module unavailable, using legacy checks: {exc}[/yellow]" if HAS_RICH else f"doctor module unavailable: {exc}")
+
         import importlib as _il, subprocess as _sp, shutil as _sh
 
         cfg = self.terminal.config
@@ -9677,8 +6832,52 @@ class SlashCommands:
             n_w  = sum(1 for s, *_ in checks if s == "warn")
             n_e  = sum(1 for s, *_ in checks if s == "err")
             summary_color = "green" if n_e == 0 and n_w == 0 else ("yellow" if n_e == 0 else "red")
-            console.print(f"  [{summary_color}]{n_ok} passed, {n_w} warnings, {n_e} errors[/{summary_color}]")
+            console.print(f"  [{summary_color}]{n_ok} passed · {n_w} warnings · {n_e} errors[/{summary_color}]")
             console.print()
+
+            # ── Data source configuration guide ───────────────────────────────
+            _fh_ok  = bool(_get_provider_key("finnhub"))
+            _av_ok  = bool(_get_provider_key("alphavantage"))
+            _na_ok  = bool(_get_provider_key("newsapi"))
+            _ak_ok  = True  # akshare is always available (no key needed)
+            _llm_ok = any(_get_provider_key(p) for p in ("deepseek","openai","anthropic","groq"))
+
+            _guide_needed = not (_fh_ok and _av_ok and _na_ok and _llm_ok)
+            if _guide_needed:
+                console.print("[bold]数据源配置指南[/bold]  [dim](完整功能需要以下 key)[/dim]")
+                console.print()
+                _guide_rows = [
+                    # (service, key_configured, priority, what_it_unlocks, register_url, config_cmd)
+                    ("finnhub",      _fh_ok,  "P0",
+                     "美股/港股实时行情 + 完整 TA 指标（RSI/MACD/MA）",
+                     "finnhub.io/register",  "finnhub"),
+                    ("akshare",      _ak_ok,  "P0",
+                     "A 股历史数据 + TA 指标（内置，无需 key）",
+                     "",                      ""),
+                    ("alphavantage", _av_ok,  "P1",
+                     "补充历史 OHLCV、基本面数据（每日 500 次免费）",
+                     "alphavantage.co/support",  "alphavantage"),
+                    ("newsapi",      _na_ok,  "P1",
+                     "全球财经新闻摘要（100 req/天免费）",
+                     "newsapi.org/register",     "newsapi"),
+                    ("deepseek",     _llm_ok, "P2",
+                     "云端 LLM — 本地模型不够时的备用推理引擎",
+                     "platform.deepseek.com",    "deepseek"),
+                ]
+                for svc, ok, pri, desc, url, cmd in _guide_rows:
+                    if ok:
+                        console.print(f"  [green]✓[/green]  [dim]{svc:<14}[/dim]{desc}")
+                    else:
+                        pri_color = "cyan" if pri == "P0" else ("yellow" if pri == "P1" else "dim")
+                        console.print(f"  [dim]○[/dim]  [dim]{svc:<14}[/dim]{desc}")
+                        if cmd:
+                            console.print(
+                                f"       [dim]注册：{url}  →  配置：[/dim]"
+                                f"[bold cyan]/apikey set {cmd} <KEY>[/bold cyan]"
+                            )
+                console.print()
+                console.print("[dim]配置后运行 /doctor 重新检查 · /apikey list 查看已有 key[/dim]")
+                console.print()
         else:
             print("Aria Code Diagnostics")
             for status, label, detail in checks:
@@ -9869,103 +7068,6 @@ class SlashCommands:
             console.print(f"[dim]Note saved to {aria_md.name}[/dim]")
         else:
             print(f"Saved to {aria_md.name}")
-
-    def cmd_memory(self, args: str):
-        """Manage persistent ARIA.md project memory.
-
-        Usage:
-            /memory show          — display current ARIA.md
-            /memory add <fact>    — append a fact (same as /note)
-            /memory clear         — wipe ARIA.md memory section
-        """
-        global _PROJECT_CONTEXT
-        aria_md = pathlib.Path.cwd() / "ARIA.md"
-        parts = args.strip().split(maxsplit=1)
-        sub  = parts[0].lower() if parts else "show"
-        rest = parts[1].strip() if len(parts) > 1 else ""
-
-        if sub == "show":
-            if not aria_md.exists():
-                msg = f"No ARIA.md in {pathlib.Path.cwd()}"
-                console.print(f"[dim]{msg}[/dim]") if HAS_RICH else print(msg)
-                return
-            content = aria_md.read_text(encoding="utf-8")
-            if HAS_RICH:
-                try:
-                    from rich.markdown import Markdown as _RMd
-                    console.print(_RMd(content))
-                except Exception:
-                    console.print(content)
-            else:
-                print(content)
-
-        elif sub == "add":
-            if not rest:
-                console.print("[dim]Usage: /memory add <fact>[/dim]") if HAS_RICH else print("Usage: /memory add <fact>")
-                return
-            self.cmd_note(rest)
-
-        elif sub == "clear":
-            if aria_md.exists():
-                aria_md.write_text("# Memory\n\n", encoding="utf-8")
-                _PROJECT_CONTEXT = _load_project_context()
-                console.print("[dim]Memory cleared.[/dim]") if HAS_RICH else print("Memory cleared.")
-            else:
-                console.print("[dim]Nothing to clear.[/dim]") if HAS_RICH else print("Nothing to clear.")
-
-        elif sub == "search":
-            # Semantic search in ARIA.md and strategy vault using simple grep
-            # (ChromaDB RAG upgrade planned for Phase 2)
-            if not rest:
-                console.print("[dim]Usage: /memory search <query>[/dim]") if HAS_RICH else print("Usage: /memory search <query>")
-                return
-            query_low = rest.lower()
-            results = []
-            # 1. Search ARIA.md
-            if aria_md.exists():
-                for line in aria_md.read_text(encoding="utf-8").splitlines():
-                    if query_low in line.lower() and line.strip():
-                        results.append(("ARIA.md", line.strip()))
-            # 2. Search session history titles
-            for sess_file in sorted(SESSIONS_DIR.glob("*.json"), key=lambda p: -p.stat().st_mtime)[:20]:
-                try:
-                    sess = json.loads(sess_file.read_text(encoding="utf-8"))
-                    title = sess.get("metadata", {}).get("title", "")
-                    if query_low in title.lower():
-                        results.append(("Session", title[:80]))
-                except Exception:
-                    pass
-            # 3. Search strategy vault
-            try:
-                from strategy_vault import get_vault as _gv
-                vault = _gv()
-                for s in (vault.list() or []):
-                    name = str(s.get("name", ""))
-                    msg  = str(s.get("message", ""))
-                    if query_low in name.lower() or query_low in msg.lower():
-                        results.append(("Strategy", f"{name}: {msg[:60]}"))
-            except Exception:
-                pass
-
-            if results:
-                if HAS_RICH:
-                    console.print()
-                    console.print(f"  [bold]记忆搜索: '{rest}'[/bold]  [dim]{len(results)} 条结果[/dim]")
-                    console.print()
-                    for src, text in results[:15]:
-                        console.print(f"  [dim]{src:<12s}[/dim]  {text}")
-                    console.print()
-                else:
-                    print(f"  Search '{rest}': {len(results)} results")
-                    for src, text in results[:15]:
-                        print(f"  [{src}] {text}")
-            else:
-                msg = f"未找到与 '{rest}' 相关的记忆"
-                console.print(f"[dim]{msg}[/dim]") if HAS_RICH else print(msg)
-
-        else:
-            console.print("[dim]Usage: /memory [show|add <fact>|clear|search <query>][/dim]") if HAS_RICH else print("Usage: /memory [show|add <fact>|clear|search <query>]")
-
     async def cmd_review(self, args: str):
         """AI code review for a file or git diff.
 
@@ -10017,402 +7119,27 @@ class SlashCommands:
 
         await self.terminal.send_message(prompt)
 
-    async def cmd_init(self, args: str):
-        """Bootstrap an ARIA.md memory file for the current project.
+    # ── Project scaffold templates ────────────────────────────────────────────
 
-        Scans the current directory for key files and asks the AI to generate
-        a structured ARIA.md with project name, stack, entry point and conventions.
+    # Scaffold templates moved to apps.cli.commands.scaffold_templates
+    from apps.cli.commands.scaffold_templates import SCAFFOLD_TEMPLATES as _SCAFFOLD_TEMPLATES  # noqa
 
-        Usage:
-            /init           — generate ARIA.md (skip if already exists)
-            /init --force   — regenerate even if ARIA.md already exists
-        """
-        global _PROJECT_CONTEXT
-        cwd = pathlib.Path.cwd()
-        aria_md = cwd / "ARIA.md"
-        force = "--force" in args
-
-        if aria_md.exists() and not force:
-            msg = f"ARIA.md already exists. Use /init --force to regenerate."
-            console.print(f"[yellow]{msg}[/yellow]") if HAS_RICH else print(msg)
-            return
-
-        # Scan for common project signal files
-        _SCAN_FILES = [
-            "README.md", "README.rst", "README.txt",
-            "package.json", "pyproject.toml", "setup.py", "setup.cfg",
-            "requirements.txt", "Pipfile", "poetry.lock",
-            "Cargo.toml", "go.mod", "pom.xml", "build.gradle",
-            "Makefile", "Dockerfile", ".env.example",
-            "CLAUDE.md", ".ariarc",
-        ]
-        snippets, found_files = [], []
-        for fname in _SCAN_FILES:
-            fp = cwd / fname
-            if fp.exists():
-                found_files.append(fname)
-                try:
-                    snippets.append(f"### {fname}\n{fp.read_text(errors='replace')[:1200]}")
-                except Exception:
-                    pass
-
-        code_exts = {".py", ".ts", ".js", ".go", ".rs", ".java", ".cpp", ".c"}
-        code_files = sorted(
-            f.name for f in cwd.iterdir()
-            if f.is_file() and f.suffix in code_exts
-        )[:10]
-
-        scan_summary = "\n\n".join(snippets[:5])
-
-        prompt = (
-            f"分析以下项目信息，生成一个 ARIA.md 记忆文件。\n\n"
-            f"目录: {cwd}\n"
-            f"发现的配置文件: {', '.join(found_files) or '无'}\n"
-            f"代码文件: {', '.join(code_files) or '无'}\n\n"
-            f"文件内容:\n{scan_summary}\n\n"
-            f"请生成符合以下格式的 ARIA.md（只输出文件内容本身，不加任何解释）:\n\n"
-            f"# Memory\n\n"
-            f"- **Project**: <项目名称>\n"
-            f"- **Stack**: <语言/框架>\n"
-            f"- **Entry**: <主入口文件>\n"
-            f"- **Conventions**: <代码规范或约定>\n"
-            f"- **Notes**: <其他重要信息>\n"
-        )
-
-        console.print("[dim]分析项目结构中...[/dim]") if HAS_RICH else print("Analyzing project...")
-        await self.terminal.send_message(prompt)
-
-        # Extract the last assistant response and write to ARIA.md
-        if self.terminal.conversation:
-            last_ai = next(
-                (m["content"] for m in reversed(self.terminal.conversation)
-                 if m.get("role") == "assistant"),
-                None,
-            )
-            if last_ai:
-                content = _strip_markdown_fences(last_ai).strip()
-                # Strip injected market-data blocks (lines starting with ##  📊 or *⚠️*)
-                # that the market-data prefetch may have appended to the AI response.
-                import re as _re_init
-                content = _re_init.sub(
-                    r'\n*## 📊.*?(?=\n#|\Z)', '', content, flags=_re_init.DOTALL
-                ).strip()
-                content = _re_init.sub(r'\n*\*⚠️.*?\*\n*', '\n', content).strip()
-                if not content.startswith("# Memory"):
-                    content = "# Memory\n\n" + content
-                aria_md.write_text(content + "\n", encoding="utf-8")
-                _PROJECT_CONTEXT = _load_project_context()
-                msg = f"ARIA.md created at {aria_md}"
-                console.print(f"\n[green]{msg}[/green]") if HAS_RICH else print(f"\n{msg}")
-
+    @staticmethod
+    def _create_scaffold(target_dir: pathlib.Path, template: dict) -> list:
+        """Create dirs + write files from a scaffold template. Returns list of created paths."""
+        created = []
+        for d in template.get("dirs", []):
+            dp = target_dir / d
+            dp.mkdir(parents=True, exist_ok=True)
+            created.append(str(dp))
+        for rel, content in template.get("files", {}).items():
+            fp = target_dir / rel
+            fp.parent.mkdir(parents=True, exist_ok=True)
+            if not fp.exists():
+                fp.write_text(content, encoding="utf-8")
+                created.append(str(fp))
+        return created
     # ---- Aria-exclusive quant features ----
-
-    async def cmd_auto_strategy(self, args: str):
-        """AI strategy auto-optimization loop (unique to Aria).
-
-        Generates a strategy, runs backtest, reads results, iterates until
-        the target metric is reached or max rounds exhausted.
-
-        Usage:
-            /auto-strategy momentum SPY
-            /auto-strategy momentum SPY --target sharpe=1.5
-            /auto-strategy meanrev AAPL --target sharpe=1.2 --rounds 3
-        """
-        import re as _re, time as _time
-
-        parts = args.split()
-        strategy_type = parts[0].lower() if parts else "momentum"
-        symbol = parts[1].upper() if len(parts) > 1 else "SPY"
-        target_sharpe = 1.0
-        max_rounds = 3
-        for p in parts[2:]:
-            m = _re.match(r"--target\s*sharpe=([0-9.]+)", p)
-            if m:
-                target_sharpe = float(m.group(1))
-            m = _re.match(r"--rounds=?([0-9]+)", p)
-            if m:
-                max_rounds = int(m.group(1))
-
-        if HAS_RICH:
-            console.print()
-            console.print(f"  [bold cyan]🔄 策略自动优化[/bold cyan]  [dim]{strategy_type} / {symbol}  目标 Sharpe≥{target_sharpe}  最多{max_rounds}轮[/dim]")
-            console.print()
-
-        best_sharpe = 0.0
-        best_version = None
-
-        for round_num in range(1, max_rounds + 1):
-            console.print(f"  [bold]第 {round_num}/{max_rounds} 轮[/bold]") if HAS_RICH else print(f"  Round {round_num}/{max_rounds}")
-
-            # ── Step 1: Generate strategy code ──────────────────────────────
-            feedback_ctx = ""
-            if round_num > 1 and best_version:
-                feedback_ctx = (
-                    f"\n\nPrevious backtest Sharpe={best_sharpe:.2f} (target={target_sharpe})."
-                    " Modify the strategy to improve Sharpe: adjust lookback period, "
-                    "add momentum filter, tighten stop-loss, or change position sizing."
-                )
-
-            gen_prompt = (
-                f"Generate a complete, self-contained Python backtest strategy script.\n"
-                f"Strategy type: {strategy_type}\n"
-                f"Symbol: {symbol}\n"
-                f"Requirements:\n"
-                f"1. Use yfinance to download 2 years of daily OHLCV data\n"
-                f"2. Implement the {strategy_type} strategy with clear entry/exit signals\n"
-                f"3. Simulate trades: track portfolio value, returns, Sharpe ratio\n"
-                f"4. Print EXACTLY this at the end (machine-parseable):\n"
-                f"   BACKTEST_RESULT: sharpe=X.XX annual_return=X.XX% max_drawdown=X.XX% trades=N\n"
-                f"5. All code in one file, no external dependencies except yfinance/pandas/numpy\n"
-                f"{feedback_ctx}\n"
-                f"Output ONLY the Python code in ```python``` fences."
-            )
-
-            _fname = f"auto_strat_{strategy_type}_{symbol}_r{round_num}_{int(_time.time())}.py"
-            _fpath = pathlib.Path.home() / "Desktop" / _fname
-
-            console.print(f"  [dim]生成策略代码...[/dim]") if HAS_RICH else print("  Generating strategy...")
-            await self.terminal.send_message(gen_prompt)
-
-            # Extract code from last response
-            last_ai = next(
-                (m["content"] for m in reversed(self.terminal.conversation)
-                 if m.get("role") == "assistant"), ""
-            )
-            import re as _re2
-            py_blocks = _re2.findall(r"```python\n(.*?)```", last_ai, _re2.DOTALL)
-            if not py_blocks:
-                # fallback: grab after fence
-                m = _re2.search(r"```python\n(.*)", last_ai, _re2.DOTALL)
-                if m:
-                    py_blocks = [m.group(1)]
-
-            if not py_blocks:
-                console.print("  [yellow]⚠ 未生成代码，跳过本轮[/yellow]") if HAS_RICH else print("  No code generated, skipping")
-                continue
-
-            code = py_blocks[-1].strip()
-            _tool_write_file({"path": str(_fpath), "content": code, "_skip_confirm": True})
-            console.print(f"  [dim]策略已保存: {_fpath.name}[/dim]") if HAS_RICH else print(f"  Saved: {_fpath.name}")
-
-            # ── Step 2: Run backtest ─────────────────────────────────────────
-            console.print(f"  [dim]运行回测...[/dim]") if HAS_RICH else print("  Running backtest...")
-            bt_result = _tool_run_command({
-                "command": f"python3 {_fpath}",
-                "timeout": 120,
-            })
-            stdout = bt_result.get("data", {}).get("stdout", "") or ""
-            stderr = bt_result.get("data", {}).get("stderr", "") or ""
-
-            # ── Step 3: Parse backtest metrics ──────────────────────────────
-            sharpe = 0.0
-            ann_return = 0.0
-            max_dd = 0.0
-            n_trades = 0
-            m = _re2.search(r"BACKTEST_RESULT:.*?sharpe=([0-9.-]+)", stdout)
-            if m:
-                sharpe = float(m.group(1))
-            m = _re2.search(r"annual_return=([0-9.-]+)%", stdout)
-            if m:
-                ann_return = float(m.group(1))
-            m = _re2.search(r"max_drawdown=([0-9.-]+)%", stdout)
-            if m:
-                max_dd = float(m.group(1))
-            m = _re2.search(r"trades=([0-9]+)", stdout)
-            if m:
-                n_trades = int(m.group(1))
-
-            # Update best
-            if sharpe > best_sharpe:
-                best_sharpe = sharpe
-                best_version = _fpath
-
-            # Display round result
-            sharpe_color = "green" if sharpe >= target_sharpe else ("yellow" if sharpe > 0 else "red")
-            if HAS_RICH:
-                console.print(
-                    f"  [dim]回测结果:[/dim]  "
-                    f"Sharpe=[{sharpe_color}]{sharpe:.2f}[/{sharpe_color}]  "
-                    f"年化={ann_return:.1f}%  "
-                    f"最大回撤={max_dd:.1f}%  "
-                    f"交易次数={n_trades}"
-                )
-            else:
-                print(f"  Backtest: Sharpe={sharpe:.2f}  Return={ann_return:.1f}%  MaxDD={max_dd:.1f}%  Trades={n_trades}")
-
-            if stderr and "Error" in stderr:
-                console.print(f"  [red]执行错误: {stderr[:200]}[/red]") if HAS_RICH else print(f"  Error: {stderr[:200]}")
-
-            # ── Step 4: Check convergence ────────────────────────────────────
-            if sharpe >= target_sharpe:
-                console.print(f"\n  [green]✅ 目标达成！Sharpe={sharpe:.2f} ≥ {target_sharpe}[/green]") if HAS_RICH else print(f"\n  ✓ Target reached: Sharpe={sharpe:.2f}")
-                break
-            elif round_num < max_rounds:
-                console.print(f"  [dim]Sharpe={sharpe:.2f} < 目标{target_sharpe}，继续优化...[/dim]\n") if HAS_RICH else print(f"  Sharpe={sharpe:.2f} < {target_sharpe}, optimizing...\n")
-
-        # ── Summary ──────────────────────────────────────────────────────────
-        if HAS_RICH:
-            console.print()
-            console.print(f"  [bold]优化完成[/bold]  最佳 Sharpe=[{'green' if best_sharpe >= target_sharpe else 'yellow'}]{best_sharpe:.2f}[/{'green' if best_sharpe >= target_sharpe else 'yellow'}]")
-            if best_version:
-                console.print(f"  最优策略文件: [dim]{best_version}[/dim]")
-                console.print(f"  [dim]运行: python3 {best_version}[/dim]")
-            console.print()
-        else:
-            print(f"\n  Best Sharpe={best_sharpe:.2f}  File: {best_version}")
-
-    async def cmd_factor_lab(self, args: str):
-        """Factor analysis workstation — compute IC, ICIR, factor returns (Aria exclusive).
-
-        Usage:
-            /factor-lab AAPL
-            /factor-lab QQQ --days 252
-            /factor-lab SPY --factors momentum,value,quality
-        """
-        import re as _re
-
-        parts = args.split()
-        symbol = parts[0].upper() if parts else "SPY"
-        days = 252
-        for p in parts[1:]:
-            m = _re.match(r"--days=?(\d+)", p)
-            if m:
-                days = int(m.group(1))
-
-        if HAS_RICH:
-            console.print()
-            console.print(f"  [bold cyan]🔬 因子分析工作台[/bold cyan]  [dim]{symbol}  {days}天数据[/dim]")
-            console.print()
-
-        if not _HAS_MDC:
-            console.print("[red]需要 market_data_client 模块[/red]") if HAS_RICH else print("market_data_client not available")
-            return
-
-        try:
-            import numpy as np
-            import pandas as pd
-
-            mdc = _get_mdc()
-
-            # ── Fetch data ────────────────────────────────────────────────────
-            console.print("  [dim]拉取行情数据...[/dim]") if HAS_RICH else print("  Fetching data...")
-            hist = mdc.history(symbol, days=days)
-            if not hist.get("success") or not hist.get("data"):
-                console.print(f"[red]无法获取 {symbol} 历史数据[/red]") if HAS_RICH else print(f"No data for {symbol}")
-                return
-
-            df = pd.DataFrame(hist["data"])
-            df["close"] = pd.to_numeric(df["close"], errors="coerce")
-            df["volume"] = pd.to_numeric(df.get("volume", pd.Series()), errors="coerce")
-            df = df.dropna(subset=["close"])
-            close = df["close"]
-            returns = close.pct_change().dropna()
-
-            # ── Compute factors ───────────────────────────────────────────────
-            factors: dict = {}
-
-            # 1. Momentum (1M, 3M, 6M, 12M)
-            for months, label in [(21, "Mom1M"), (63, "Mom3M"), (126, "Mom6M"), (252, "Mom12M")]:
-                if len(close) > months:
-                    factors[label] = close.pct_change(months)
-
-            # 2. Mean Reversion (short-term)
-            if len(close) > 5:
-                factors["MeanRev5D"] = -close.pct_change(5)
-
-            # 3. Volatility (annualized)
-            if len(returns) > 20:
-                factors["Vol20D"] = returns.rolling(20).std() * np.sqrt(252)
-
-            # 4. Volume trend
-            if "volume" in df.columns and df["volume"].notna().sum() > 20:
-                vol_series = df["volume"].astype(float)
-                factors["VolTrend"] = vol_series.pct_change(20)
-
-            # 5. RSI factor
-            delta = close.diff()
-            gain  = delta.clip(lower=0).rolling(14).mean()
-            loss  = (-delta.clip(upper=0)).rolling(14).mean()
-            rs    = gain / loss.replace(0, np.nan)
-            factors["RSI14"] = 100 - 100 / (1 + rs)
-
-            # ── Compute IC (Information Coefficient) for each factor ──────────
-            # IC = correlation between factor value at t and next-period return
-            fwd_returns = returns.shift(-1)  # 1-day forward return
-
-            ic_results = {}
-            for fname, fseries in factors.items():
-                try:
-                    aligned = pd.concat([fseries, fwd_returns], axis=1).dropna()
-                    aligned.columns = ["factor", "fwd"]
-                    if len(aligned) < 20:
-                        continue
-                    ic = aligned["factor"].corr(aligned["fwd"])
-                    if np.isnan(ic):
-                        continue
-                    # Rolling IC (window=20) — compute manually to avoid rolling.apply issues
-                    roll_ics = []
-                    for start in range(0, len(aligned) - 20, 5):
-                        chunk = aligned.iloc[start:start + 20]
-                        chunk_ic = chunk["factor"].corr(chunk["fwd"])
-                        if not np.isnan(chunk_ic):
-                            roll_ics.append(chunk_ic)
-                    icir = ic / (np.std(roll_ics) + 1e-9) if len(roll_ics) >= 3 else 0.0
-                    ic_results[fname] = {"ic": ic, "icir": float(icir), "abs_ic": abs(ic)}
-                except Exception:
-                    continue
-
-            # ── Current factor values (latest bar) ───────────────────────────
-            latest = {fname: float(fseries.dropna().iloc[-1]) if not fseries.dropna().empty else None
-                      for fname, fseries in factors.items()}
-
-            # ── Display results ───────────────────────────────────────────────
-            if HAS_RICH:
-                console.print(f"  [bold]{symbol}[/bold]  [dim]当前价: {close.iloc[-1]:.2f}  数据: {len(df)}天[/dim]")
-                console.print()
-                console.print("  [bold]因子分析[/bold]")
-                console.print()
-                console.print(f"  [dim]{'因子':<14s}{'IC':>8s}{'|IC|':>8s}{'ICIR':>8s}{'当前值':>12s}  信号[/dim]")
-                console.print("  " + "─" * 60)
-                for fname, metrics in sorted(ic_results.items(), key=lambda x: -abs(x[1]["ic"])):
-                    ic   = metrics["ic"]
-                    icir = metrics["icir"]
-                    curr = latest.get(fname)
-                    curr_str = f"{curr:.3f}" if curr is not None else "N/A"
-                    signal = ""
-                    if abs(ic) > 0.03:
-                        signal = "↑ 看多" if ic > 0 else "↓ 看空"
-                    ic_color = "green" if ic > 0.03 else ("red" if ic < -0.03 else "dim")
-                    console.print(
-                        f"  [{ic_color}]{fname:<14s}[/{ic_color}]"
-                        f"[{ic_color}]{ic:>8.3f}[/{ic_color}]"
-                        f"{abs(ic):>8.3f}"
-                        f"{icir:>8.2f}"
-                        f"{curr_str:>12s}"
-                        f"  [dim]{signal}[/dim]"
-                    )
-                console.print()
-                # AI interpretation
-                top_factors = sorted(ic_results.items(), key=lambda x: -abs(x[1]["ic"]))[:3]
-                if top_factors:
-                    console.print("  [bold]AI 解读[/bold]")
-                    fac_summary = ", ".join(f"{f}(IC={m['ic']:.3f})" for f, m in top_factors)
-                    console.print(f"  [dim]最有效因子: {fac_summary}[/dim]")
-                    console.print(f"  [dim]使用 /deep-analysis {symbol} 获取完整 AI 投研分析[/dim]")
-                    console.print()
-            else:
-                print(f"  {symbol} Factor Analysis ({len(df)} days)")
-                print(f"  {'Factor':<14} {'IC':>8} {'|IC|':>8} {'ICIR':>8} {'Current':>12}")
-                for fname, metrics in sorted(ic_results.items(), key=lambda x: -abs(x[1]["ic"])):
-                    curr = latest.get(fname)
-                    curr_str = f"{curr:.3f}" if curr is not None else "N/A"
-                    print(f"  {fname:<14} {metrics['ic']:>8.3f} {abs(metrics['ic']):>8.3f} {metrics['icir']:>8.2f} {curr_str:>12}")
-
-        except ImportError as e:
-            console.print(f"[red]需要 numpy/pandas: {e}[/red]") if HAS_RICH else print(f"Missing: {e}")
-        except Exception as e:
-            console.print(f"[red]因子分析失败: {e}[/red]") if HAS_RICH else print(f"Error: {e}")
-
     # ── financial-services workflow 命令 ────────────────────────────────────────
 
     async def cmd_research(self, args: str):
@@ -10833,320 +7560,6 @@ class SlashCommands:
 
 
     # ---- Provider / API Key management (Open Interpreter style) ----
-
-    def cmd_apikey(self, args: str):
-        """Manage Cloud API keys (stored in ~/.arthera/providers.json).
-
-        Usage:
-            /apikey set <provider> <key>    — save API key
-            /apikey list                    — show configured providers (key masked)
-            /apikey remove <provider>       — delete a key
-            /apikey test <provider>         — verify key with a ping request
-        """
-        parts = args.strip().split()
-        sub   = parts[0].lower() if parts else "list"
-
-        pjson = _load_providers_json()   # dict of {provider: {api_key, base_url, ...}}
-
-        if sub == "set-url":
-            # /apikey set-url <provider> <base_url>
-            # 允许自定义端点（中转代理、国内镜像等），示例：
-            #   /apikey set-url openai https://my-proxy.com
-            #   /apikey set-url siliconflow https://api.siliconflow.cn
-            if len(parts) < 3:
-                msg = "Usage: /apikey set-url <provider> <base_url>"
-                console.print(f"[dim]{msg}[/dim]") if HAS_RICH else print(msg)
-                return
-            provider = parts[1].lower()
-            url      = parts[2].rstrip("/")
-            entry    = pjson.get(provider, {})
-            entry["base_url"] = url
-            pjson[provider]   = entry
-            _save_providers_json(pjson)
-            msg = f"✓ {provider.capitalize()} base_url 已更新: {url}"
-            console.print(f"[green]{msg}[/green]") if HAS_RICH else print(msg)
-            return
-
-        if sub == "set":
-            if len(parts) < 3:
-                msg = ("Usage: /apikey set <provider> <key>  (e.g. /apikey set deepseek sk-...)\n"
-                       "       /apikey set-url <provider> <base_url>  (自定义代理端点)")
-                console.print(f"[dim]{msg}[/dim]") if HAS_RICH else print(msg)
-                return
-            provider = parts[1].lower()
-            key      = parts[2]
-            _all_known = set(_PROVIDER_KEY_MAP) | set(_DATA_KEY_MAP) | set(_PROVIDER_BASE_URLS)
-            if provider not in _all_known:
-                known_llm  = ", ".join(sorted(_PROVIDER_KEY_MAP.keys()))
-                known_data = ", ".join(sorted(_DATA_KEY_MAP.keys()))
-                msg = (f"Unknown provider '{provider}'.\n"
-                       f"  LLM providers: {known_llm}\n"
-                       f"  Data services: {known_data}")
-                console.print(f"[yellow]{msg}[/yellow]") if HAS_RICH else print(msg)
-                return
-
-            # ── Data service key ──────────────────────────────────────────────
-            if provider in _DATA_KEY_MAP:
-                _save_data_key(provider, key)
-                env_var = _DATA_KEY_MAP[provider]
-                os.environ[env_var] = key  # take effect immediately
-                masked = key[:6] + "****" + key[-4:] if len(key) > 10 else "****"
-                signup = _DATA_SIGNUP_URLS.get(provider, "")
-                msg = f"✓ {provider.capitalize()} 数据服务 key 已保存 ({masked})"
-                console.print(f"[green]{msg}[/green]") if HAS_RICH else print(msg)
-                return
-
-            # ── LLM provider key (original logic) ────────────────────────────
-            # Persist to providers.json
-            entry = pjson.get(provider, {})
-            entry["api_key"] = key
-            if provider in _PROVIDER_BASE_URLS:
-                entry.setdefault("base_url", _PROVIDER_BASE_URLS[provider])
-            pjson[provider] = entry
-            _save_providers_json(pjson)
-            # Also set in current process env so it works immediately
-            env_var = _PROVIDER_KEY_MAP.get(provider)
-            if env_var:
-                os.environ[env_var] = key
-            masked = key[:6] + "****" + key[-4:] if len(key) > 10 else "****"
-            msg = f"✓ {provider.capitalize()} API key 已保存 ({masked})"
-            console.print(f"[green]{msg}[/green]") if HAS_RICH else print(msg)
-
-        elif sub == "list":
-            _CLOUD_PROVIDERS = list(_PROVIDER_KEY_MAP.keys())
-            # Deduplicate (aliyun == dashscope)
-            seen: set = set()
-            rows = []
-            for prov in _CLOUD_PROVIDERS:
-                env_var = _PROVIDER_KEY_MAP[prov]
-                if env_var in seen:
-                    continue
-                seen.add(env_var)
-                key = (os.getenv(env_var) or
-                       pjson.get(prov, {}).get("api_key", "") if isinstance(pjson, dict) else "")
-                if key:
-                    masked = key[:6] + "****" + key[-4:] if len(key) > 10 else "****"
-                    rows.append((prov, masked, True))
-                else:
-                    rows.append((prov, "未配置", False))
-            data_configured = _load_data_keys()
-
-            if HAS_RICH:
-                console.print()
-                console.print("  [bold]🤖 LLM Provider Keys[/bold]")
-                console.print()
-                for prov, display, configured in rows:
-                    icon  = "🔑" if configured else "○"
-                    color = "green" if configured else "dim"
-                    hint  = "" if configured else f"  → [dim]/apikey set {prov} <key>[/dim]"
-                    console.print(f"  {icon} [{color}]{prov:14s}[/{color}] {display}{hint}")
-                console.print()
-                console.print("  [bold]📊 数据服务 Keys[/bold]  [dim](后端离线时使用)[/dim]")
-                console.print()
-                for svc in sorted(_DATA_KEY_MAP.keys()):
-                    key_val = data_configured.get(svc, "")
-                    signup  = _DATA_SIGNUP_URLS.get(svc, "")
-                    if key_val:
-                        masked = key_val[:6] + "****" + key_val[-4:] if len(key_val) > 10 else "****"
-                        console.print(f"  🔑 [green]{svc:16s}[/green] {masked}")
-                    else:
-                        console.print(f"  ○ [dim]{svc:16s} 未配置  → /apikey set {svc} <key>[/dim]")
-                console.print()
-            else:
-                print("\n  LLM Providers:")
-                for prov, display, _ in rows:
-                    print(f"  {prov:14s} {display}")
-                print("\n  Data Services:")
-                for svc in sorted(_DATA_KEY_MAP.keys()):
-                    key_val = data_configured.get(svc, "")
-                    status  = key_val[:6] + "****" if key_val else "未配置"
-                    print(f"  {svc:16s} {status}")
-
-        elif sub == "remove":
-            if len(parts) < 2:
-                console.print("[dim]Usage: /apikey remove <provider>[/dim]") if HAS_RICH else print("Usage: /apikey remove <provider>")
-                return
-            provider = parts[1].lower()
-            # LLM section
-            if provider in pjson:
-                pjson[provider].pop("api_key", None)
-                if not pjson[provider]:
-                    del pjson[provider]
-                _save_providers_json(pjson)
-            # Data section
-            if provider in _DATA_KEY_MAP:
-                try:
-                    if PROVIDERS_FILE.exists():
-                        raw = json.loads(PROVIDERS_FILE.read_text(encoding="utf-8"))
-                        if provider in raw.get("data", {}):
-                            del raw["data"][provider]
-                            PROVIDERS_FILE.write_text(json.dumps(raw, indent=2, ensure_ascii=False), encoding="utf-8")
-                except Exception:
-                    pass
-            # Clear from env
-            env_var = _PROVIDER_KEY_MAP.get(provider) or _DATA_KEY_MAP.get(provider)
-            if env_var and env_var in os.environ:
-                del os.environ[env_var]
-            msg = f"✓ {provider.capitalize()} key 已删除"
-            console.print(f"[green]{msg}[/green]") if HAS_RICH else print(msg)
-
-        elif sub == "test":
-            if len(parts) < 2:
-                console.print("[dim]Usage: /apikey test <provider>[/dim]") if HAS_RICH else print("Usage: /apikey test <provider>")
-                return
-            provider = parts[1].lower()
-            key = _get_provider_key(provider)
-            if not key:
-                msg = f"⚠ {provider} API key 未配置，先运行 /apikey set {provider} <key>"
-                console.print(f"[yellow]{msg}[/yellow]") if HAS_RICH else print(msg)
-                return
-            base_url = _PROVIDER_BASE_URLS.get(provider, "")
-            # Quick connectivity test: GET /v1/models (most OpenAI-compat providers support this)
-            import urllib.request as _ur, urllib.error as _ue
-            test_url = base_url.rstrip("/") + "/v1/models"
-            try:
-                req = _ur.Request(test_url, headers={"Authorization": f"Bearer {key}"})
-                with _ur.urlopen(req, timeout=5) as r:
-                    status = r.status
-            except _ue.HTTPError as e:
-                status = e.code
-            except Exception as e:
-                status = str(e)
-            ok = status == 200 if isinstance(status, int) else False
-            icon = "✅" if ok else "⚠"
-            msg = f"{icon} {provider.capitalize()}: HTTP {status}"
-            console.print(f"{'[green]' if ok else '[yellow]'}{msg}{'[/green]' if ok else '[/yellow]'}")  if HAS_RICH else print(msg)
-
-        else:
-            console.print("[dim]Usage: /apikey [set|list|remove|test][/dim]") if HAS_RICH else print("Usage: /apikey [set|list|remove|test]")
-
-    async def cmd_setup(self, args: str):
-        """Guided first-run setup wizard (Open Interpreter style).
-
-        Usage: /setup
-        """
-        import getpass as _gp
-
-        _is_interactive = sys.stdin.isatty()
-
-        if HAS_RICH:
-            console.print()
-            console.print("[bold cyan]━━ Aria Setup Wizard ━━━━━━━━━━━━━━━━━━━━━━━━━━━[/bold cyan]")
-            console.print()
-
-        # ── Step 1: Detect LOCAL backends only (not cloud LLM providers) ───────
-        _LOCAL_BACKENDS_ONLY = {"ollama", "lmstudio", "vllm", "llamacpp", "jan"}
-        try:
-            from local_llm_provider import probe_all_backends, BACKEND_DEFAULTS
-            _all_backends = probe_all_backends()
-            # Filter to only true local backends — cloud providers appear in Step 3
-            backends = {k: v for k, v in _all_backends.items() if k in _LOCAL_BACKENDS_ONLY}
-        except ImportError:
-            backends = {}
-
-        console.print("  [bold]Step 1/4 · 本地 Backend[/bold]") if HAS_RICH else print("Step 1: Local Backends")
-        ollama_online = backends.get("ollama", False)
-        for name, ok in backends.items():
-            icon  = "✅" if ok else "○"
-            color = "green" if ok else "dim"
-            url   = BACKEND_DEFAULTS.get(name, {}).get("default_url", "") if "BACKEND_DEFAULTS" in dir() else ""
-            if HAS_RICH:
-                console.print(f"  {icon} [{color}]{name:12s}[/{color}] [dim]{url}[/dim]")
-            else:
-                print(f"  {'✓' if ok else '✗'} {name:12s} {url}")
-        console.print() if HAS_RICH else print()
-
-        # ── Step 2: Pick default Ollama model (if Ollama online) ────────────
-        if ollama_online and _is_interactive:
-            console.print("  [bold]Step 2/4 · 选择默认本地模型[/bold]") if HAS_RICH else print("Step 2: Default model")
-            rich_models, _ = detect_ollama_models_rich(
-                self.terminal.config.get("ollama_url", "http://localhost:11434")
-            )
-            if rich_models:
-                model_names = [m["name"] for m in rich_models]
-                current_id  = self.terminal.config.get("model", "")
-                sel_idx     = next((i for i, n in enumerate(model_names) if n == current_id), 0)
-                options     = [(f"  {n}", "") for n in model_names]
-                picked      = _arrow_select(options, sel_idx, "选择默认模型")
-                if picked is not None:
-                    chosen = model_names[picked]
-                    self.terminal.config["model"] = chosen
-                    save_config(self.terminal.config)
-                    msg = f"✓ 默认模型设为 {chosen}"
-                    console.print(f"  [green]{msg}[/green]") if HAS_RICH else print(f"  {msg}")
-            console.print() if HAS_RICH else print()
-        else:
-            console.print("  [dim]Step 2/4 · (Ollama 未运行，跳过模型选择)[/dim]") if HAS_RICH else print("  Skipping model select (Ollama offline)")
-            console.print() if HAS_RICH else print()
-
-        # ── Step 3: Cloud API keys ───────────────────────────────────────────
-        console.print("  [bold]Step 3/4 · Cloud API Key 配置[/bold]") if HAS_RICH else print("Step 3: Cloud API Keys")
-        _SETUP_PROVIDERS = [
-            ("deepseek",  "DeepSeek",  "推荐：deepseek-chat，性价比最高"),
-            ("openai",    "OpenAI",    "GPT-4o，o1等"),
-            ("groq",      "Groq",      "免费 llama/mixtral 推理，极速"),
-            ("anthropic", "Anthropic", "Claude 3.5/3.7"),
-        ]
-        for prov, label, desc in _SETUP_PROVIDERS:
-            existing_key = _get_provider_key(prov)
-            if existing_key:
-                masked = existing_key[:6] + "****" + existing_key[-4:]
-                console.print(f"  🔑 {label:12s} [dim]已配置 ({masked})[/dim]") if HAS_RICH else print(f"  {label}: 已配置")
-                continue
-            if _is_interactive:
-                console.print(f"  [cyan]{label}[/cyan] [dim]({desc})[/dim]") if HAS_RICH else print(f"  {label}: {desc}")
-                try:
-                    key = _gp.getpass(f"  Enter {label} API key (留空跳过): ").strip()
-                except Exception:
-                    key = ""
-                if key:
-                    self.cmd_apikey(f"set {prov} {key}")
-            else:
-                console.print(f"  ○ {label:12s} [dim]未配置  → /apikey set {prov} <key>[/dim]") if HAS_RICH else print(f"  {label}: not configured")
-        console.print() if HAS_RICH else print()
-
-        # ── Step 3.5: Data Service API keys ──────────────────────────────────
-        console.print("  [bold]Step 3.5/4 · 市场数据服务 Key（后端离线时使用）[/bold]") if HAS_RICH else print("Step 3.5: Data Service Keys")
-        _SETUP_DATA = [
-            ("finnhub",      "Finnhub",      "股票实时行情+新闻",     "https://finnhub.io/register"),
-            ("newsapi",      "NewsAPI",       "财经新闻聚合",          "https://newsapi.org/register"),
-            ("brave",        "Brave Search",  "网页搜索",             "https://api.search.brave.com/app/keys"),
-            ("alphavantage", "Alpha Vantage", "股票历史数据",          "https://www.alphavantage.co/support/#api-key"),
-        ]
-        _existing_data = _load_data_keys()
-        for svc, label, desc, signup_url in _SETUP_DATA:
-            existing_key = _existing_data.get(svc, "")
-            if existing_key:
-                masked = existing_key[:6] + "****" + existing_key[-4:]
-                console.print(f"  🔑 {label:16s} [dim]已配置 ({masked})[/dim]") if HAS_RICH else print(f"  {label}: configured")
-                continue
-            if _is_interactive:
-                console.print(f"  [cyan]{label}[/cyan] [dim]({desc})[/dim]") if HAS_RICH else print(f"  {label}: {desc}")
-                console.print(f"  [dim]注册：{signup_url}[/dim]") if HAS_RICH else print(f"  Register: {signup_url}")
-                try:
-                    key = _gp.getpass(f"  Enter {label} API key (留空跳过): ").strip()
-                except Exception:
-                    key = ""
-                if key:
-                    self.cmd_apikey(f"set {svc} {key}")
-            else:
-                if HAS_RICH:
-                    console.print(f"  ○ {label:16s} [dim]未配置  → /apikey set {svc} <key>[/dim]")
-                    console.print(f"    [dim]注册：{signup_url}[/dim]")
-                else:
-                    print(f"  {label}: not configured  → /apikey set {svc} <key>")
-        console.print() if HAS_RICH else print()
-
-        # ── Step 4: Summary ─────────────────────────────────────────────────
-        console.print("  [bold]Step 4/4 · 配置完成[/bold]") if HAS_RICH else print("Step 4: Done")
-        model = self.terminal.config.get("model", "?")
-        provider = self.terminal.config.get("local_provider", "ollama")
-        console.print(f"  模型: [cyan]{model}[/cyan]  Provider: [cyan]{provider}[/cyan]") if HAS_RICH else print(f"  Model: {model}  Provider: {provider}")
-        console.print()  if HAS_RICH else print()
-        console.print("  [dim]提示: /model — 切换模型   /providers — 查看所有 provider[/dim]") if HAS_RICH else print("  Tip: /model  /providers")
-        console.print("[bold cyan]━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[/bold cyan]") if HAS_RICH else print("─" * 50)
-        console.print() if HAS_RICH else print()
-
     # ---- Auth commands ----
 
     async def cmd_login(self, args: str):
@@ -11483,18 +7896,24 @@ class SlashCommands:
             console.print(f"[red]{result['error']}[/red]" if HAS_RICH else result["error"])
 
     def cmd_write(self, args: str):
-        """Write a file: /write <path> then paste content, end with EOF line."""
-        path = args.strip()
+        """Write a file: /write [--stage] <path> then paste content, end with EOF line."""
+        parts = args.strip().split()
+        stage_only = False
+        if "--stage" in parts:
+            stage_only = True
+            parts = [p for p in parts if p != "--stage"]
+        path = " ".join(parts).strip()
         if not path:
-            console.print("[dim]Usage: /write <file_path>[/dim]" if HAS_RICH
-                          else "Usage: /write <path>")
+            console.print("[dim]Usage: /write [--stage] <file_path>[/dim]" if HAS_RICH
+                          else "Usage: /write [--stage] <path>")
             console.print("[dim]Then paste content, end with a line containing only 'EOF'[/dim]" if HAS_RICH
                           else "Paste content, end with EOF")
             return
         if HAS_RICH:
-            console.print(f"[dim]Writing to {path} — paste content, end with 'EOF' on a new line:[/dim]")
+            mode = "Staging" if stage_only else "Writing"
+            console.print(f"[dim]{mode} {path} — paste content, end with 'EOF' on a new line:[/dim]")
         else:
-            print(f"Writing to {path} — paste content, end with EOF:")
+            print(f"{'Staging' if stage_only else 'Writing'} {path} — paste content, end with EOF:")
         lines = []
         try:
             while True:
@@ -11506,9 +7925,13 @@ class SlashCommands:
             console.print("[dim]Cancelled[/dim]" if HAS_RICH else "Cancelled")
             return
         content = "\n".join(lines) + "\n"
-        result = _tool_write_file({"path": path, "content": content})
+        result = _tool_write_file({"path": path, "content": content, "stage_only": stage_only})
         if not result["success"]:
             console.print(f"[red]{result['error']}[/red]" if HAS_RICH else result["error"])
+        elif stage_only:
+            change_id = result.get("data", {}).get("change_id", "")
+            msg = f"Staged change {change_id}. Review with /changes, apply with /apply-change {change_id}."
+            console.print(f"[dim]{msg}[/dim]" if HAS_RICH else msg)
 
     async def cmd_edit(self, args: str):
         """Edit a file interactively: /edit <path> — AI edits based on instruction."""
@@ -11629,6 +8052,101 @@ class SlashCommands:
         else:
             console.print(f"[red]{result['error']}[/red]" if HAS_RICH else result["error"])
 
+    def cmd_changes(self, args: str):
+        """List staged file changes."""
+        include_closed = "--all" in args.split()
+        changes = GLOBAL_CHANGE_STORE.list(include_closed=include_closed)
+        if not changes:
+            msg = "No staged changes."
+            console.print(f"[dim]{msg}[/dim]" if HAS_RICH else msg)
+            return
+        if HAS_RICH:
+            console.print()
+            for change in changes:
+                added = sum(1 for line in change.diff.splitlines() if line.startswith("+") and not line.startswith("+++"))
+                removed = sum(1 for line in change.diff.splitlines() if line.startswith("-") and not line.startswith("---"))
+                status = "applied" if change.applied else "rejected" if change.rejected else "pending"
+                color = "green" if change.applied else "red" if change.rejected else "yellow"
+                console.print(f"[{color}]{change.change_id}[/{color}] [bold]{change.path}[/bold] [dim]{status} +{added}/-{removed}[/dim]")
+                preview = "\n".join(change.diff.splitlines()[:18])
+                if preview:
+                    console.print(Syntax(preview, "diff", theme=_SYNTAX_THEME))
+            console.print()
+        else:
+            for change in changes:
+                status = "applied" if change.applied else "rejected" if change.rejected else "pending"
+                print(f"{change.change_id} {status} {change.path}")
+                print("\n".join(change.diff.splitlines()[:18]))
+
+    def cmd_apply_change(self, args: str):
+        """Apply a staged file change."""
+        change_id = args.strip()
+        if not change_id:
+            console.print("[dim]Usage: /apply-change <change_id>[/dim]" if HAS_RICH
+                          else "Usage: /apply-change <change_id>")
+            return
+        try:
+            change = GLOBAL_CHANGE_STORE.apply(change_id)
+            msg = f"Applied change {change.change_id}: {change.path}"
+            console.print(f"[green]{msg}[/green]" if HAS_RICH else msg)
+        except Exception as exc:
+            console.print(f"[red]{exc}[/red]" if HAS_RICH else str(exc))
+
+    def cmd_reject_change(self, args: str):
+        """Reject a staged file change."""
+        change_id = args.strip()
+        if not change_id:
+            console.print("[dim]Usage: /reject-change <change_id>[/dim]" if HAS_RICH
+                          else "Usage: /reject-change <change_id>")
+            return
+        try:
+            change = GLOBAL_CHANGE_STORE.reject(change_id)
+            msg = f"Rejected change {change.change_id}: {change.path}"
+            console.print(f"[dim]{msg}[/dim]" if HAS_RICH else msg)
+        except Exception as exc:
+            console.print(f"[red]{exc}[/red]" if HAS_RICH else str(exc))
+
+    def cmd_verify(self, args: str):
+        """Infer and run focused verification checks."""
+        parts = args.split()
+        dry_run = "--dry-run" in parts
+        paths = [p for p in parts if p != "--dry-run"]
+        plan = VerificationPlanner(pathlib.Path.cwd()).infer(paths)
+        if not plan.commands:
+            msg = "No verification command inferred."
+            console.print(f"[dim]{msg}[/dim]" if HAS_RICH else msg)
+            return
+        if HAS_RICH:
+            console.print(f"[dim]Verification plan: {plan.reason}[/dim]")
+            for idx, command in enumerate(plan.commands, 1):
+                console.print(f"  [bold]{idx}.[/bold] {command}")
+        else:
+            print(f"Verification plan: {plan.reason}")
+            for idx, command in enumerate(plan.commands, 1):
+                print(f"  {idx}. {command}")
+        if dry_run:
+            return
+        for command in plan.commands:
+            result = _tool_run_command({
+                "command": command,
+                "policy": "balanced",
+                "permission_mode": self.terminal.config.get("permission_mode", "workspace-write"),
+                "network_enabled": bool(self.terminal.config.get("network_enabled", True)),
+                "user_approved": True,
+                "timeout": 300,
+            })
+            if not result.get("success"):
+                console.print(f"[red]Verification failed: {command}[/red]" if HAS_RICH else f"Verification failed: {command}")
+                console.print(f"[red]{result.get('error', '')}[/red]" if HAS_RICH else result.get("error", ""))
+                return
+            data = result.get("data", {})
+            if data.get("stdout"):
+                console.print(Syntax(data["stdout"], "text", theme=_SYNTAX_THEME) if HAS_RICH else data["stdout"])
+            if data.get("stderr"):
+                console.print(f"[yellow]{data['stderr']}[/yellow]" if HAS_RICH else data["stderr"])
+        msg = "Verification passed."
+        console.print(f"[green]{msg}[/green]" if HAS_RICH else msg)
+
     def cmd_run(self, args: str):
         """Run a command: /run <command>"""
         if not args.strip():
@@ -11646,17 +8164,34 @@ class SlashCommands:
             return
 
         policy = self.terminal.config.get("command_policy", "safe")
-        decision = evaluate_command_policy(text, policy)
+        decision = evaluate_command_policy(
+            text,
+            policy,
+            mode=self.terminal.config.get("permission_mode", "workspace-write"),
+            network_enabled=bool(self.terminal.config.get("network_enabled", True)),
+        )
         if not dry_run and decision.allowed and decision.risk == "high":
             if not self._confirm_high_risk_command(decision.normalized_command, decision.risk, decision.policy):
                 msg = "Cancelled by user."
                 console.print(f"[dim]{msg}[/dim]" if HAS_RICH else msg)
                 return
-        result = _tool_run_command({"command": text, "policy": policy, "dry_run": dry_run})
+        result = _tool_run_command({
+            "command": text,
+            "policy": policy,
+            "permission_mode": self.terminal.config.get("permission_mode", "workspace-write"),
+            "network_enabled": bool(self.terminal.config.get("network_enabled", True)),
+            "dry_run": dry_run,
+        })
         if result["success"]:
             data = result["data"]
             if dry_run:
-                msg = f"Dry run: risk={data.get('risk', '?')} policy={data.get('policy', '?')} command={data.get('command', '')}"
+                msg = (
+                    f"Dry run: risk={data.get('risk', '?')} "
+                    f"policy={data.get('policy', '?')} "
+                    f"approval={data.get('requires_approval', False)} "
+                    f"network={data.get('network', False)} "
+                    f"command={data.get('command', '')}"
+                )
                 console.print(f"[dim]{msg}[/dim]" if HAS_RICH else msg)
                 return
             if data["stdout"]:
@@ -11786,457 +8321,28 @@ class SlashCommands:
                     print("No code block found to save")
 
     # ---- Scaffold command ----
-
-    def cmd_scaffold(self, args: str):
-        """Generate a project folder structure with files, with user approval.
-
-        Usage:
-          /scaffold <project_name> [template]
-          /scaffold my-quant-bot
-          /scaffold aapl-analysis --template analysis
-          /scaffold momentum-strat --template strategy
-          /scaffold data-pipeline --template pipeline
-        """
-        import textwrap
-
-        parts = args.strip().split()
-        if not parts:
-            if HAS_RICH:
-                console.print("[dim]Usage: /scaffold <project_name> [--template analysis|strategy|pipeline|blank][/dim]")
-                console.print("[dim]Examples:[/dim]")
-                console.print("[dim]  /scaffold aapl-analysis --template analysis[/dim]")
-                console.print("[dim]  /scaffold momentum-strat --template strategy[/dim]")
-                console.print("[dim]  /scaffold my-quant-bot[/dim]")
-            else:
-                print("Usage: /scaffold <project_name> [--template analysis|strategy|pipeline|blank]")
-            return
-
-        # Parse project name and template
-        project_name = parts[0]
-        template = "blank"
-        if "--template" in parts:
-            idx = parts.index("--template")
-            if idx + 1 < len(parts):
-                template = parts[idx + 1]
-
-        # Resolve base directory: always ~/Desktop/<project_name>/
-        base_dir = pathlib.Path.home() / "Desktop" / project_name
-
-        # Built-in templates
-        TEMPLATES = {
-            "analysis": {
-                "description": "Stock/asset analysis project",
-                "files": {
-                    "main.py": textwrap.dedent("""\
-                        #!/usr/bin/env python3
-                        \"\"\"
-                        {project} — market analysis entry point.
-                        Usage: python3 main.py AAPL
-                        \"\"\"
-                        import sys
-                        import os
-                        import numpy as np
-                        import pandas as pd
-                        import yfinance as yf
-                        import matplotlib; matplotlib.use('Agg')
-                        import matplotlib.pyplot as plt
-                        from analysis import run_analysis
-                        from report import generate_report
-
-                        if __name__ == "__main__":
-                            symbol = sys.argv[1] if len(sys.argv) > 1 else "AAPL"
-                            data = run_analysis(symbol)
-                            generate_report(symbol, data)
-                        """),
-                    "analysis.py": textwrap.dedent("""\
-                        \"\"\"Core analysis logic for {project}.\"\"\"
-                        import numpy as np
-                        import pandas as pd
-                        import yfinance as yf
-
-
-                        def run_analysis(symbol: str, period: str = "1y") -> dict:
-                            ticker = yf.Ticker(symbol)
-                            hist = ticker.history(period=period, auto_adjust=True, progress=False)
-                            if hist.empty:
-                                raise ValueError(f"No data for {{symbol}}")
-                            hist.columns = hist.columns.droplevel(1) if hasattr(hist.columns, 'droplevel') and hist.columns.nlevels > 1 else hist.columns
-                            close = hist["Close"]
-                            returns = close.pct_change().dropna()
-                            sma20 = close.rolling(20).mean()
-                            sma50 = close.rolling(50).mean()
-                            rsi = _calc_rsi(close)
-                            return {{
-                                "symbol": symbol,
-                                "current_price": round(float(close.iloc[-1]), 2),
-                                "sma20": round(float(sma20.iloc[-1]), 2),
-                                "sma50": round(float(sma50.iloc[-1]), 2),
-                                "rsi": round(float(rsi.iloc[-1]), 1),
-                                "annual_return": round(float(returns.mean() * 252), 4),
-                                "volatility": round(float(returns.std() * (252 ** 0.5)), 4),
-                                "hist": hist,
-                                "returns": returns,
-                            }}
-
-
-                        def _calc_rsi(close: pd.Series, period: int = 14) -> pd.Series:
-                            delta = close.diff()
-                            gain = delta.clip(lower=0).rolling(period).mean()
-                            loss = (-delta.clip(upper=0)).rolling(period).mean()
-                            rs = gain / loss.replace(0, float("nan"))
-                            return 100 - 100 / (1 + rs)
-                        """),
-                    "report.py": textwrap.dedent("""\
-                        \"\"\"Report generation for {project}.\"\"\"
-                        import os
-                        import matplotlib; matplotlib.use('Agg')
-                        import matplotlib.pyplot as plt
-
-
-                        def generate_report(symbol: str, data: dict):
-                            fig, axes = plt.subplots(2, 1, figsize=(14, 8), sharex=True)
-                            hist = data["hist"]
-                            close = hist["Close"]
-                            # Price + SMAs
-                            axes[0].plot(close.index, close, label="Close", color="#C08050", linewidth=1.5)
-                            axes[0].plot(close.index, hist["Close"].rolling(20).mean(), label="SMA20", color="#2AE8A5", linewidth=1)
-                            axes[0].plot(close.index, hist["Close"].rolling(50).mean(), label="SMA50", color="#EF4444", linewidth=1)
-                            axes[0].set_title(f"{{symbol}} — Price & Moving Averages", fontsize=14)
-                            axes[0].legend(); axes[0].grid(alpha=0.3)
-                            # Volume
-                            axes[1].bar(hist.index, hist["Volume"], color="#C08050", alpha=0.5, label="Volume")
-                            axes[1].set_title("Volume"); axes[1].grid(alpha=0.3)
-                            plt.tight_layout()
-                            out = os.path.expanduser(f"~/Desktop/{symbol}_analysis.png")
-                            plt.savefig(out, dpi=150, bbox_inches="tight")
-                            plt.close()
-                            print(f"Chart saved: {{out}}")
-                            print(f"Price: ${{data['current_price']}}  RSI: {{data['rsi']}}  "
-                                  f"Annual Return: {{data['annual_return']*100:.1f}}%  Vol: {{data['volatility']*100:.1f}}%")
-                        """),
-                    "requirements.txt": "numpy\npandas\nyfinance\nmatplotlib\n",
-                    "README.md": textwrap.dedent("""\
-                        # {project}
-                        Stock analysis project generated by Aria CLI.
-
-                        ## Usage
-                        ```bash
-                        pip3 install -r requirements.txt
-                        python3 main.py AAPL
-                        ```
-                        """),
-                },
-            },
-            "strategy": {
-                "description": "Quant trading strategy with backtesting",
-                "files": {
-                    "main.py": textwrap.dedent("""\
-                        #!/usr/bin/env python3
-                        \"\"\"
-                        {project} — backtest entry point.
-                        Usage: python3 main.py AAPL 2022-01-01 2024-01-01
-                        \"\"\"
-                        import sys
-                        from strategy import MomentumStrategy
-                        from backtest import run_backtest
-
-                        if __name__ == "__main__":
-                            symbol = sys.argv[1] if len(sys.argv) > 1 else "SPY"
-                            start  = sys.argv[2] if len(sys.argv) > 2 else "2022-01-01"
-                            end    = sys.argv[3] if len(sys.argv) > 3 else "2024-01-01"
-                            strat  = MomentumStrategy(lookback=20)
-                            result = run_backtest(strat, symbol, start, end)
-                            print(result)
-                        """),
-                    "strategy.py": textwrap.dedent("""\
-                        \"\"\"Strategy definitions for {project}.\"\"\"
-                        import pandas as pd
-
-
-                        class MomentumStrategy:
-                            def __init__(self, lookback: int = 20):
-                                self.lookback = lookback
-                                self.name = f"Momentum({{lookback}})"
-
-                            def generate_signals(self, prices: pd.Series) -> pd.Series:
-                                \"\"\"Return +1 (long), -1 (short), 0 (flat) signals.\"\"\"
-                                momentum = prices.pct_change(self.lookback)
-                                signals = pd.Series(0, index=prices.index)
-                                signals[momentum > 0] = 1
-                                signals[momentum < 0] = -1
-                                return signals.shift(1).fillna(0)  # avoid lookahead
-                        """),
-                    "backtest.py": textwrap.dedent("""\
-                        \"\"\"Backtest engine for {project}.\"\"\"
-                        import os
-                        import numpy as np
-                        import pandas as pd
-                        import yfinance as yf
-                        import matplotlib; matplotlib.use('Agg')
-                        import matplotlib.pyplot as plt
-
-
-                        def run_backtest(strategy, symbol: str, start: str, end: str) -> dict:
-                            ticker = yf.download(symbol, start=start, end=end, auto_adjust=True, progress=False)
-                            if ticker.empty:
-                                raise ValueError(f"No data for {{symbol}}")
-                            prices = ticker["Close"].squeeze()
-                            signals = strategy.generate_signals(prices)
-                            returns = prices.pct_change().fillna(0)
-                            strat_returns = signals * returns
-                            equity = (1 + strat_returns).cumprod()
-                            bh_equity = (1 + returns).cumprod()
-                            # Metrics
-                            ann_return = strat_returns.mean() * 252
-                            ann_vol    = strat_returns.std() * (252 ** 0.5)
-                            sharpe     = ann_return / ann_vol if ann_vol > 0 else 0
-                            max_dd     = (equity / equity.cummax() - 1).min()
-                            # Plot
-                            fig, ax = plt.subplots(figsize=(14, 6))
-                            ax.plot(equity.index, equity, label=strategy.name, color="#C08050", linewidth=2)
-                            ax.plot(bh_equity.index, bh_equity, label="Buy & Hold", color="#2AE8A5", linewidth=1.5, linestyle="--")
-                            ax.set_title(f"{{symbol}} — {{strategy.name}} Backtest"); ax.legend(); ax.grid(alpha=0.3)
-                            out = os.path.expanduser(f"~/Desktop/{{symbol}}_backtest.png")
-                            plt.savefig(out, dpi=150, bbox_inches="tight"); plt.close()
-                            result = {{
-                                "symbol": symbol, "strategy": strategy.name,
-                                "ann_return": round(ann_return * 100, 2),
-                                "ann_vol": round(ann_vol * 100, 2),
-                                "sharpe": round(sharpe, 3),
-                                "max_drawdown": round(max_dd * 100, 2),
-                                "chart": out,
-                            }}
-                            print(f"Sharpe: {{result['sharpe']}}  Return: {{result['ann_return']}}%  "
-                                  f"MaxDD: {{result['max_drawdown']}}%  Chart: {{out}}")
-                            return result
-                        """),
-                    "requirements.txt": "numpy\npandas\nyfinance\nmatplotlib\n",
-                    "README.md": textwrap.dedent("""\
-                        # {project}
-                        Quant strategy backtest project generated by Aria CLI.
-
-                        ## Usage
-                        ```bash
-                        pip3 install -r requirements.txt
-                        python3 main.py SPY 2022-01-01 2024-01-01
-                        ```
-                        """),
-                },
-            },
-            "pipeline": {
-                "description": "Market data pipeline (fetch → process → store)",
-                "files": {
-                    "main.py": textwrap.dedent("""\
-                        #!/usr/bin/env python3
-                        \"\"\"
-                        {project} — data pipeline entry point.
-                        Usage: python3 main.py AAPL MSFT TSLA
-                        \"\"\"
-                        import sys
-                        from pipeline import DataPipeline
-
-                        if __name__ == "__main__":
-                            symbols = sys.argv[1:] or ["AAPL", "MSFT", "TSLA"]
-                            pipe = DataPipeline(symbols)
-                            pipe.run()
-                        """),
-                    "pipeline.py": textwrap.dedent("""\
-                        \"\"\"Data pipeline for {project}.\"\"\"
-                        import os
-                        import pandas as pd
-                        import yfinance as yf
-
-
-                        class DataPipeline:
-                            def __init__(self, symbols: list, period: str = "1y", output_dir: str = "~/Desktop/data"):
-                                self.symbols = symbols
-                                self.period = period
-                                self.output_dir = os.path.expanduser(output_dir)
-                                os.makedirs(self.output_dir, exist_ok=True)
-
-                            def fetch(self, symbol: str) -> pd.DataFrame:
-                                df = yf.download(symbol, period=self.period, auto_adjust=True, progress=False)
-                                df.columns = df.columns.droplevel(1) if df.columns.nlevels > 1 else df.columns
-                                return df
-
-                            def process(self, df: pd.DataFrame) -> pd.DataFrame:
-                                df = df.copy()
-                                df["Returns"] = df["Close"].pct_change()
-                                df["SMA20"]   = df["Close"].rolling(20).mean()
-                                df["SMA50"]   = df["Close"].rolling(50).mean()
-                                df["Volatility"] = df["Returns"].rolling(20).std() * (252 ** 0.5)
-                                return df.dropna()
-
-                            def store(self, symbol: str, df: pd.DataFrame):
-                                path = os.path.join(self.output_dir, f"{{symbol}}.csv")
-                                df.to_csv(path)
-                                print(f"  Saved {{len(df)}} rows → {{path}}")
-
-                            def run(self):
-                                print(f"Running pipeline for: {{self.symbols}}")
-                                for symbol in self.symbols:
-                                    try:
-                                        raw = self.fetch(symbol)
-                                        processed = self.process(raw)
-                                        self.store(symbol, processed)
-                                    except Exception as e:
-                                        print(f"  Error {{symbol}}: {{e}}")
-                                print("Pipeline complete.")
-                        """),
-                    "requirements.txt": "pandas\nyfinance\n",
-                    "README.md": textwrap.dedent("""\
-                        # {project}
-                        Market data pipeline generated by Aria CLI.
-
-                        ## Usage
-                        ```bash
-                        pip3 install -r requirements.txt
-                        python3 main.py AAPL MSFT TSLA
-                        # Output CSVs saved to ~/Desktop/data/
-                        ```
-                        """),
-                },
-            },
-            "blank": {
-                "description": "Blank project scaffold",
-                "files": {
-                    "main.py": textwrap.dedent("""\
-                        #!/usr/bin/env python3
-                        \"\"\"
-                        {project} — main entry point.
-                        \"\"\"
-                        import os
-                        import sys
-                        import numpy as np
-                        import pandas as pd
-
-
-                        def main():
-                            print("Hello from {project}!")
-
-
-                        if __name__ == "__main__":
-                            main()
-                        """),
-                    "requirements.txt": "numpy\npandas\n",
-                    "README.md": "# {project}\n\nProject generated by Aria CLI.\n",
-                },
-            },
-        }
-
-        if template not in TEMPLATES:
-            msg = f"Unknown template '{template}'. Available: {', '.join(TEMPLATES)}"
-            console.print(f"[red]{msg}[/red]" if HAS_RICH else msg)
-            return
-
-        tmpl = TEMPLATES[template]
-        files = {
-            k: v.format(project=project_name) if isinstance(v, str) else v
-            for k, v in tmpl["files"].items()
-        }
-
-        # ── Preview: show tree + file summaries ──────────────────────────────
-        if HAS_RICH:
-            console.print()
-            console.print(f"  [bold]Scaffold:[/bold] [cyan]{project_name}[/cyan]  "
-                          f"[dim]({tmpl['description']}, {template} template)[/dim]")
-            console.print(f"  [dim]Location:[/dim] {base_dir}")
-            console.print()
-            console.print(f"  [dim]{base_dir.name}/[/dim]")
-            for fname, fcontent in files.items():
-                lines = fcontent.count("\n") + 1 if fcontent else 0
-                exists_tag = " [yellow](exists)[/yellow]" if (base_dir / fname).exists() else ""
-                console.print(f"  [dim]  ├── {fname:<24s}[/dim] {lines} lines{exists_tag}")
-            console.print()
-        else:
-            print(f"\nScaffold: {project_name}  ({template} template)")
-            print(f"Location: {base_dir}")
-            print(f"\n  {base_dir.name}/")
-            for fname, fcontent in files.items():
-                lines = fcontent.count("\n") + 1 if fcontent else 0
-                exists_tag = " (exists)" if (base_dir / fname).exists() else ""
-                print(f"    ├── {fname:<24s}  {lines} lines{exists_tag}")
-            print()
-
-        # ── Ask: approve all / approve each / cancel ─────────────────────────
-        # In non-interactive mode (-p flag / piped stdin) auto-approve all files.
-        if not sys.stdin.isatty():
-            choice = "y"
-            console.print("  [dim](非交互模式：自动确认创建所有文件)[/dim]") if HAS_RICH else print("  (Auto-approved: non-interactive mode)")
-        elif HAS_RICH:
-            choice = console.input(
-                "  [bold]Create these files?[/bold] "
-                "[dim]\\[y=all / n=cancel / r=review each][/dim] "
-            ).strip().lower()
-        else:
-            choice = input("  Create these files? [y=all / n=cancel / r=review each] ").strip().lower()
-
-        if choice in ("n", "no"):
-            console.print("[dim]Scaffold cancelled.[/dim]" if HAS_RICH else "Cancelled.")
-            return
-
-        approve_each = choice in ("r", "review")
-        created, skipped = [], []
-
-        for fname, fcontent in files.items():
-            target = base_dir / fname
-            if approve_each:
-                if HAS_RICH:
-                    console.print(f"\n  [dim]{fname}[/dim]  ({fcontent.count(chr(10))+1} lines)")
-                    sub = console.input(
-                        "  [dim]Write this file? [y/n] [/dim]"
-                    ).strip().lower()
-                else:
-                    print(f"\n  {fname}  ({fcontent.count(chr(10))+1} lines)")
-                    sub = input("  Write? [y/n] ").strip().lower()
-                if sub not in ("y", "yes", ""):
-                    skipped.append(fname)
-                    continue
-
-            result = _tool_write_file({"path": str(target), "content": fcontent, "_skip_confirm": True})
-            if result["success"]:
-                created.append(fname)
-            else:
-                err = result.get("error", "?")
-                if HAS_RICH:
-                    console.print(f"  [red]Failed {fname}: {err}[/red]")
-                else:
-                    print(f"  Failed {fname}: {err}")
-
-        # ── Summary ───────────────────────────────────────────────────────────
-        if HAS_RICH:
-            console.print()
-            if created:
-                console.print(f"  [green]✓[/green] Created {len(created)} file(s) in [bold]{base_dir}[/bold]")
-                for f in created:
-                    console.print(f"    [dim]{f}[/dim]")
-            if skipped:
-                console.print(f"  [dim]Skipped: {', '.join(skipped)}[/dim]")
-            console.print()
-            console.print(f"  [dim]Run:  cd ~/Desktop/{project_name} && python3 main.py[/dim]")
-            console.print()
-        else:
-            print(f"\nCreated {len(created)} files in {base_dir}")
-            if skipped:
-                print(f"Skipped: {', '.join(skipped)}")
-            print(f"Run: cd ~/Desktop/{project_name} && python3 main.py")
-
     # ---- Feedback command ----
 
     async def cmd_feedback(self, args: str):
-        """Rate the last AI response and log feedback locally and remotely.
+        """Rate the last AI response and store feedback locally by default.
 
-        Usage: /feedback up|down [optional comment]
+        Usage: /feedback good|bad [comment]
+               /feedback note <comment>
         """
         parts = args.strip().split(maxsplit=1)
         vote = parts[0].lower() if parts else ""
         comment = parts[1].strip() if len(parts) > 1 else ""
 
-        if vote not in ("up", "down", "1", "0"):
-            console.print("[dim]Usage: /feedback up|down [comment][/dim]" if HAS_RICH
-                          else "Usage: /feedback up|down [comment]")
+        aliases = {
+            "good": "positive", "up": "positive", "1": "positive", "+": "positive",
+            "bad": "negative", "down": "negative", "0": "negative", "-": "negative",
+            "note": "note",
+        }
+        rating = aliases.get(vote)
+        if rating is None or (rating == "note" and not comment):
+            console.print("[dim]Usage: /feedback good|bad [comment] | /feedback note <comment>[/dim]" if HAS_RICH
+                          else "Usage: /feedback good|bad [comment] | /feedback note <comment>")
             return
-        is_positive = vote in ("up", "1")
 
         # Find last assistant message and its position
         last_msg = None
@@ -12250,52 +8356,121 @@ class SlashCommands:
             console.print("[dim]No AI response to rate[/dim]" if HAS_RICH else "No response to rate")
             return
 
-        rating = "positive" if is_positive else "negative"
-        feedback_payload = {
-            "message": last_msg,
-            "rating": rating,
-            "comment": comment,
-            "model": self.terminal.config.get("model", ""),
-            "timestamp": datetime.now().isoformat(),
-            "session_id": self.terminal.session_id,
-        }
+        settings = PrivacySettings.from_config(self.terminal.config)
+        record = FeedbackRecord.create(
+            rating=rating,
+            message=last_msg,
+            comment=comment,
+            model=self.terminal.config.get("model", ""),
+            session_id=self.terminal.session_id,
+            message_index=msg_idx,
+            shared=settings.data_sharing and settings.feedback_upload,
+        )
+        store = FeedbackStore(CONFIG_DIR)
 
-        # --- 1. Persist locally first (always works, even offline) ---
-        feedback_log = CONFIG_DIR / "feedback_log.jsonl"
+        # Persist locally first. This is the default and works offline.
         try:
-            with open(feedback_log, "a", encoding="utf-8") as f:
-                f.write(json.dumps(feedback_payload, ensure_ascii=False) + "\n")
-        except Exception:
-            pass  # Non-fatal: don't block UI if disk write fails
+            feedback_path = store.append(record)
+        except Exception as exc:
+            msg = f"Could not save feedback locally: {exc}"
+            console.print(f"[red]{msg}[/red]" if HAS_RICH else msg)
+            return
 
-        # --- 2. Send to backend (best-effort, fire-and-forget) ---
-        import aiohttp
+        # Optional remote upload only after explicit opt-in.
         api_success = False
-        try:
-            headers = {}
-            if self.terminal.config.get("auth_token"):
-                headers["Authorization"] = f"Bearer {self.terminal.config['auth_token']}"
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    f"{self.terminal.api_url}/api/v2/ai/feedback",
-                    json=feedback_payload,
-                    headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=8)
-                ) as resp:
-                    api_success = resp.status in (200, 201, 204)
-        except (aiohttp.ClientConnectorError, asyncio.TimeoutError):
-            pass  # Offline or server down — local log is the fallback
-        except Exception:
-            pass
+        upload_attempted = settings.data_sharing and settings.feedback_upload
+        if upload_attempted:
+            try:
+                import aiohttp
+                headers = {}
+                if self.terminal.config.get("auth_token"):
+                    headers["Authorization"] = f"Bearer {self.terminal.config['auth_token']}"
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(
+                        f"{self.terminal.api_url}/api/v2/ai/feedback",
+                        json=json.loads(record.to_json()),
+                        headers=headers,
+                        timeout=aiohttp.ClientTimeout(total=8)
+                    ) as resp:
+                        api_success = resp.status in (200, 201, 204)
+            except Exception:
+                api_success = False
 
-        icon = "↑" if is_positive else "↓"
-        sync_note = "" if api_success else " [dim](saved locally)[/dim]"
+        icon = "↑" if rating == "positive" else ("↓" if rating == "negative" else "note")
+        if upload_attempted:
+            sync_note = "" if api_success else " [dim](saved locally; upload failed)[/dim]"
+        else:
+            sync_note = " [dim](saved locally; sharing off)[/dim]"
         if HAS_RICH:
             comment_note = f" — {comment}" if comment else ""
             console.print(f"[green]Feedback {icon}[/green]{comment_note}{sync_note}")
+            console.print(f"[dim]Path: {feedback_path}[/dim]")
         else:
             print(f"Feedback {icon}" + (f" — {comment}" if comment else "") +
-                  ("" if api_success else " (saved locally)"))
+                  (" (uploaded)" if api_success else " (saved locally)"))
+
+    def cmd_privacy(self, args: str):
+        """Manage local privacy and feedback-sharing settings."""
+        parts = args.strip().split(maxsplit=1)
+        sub = parts[0].lower() if parts else "status"
+        rest = parts[1].strip() if len(parts) > 1 else ""
+        store = FeedbackStore(CONFIG_DIR)
+        settings = PrivacySettings.from_config(self.terminal.config)
+
+        def _save_settings(new_settings: PrivacySettings):
+            new_settings.apply_to_config(self.terminal.config)
+            save_config(self.terminal.config)
+
+        if sub in {"status", "show"}:
+            lines = [
+                "Privacy status",
+                f"  data_sharing: {settings.data_sharing}",
+                f"  feedback_upload: {settings.feedback_upload}",
+                f"  feedback_records: {store.count()}",
+                f"  local_feedback: {store.feedback_file}",
+                "  default: local-only; no upload unless data_sharing and feedback_upload are true",
+            ]
+            if HAS_RICH:
+                console.print()
+                console.print("[bold]Privacy[/bold]")
+                for line in lines[1:]:
+                    console.print(f"[dim]{line}[/dim]")
+            else:
+                print("\n".join(lines))
+            return
+
+        if sub in {"opt-in", "on", "enable"}:
+            _save_settings(PrivacySettings(data_sharing=True, feedback_upload=True))
+            msg = "Data sharing enabled for feedback. Local copies are still kept."
+            console.print(f"[green]{msg}[/green]" if HAS_RICH else msg)
+            return
+
+        if sub in {"opt-out", "off", "disable"}:
+            _save_settings(PrivacySettings(data_sharing=False, feedback_upload=False))
+            msg = "Data sharing disabled. Feedback stays local only."
+            console.print(f"[green]{msg}[/green]" if HAS_RICH else msg)
+            return
+
+        if sub == "export":
+            dest = rest or None
+            try:
+                path = store.export_jsonl(dest)
+            except Exception as exc:
+                msg = f"Export failed: {exc}"
+                console.print(f"[red]{msg}[/red]" if HAS_RICH else msg)
+                return
+            msg = f"Exported feedback to {path}"
+            console.print(f"[green]{msg}[/green]" if HAS_RICH else msg)
+            return
+
+        if sub in {"delete", "clear"}:
+            count = store.delete_all()
+            msg = f"Deleted {count} local feedback record(s)."
+            console.print(f"[green]{msg}[/green]" if HAS_RICH else msg)
+            return
+
+        msg = "Usage: /privacy [status|opt-in|opt-out|export [path]|delete]"
+        console.print(f"[dim]{msg}[/dim]" if HAS_RICH else msg)
 
     # ---- Market data commands (expose unused Aria tools) ----
 
@@ -12517,7 +8692,7 @@ class SlashCommands:
         else:
             # Try remote tool first; fall back to local MarketDataClient if backend unavailable
             result = await execute_aria_tool(self.terminal.api_url, "get_market_indices", {})
-            if result.get("success"):
+            if result and result.get("success"):
                 await self._run_tool_cmd("get_market_indices", {}, "market indices")
             elif _HAS_MDC:
                 # Local fallback via MarketDataClient.indices()
@@ -12565,6 +8740,88 @@ class SlashCommands:
         """Factor analysis: /factors AAPL"""
         symbol = args.strip().upper() or "AAPL"
         await self._run_tool_cmd("calculate_factors", {"symbol": symbol}, f"factors {symbol}")
+
+    async def cmd_factor_lab(self, args: str):
+        """/factor-lab <SYMBOL> [days=252] — 量化因子工作台（动量/波动率/Sharpe/Amihud）"""
+        parts  = args.strip().split()
+        symbol = parts[0].upper() if parts else "AAPL"
+        market = "CN" if any(symbol.startswith(p) for p in ("SH", "SZ", "6", "0", "3")) else "US"
+
+        await self._run_tool_cmd(
+            "equity_factor_scores",
+            {"symbol": symbol, "period": "1y", "market": market},
+            f"factor-lab {symbol}",
+        )
+
+    async def cmd_execution(self, args: str):
+        """/execution <SYMBOL> <buy|sell> <qty> [algo=compare] [price=0] — 执行算法对比"""
+        parts = args.strip().split()
+        if len(parts) < 3:
+            if HAS_RICH:
+                console.print("[dim]Usage: /execution AAPL buy 100000 [algo=compare] [price=180][/dim]")
+            return
+
+        symbol    = parts[0].upper()
+        side      = parts[1].lower()
+        try:
+            total_qty = float(parts[2].replace(",", ""))
+        except ValueError:
+            if HAS_RICH: console.print("[red]qty 必须是数字[/red]")
+            return
+
+        algo  = "compare"
+        price = 0.0
+        for p in parts[3:]:
+            if p.startswith("algo="):
+                algo = p.split("=", 1)[1]
+            elif p.startswith("price="):
+                try:
+                    price = float(p.split("=", 1)[1])
+                except ValueError:
+                    pass
+
+        if price <= 0:
+            # 尝试从市场数据获取现价
+            try:
+                import yfinance as yf
+                t = yf.Ticker(symbol)
+                info = t.fast_info
+                price = float(getattr(info, "last_price", 0) or 0)
+            except Exception:
+                price = 100.0
+
+        await self._run_tool_cmd(
+            "execution_schedule",
+            {
+                "symbol":          symbol,
+                "side":            side,
+                "total_qty":       total_qty,
+                "benchmark_price": price,
+                "algo":            algo,
+            },
+            f"执行计划 {symbol} {side} {total_qty:,.0f}股",
+        )
+
+    async def cmd_stat_arb(self, args: str):
+        """/stat-arb <SYMBOL_A> <SYMBOL_B> [period=2y] — 配对协整检验 + 当前 z-score"""
+        parts = args.strip().split()
+        if len(parts) < 2:
+            if HAS_RICH:
+                console.print("[dim]Usage: /stat-arb GLD SLV [period=2y][/dim]")
+            return
+
+        sym_a  = parts[0].upper()
+        sym_b  = parts[1].upper()
+        period = "2y"
+        for p in parts[2:]:
+            if p.startswith("period="):
+                period = p.split("=", 1)[1]
+
+        await self._run_tool_cmd(
+            "pair_stats",
+            {"symbol_a": sym_a, "symbol_b": sym_b, "period": period},
+            f"配对检验 {sym_a}/{sym_b}",
+        )
 
     async def cmd_compliance(self, args: str):
         """Compliance check: /compliance <strategy>"""
@@ -12726,278 +8983,7 @@ class SlashCommands:
                 print(_j.dumps(arc.to_dict(), indent=2, ensure_ascii=False))
 
     # ---- Local LLM provider status ----
-
-    def cmd_providers(self, args: str):
-        """Show all LLM providers: local backends + cloud API status (Open Interpreter style)."""
-        if HAS_RICH:
-            console.print()
-
-        # ── Section 1: Local backends ────────────────────────────────────────
-        try:
-            from local_llm_provider import probe_all_backends, BACKEND_DEFAULTS
-            results = probe_all_backends()
-            current_provider = self.terminal.config.get("local_provider", "ollama")
-            # Count Ollama models if online
-            _ollama_count = ""
-            if results.get("ollama"):
-                try:
-                    _omodels, _ = detect_ollama_models_rich(
-                        self.terminal.config.get("ollama_url", "http://localhost:11434"))
-                    _ollama_count = f"  [dim]{len(_omodels)} 个模型[/dim]" if _omodels else ""
-                except Exception:
-                    pass
-
-            if HAS_RICH:
-                console.print("  [bold]本地 Backend[/bold]")
-                console.print()
-            else:
-                print("  == Local Backends ==")
-
-            for name, available in results.items():
-                info   = BACKEND_DEFAULTS.get(name, {})
-                url    = info.get("default_url", "")
-                color  = "green" if available else "dim"
-                icon   = "✅" if available else "○"
-                active = " ◀ active" if name == current_provider else ""
-                extra  = _ollama_count if (name == "ollama" and available) else ""
-                if HAS_RICH:
-                    console.print(
-                        f"  {icon} [{color}]{name:12s}[/{color}]"
-                        f" [dim]{url:30s}[/dim]{extra}"
-                        f"[green]{active}[/green]"
-                    )
-                else:
-                    status = "✓" if available else "✗"
-                    print(f"  {status} {name:12s} {url}{active}")
-        except ImportError:
-            pass
-
-        # ── Section 2: Cloud provider API keys ───────────────────────────────
-        pjson = _load_providers_json()
-        _CLOUD_LIST = [
-            ("deepseek",    "DeepSeek",   "deepseek/deepseek-chat"),
-            ("openai",      "OpenAI",     "openai/gpt-4o"),
-            ("groq",        "Groq",       "groq/llama-3.3-70b-versatile"),
-            ("anthropic",   "Anthropic",  "anthropic/claude-3-5-sonnet"),
-            ("together",    "Together",   "together/meta-llama/Meta-Llama-3-70B"),
-            ("siliconflow", "SiliconFlow","siliconflow/deepseek-ai/DeepSeek-V3"),
-            ("moonshot",    "Moonshot",   "moonshot/moonshot-v1-8k"),
-        ]
-        if HAS_RICH:
-            console.print()
-            console.print("  [bold]Cloud Provider API[/bold]")
-            console.print()
-        else:
-            print()
-            print("  == Cloud Providers ==")
-
-        for prov, label, example_model in _CLOUD_LIST:
-            env_var = _PROVIDER_KEY_MAP.get(prov, "")
-            key = (os.getenv(env_var, "") if env_var else "") or \
-                  (pjson.get(prov, {}).get("api_key", "") if isinstance(pjson, dict) else "")
-            if key:
-                masked = key[:6] + "****" + key[-4:] if len(key) > 10 else "****"
-                if HAS_RICH:
-                    console.print(f"  🔑 [green]{label:14s}[/green] [dim]{masked}[/dim]")
-                else:
-                    print(f"  ✓ {label:14s} {masked}")
-            else:
-                hint = f"/apikey set {prov} <key>"
-                if HAS_RICH:
-                    console.print(f"  ○ [dim]{label:14s} 未配置  →  {hint}[/dim]")
-                else:
-                    print(f"  ✗ {label:14s} {hint}")
-
-        # ── Custom endpoint ──────────────────────────────────────────────────
-        custom_ep = self.terminal.config.get("custom_endpoint", "")
-        custom_m  = self.terminal.config.get("custom_model", "")
-        if custom_ep:
-            if HAS_RICH:
-                console.print()
-                console.print(f"  🔧 [bold]Custom endpoint[/bold]  [dim]{custom_ep}[/dim]  model=[cyan]{custom_m or '?'}[/cyan]")
-            else:
-                print(f"\n  Custom: {custom_ep}  model={custom_m}")
-
-        # ── Data service keys section ─────────────────────────────────────────
-        _data_keys = _load_data_keys()
-        _DATA_DISPLAY = [
-            ("finnhub",      "Finnhub",       "股票+新闻"),
-            ("newsapi",      "NewsAPI",        "财经新闻"),
-            ("brave",        "Brave Search",   "网页搜索"),
-            ("alphavantage", "Alpha Vantage",  "历史数据"),
-            ("coingecko",    "CoinGecko Pro",  "加密数据"),
-            ("twelvedata",   "Twelve Data",    "全球行情"),
-        ]
-        if HAS_RICH:
-            console.print()
-            console.print("  [bold]📊 数据服务 API[/bold]  [dim](后端离线时的本地数据源)[/dim]")
-            console.print()
-        else:
-            print("\n  == Data Service APIs ==")
-        for svc, label, desc in _DATA_DISPLAY:
-            key_val = _data_keys.get(svc, "")
-            if key_val:
-                masked = key_val[:6] + "****" + key_val[-4:] if len(key_val) > 10 else "****"
-                signup = _DATA_SIGNUP_URLS.get(svc, "")
-                if HAS_RICH:
-                    console.print(f"  🔑 [green]{label:18s}[/green] [dim]{masked}  {desc}[/dim]")
-                else:
-                    print(f"  ✓ {label:18s} {masked}")
-            else:
-                hint   = f"/apikey set {svc} <key>"
-                signup = _DATA_SIGNUP_URLS.get(svc, "")
-                if HAS_RICH:
-                    console.print(f"  ○ [dim]{label:18s} 未配置  →  {hint}[/dim]")
-                else:
-                    print(f"  ✗ {label:18s} {hint}")
-
-        # ── Free data source registry (akshare / yfinance / tushare) ────────────
-        try:
-            from datasources.router import DataRouter as _DR
-            free_sources = _DR().list_sources()
-        except Exception:
-            free_sources = []
-
-        if free_sources:
-            if HAS_RICH:
-                console.print()
-                console.print("  [bold]免费行情数据源[/bold]  [dim](datasources/router — no API key required)[/dim]")
-                console.print()
-            else:
-                print("\n  == Free Market Data Sources ==")
-            for s in free_sources:
-                ok_icon = "[green]✓[/green]" if s["configured"] else "[dim]○[/dim]"
-                key_tag = " [dim](no key)[/dim]" if not s["needs_key"] else " [dim](API key)[/dim]"
-                mkts    = ", ".join(s.get("markets", []))
-                if HAS_RICH:
-                    console.print(
-                        f"  {ok_icon} [bold]{s['name']:12s}[/bold]  "
-                        f"[dim]{mkts:22s}[/dim]{key_tag}"
-                    )
-                else:
-                    ok   = "✓" if s["configured"] else "○"
-                    key  = "(no key)" if not s["needs_key"] else "(key)"
-                    print(f"  {ok} {s['name']:12s}  {mkts:22s}  {key}")
-            if HAS_RICH:
-                console.print("  [dim]Config: ~/.aria/datasources.yaml[/dim]")
-
-        if HAS_RICH:
-            console.print()
-            console.print("  [dim]配置 LLM Key:   /apikey set deepseek <key>[/dim]")
-            console.print("  [dim]配置数据 Key:   /apikey set finnhub <key>[/dim]")
-            console.print("  [dim]切换模型:       /model deepseek/deepseek-chat[/dim]")
-            console.print("  [dim]首次向导:       /setup[/dim]")
-            console.print("  [dim]自定义端点:     /config set custom_endpoint=http://...[/dim]")
-            console.print()
-
     # ---- Alibaba Cloud data service config ----
-
-    async def cmd_cloud(self, args: str):
-        """
-        Manage Alibaba Cloud data service connection.
-
-        Usage:
-          /cloud status              — show connection status & circuit breaker state
-          /cloud set <url>           — set cloud_api_server URL (e.g. http://your-aliyun-ip:8000)
-          /cloud data <url>          — set akshare_data_server URL (e.g. http://your-aliyun-ip:8002)
-          /cloud token <jwt-token>   — set API token
-          /cloud health              — live health-check both services
-          /cloud reset               — reset circuit breakers
-        """
-        try:
-            from aliyun_data_client import AliyunDataClient, save_cloud_config
-        except ImportError:
-            if HAS_RICH:
-                console.print("  [red]aliyun_data_client.py not found[/red]")
-            else:
-                print("  aliyun_data_client.py not found")
-            return
-
-        parts = args.strip().split(None, 2)
-        sub   = parts[0].lower() if parts else "status"
-
-        if sub == "set" and len(parts) >= 2:
-            url = parts[1]
-            save_cloud_config(cloud_url=url)
-            AliyunDataClient.reset()
-            if HAS_RICH:
-                console.print(f"  [green]Cloud API URL set to: {url}[/green]")
-                console.print(f"  [dim]Saved to ~/.arthera/config.json[/dim]")
-            return
-
-        if sub == "data" and len(parts) >= 2:
-            url = parts[1]
-            save_cloud_config(data_url=url)
-            AliyunDataClient.reset()
-            if HAS_RICH:
-                console.print(f"  [green]AKShare Data URL set to: {url}[/green]")
-                console.print(f"  [dim]Saved to ~/.arthera/config.json[/dim]")
-            return
-
-        if sub == "token" and len(parts) >= 2:
-            token = parts[1]
-            save_cloud_config(api_token=token)
-            AliyunDataClient.reset()
-            if HAS_RICH:
-                console.print(f"  [green]API token saved (length {len(token)})[/green]")
-            return
-
-        if sub == "reset":
-            AliyunDataClient.reset()
-            if HAS_RICH:
-                console.print("  [green]Circuit breakers reset, config reloaded[/green]")
-            return
-
-        client = AliyunDataClient.get()
-
-        if sub == "health":
-            if HAS_RICH:
-                console.print("  [dim]Checking health…[/dim]")
-            with console.status("[dim]Checking cloud services…[/dim]", spinner="dots") if HAS_RICH else _null_ctx():
-                cloud_h = await client.health_cloud()
-                data_h  = await client.health_data()
-
-            if HAS_RICH:
-                console.print()
-                _c = "green" if cloud_h.get("status") == "healthy" else "red"
-                _d = "green" if data_h.get("status") not in ("unreachable", None) else "red"
-                console.print(f"  [{_c}]● cloud_api_server[/{_c}]  {client.cloud_url}")
-                console.print(f"    status: {cloud_h.get('status', '?')}")
-                if cloud_h.get("services"):
-                    for svc, st in cloud_h["services"].items():
-                        icon = "✓" if "online" in str(st) or "ready" in str(st) else "○"
-                        console.print(f"    [dim]{icon} {svc}: {st}[/dim]")
-                console.print()
-                console.print(f"  [{_d}]● akshare_data_server[/{_d}]  {client.data_url}")
-                console.print(f"    status: {data_h.get('status', '?')}")
-                console.print()
-            else:
-                print(f"  cloud: {cloud_h.get('status')} | data: {data_h.get('status')}")
-            return
-
-        # Default: /cloud status
-        st = client.status()
-        if HAS_RICH:
-            console.print()
-            console.print("  [bold]Alibaba Cloud Data Services[/bold]")
-            console.print()
-            _c = "green" if st["cloud_cb"] == "closed" else "red"
-            _d = "green" if st["data_cb"]  == "closed" else "red"
-            console.print(f"  [{_c}]●[/{_c}] cloud_api_server   [dim]{st['cloud_url']}[/dim]"
-                          f"  [{_c}]{st['cloud_cb']}[/{_c}]")
-            console.print(f"  [{_d}]●[/{_d}] akshare_data_server [dim]{st['data_url']}[/dim]"
-                          f"  [{_d}]{st['data_cb']}[/{_d}]")
-            tok_str = "[green]set[/green]" if st["has_token"] else "[dim]not set[/dim]"
-            console.print(f"  Auth token: {tok_str}")
-            console.print()
-            console.print("  [dim]Configure: /cloud set <url>  /cloud data <url>  /cloud token <jwt>[/dim]")
-            console.print("  [dim]Health:    /cloud health[/dim]")
-            console.print()
-        else:
-            print(f"  Cloud: {st['cloud_url']} ({st['cloud_cb']})")
-            print(f"  Data:  {st['data_url']} ({st['data_cb']})")
-            print(f"  Token: {'set' if st['has_token'] else 'not set'}")
-
     # ---- AI Signal from cloud ----
 
     async def cmd_signal(self, args: str):
@@ -13105,37 +9091,6 @@ class SlashCommands:
 
     # ---- Finance local tool shortcuts ----
 
-    async def cmd_screen_cn(self, args: str):
-        """A股选股筛选器 (local, akshare)."""
-        params: Dict[str, Any] = {}
-        for tok in args.split():
-            if "=" in tok:
-                k, v = tok.split("=", 1)
-                params[k.strip()] = v.strip()
-        tool_name = "screen_ashare"
-        if tool_name in LOCAL_TOOLS:
-            await self._run_local_tool(tool_name, params, "A股选股筛选")
-        else:
-            await self.terminal.send_message(f"帮我筛选A股股票，条件：{args or '市值>50亿，非ST，流动性好'}")
-
-    async def cmd_limitup(self, args: str):
-        """A股涨停板池."""
-        params = {"date": args.strip()} if args.strip() else {}
-        tool_name = "get_limit_up_pool"
-        if tool_name in LOCAL_TOOLS:
-            await self._run_local_tool(tool_name, params, "涨停板池")
-        else:
-            await self.terminal.send_message("查询今天A股涨停板池，列出涨停股票和连续涨停次数")
-
-    async def cmd_north(self, args: str):
-        """北向资金净流入."""
-        params = {"days": int(args.strip())} if args.strip().isdigit() else {"days": 10}
-        tool_name = "get_northbound_flow"
-        if tool_name in LOCAL_TOOLS:
-            await self._run_local_tool(tool_name, params, "北向资金")
-        else:
-            await self.terminal.send_message("查询最近10天北向资金（沪深港通）净买入情况")
-
     async def cmd_optimize_port(self, args: str):
         """Portfolio weight optimisation."""
         symbols = [s.strip().upper() for s in args.split() if s.strip()]
@@ -13187,155 +9142,6 @@ class SlashCommands:
     # ════════════════════════════════════════════════════════════════════════
     # 金融 Agent 团队命令
     # ════════════════════════════════════════════════════════════════════════
-
-    async def cmd_team(self, args: str):
-        """
-        多 Agent 金融研究团队：宏观 + 基本面 + 技术 + 风控 → 综合报告
-        Usage: /team NVDA
-               /team 000333 --agents technical,risk
-               /team watchlist
-        """
-        import sys as _sys
-        parts = args.strip().split()
-
-        # 解析参数
-        agent_names = None
-        symbols_raw = []
-        i = 0
-        while i < len(parts):
-            if parts[i] == "--agents" and i + 1 < len(parts):
-                agent_names = [a.strip() for a in parts[i+1].split(",")]
-                i += 2
-            else:
-                symbols_raw.append(parts[i])
-                i += 1
-
-        if not symbols_raw or symbols_raw[0].lower() == "watchlist":
-            symbols = self.terminal.config.get("watchlist", ["AAPL", "MSFT", "NVDA"])[:3]
-        else:
-            symbols = [p.upper() for p in symbols_raw[:3]]
-
-        # 优先使用新 agents/team.py，回退到旧 financial_agents.py
-        _use_new_agents = False
-        try:
-            from agents.team import run_team as _new_run_team
-            from agents.registry import get_registry as _get_reg
-            from providers.llm.registry import get_provider as _get_prov
-            from datasources.router import get_router as _get_ds
-            _use_new_agents = True
-        except ImportError:
-            pass
-
-        for sym in symbols:
-            if HAS_RICH:
-                console.print()
-                console.print(f"  [bold cyan]━━━ /team {sym} ━━━[/bold cyan]")
-                console.print()
-            else:
-                print(f"\n  ━━━ /team {sym} ━━━\n")
-
-            if _use_new_agents:
-                # ── 新 Agent 系统（无 Ollama 依赖）────────────────────────
-                tokens = []
-                def _on_tok(t):
-                    tokens.append(t)
-                    _sys.stdout.write(t); _sys.stdout.flush()
-
-                def _on_agent_done(name, result):
-                    icon = "✅" if result.success else "⚠️ "
-                    msg  = f"  {icon} [{name}] {result.signal} ({result.confidence:.0%})"
-                    if HAS_RICH:
-                        console.print(msg)
-                    else:
-                        print(msg)
-
-                # LLM provider — prefer local Ollama, fall back to cloud
-                _llm = None
-                try:
-                    from providers.llm.registry import list_available_providers
-                    all_avail = [p for p in list_available_providers() if p["available"]]
-                    # Prefer local (Ollama) → avoids API costs for team analysis
-                    local_avail  = [p for p in all_avail if p["local"]]
-                    cloud_avail  = [p for p in all_avail if not p["local"]]
-                    chosen = (local_avail or cloud_avail)
-                    if chosen:
-                        _llm = _get_prov(chosen[0]["name"])
-                except Exception:
-                    pass
-
-                try:
-                    team_result = await _new_run_team(
-                        symbol     = sym,
-                        agents     = agent_names,
-                        llm_provider = _llm,
-                        data_router  = _get_ds(),
-                        on_token     = _on_tok,
-                        on_agent_done= _on_agent_done,
-                    )
-                    print()  # 换行
-                    if HAS_RICH:
-                        console.print(f"\n  [dim]耗时 {team_result.elapsed_sec:.1f}s  "
-                                      f"Signal: [bold]{team_result.final_signal}[/bold]  "
-                                      f"置信度: {team_result.confidence:.0%}[/dim]")
-                    else:
-                        print(f"\n  耗时 {team_result.elapsed_sec:.1f}s  "
-                              f"Signal: {team_result.final_signal}  "
-                              f"置信度: {team_result.confidence:.0%}")
-
-                    # 保存报告
-                    await self._save_team_report(sym, team_result)
-
-                except Exception as e:
-                    msg = f"团队分析失败: {e}"
-                    console.print(f"\n  [red]{msg}[/red]") if HAS_RICH else print(f"\n  {msg}")
-
-            elif _HAS_AGENTS:
-                # ── 旧 Ollama Agent（兜底）────────────────────────────────
-                ollama_url = self.terminal.config.get("ollama_url", "http://localhost:11434")
-                model      = self.terminal.config.get("model", "qwen2.5:7b")
-                tokens = []
-                def on_token(tok):
-                    tokens.append(tok)
-                    _sys.stdout.write(tok); _sys.stdout.flush()
-                try:
-                    result = await _run_team(
-                        symbol=sym, ollama_url=ollama_url, model=model,
-                        portfolio_symbols=self.terminal.config.get("watchlist",[]),
-                        on_token=on_token,
-                    )
-                except Exception as e:
-                    print(f"\n  Error: {e}")
-            else:
-                print("  agents 模块未找到，请检查 apps/cli/agents/ 目录")
-
-    async def _save_team_report(self, symbol: str, team_result) -> None:
-        """将 /team 分析结果保存为 Markdown 报告"""
-        import pathlib as _pl
-        from datetime import datetime as _dt
-        out_dir = _pl.Path.home() / "Desktop" / "Arthera" / "reports" / "team"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        ts      = _dt.now().strftime("%Y%m%d_%H%M")
-        out_f   = out_dir / f"{symbol}_team_{ts}.md"
-
-        lines = [
-            f"# {symbol} 多 Agent 研究报告",
-            f"> 生成时间: {_dt.now():%Y-%m-%d %H:%M}  |  最终信号: **{team_result.final_signal}**"
-            f"  |  置信度: {team_result.confidence:.0%}  |  耗时: {team_result.elapsed_sec:.1f}s",
-            "", "---", "",
-        ]
-        for r in team_result.results:
-            if r.success:
-                lines += [
-                    f"## {r.agent.upper()} ({r.signal}, {r.confidence:.0%})",
-                    "",
-                    r.analysis or "*(无分析文本)*",
-                    "",
-                ]
-        lines += ["---", "", "## 综合结论", "", team_result.synthesis or "*(无综合结论)*", ""]
-        out_f.write_text("\n".join(lines), encoding="utf-8")
-        msg = f"  📄 报告已保存: {out_f}"
-        console.print(f"  [dim]{msg}[/dim]") if HAS_RICH else print(msg)
-
     async def cmd_chart(self, args: str):
         """
         生成股票分析图表（HTML，含K线/均线/RSI/MACD）。
@@ -13372,215 +9178,6 @@ class SlashCommands:
         else:
             err = result.get("error") or result.get("response", "未知错误")
             _print_error(f"图表生成失败: {err[:120]}")
-
-    async def cmd_report(self, args: str):
-        """生成综合投资报告（图表 + 多 Agent 分析 → HTML / Markdown 文件）。
-
-        Usage:
-            /report AAPL
-            /report 000333
-            /report AAPL --format md      # Markdown 投研报告（离线可用）
-            /report AAPL --type deep      # 深度研报（8页）
-            /report AAPL --type brief     # 简评（1页）
-        """
-        import pathlib as _pl
-        from datetime import datetime as _dt
-        import re as _re_rpt
-
-        parts = args.split()
-        symbol = "AAPL"
-        fmt = "html"
-        report_type = "standard"
-        skip_next = False
-        for i, p in enumerate(parts):
-            if skip_next:
-                skip_next = False
-                continue
-            if p.startswith("--format="):
-                fmt = p.split("=", 1)[1].lower()
-            elif p == "--format" and i + 1 < len(parts):
-                fmt = parts[i + 1].lower()
-                skip_next = True
-            elif p.startswith("--type="):
-                report_type = p.split("=", 1)[1].lower()
-            elif p == "--type" and i + 1 < len(parts):
-                report_type = parts[i + 1].lower()
-                skip_next = True
-            elif not p.startswith("-"):
-                symbol = p.upper()
-
-        out_dir = _pl.Path.home() / "Desktop" / "Arthera" / "reports"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        ts = _dt.now().strftime("%Y%m%d_%H%M")
-
-        # ── Markdown report mode (works fully offline) ────────────────────────
-        if fmt in ("md", "markdown"):
-            console.print(f"\n  📄 生成 [bold]{symbol}[/bold] Markdown 投研报告 ({report_type})...") if HAS_RICH else print(f"\n  Generating {symbol} Markdown report...")
-
-            # Fetch real data
-            mdc_data = {}
-            if _HAS_MDC:
-                try:
-                    mdc = _get_mdc()
-                    q = mdc.quote(symbol)
-                    ti = mdc.technical_indicators(symbol, days=120)
-                    mdc_data = {**q, **ti}
-                except Exception:
-                    pass
-
-            price    = mdc_data.get("price", "N/A")
-            chg      = mdc_data.get("change_pct", 0)
-            rsi      = mdc_data.get("rsi", "N/A")
-            macd     = mdc_data.get("macd", "N/A")
-            ma20     = mdc_data.get("ma20", "N/A")
-            ma60     = mdc_data.get("ma60", "N/A")
-            bb_upper = mdc_data.get("bb_upper", "N/A")
-            bb_lower = mdc_data.get("bb_lower", "N/A")
-            sign     = "+" if isinstance(chg, (int, float)) and chg >= 0 else ""
-
-            depth_prompt = (
-                "深度（8页）版本：包含估值模型（DCF + 相对估值）、财务分析（3年P&L）、管理层分析、行业竞争格局" if report_type == "deep"
-                else "简评版本：1页，核心观点 + 关键数据 + 1句话结论" if report_type == "brief"
-                else "标准版本：封面、技术分析、基本面概览、风险因素"
-            )
-
-            ai_prompt = (
-                f"为 {symbol} 生成一份专业 Markdown 投研报告（{depth_prompt}）。\n\n"
-                f"**实时数据（必须使用这些数字）**：\n"
-                f"- 当前价: {price}  涨跌: {sign}{chg:.2f}%\n"
-                f"- RSI(14): {rsi}  MACD: {macd}\n"
-                f"- MA20: {ma20}  MA60: {ma60}\n"
-                f"- 布林上轨: {bb_upper}  布林下轨: {bb_lower}\n\n"
-                f"报告结构（Markdown）：\n"
-                f"# {symbol} 投资研究报告\n"
-                f"**评级**: 买入/中性/减持  **目标价**: X.XX  **日期**: {_dt.now().strftime('%Y-%m-%d')}\n\n"
-                f"## 核心观点\n"
-                f"## 技术面分析\n"
-                f"## 基本面概况\n"
-                f"## 风险因素\n"
-                f"## 投资建议\n\n"
-                f"请用真实数据，不要使用占位符，用中文输出。"
-            )
-
-            await self.terminal.send_message(ai_prompt)
-
-            # Extract last AI response and save as markdown
-            last_ai = next(
-                (m["content"] for m in reversed(self.terminal.conversation)
-                 if m.get("role") == "assistant"), ""
-            )
-            if last_ai:
-                out_f = out_dir / f"{symbol}_report_{ts}.md"
-                # Clean up any market data injection blocks
-                clean = _re_rpt.sub(r'\n*## 📊.*?(?=\n#|\Z)', '', last_ai, flags=_re_rpt.DOTALL).strip()
-                out_f.write_text(clean, encoding="utf-8")
-                if HAS_RICH:
-                    console.print(f"\n  [green]✅ 报告已保存: {out_f}[/green]")
-                    console.print(f"  [dim]预览: open {out_f}[/dim]\n")
-                else:
-                    print(f"\n  Saved: {out_f}")
-            return
-
-        import pathlib as _pl
-        from datetime import datetime as _dt
-
-        out_f   = out_dir / f"{symbol}_report_{ts}.html"
-
-        if HAS_RICH:
-            console.print(f"\n  🔍 正在生成 [bold]{symbol}[/bold] 综合报告...")
-        else:
-            print(f"\n  正在生成 {symbol} 综合报告...")
-
-        # 1. 图表
-        chart_html = ""
-        chart_result = await asyncio.get_event_loop().run_in_executor(
-            None, lambda: _generate_chart_sync(symbol)
-        )
-        if chart_result.get("success"):
-            chart_path = chart_result.get("chart_path", "")
-            try:
-                with open(chart_path, encoding="utf-8") as f:
-                    raw = f.read()
-                # 提取 chart div + script
-                import re as _re
-                body = _re.search(r"<main>(.*?)</main>", raw, _re.DOTALL)
-                chart_html = body.group(1) if body else raw[raw.find("<body>"):]
-            except Exception:
-                chart_html = f'<p><a href="{chart_path}" target="_blank">打开图表</a></p>'
-        else:
-            chart_html = f'<p style="color:#888">图表获取失败: {chart_result.get("error","")}</p>'
-
-        # 2. Agent 分析
-        agent_html = ""
-        try:
-            from agents.team import run_team as _new_run_team
-            from datasources.router import get_router as _get_ds
-            team_result = await _new_run_team(
-                symbol=symbol, data_router=_get_ds()
-            )
-            agent_lines = []
-            for r in team_result.results:
-                if r.success:
-                    bg = {"BUY":"#e8f5e9","SELL":"#fce4ec","HOLD":"#f5f5f5",
-                          "REDUCE":"#fff8e1","STRONG_BUY":"#c8e6c9"}.get(r.signal,"#f5f5f5")
-                    agent_lines.append(
-                        f'<div style="background:{bg};border-radius:8px;padding:12px;margin:8px 0">'
-                        f'<strong>{r.agent.upper()}</strong> &nbsp; '
-                        f'<span style="color:#555">{r.signal} ({r.confidence:.0%})</span>'
-                        f'<hr style="margin:6px 0;opacity:.2">'
-                        f'<pre style="white-space:pre-wrap;font-size:13px;margin:0">'
-                        f'{r.analysis[:600] if r.analysis else "(无分析)"}</pre></div>'
-                    )
-            synthesis_html = (
-                f'<div style="background:#e3f2fd;border-radius:8px;padding:14px;margin-top:12px">'
-                f'<strong>综合结论</strong>: {team_result.final_signal} '
-                f'(置信度 {team_result.confidence:.0%})<hr style="margin:6px 0;opacity:.2">'
-                f'<pre style="white-space:pre-wrap;font-size:13px;margin:0">'
-                f'{team_result.synthesis[:800] if team_result.synthesis else ""}</pre></div>'
-            )
-            agent_html = "\n".join(agent_lines) + synthesis_html
-        except Exception as e:
-            agent_html = f'<p style="color:#888">Agent 分析失败: {e}</p>'
-
-        # 3. 输出 HTML
-        from datetime import datetime as _dt2
-        html = f"""<!doctype html>
-<html lang="zh-CN"><head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{symbol} — Aria 综合投资报告</title>
-<style>
-  body{{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
-        background:#f7f8fa;color:#17202a}}
-  .wrap{{max-width:1100px;margin:0 auto;padding:28px}}
-  h1{{margin:0 0 4px;font-size:26px}}
-  .meta{{color:#667085;font-size:13px;margin-bottom:20px}}
-  .section{{background:#fff;border:1px solid #e5e7eb;border-radius:10px;
-            padding:20px;margin-bottom:20px}}
-  h2{{font-size:16px;margin:0 0 12px;color:#374151}}
-  pre{{font-family:"SF Mono","Menlo",monospace;font-size:12px}}
-  .footer{{text-align:center;color:#999;font-size:12px;margin-top:20px}}
-</style></head>
-<body><div class="wrap">
-  <h1>{symbol} 综合投资报告</h1>
-  <p class="meta">生成时间: {_dt2.now():%Y-%m-%d %H:%M} &nbsp;|&nbsp; Aria Code</p>
-  <div class="section"><h2>📈 技术图表</h2>{chart_html}</div>
-  <div class="section"><h2>🤖 多 Agent 分析</h2>{agent_html}</div>
-  <p class="footer">⚠️ 本报告仅供参考，不构成投资建议。</p>
-</div></body></html>"""
-
-        out_f.write_text(html, encoding="utf-8")
-        path = str(out_f)
-        if HAS_RICH:
-            console.print(f"\n  ✅ 报告已保存: [link={path}]{path}[/link]")
-        else:
-            print(f"\n  ✅ 报告已保存: {path}")
-        import subprocess
-        try:
-            subprocess.Popen(["open", path])
-        except Exception:
-            pass
-
     async def cmd_shortterm(self, args: str):
         """
         运行 A股短线分析（日线级别，3-15交易日）并输出报告。
@@ -13647,7 +9244,8 @@ class SlashCommands:
             r = mdc.indices()
 
         if not r.get("success"):
-            console.print(f"  [red]{r.get('error','failed')}[/red]" if HAS_RICH else r.get('error'))
+            err = _clean_tool_error_message(r.get("error", "failed"))
+            console.print(f"  [red]{err}[/red]" if HAS_RICH else err)
             return
 
         if HAS_RICH:
@@ -13682,7 +9280,7 @@ class SlashCommands:
         for p in parts:
             if p.startswith("top="):
                 try: top_n = int(p.split("=")[1])
-                except: pass
+                except ValueError: pass
 
         mdc = _get_mdc()
         if HAS_RICH:
@@ -13721,285 +9319,61 @@ class SlashCommands:
 
     async def cmd_ta(self, args: str):
         """技术指标分析.  Usage: /ta NVDA [days=120]"""
-        if not _HAS_MDC:
-            console.print("  [dim]market_data_client 未加载[/dim]" if HAS_RICH else "market_data_client not loaded")
-            return
-        parts  = args.strip().split()
-        symbol = parts[0].upper() if parts else "AAPL"
-        days   = 120
-        for p in parts[1:]:
-            if p.startswith("days="):
-                try: days = int(p.split("=")[1])
-                except: pass
+        parsed = parse_technical_args(args)
+        symbol = parsed.symbol
+        days = parsed.days
 
-        mdc = _get_mdc()
+        service_result = None
         if HAS_RICH:
             with console.status(f"[dim]计算 {symbol} 技术指标...[/dim]", spinner="dots"):
-                r = mdc.technical_indicators(symbol, days=days)
+                from packages.aria_services.data import DataService
+                service_result = DataService().technical_indicators(symbol, days=days)
         else:
-            r = mdc.technical_indicators(symbol, days=days)
-
-        if not r.get("success"):
-            console.print(f"  [red]{r.get('error','failed')}[/red]" if HAS_RICH else r.get('error'))
+            from packages.aria_services.data import DataService
+            service_result = DataService().technical_indicators(symbol, days=days)
+        if not service_result or not service_result.success:
+            _ta_warns = (service_result.warnings or []) if service_result else []
+            _ta_errs  = (service_result.errors   or []) if service_result else []
+            _ta_data  = (service_result.data or {})    if service_result else {}
+            _missing  = ", ".join(service_result.missing_fields) if service_result else ""
+            _all_msgs = " ".join(_ta_warns + _ta_errs).lower()
+            # Show current price when we have partial data (e.g. new IPO with 1 bar)
+            _price_line = ""
+            if _ta_data.get("price"):
+                _price_line = f"  当前价格  [bold]{_display_value(_ta_data['price'])}[/bold]"
+                if _ta_data.get("history_bars"):
+                    _price_line += f"  [dim]({_ta_data['history_bars']} 个交易日数据)[/dim]"
+                _price_line += "\n"
+            if "数据不足" in _all_msgs or "新上市" in _all_msgs:
+                _reason = f"[yellow]历史数据不足[/yellow] — {symbol} 上市时间较短（< 14 个交易日），TA 指标无法计算\n  [dim]可待更多交易日积累后重试，或运行 `/analyze {symbol}` 查看基本面[/dim]"
+            elif "rate" in _all_msgs or "429" in _all_msgs or "too many" in _all_msgs:
+                _reason = f"[yellow]数据源频率限制[/yellow] — 稍后重试，或用 `/apikey set finnhub <KEY>` 切换数据源"
+            else:
+                _err = "; ".join(_ta_errs or _ta_warns) or "数据源暂时不可用"
+                _reason = f"[red]{_err[:120]}[/red]"
+                if _missing:
+                    _reason += f"  [dim]missing: {_missing}[/dim]"
+            if HAS_RICH:
+                if _price_line:
+                    console.print(f"\n{_price_line}")
+                console.print(f"  {_reason}\n")
+            else:
+                import re as _re
+                print(f"\n  {_re.sub(r'[[/].*?]', '', _price_line + _reason)}\n")
             return
 
-        rsi = r.get("rsi")
-        bb_pos = r.get("bb_position", 0.5)
-
-        def rsi_color(v):
-            if v is None: return "dim"
-            return "red" if v > 70 else "green" if v < 30 else "white"
-
-        def macd_color(v):
-            return "green" if v and v > 0 else "red"
-
-        if HAS_RICH:
-            console.print()
-            console.print(f"  [bold]{symbol}[/bold] 技术指标  "
-                          f"[dim]{days}日数据  "
-                          f"provider:{r.get('provider','')}[/dim]")
-            console.print()
-            console.print(f"  当前价格  [bold]{r.get('price','N/A')}[/bold]")
-            console.print(
-                f"  RSI(14)  [{rsi_color(rsi)}]{rsi if rsi else 'N/A'}[/{rsi_color(rsi)}]"
-                f"  {'超买⚠️' if rsi and rsi>70 else '超卖⚠️' if rsi and rsi<30 else '中性'}"
-            )
-            mh = r.get("macd_hist", 0)
-            console.print(
-                f"  MACD     {r.get('macd','N/A')}  Signal:{r.get('macd_signal','N/A')}  "
-                f"[{macd_color(mh)}]Hist:{mh}  "
-                f"{'金叉↑' if mh and mh>0 else '死叉↓'}[/{macd_color(mh)}]"
-            )
-            console.print(f"  布林带   上:{r.get('bb_upper','N/A')}  "
-                          f"中:{r.get('bb_mid','N/A')}  下:{r.get('bb_lower','N/A')}  "
-                          f"位置:{bb_pos:.2f}")
-            console.print()
-            for ma in ["ma5","ma10","ma20","ma60","ma120"]:
-                if r.get(ma):
-                    console.print(f"  {ma.upper():<7} {r[ma]}", end="  ")
-            console.print()
-            console.print()
-        else:
-            print(f"\n  {symbol} 技术指标")
-            print(f"  价格: {r.get('price')}  RSI: {rsi}  MACD_hist: {r.get('macd_hist')}")
-            for ma in ["ma5","ma10","ma20","ma60"]:
-                if r.get(ma): print(f"  {ma.upper()}: {r[ma]}", end="  ")
-            print()
+        print_ta_result(
+            console=console,
+            has_rich=HAS_RICH,
+            symbol=symbol,
+            days=days,
+            service_result=service_result,
+            formatter=_display_value,
+        )
 
     # ════════════════════════════════════════════════════════════════════════
     # 策略金库命令
     # ════════════════════════════════════════════════════════════════════════
-
-    async def cmd_strategy(self, args: str):
-        """
-        策略版本管理系统 (Strategy Vault)
-
-        /strategy save [name] [message]   — 保存当前对话中最后一段代码
-        /strategy list [name]             — 列出所有版本
-        /strategy diff [name] [v1] [v2]   — 查看版本差异
-        /strategy load [name] [tag/id]    — 加载版本到上下文
-        /strategy review                  — AI审查+静态检测
-        """
-        if not _HAS_VAULT:
-            console.print("  [yellow]strategy_vault.py 未找到[/yellow]" if HAS_RICH
-                          else "  strategy_vault.py not found")
-            return
-
-        parts = args.strip().split(None, 3)
-        sub   = parts[0].lower() if parts else "list"
-
-        vault = _get_vault()
-
-        # ── save ──────────────────────────────────────────────────────────
-        if sub == "save":
-            # 从对话历史中提取最后一段 Python 代码
-            code = self._extract_last_code()
-            if not code:
-                if HAS_RICH:
-                    console.print("  [yellow]未在对话中找到代码块。先让 Aria 生成策略代码。[/yellow]")
-                else:
-                    print("  No code found in conversation. Generate strategy code first.")
-                return
-            name    = parts[1] if len(parts) > 1 and not parts[1].startswith('"') else "strategy"
-            message = " ".join(parts[2:]).strip('"') if len(parts) > 2 else ""
-            sv = vault.save(code, name=name, message=message)
-            if HAS_RICH:
-                console.print(
-                    f"\n  [green]✓[/green] 策略已保存  "
-                    f"[bold]{sv.name}[/bold] [dim]{sv.version_tag}[/dim]  "
-                    f"hash={sv.code_hash}  {sv.created_at[:16]}"
-                )
-            else:
-                print(f"  Saved: {sv.name} {sv.version_tag} ({sv.created_at[:16]})")
-
-        # ── list ──────────────────────────────────────────────────────────
-        elif sub == "list":
-            name = parts[1] if len(parts) > 1 else None
-            if name:
-                versions = vault.list(name)
-                title = f"  策略: {name}"
-            else:
-                # Show all strategies
-                all_names = vault.list_all_names()
-                if not all_names:
-                    console.print("  [dim]策略金库为空。使用 /strategy save 保存策略。[/dim]" if HAS_RICH
-                                  else "  Vault is empty.")
-                    return
-                if HAS_RICH:
-                    console.print("\n  [bold]策略金库[/bold]\n")
-                    for n in all_names:
-                        vs = vault.list(n, limit=3)
-                        latest = vs[0] if vs else None
-                        if latest:
-                            bt = ""
-                            if latest.backtest_result:
-                                br = latest.backtest_result
-                                bt = f"  sharpe={br.get('sharpe_ratio','?')} ret={br.get('total_return_pct','?')}%"
-                            console.print(
-                                f"  [bold]{n}[/bold]  [dim]{len(vs)}个版本  "
-                                f"最新:{latest.version_tag}  {latest.created_at[:10]}{bt}[/dim]"
-                            )
-                    console.print()
-                else:
-                    for n in all_names:
-                        print(f"  {n}")
-                return
-            if not versions:
-                console.print(f"  [dim]没有找到策略 '{name}'[/dim]" if HAS_RICH else f"  Not found: {name}")
-                return
-            if HAS_RICH:
-                console.print(f"\n  [bold]{title}[/bold]\n")
-                for v in versions:
-                    bt = ""
-                    if v.backtest_result:
-                        br = v.backtest_result
-                        sharpe = br.get("sharpe_ratio")
-                        ret    = br.get("total_return_pct")
-                        bt = f"  [green]sharpe={sharpe:.2f}  ret={ret:.1f}%[/green]" if sharpe else ""
-                    reviewed = "  [dim]✓reviewed[/dim]" if v.review_result else ""
-                    msg = f"  [dim]{v.message[:50]}[/dim]" if v.message else ""
-                    console.print(
-                        f"  [dim]{v.id:4d}[/dim]  [bold]{v.version_tag}[/bold]  "
-                        f"[dim]{v.created_at[:16]}[/dim]{msg}{bt}{reviewed}"
-                    )
-                console.print()
-            else:
-                for v in versions:
-                    print(v.summary_line())
-
-        # ── diff ──────────────────────────────────────────────────────────
-        elif sub == "diff":
-            name  = parts[1] if len(parts) > 1 else "strategy"
-            tag_a = parts[2] if len(parts) > 2 else None
-            tag_b = parts[3] if len(parts) > 3 else None
-            diff_text = vault.diff(name, tag_a, tag_b)
-            if HAS_RICH:
-                console.print()
-                # Simple color: + lines green, - lines red
-                for line in diff_text.splitlines():
-                    if line.startswith("+++") or line.startswith("---"):
-                        console.print(f"  [bold]{line}[/bold]")
-                    elif line.startswith("+"):
-                        console.print(f"  [green]{line}[/green]")
-                    elif line.startswith("-"):
-                        console.print(f"  [red]{line}[/red]")
-                    elif line.startswith("@@"):
-                        console.print(f"  [cyan]{line}[/cyan]")
-                    else:
-                        console.print(f"  {line}")
-                console.print()
-            else:
-                print(diff_text)
-
-        # ── load ──────────────────────────────────────────────────────────
-        elif sub == "load":
-            name    = parts[1] if len(parts) > 1 else "strategy"
-            tag     = parts[2] if len(parts) > 2 else None
-            version = vault.load(name, version_tag=tag)
-            if not version:
-                console.print(f"  [red]未找到: {name} {tag or '(latest)'}[/red]" if HAS_RICH
-                              else f"  Not found: {name} {tag}")
-                return
-            # Inject code into conversation context as a user message
-            code_msg = f"以下是策略 {version.name} {version.version_tag} 的代码：\n\n```python\n{version.code}\n```"
-            self.terminal.conversation.append({"role": "assistant", "content": code_msg})
-            if HAS_RICH:
-                console.print(
-                    f"\n  [green]✓[/green] 已加载 [bold]{version.name} {version.version_tag}[/bold]  "
-                    f"[dim]{len(version.code)} chars  {version.created_at[:16]}[/dim]"
-                )
-                console.print(f"  [dim]{version.message}[/dim]" if version.message else "")
-                lines = version.code.count("\n")
-                console.print(f"  [dim]代码 {lines} 行已注入上下文，可继续对话修改。[/dim]")
-            else:
-                print(f"  Loaded: {version.name} {version.version_tag}")
-
-        # ── review ────────────────────────────────────────────────────────
-        elif sub == "review":
-            name    = parts[1] if len(parts) > 1 else "strategy"
-            tag     = parts[2] if len(parts) > 2 else None
-            version = vault.load(name, version_tag=tag)
-            if not version:
-                code = self._extract_last_code()
-                if not code:
-                    console.print("  [yellow]未找到策略，请先 /strategy save 或生成代码[/yellow]" if HAS_RICH
-                                  else "  No strategy found.")
-                    return
-                ver_id = None
-            else:
-                code   = version.code
-                ver_id = version.id
-
-            if HAS_RICH:
-                console.print()
-                console.print("  [bold]🔬 策略审查中...[/bold]")
-                console.print()
-
-            ollama_url = self.terminal.config.get("ollama_url", "http://localhost:11434")
-            model      = self.terminal.config.get("model", "qwen2.5:7b")
-            bt_result  = version.backtest_result if version else None
-
-            import sys
-            def on_token(tok):
-                sys.stdout.write(tok)
-                sys.stdout.flush()
-
-            review = await _ai_review(code, bt_result, ollama_url, model, on_token=on_token)
-
-            # Print static results
-            static = review.get("static", {})
-            if HAS_RICH:
-                console.print()
-                console.print(f"\n  [bold]静态检测[/bold]  评级:{static.get('grade','?')}  "
-                              f"{static.get('summary','')}")
-                for e in static.get("errors", []):
-                    console.print(f"  [red]❌ {e['detail']}[/red]")
-                for w in static.get("warnings", []):
-                    console.print(f"  [yellow]⚠️  {w['detail']}[/yellow]")
-                for q in static.get("quality_checks", []):
-                    console.print(f"  [dim]💡 {q}[/dim]")
-                console.print()
-            else:
-                print(f"\n  Static: {static.get('summary','')}")
-
-            if ver_id:
-                vault.save_review(ver_id, review)
-                if HAS_RICH:
-                    console.print("  [dim]审查结果已保存到策略金库[/dim]")
-
-        else:
-            if HAS_RICH:
-                console.print(
-                    "\n  [bold]Strategy Vault 命令[/bold]\n\n"
-                    "  /strategy save [name] [message]   保存当前代码快照\n"
-                    "  /strategy list [name]              列出版本历史\n"
-                    "  /strategy diff [name] [v1] [v2]   查看版本差异\n"
-                    "  /strategy load [name] [tag]        加载版本到上下文\n"
-                    "  /strategy review [name] [tag]      AI + 静态代码审查\n"
-                )
-            else:
-                print("  Usage: /strategy save|list|diff|load|review [name] [tag]")
-
     def _extract_last_code(self) -> str:
         """从对话历史中提取最后一段 Python 代码块."""
         import re
@@ -14039,116 +9413,29 @@ class SlashCommands:
         await self.terminal._handle_ai_message(prompt)
 
     # ---- News command ----
-
-    async def cmd_news(self, args: str):
-        """Fetch latest financial news for a topic or symbol.
-
-        Usage: /news [topic|symbol] [--limit N]
-        Examples:
-          /news AAPL
-          /news earnings --limit 10
-          /news crypto --limit 3
-        """
-        parts = args.split()
-        limit = 5
-        topic_parts = []
-        i = 0
-        while i < len(parts):
-            if parts[i] == "--limit" and i + 1 < len(parts):
-                try:
-                    limit = max(1, min(20, int(parts[i + 1])))
-                    i += 2
-                    continue
-                except ValueError:
-                    pass
-            topic_parts.append(parts[i])
-            i += 1
-        topic = " ".join(topic_parts) or "market"
-
-        console.print(f"[dim]Fetching {limit} news items for '{topic}'...[/dim]" if HAS_RICH
-                      else f"Fetching news for {topic}...")
-
-        # Try backend first, then local tools (Finnhub / NewsAPI / AKShare fallback chain)
-        result = await execute_aria_tool(self.terminal.api_url, "analyze_news", {
-            "query": topic, "limit": limit,
-        })
-        if not result.get("success") and "analyze_news" in LOCAL_TOOLS:
-            # Local fallback: uses Finnhub → NewsAPI → AKShare depending on configured keys
-            local_fn = LOCAL_TOOLS["analyze_news"][0]
-            result = await asyncio.get_event_loop().run_in_executor(
-                None, local_fn, {"query": topic, "symbol": topic, "limit": limit}
-            )
-        if result.get("success"):
-            data = result.get("data", {})
-            articles = data.get("articles", data.get("news", data if isinstance(data, list) else []))
-            sentiment = data.get("sentiment", data.get("overall_sentiment", "")) if isinstance(data, dict) else ""
-            if isinstance(articles, list) and articles:
-                if HAS_RICH:
-                    console.print()
-                    if sentiment:
-                        sent_color = "green" if "positive" in sentiment.lower() or "bullish" in sentiment.lower() else (
-                            "red" if "negative" in sentiment.lower() or "bearish" in sentiment.lower() else "yellow"
-                        )
-                        console.print(f"  Sentiment: [{sent_color}]{sentiment}[/{sent_color}]")
-                        console.print()
-                for idx, a in enumerate(articles[:limit], 1):
-                    if isinstance(a, dict):
-                        title = a.get("title", "Untitled")
-                        source = a.get("source", a.get("publisher", ""))
-                        url_item = a.get("url", a.get("link", ""))
-                        pub_date = a.get("published_at", a.get("date", a.get("publishedAt", "")))
-                        if pub_date:
-                            pub_date = pub_date[:10] if len(pub_date) >= 10 else pub_date
-                    else:
-                        title = str(a)
-                        source = pub_date = url_item = ""
-                    if HAS_RICH:
-                        console.print(f"  [bold]{idx}.[/bold] {title}")
-                        meta_parts = [p for p in [source, pub_date] if p]
-                        if meta_parts:
-                            console.print(f"     [dim]{' · '.join(meta_parts)}[/dim]")
-                    else:
-                        meta = f" ({source})" if source else ""
-                        print(f"  {idx}. {title}{meta}")
-                if HAS_RICH:
-                    console.print()
-            else:
-                # Empty articles — show helpful config guidance
-                _data_keys = _load_data_keys()
-                if HAS_RICH:
-                    console.print()
-                    console.print(f"  [dim]未找到 '{topic}' 的相关新闻。[/dim]")
-                    if not _data_keys.get("finnhub") and not _data_keys.get("newsapi"):
-                        console.print("  [dim]配置数据服务 key 可获取更多新闻来源：[/dim]")
-                        console.print("  [dim]  /apikey set finnhub <key>   →  https://finnhub.io/register[/dim]")
-                        console.print("  [dim]  /apikey set newsapi <key>   →  https://newsapi.org/register[/dim]")
-                    console.print()
-        else:
-            # Backend + all local fallbacks unavailable — show actionable config guide
-            err = result.get("error", "")
-            _data_keys = _load_data_keys()
-            _has_finnhub = bool(_data_keys.get("finnhub"))
-            _has_newsapi = bool(_data_keys.get("newsapi"))
-            if HAS_RICH:
-                console.print()
-                console.print(f"  [yellow]⚠ 新闻服务不可用[/yellow]")
-                if not _has_finnhub and not _has_newsapi:
-                    console.print("  [dim]配置以下任意一个数据服务 key 即可获取新闻：[/dim]")
-                    console.print("  [dim]  Finnhub  (免费60次/分) → /apikey set finnhub <key>   注册: https://finnhub.io/register[/dim]")
-                    console.print("  [dim]  NewsAPI  (免费100次/天) → /apikey set newsapi <key>   注册: https://newsapi.org/register[/dim]")
-                else:
-                    console.print(f"  [dim]错误: {err[:120] if err else '获取失败'}[/dim]")
-                console.print(f"  [dim]或使用: /web {topic} latest news — 通过 Brave 搜索[/dim]")
-                console.print()
-            else:
-                print(f"  News unavailable. Configure: /apikey set finnhub <key>")
-
+    # ── /file 多格式文件分析命令 ──────────────────────────────────────────────
+    # ── /project — Claude Code style project folder analysis ─────────────────
     # ---- Vision / image input command ----
 
     def cmd_vision(self, args: str):
         """Load an image for visual analysis in the next message: /vision <path>"""
         from pathlib import Path as _Path
         import base64 as _b64
+
+        # Check that the current model supports vision before loading
+        _curr_model = self.terminal.config.get("model", "")
+        if _curr_model and _HAS_MODEL_CAP:
+            _vcap = get_model_capability(_curr_model)
+            if not _vcap.vision:
+                _warn = (
+                    f"[yellow]⚠[/yellow]  当前模型 [bold]{_curr_model}[/bold] 不支持图片输入。\n"
+                    f"[dim]支持视觉的模型：llama3.2:11b · gemma3 · llava · qwen2-vl · moondream[/dim]"
+                )
+                if HAS_RICH:
+                    console.print(Panel(_warn, border_style="yellow", box=rich_box.ROUNDED, padding=(0, 1)))
+                else:
+                    print(f"Warning: model {_curr_model} does not support vision input.")
+                return
 
         path_str = args.strip().strip("\"'")
         if not path_str:
@@ -14199,109 +9486,191 @@ class SlashCommands:
         else:
             print(f"Image loaded: {path.name} ({size_kb} KB) — send your question now")
 
+    # ---- Browser command ----
+
+    async def cmd_browser(self, args: str):
+        """Open a URL in a headless browser.
+        Usage:
+          /browser <url>              — fetch page text + links
+          /browser screenshot <url>  — capture visual screenshot + queue for vision
+        """
+        if not _HAS_COMPUTER_USE:
+            _print_error(
+                "computer_use_tools not available.",
+                "Install: pip install playwright mss pyautogui pillow && playwright install chromium",
+            )
+            return
+        from computer_use_tools import _tool_browser_navigate, _tool_browser_screenshot
+
+        parts = args.strip().split(maxsplit=1)
+        if not parts:
+            if HAS_RICH:
+                console.print("[dim]Usage: /browser <url>  or  /browser screenshot <url>[/dim]")
+            return
+
+        if parts[0].lower() == "screenshot" and len(parts) > 1:
+            url = parts[1].strip()
+            if HAS_RICH:
+                with console.status(f"[dim]Screenshotting {url[:60]}…[/dim]", spinner="dots"):
+                    result = _tool_browser_screenshot({"url": url})
+            else:
+                result = _tool_browser_screenshot({"url": url})
+            if result.get("success"):
+                d = result["data"]
+                # Set pending image so next question sees the screenshot
+                from computer_use_tools import pop_pending_vision_image
+                b64 = pop_pending_vision_image()
+                if b64:
+                    self.terminal._pending_image = {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{b64}"},
+                    }
+                if HAS_RICH:
+                    console.print(Panel(
+                        f"[green]✓[/green]  [bold]{d.get('title','')[:60]}[/bold]\n"
+                        f"[dim]{url}  ·  {d.get('size_kb', 0)} KB[/dim]\n"
+                        f"[dim]Screenshot queued — ask your question now[/dim]",
+                        border_style="dim", box=rich_box.ROUNDED, padding=(0, 1),
+                    ))
+                else:
+                    print(f"Screenshot ready ({d.get('size_kb', 0)} KB) — send your question")
+            else:
+                _print_error(result.get("error", "Screenshot failed"), "browser screenshot")
+        else:
+            url = parts[0].strip()
+            if HAS_RICH:
+                with console.status(f"[dim]Opening {url[:60]}…[/dim]", spinner="dots"):
+                    result = _tool_browser_navigate({"url": url})
+            else:
+                result = _tool_browser_navigate({"url": url})
+            if result.get("success"):
+                d = result["data"]
+                title = d.get("title", "")
+                text = d.get("text", "")[:2000]
+                links = d.get("links", [])[:5]
+                engine = d.get("engine", "")
+                if HAS_RICH:
+                    link_str = "\n".join(f"  {l}" for l in links) if links else "  (none)"
+                    console.print(Panel(
+                        f"[bold]{title[:80]}[/bold]  [dim]({engine})[/dim]\n\n"
+                        f"{text}\n\n[dim]Links:[/dim]\n{link_str}",
+                        border_style="dim", box=rich_box.ROUNDED, padding=(0, 1),
+                        title=f"[dim]{url[:60]}[/dim]", title_align="left",
+                    ))
+                else:
+                    print(f"Title: {title}\n{text[:500]}")
+            else:
+                _print_error(result.get("error", "Navigation failed"), "browser")
+
+    # ---- Screenshot command ----
+
+    async def cmd_screenshot(self, args: str):
+        """Capture desktop screenshot and queue for vision analysis.
+        Usage: /screenshot [monitor_number]
+        """
+        if not _HAS_COMPUTER_USE:
+            _print_error(
+                "computer_use_tools not available.",
+                "Install: pip install mss pillow",
+            )
+            return
+        from computer_use_tools import _tool_computer_screenshot, pop_pending_vision_image
+
+        monitor = int(args.strip()) if args.strip().isdigit() else 1
+        if HAS_RICH:
+            with console.status("[dim]Capturing screen…[/dim]", spinner="dots"):
+                result = _tool_computer_screenshot({"monitor": monitor})
+        else:
+            result = _tool_computer_screenshot({"monitor": monitor})
+
+        if result.get("success"):
+            d = result["data"]
+            b64 = pop_pending_vision_image()
+            if b64:
+                self.terminal._pending_image = {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/png;base64,{b64}"},
+                }
+            if HAS_RICH:
+                console.print(Panel(
+                    f"[green]✓[/green]  [dim]{d['width']}×{d['height']}  ·  {d['size_kb']} KB[/dim]\n"
+                    f"[dim]Screenshot queued — ask your question now[/dim]",
+                    border_style="dim", box=rich_box.ROUNDED, padding=(0, 1),
+                ))
+            else:
+                print(f"Screenshot {d['width']}×{d['height']} ({d['size_kb']} KB) — send your question")
+        else:
+            _print_error(result.get("error", "Screenshot failed"), "screenshot")
+
     # ---- Config command ----
 
-    def cmd_config(self, args: str):
-        """Show or set CLI configuration."""
-        parts = args.strip().split(maxsplit=1)
-        if not parts or parts[0] == "show":
-            # Show current config
-            cfg = self.terminal.config
-            if HAS_RICH:
-                console.print()
-                console.print("[bold]Configuration[/bold]")
-                console.print()
-                for key in ("api_url", "ollama_url", "model", "thinking_mode",
-                            "command_policy", "write_policy", "auto_save_sessions"):
-                    val = cfg.get(key, "-")
-                    console.print(f"  [dim]{key:<24s}[/dim]{val}")
-                console.print()
-            else:
-                for key in ("api_url", "ollama_url", "model", "thinking_mode",
-                            "command_policy", "write_policy"):
-                    print(f"  {key}: {cfg.get(key, '-')}")
-        elif len(parts) == 2 and parts[0] == "set":
-            # Parse key=value
-            kv = parts[1].split("=", 1)
-            if len(kv) == 2:
-                key, val = kv[0].strip(), kv[1].strip()
-                # Validate known config keys
-                if key == "command_policy":
-                    if val not in {"safe", "balanced", "full"}:
-                        msg = "command_policy must be one of: safe | balanced | full"
-                        console.print(f"[red]{msg}[/red]" if HAS_RICH else msg)
-                        return
-                elif key == "thinking_mode":
-                    if val not in {"auto", "instant", "thinking"}:
-                        msg = "thinking_mode must be one of: auto | instant | thinking"
-                        console.print(f"[red]{msg}[/red]" if HAS_RICH else msg)
-                        return
-                elif key == "model":
-                    resolved = MODEL_ALIASES.get(val) or (val if val in MODELS else None)
-                    if not resolved:
-                        valid = ", ".join(sorted(MODEL_ALIASES.keys()))
-                        msg = f"Unknown model '{val}'. Valid: {valid}"
-                        console.print(f"[red]{msg}[/red]" if HAS_RICH else msg)
-                        return
-                    val = MODELS[resolved]["id"]
-                elif key == "auto_save_sessions":
-                    if val.lower() in {"true", "1", "yes", "on"}:
-                        val = True
-                    elif val.lower() in {"false", "0", "no", "off"}:
-                        val = False
-                    else:
-                        msg = "auto_save_sessions must be: true | false"
-                        console.print(f"[red]{msg}[/red]" if HAS_RICH else msg)
-                        return
-                elif key == "write_policy":
-                    if val not in {"desktop_only", "confirm_outside", "always_confirm"}:
-                        msg = "write_policy must be: desktop_only | confirm_outside | always_confirm"
-                        console.print(f"[red]{msg}[/red]" if HAS_RICH else msg)
-                        return
-                elif key == "local_mode":
-                    if val.lower() in {"true", "1", "yes", "on"}:
-                        val = True
-                    elif val.lower() in {"false", "0", "no", "off"}:
-                        val = False
-                    else:
-                        msg = "local_mode must be: true | false"
-                        console.print(f"[red]{msg}[/red]" if HAS_RICH else msg)
-                        return
-                elif key == "custom_endpoint":
-                    # /config set custom_endpoint=http://my-litellm:4000/v1
-                    # Automatically sets local_provider=custom
-                    self.terminal.config["local_provider"] = "custom"
-                    self.terminal.config["custom_endpoint"] = val
-                    _sync_write_policy(self.terminal.config)
-                    save_config(self.terminal.config)
-                    msg = f"✓ 自定义 endpoint 设为 {val}  (local_provider=custom)"
-                    console.print(f"[green]{msg}[/green]") if HAS_RICH else print(msg)
-                    return
-                elif key == "custom_model":
-                    # /config set custom_model=gpt-4o
-                    self.terminal.config["custom_model"] = val
-                    if self.terminal.config.get("local_provider") == "custom":
-                        self.terminal.config["model"] = val
-                    _sync_write_policy(self.terminal.config)
-                    save_config(self.terminal.config)
-                    console.print(f"  [dim]custom_model[/dim] = {val}" if HAS_RICH else f"  custom_model = {val}")
-                    return
-                self.terminal.config[key] = val
-                _sync_write_policy(self.terminal.config)
-                save_config(self.terminal.config)
-                console.print(f"  [dim]{key}[/dim] = {val}" if HAS_RICH else f"  {key} = {val}")
-            else:
-                console.print("[dim]Usage: /config set key=value[/dim]" if HAS_RICH
-                              else "Usage: /config set key=value")
-        elif parts[0] == "reload":
-            fresh = load_config()
-            self.terminal.config.update(fresh)
-            msg = "Config reloaded from ~/.arthera/config.json"
-            console.print(f"[dim]{msg}[/dim]" if HAS_RICH else msg)
-        else:
-            console.print("[dim]Usage: /config [show] | /config set key=value | /config reload[/dim]" if HAS_RICH
-                          else "Usage: /config [show] | /config set key=value | /config reload")
+    def cmd_input(self, args: str):
+        """Configure the interactive input UI."""
+        raw = args.strip().lower()
+        cfg = self.terminal.config
+        valid_styles = {"panel", "box", "plain"}
+        valid_themes = {"auto", "dark", "light"}
 
+        def _save_and_show(message: str) -> None:
+            save_config(cfg)
+            if HAS_RICH:
+                console.print(f"[green]✓[/green] {message}")
+                console.print(
+                    f"  [dim]style[/dim] {cfg.get('input_style', 'panel')}  "
+                    f"[dim]theme[/dim] {cfg.get('input_theme', 'auto')}"
+                )
+            else:
+                print(message)
+                print(f"  style {cfg.get('input_style', 'panel')}  theme {cfg.get('input_theme', 'auto')}")
+
+        if not raw or raw in {"status", "show"}:
+            style = cfg.get("input_style", "panel")
+            theme = cfg.get("input_theme", "auto")
+            if HAS_RICH:
+                console.print(Panel(
+                    f"[bold]style[/bold]  {style}\n"
+                    f"[bold]theme[/bold]  {theme}\n\n"
+                    "[dim]Use[/dim] /input panel [dim]for the Codex-style input block[/dim]\n"
+                    "[dim]Use[/dim] /input theme auto [dim]to follow the terminal/system theme[/dim]",
+                    title="Input UI",
+                    border_style="dim",
+                    box=rich_box.ROUNDED,
+                    padding=(0, 1),
+                ))
+            else:
+                print(f"input style: {style}")
+                print(f"input theme: {theme}")
+                print("Usage: /input panel|box|plain | /input theme auto|dark|light")
+            return
+
+        if raw == "reset":
+            cfg["input_style"] = "panel"
+            cfg["input_theme"] = "auto"
+            _save_and_show("input UI reset to panel · auto")
+            return
+
+        parts = raw.split()
+        if parts[0] == "theme":
+            if len(parts) != 2 or parts[1] not in valid_themes:
+                msg = "Usage: /input theme auto|dark|light"
+                console.print(f"[red]{msg}[/red]" if HAS_RICH else msg)
+                return
+            cfg["input_theme"] = parts[1]
+            _save_and_show(f"input theme set to {parts[1]}")
+            return
+
+        if parts[0] in valid_themes and len(parts) == 1:
+            cfg["input_theme"] = parts[0]
+            _save_and_show(f"input theme set to {parts[0]}")
+            return
+
+        if parts[0] in valid_styles and len(parts) == 1:
+            cfg["input_style"] = parts[0]
+            _save_and_show(f"input style set to {parts[0]}")
+            return
+
+        msg = "Usage: /input panel|box|plain | /input theme auto|dark|light | /input reset"
+        console.print(f"[red]{msg}[/red]" if HAS_RICH else msg)
     # ---- Context command ----
 
     def cmd_context(self, args: str):
@@ -14428,6 +9797,13 @@ class ArtheraTerminal:
         self.session_mgr = SessionManager()
         self.pending_plan: List[str] = []
         self.last_plan_results: List[dict] = []
+        self.runtime_trace = RuntimeTrace()
+        self.tool_executor = ToolExecutor(
+            LOCAL_TOOLS,
+            hook=_run_hook,
+            trace=self.runtime_trace,
+            config=self.config,
+        )
         self.cancel_event: Optional[asyncio.Event] = None
         self._streaming = False
         self._last_provider = ""   # last successful provider ("" = no message sent yet)
@@ -14446,6 +9822,16 @@ class ArtheraTerminal:
         self._last_response: str = ""          # last assistant message text (for /copy)
         self._forks: List[dict] = []           # forked conversation snapshots
         self._pending_image: Optional[dict] = None  # pending vision content block
+        # ── Multi-file analysis session ──────────────────────────────────────
+        try:
+            from file_analysis_tools import FileSession
+            self._file_session: Optional[Any] = FileSession()
+        except ImportError:
+            self._file_session = None
+
+        # ── Project folder analysis session (Claude Code style) ──────────────
+        self._project_session: Optional[Any] = None  # set by /project load
+        self._project_ctx_injected: bool = False
 
         # ── ariarc: project-level context injection ──────────────────────
         self.ariarc: Optional[Any] = None
@@ -14461,25 +9847,40 @@ class ArtheraTerminal:
         self._mcp_registry: Optional[Any] = None
         self._mcp_started = False
 
+        # ── Global user memory ────────────────────────────────────────────
+        try:
+            from memory_manager import MemoryManager
+            self.memory_mgr: Optional[Any] = MemoryManager()
+        except Exception:
+            self.memory_mgr = None
+
         self.commands = SlashCommands(self)
 
         # Setup input — prefer prompt_toolkit, fallback to readline.
         # Skip interactive input setup entirely in non-interactive mode (-p flag)
         # to avoid prompt_toolkit emitting "Warning: Input is not a terminal".
         self._pt_session = None
+        self._pt_completer = None
+        self._pt_history = None
         HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
 
         _interactive = sys.stdin.isatty()
         if HAS_PT and _interactive:
-            pt_completer = AriaPTCompleter(
+            self._pt_completer = AriaPTCompleter(
                 self.commands.commands, SKILLS, config.get("watchlist", []),
             )
+            self._pt_history = FileHistory(str(HISTORY_FILE))
+            _placeholder = (
+                [("class:placeholder", "Ask Aria, edit files, run commands, or /help")]
+                if config.get("input_style", "panel") == "box"
+                else HTML('<style fg="#888888">Ask Aria, edit files, run commands, or /help</style>')
+            )
             self._pt_session = PromptSession(
-                history=FileHistory(str(HISTORY_FILE)),
-                completer=pt_completer,
+                history=self._pt_history,
+                completer=self._pt_completer,
                 complete_while_typing=True,
                 style=ARIA_PT_STYLE,
-                placeholder=HTML('<style fg="#606060">发送消息，或输入 / 查看命令…</style>'),
+                placeholder=_placeholder,
             )
         elif _interactive:
             try:
@@ -14545,98 +9946,94 @@ class ArtheraTerminal:
             if len(wl) > 5:
                 wl_str += f" +{len(wl) - 5}"
 
+        _badge = m.get("badge", "")
+        _runtime = "cloud" if _badge == "Cloud" or "cloud" in current_id.lower() else "local"
+        _banner_mode = self.config.get("banner", "full")  # full | compact | off
+        _mascot = "[bold #C08050]▣[/bold #C08050]"
+
+        if _banner_mode == "off":
+            return   # Silent startup for scripts / automation
+
         if HAS_RICH:
             console.print()
 
-            # ASCII art logo in copper
-            _LOGO = r"""    _         _
-   / \  _ __ (_) __ _
-  / _ \| '__|| |/ _` |
- / ___ \  |  | | (_| |
-/_/   \_\_|  |_|\__,_|"""
-            for line in _LOGO.splitlines():
-                console.print(f"[#C08050]{line}[/#C08050]")
-            console.print()
-
-            # Info lines — vertical stack
-            t1 = Text()
-            t1.append("  Aria Code", style="bold")
-            t1.append(" v3.0", style="dim")
-            console.print(t1)
-
-            # Model line — 现实优先：显示实际将使用的模型
-            _badge = m.get("badge", "")
-            if current_key:
-                _model_label = f"{m['name']} {m['version']} · {m['tag']}"
-            else:
-                _model_label = current_id   # 不在注册表内的模型直接显示原始 ID
-            if _badge == "Fast":
-                console.print(f"  [dim]{_model_label}[/dim]  [yellow]⚡lite[/yellow]")
-            elif _badge == "Cloud":
-                console.print(f"  [dim]{_model_label}[/dim]  [cyan]☁ cloud[/cyan]")
-            else:
-                console.print(f"  [dim]{_model_label}[/dim]")
-            # 自动配对附注（仅当本次启动发生了配对时显示，两行避免折行混乱）
-            if self._auto_healed_from:
-                console.print(
-                    f"  [dim]⚙ 已自动配对：[/dim][yellow]{self._auto_healed_from}[/yellow]"
-                    f"[dim] 未安装 → 配置已更新为 [/dim][bold]{current_id}[/bold]"
+            if _banner_mode == "compact":
+                _model_label = f"{m['name']} {m['version']}" if current_key else current_id
+                from ui.banner import render_compact_banner as _rcb
+                _rcb(
+                    version=__version__,
+                    model_label=_model_label,
+                    runtime=_runtime,
+                    cwd=cwd,
+                    control_status_rich=self._control_status_label(rich=True),
+                    tool_count=tool_count,
+                    console=console,
+                    has_rich=HAS_RICH,
                 )
-                console.print(
-                    f"  [dim]  恢复原模型: ollama pull {self._auto_healed_from}"
-                    f" && /model {self._auto_healed_from}[/dim]"
-                )
-            console.print(f"  [dim]{cwd}[/dim]")
-            if wl_str:
-                console.print(f"  [dim]{wl_str}[/dim]")
-            console.print(f"  [dim]{tool_count} tools · {skill_count} skills · /help[/dim]")
+            else:
+                _model_label = f"{m['name']} {m['version']}" if current_key else current_id
+                if _badge == "Fast":
+                    _rt_label = f"{_model_label}  [dim]lite[/dim]"
+                elif _badge == "Cloud":
+                    _rt_label = f"{_model_label}  [dim]cloud[/dim]"
+                else:
+                    _rt_label = f"{_model_label}  [dim]local[/dim]"
 
-            # ── Recommend better model if only the tiny 1.5B is installed ─
-            if _badge == "Fast" and self._installed_models:
                 _best_id = (MODELS.get("qwen7b") or {}).get("id", "qwen2.5:7b")
-                if _best_id not in self._installed_models:
-                    console.print(
-                        f"  [yellow]⚡ Tip:[/yellow] [dim]Running lite model. "
-                        f"For best results: [bold]ollama pull {_best_id}[/bold][/dim]"
-                    )
-
-            # Thin separator
-            try:
-                tw = os.get_terminal_size().columns
-            except OSError:
-                tw = 80
-            console.print(Text("─" * min(tw, 80), style="dim"))
-
-            # First-run welcome tips
-            if not self.config.get("first_run_seen"):
-                console.print()
-                tip1 = Text()
-                tip1.append("  Try: ", style="dim")
-                tip1.append("analyze AAPL", style="bold")
-                tip1.append("  ·  ", style="dim")
-                tip1.append("/morning-brief", style="bold")
-                tip1.append("  ·  ", style="dim")
-                tip1.append("/trade-idea TSLA", style="bold")
-                console.print(tip1)
-                tip2 = Text()
-                tip2.append("  Type ", style="dim")
-                tip2.append("/", style="bold")
-                tip2.append(" for commands · ", style="dim")
-                tip2.append("/help", style="bold")
-                tip2.append(" for guide · ", style="dim")
-                tip2.append("/login", style="bold")
-                tip2.append(" to personalize", style="dim")
-                console.print(tip2)
-                self.config["first_run_seen"] = True
-                save_config(self.config)
+                from ui.banner import render_full_banner as _rfb, render_try_hints as _rth
+                _rfb(
+                    version=__version__,
+                    rt_label=_rt_label,
+                    cwd=cwd,
+                    control_status_rich=self._control_status_label(rich=True),
+                    ollama_status_rich=self._ollama_status_label(rich=True),
+                    tool_count=tool_count,
+                    skill_count=skill_count,
+                    auto_healed_from=self._auto_healed_from or "",
+                    current_id=current_id,
+                    badge=_badge,
+                    installed_models=frozenset(self._installed_models),
+                    best_lite_id=_best_id,
+                    console=console,
+                    has_rich=HAS_RICH,
+                    rich_box=rich_box,
+                )
+                _rth(console, HAS_RICH)
+                if not self.config.get("first_run_seen"):
+                    self.config["first_run_seen"] = True
+                    save_config(self.config)
         else:
-            print()
-            print(f"  Aria Code v3.0")
-            print(f"  {m['name']} {m['version']} · {m['tag']} · {tool_count} tools")
-            print(f"  {cwd}")
-            if wl_str:
-                print(f"  {wl_str}")
-            print("─" * 60)
+            if _banner_mode != "off":
+                from ui.banner import render_full_banner as _rfb
+                _rfb(
+                    version=__version__,
+                    rt_label=_runtime,
+                    cwd=cwd,
+                    control_status_rich=self._control_status_label(),
+                    ollama_status_rich=self._ollama_status_label(),
+                    tool_count=tool_count,
+                    skill_count=skill_count,
+                    console=console,
+                    has_rich=HAS_RICH,
+                    rich_box=rich_box,
+                )
+
+    def _privacy_status_label(self, rich: bool = False) -> str:
+        from ui.banner import privacy_status_label as _psl
+        return _psl(self.config, rich=rich)
+
+    def _control_status_label(self, rich: bool = False) -> str:
+        from ui.banner import control_status_label as _csl
+        return _csl(self.config, rich=rich)
+
+    def _ollama_status_label(self, rich: bool = False) -> str:
+        from ui.banner import ollama_status_label as _osl
+        return _osl(
+            getattr(self, "_ollama_alive", False),
+            getattr(self, "_installed_models", set()) or set(),
+            self.config,
+            rich=rich,
+        )
 
     def _status_line(self) -> str:
         current_id = self.config.get("model", "qwen2.5:7b")
@@ -14655,27 +10052,36 @@ class ArtheraTerminal:
         _mismatch = (self._actual_model is not None and self._actual_model != current_id)
         if _mismatch:
             model_name = f"{self._actual_model} ⚑"
-        thinking = THINKING_MODES.get(self.config.get("thinking_mode", "auto"), {}).get("label", "Auto")
-        # Determine provider label based on last used provider AND selected model badge
+        # Determine runtime label
         _lp = self._last_provider or ""
         _model_badge = next(
             (v.get("badge", "") for v in MODELS.values() if v["id"] == current_id), ""
         )
         if _lp == "ollama":
-            provider_label = "Local"
+            runtime = "local"
         elif _lp in ("deepseek", "openai", "anthropic", "groq", "dashscope", "together"):
-            provider_label = "Cloud"
+            runtime = "cloud"
         elif _model_badge == "Cloud" or "cloud" in current_id.lower():
-            provider_label = "Cloud"
+            runtime = "cloud"
         elif not _lp:
-            # 尚未发送消息 — 根据实际环境推断而非硬编码
-            provider_label = "Local" if getattr(self, "_ollama_alive", False) else "—"
+            runtime = "local" if getattr(self, "_ollama_alive", False) else "—"
         else:
-            provider_label = "AWS"
-        return f"{model_name} · {thinking} · {provider_label}"
+            runtime = "cloud"
+        # Context source tags
+        _ctx_tags = []
+        if getattr(self, "_project_session", None):
+            _ctx_tags.append(f"proj:{self._project_session.name}")
+        elif getattr(self, "_file_session", None) and self._file_session.get_active():
+            _ctx_tags.append(f"file:{self._file_session.get_active().filename}")
+        _ctx = f"  ·  {_ctx_tags[0]}" if _ctx_tags else ""
+        privacy = "share" if bool(self.config.get("data_sharing", False)) else "local-only"
+        permission = self.config.get("permission_mode", "workspace-write")
+        return f"aria  ·  {runtime}  ·  {permission}  ·  {privacy}{_ctx}"
 
-    async def send_message(self, message: str):
+    async def send_message(self, message: str, system_override: Optional[str] = None):
         """Send message to Aria AI with agentic tool loop, smart fallback, markdown."""
+        # Store optional system prompt override (used by /file analyze)
+        self._system_override = system_override
         # Fire prompt_submit hook (Claude Code: UserPromptSubmit)
         _run_event_hook("prompt_submit", {
             "ARIA_MESSAGE":  message[:500],
@@ -14689,8 +10095,35 @@ class ArtheraTerminal:
                 self._pending_image,
             ]
             self._pending_image = None
+        elif (self._file_session is not None and
+              self._file_session.get_active() is not None):
+            # Inject loaded-file context as a text block before the user question.
+            # Only inject for the FIRST message after /file load (tracked via flag),
+            # then keep the file in system prompt for follow-up turns.
+            _fc = self._file_session.get_active()
+            _fc_ctx = self._file_session.build_context_block(max_chars=14_000)
+            user_content = f"[文件上下文已加载: {_fc.filename}]\n\n{message}"
+            # Persist file context in system prompt so follow-up questions work
+            if not hasattr(self, "_file_ctx_injected") or not self._file_ctx_injected:
+                self._file_ctx_injected = True
+                # Pre-pend file content to the very first user message
+                user_content = (f"以下是用户上传的文件内容，请在回答时参考：\n{_fc_ctx}\n\n"
+                                f"---用户问题---\n{message}")
+        elif self._project_session is not None:
+            # Inject project context for the first message, then rely on history
+            _ps = self._project_session
+            user_content = f"[项目已加载: {_ps.name}]\n\n{message}"
+            if not self._project_ctx_injected:
+                self._project_ctx_injected = True
+                _pc_ctx = _ps.build_llm_context(max_chars=14_000)
+                user_content = (
+                    f"以下是已加载的项目信息，请在完成任务时参考：\n{_pc_ctx}\n\n"
+                    f"---用户请求---\n{message}"
+                )
         else:
             user_content = message
+            self._file_ctx_injected = False  # reset when no file loaded
+            self._project_ctx_injected = False  # reset when no project loaded
         self.conversation.append({"role": "user", "content": user_content})
 
         # ── 路由决策：支持工具调用的模型走 LLM+tool call，否则走确定性路由 ──
@@ -14709,6 +10142,14 @@ class ArtheraTerminal:
         deterministic: dict = {"success": False}
         if not _model_has_tools:
             # Deterministic path: only for models that can't reliably do function calling
+            deterministic = _try_handle_broker_query(message)
+        if not deterministic.get("success"):
+            # Real-estate / housing queries get their own deterministic handler so they
+            # never accidentally inherit a stock ticker from session history.
+            deterministic = _try_handle_realty_query(message)
+        if not deterministic.get("success"):
+            # Market snapshot always uses deterministic renderer — even tool-capable models
+            # produce N/A when they try to parse injected data themselves.
             deterministic = _try_handle_market_snapshot_analysis(
                 message, history=self.conversation[:-1])
         if not deterministic.get("success"):
@@ -14727,6 +10168,8 @@ class ArtheraTerminal:
                 _tool_label = {
                     "market_snapshot": "市场快照",
                     "stock_chart":     "图表分析",
+                    "broker_query":    "账户数据",
+                    "realty_query":    "房地产数据",
                 }.get(_tools[0], _tools[0]) if _tools else "本地分析"
                 _rate_limited = deterministic.get("rate_limited", False)
                 _rl_note = "  [yellow]⚠ 数据源限流[/yellow]" if _rate_limited else ""
@@ -14745,7 +10188,15 @@ class ArtheraTerminal:
         user_context = _build_user_context(self.config)
         self.cancel_event = asyncio.Event()
         self._streaming = True
+        set_robot_state(RobotState.THINKING)
         _esc_watcher.start(self.cancel_event)
+
+        # Context pressure warning — only once per session when > 85% full
+        _est_tokens = sum(len(m.get("content", "")) for m in self.conversation) // 3
+        _max_ctx    = get_model_cfg(self.config.get("model", "qwen2.5:7b")).get("num_ctx", 16384)
+        from ui.render.output import print_context_warning as _pcw
+        _pcw(_est_tokens, _max_ctx, console=console, has_rich=HAS_RICH,
+             session_id=getattr(self, "session_id", ""))
 
         if HAS_RICH:
             console.print()
@@ -14754,14 +10205,10 @@ class ArtheraTerminal:
         # --- Agentic loop: may run multiple rounds if AI requests tools ---
         max_rounds = 10
         current_message = message
-        total_response = ""
-        all_tools = []
-        all_sources = []
-        provider = "aws"
+        turn_state = AgentTurnState(provider="aws")
+        provider = turn_state.provider
         token_count = 0
-        total_usage = {"prompt_tokens": 0, "completion_tokens": 0, "thinking_tokens": 0}
         thinking_tokens = 0
-        tool_time_total = 0.0
 
         for round_num in range(max_rounds):
             response_text = ""
@@ -14865,6 +10312,7 @@ class ArtheraTerminal:
                 if not _first_token_received[0]:
                     _first_token_received[0] = True
                     _token_start_time[0] = time.time()
+                    set_robot_state(RobotState.STREAMING)
                     if not _use_batch_render[0]:
                         _stop_spinner()
                 # Filter out Ollama special tokens
@@ -14900,6 +10348,10 @@ class ArtheraTerminal:
                     if thinking_tokens > 0:
                         t_info += f" · {thinking_tokens:,} tokens"
                     if HAS_RICH:
+                        # \r clears the live thinking counter line before printing
+                        import sys as _sys
+                        _sys.stdout.write("\r\033[K")  # CR + erase-to-end-of-line
+                        _sys.stdout.flush()
                         console.print(f"  [dim]{t_info}[/dim]")
                         # Optional thinking preview (config: "thinking_preview": true)
                         if self.config.get("thinking_preview") and thinking_preview_buf:
@@ -15004,18 +10456,19 @@ class ArtheraTerminal:
             def on_thinking(content):
                 nonlocal thinking_shown, thinking_start, thinking_tokens
                 if not thinking_shown:
-                    _stop_spinner()  # stop generic spinner, replace with thinking spinner
+                    _stop_spinner()  # stop generic spinner
                     thinking_start = time.time()
-                    if HAS_RICH:
-                        _spinner[0] = console.status(
-                            "[dim italic]Thinking[/dim italic]",
-                            spinner="dots2", spinner_style="dim"
-                        )
-                        _spinner[0].__enter__()
-                    else:
-                        print("  (thinking...) ", end="", flush=True)
                     thinking_shown = True
                 thinking_tokens += 1
+                # Live elapsed counter — update every 30 tokens (~0.5s)
+                if thinking_tokens % 30 == 1:
+                    elapsed = time.time() - thinking_start
+                    import sys as _sys
+                    _sys.stdout.write(
+                        f"\r  \033[2mthinking...  {elapsed:.1f}s  "
+                        f"({thinking_tokens} tokens)\033[0m    "
+                    )
+                    _sys.stdout.flush()
                 # Accumulate up to 300 chars for optional preview
                 if len("".join(thinking_preview_buf)) < 300:
                     thinking_preview_buf.append(content)
@@ -15030,7 +10483,10 @@ class ArtheraTerminal:
                     if thinking_tokens > 0:
                         t_info += f" · {thinking_tokens:,} tokens"
                     if HAS_RICH:
-                        console.print(f"\r  [dim]{t_info}[/dim]")
+                        import sys as _sys
+                        _sys.stdout.write("\r\033[K")  # CR + erase-to-end-of-line
+                        _sys.stdout.flush()
+                        console.print(f"  [dim]{t_info}[/dim]")
                         if self.config.get("thinking_preview") and thinking_preview_buf:
                             preview_text = "".join(thinking_preview_buf)[:280].strip()
                             if len("".join(thinking_preview_buf)) > 280:
@@ -15043,18 +10499,29 @@ class ArtheraTerminal:
             def on_tool_result(tool, summary):
                 pass  # Tool results are displayed by _print_tool_result
 
+            _prev_provider = self._last_provider or "local"
+
             def on_status(state, msg):
                 if state == "fallback":
-                    if HAS_RICH:
-                        console.print(f"\n  [dim]{msg}[/dim]")
+                    # Parse "from → to" from msg when possible, otherwise show as-is
+                    import re as _re_status
+                    m = _re_status.search(r"(?:from\s+)?(\w+)\s*(?:→|->|to)\s*(\w+)", msg or "", _re_status.I)
+                    if m:
+                        _from, _to = m.group(1), m.group(2)
                     else:
-                        print(f"\n  {msg}")
+                        _from  = _prev_provider
+                        _to    = "cloud"
+                    reason = msg or ""
+                    from ui.render.output import print_fallback_toast as _pft
+                    _pft(_from, _to, reason, console=console, has_rich=HAS_RICH)
 
             # Route: local_mode → Ollama directly; otherwise AWS first → Ollama fallback
             local_mode = self.config.get("local_mode", False)
             if local_mode:
                 _use_plain_print[0]  = True
                 _use_batch_render[0] = True   # accumulate silently → Rich render at end
+                _sys_ov = getattr(self, "_system_override", None)
+                self._system_override = None
                 result = await stream_ollama(
                     self.config.get("ollama_url", "http://localhost:11434"),
                     current_message, self.conversation,
@@ -15062,14 +10529,21 @@ class ArtheraTerminal:
                     on_tool_call=on_tool_call, on_tool_result=on_tool_result,
                     cancel_event=self.cancel_event,
                     enable_tools=True,
+                    system_override=_sys_ov,
                 )
                 provider = "ollama"
                 self._last_provider = "ollama"
             else:
+                # Pass system_override through user_context for cloud path
+                _cloud_uctx = dict(user_context or {})
+                _so = getattr(self, "_system_override", None)
+                if _so:
+                    _cloud_uctx["system_role_override"] = _so
+                    self._system_override = None
                 result = await stream_chat(
                     self.api_url, current_message, self.conversation,
                     model=model, thinking_mode=thinking_mode,
-                    user_context=user_context, auth_token=auth_token,
+                    user_context=_cloud_uctx or user_context, auth_token=auth_token,
                     on_token=on_token, on_thinking=on_thinking,
                     on_tool_call=on_tool_call, on_tool_result=on_tool_result,
                     on_status=on_status, cancel_event=self.cancel_event,
@@ -15164,17 +10638,20 @@ class ArtheraTerminal:
                             else:
                                 print(f"  ⚠ 配置模型 {model} 未安装，已切换至 {_ollama_model}")
                         else:
-                            # 正常使用配置的模型，仅在含 "cloud" 字样时说明是本地运行
+                            # 含 "cloud" 字样说明是通过 Ollama 运行的云端命名模型
                             if "cloud" in _ollama_model.lower() and HAS_RICH:
-                                console.print(f"  [dim]本地运行: {_ollama_model}[/dim]")
+                                console.print(f"  [dim]Ollama · {_ollama_model}[/dim]")
                         _use_plain_print[0]  = True   # disable Live for Ollama
                         _use_batch_render[0] = True   # accumulate silently → Rich render at end
+                        _sys_ov = getattr(self, "_system_override", None)
+                        self._system_override = None  # consume before call
                         result = await stream_ollama(
                             ollama_url, current_message, self.conversation,
                             model=_ollama_model, on_token=on_token,
                             on_thinking=on_thinking,
                             on_tool_call=on_tool_call, on_tool_result=on_tool_result,
                             cancel_event=self.cancel_event, enable_tools=True,
+                            system_override=_sys_ov,
                         )
                         provider = "ollama"
                         self._last_provider = "ollama"
@@ -15218,55 +10695,29 @@ class ArtheraTerminal:
             _stop_live()
 
             if result.get("cancelled"):
-                if HAS_RICH:
-                    console.print("\n[dim]Cancelled[/dim]")
-                else:
-                    print("\n  (cancelled)")
-                total_response += response_text
+                turn_state.append_response(response_text)
                 break
 
             if not result.get("success"):
-                error = result.get("error", "Unknown error")
+                set_robot_state(RobotState.ERROR)
+                error_presentation = AgentErrorPresentation.from_error(result.get("error", "Unknown error"))
                 console.print() if HAS_RICH else print()
-                # ── 用户友好错误提示 ──────────────────────────────────────────
-                if error in ("no_cloud_provider", "no_provider"):
-                    _hint_lines = [
-                        "没有可用的 AI 模型",
-                        "  Ollama 未运行，且未配置云端 API Key。",
-                        "  解决方案（任选其一）：",
-                        "    • 启动 Ollama:  ollama serve",
-                        "    • 配置云端 Key: /apikey set deepseek <your-key>",
-                        "    • 导出环境变量: export DEEPSEEK_API_KEY=sk-...",
-                    ]
-                    for ln in _hint_lines:
+                if error_presentation.use_generic_error_prefix:
+                    _print_error(error_presentation.lines[0])
+                else:
+                    for idx, ln in enumerate(error_presentation.lines):
                         if HAS_RICH:
-                            style = "bold yellow" if ln == _hint_lines[0] else "yellow"
+                            style = "bold yellow" if idx == 0 and len(error_presentation.lines) > 1 else "yellow"
                             console.print(f"  [{style}]{ln}[/{style}]")
                         else:
                             print(f"  {ln}")
-                elif error == "all_providers_failed":
-                    _msg = "所有云端 Provider 均请求失败，请检查网络或 API Key 是否有效。"
-                    if HAS_RICH:
-                        console.print(f"  [yellow]{_msg}[/yellow]")
-                    else:
-                        print(f"  {_msg}")
-                else:
-                    _print_error(f"Error: {error}")
                 console.print() if HAS_RICH else print()
                 break
 
-            total_response += result.get("response", response_text)
-            all_tools.extend(result.get("tools_used", []))
-            all_sources.extend(result.get("sources", []))
-            provider = result.get("provider", provider)
-
-            # Accumulate usage stats from this round
-            round_usage = result.get("usage", {})
-            if round_usage:
-                total_usage["prompt_tokens"] += round_usage.get("prompt_tokens", 0)
-                total_usage["completion_tokens"] += round_usage.get("completion_tokens", 0)
-                total_usage["thinking_tokens"] += round_usage.get("thinking_tokens", 0)
-            self._last_provider = provider
+            turn_state.provider = provider
+            turn_state.apply_model_result(result, response_text)
+            provider = turn_state.provider
+            self._last_provider = turn_state.provider
 
             # --- Agentic tool loop ---
             pending = result.get("tool_calls_pending", [])
@@ -15276,71 +10727,42 @@ class ArtheraTerminal:
             # ── Parallel tool dispatch ─────────────────────────────────────────
             # Read-only / remote tools run concurrently via asyncio.gather().
             # Write / edit / shell tools are serialised to avoid race conditions.
-            _WRITE_TOOLS_PAR = {"write_file", "edit_file", "run_command"}
-            _parallel_batch = [tc for tc in pending if tc["tool"] not in _WRITE_TOOLS_PAR]
-            _serial_batch   = [tc for tc in pending if tc["tool"] in _WRITE_TOOLS_PAR]
-
-            # Helper: execute one tool call and return (tc, result) pair
-            async def _exec_one(tc_item: dict) -> tuple:
-                _tn = tc_item["tool"]
-                _tp = tc_item["params"]
-                _run_hook("pre_tool", _tn, _tp)
-                if _tn in LOCAL_TOOLS:
-                    _tr = await asyncio.get_event_loop().run_in_executor(
-                        None, execute_local_tool, _tn, _tp)
-                else:
-                    _tr = await execute_aria_tool(
-                        self.api_url, _tn, _tp, auth_token=auth_token)
-                _run_hook("post_tool", _tn, _tp, _tr)
-                return tc_item, _tr
-
-            # Run parallel batch first (read tools, remote tools)
-            _par_results: list = []
-            if _parallel_batch:
-                _gathered = await asyncio.gather(
-                    *[_exec_one(tc) for tc in _parallel_batch],
-                    return_exceptions=True,
+            async def _remote_tool_runner(tool_name: str, tool_params: dict) -> dict:
+                return await execute_aria_tool(
+                    self.api_url,
+                    tool_name,
+                    tool_params,
+                    auth_token=auth_token,
                 )
-                for _gr in _gathered:
-                    if isinstance(_gr, Exception):
-                        _par_results.append((None, {"success": False, "error": str(_gr)}))
-                    else:
-                        _par_results.append(_gr)
 
-            # Build the ordered pending list for the sequential part of the loop
-            # (serial_batch) + collect results from parallel_batch for summarising
-            _parallel_done: Dict[int, dict] = {}
-            for _orig_idx, tc in enumerate(pending):
-                if tc["tool"] not in _WRITE_TOOLS_PAR:
-                    for _ptc, _ptr in _par_results:
-                        if _ptc is tc:
-                            _parallel_done[_orig_idx] = _ptr
-                            break
+            _parallel_done = await run_parallel_tools(
+                pending,
+                self.tool_executor,
+                remote_runner=_remote_tool_runner,
+                hook=_run_hook,
+            )
 
             # Execute pending tools: local tools first, then remote Aria tools
-            tool_results = []
-            cancelled_by_user = False
-            for idx, tc in enumerate(pending):
+            tool_turn = ToolTurnPlan(pending=pending, parallel_done=_parallel_done)
+            tool_batch = tool_turn.batch
+            _activity_results: list = []   # accumulate (name, result, elapsed, params) for group render
+
+            for task in tool_turn.tasks():
                 # Check if user cancelled (ESC / Ctrl+C) between tool executions
                 if self.cancel_event and self.cancel_event.is_set():
-                    cancelled_by_user = True
+                    tool_batch.cancel()
                     break
 
-                tool_name = tc["tool"]
-                tool_params = tc["params"]
+                tool_name = task.tool_name
+                tool_params = task.params
 
                 # Note: _print_tool_call already called by on_tool_call during streaming
 
                 # If this tool was already executed in the parallel batch, reuse result
-                if idx in _parallel_done:
-                    tr = _parallel_done[idx]
-                    tool_elapsed = 0.0
-                    tool_time_total += tool_elapsed
-                    # (fall through to result formatting below)
-                    # Duplicate the summarisation block inline for clarity
-                    _tool_summary = _format_tool_result(tool_name, tr)
-                    tool_results.append({"tool": tool_name, "result": tr, "summary": _tool_summary})
-                    _print_tool_result(tool_name, tr)
+                if task.has_parallel_result:
+                    tr = task.parallel_result
+                    tool_batch.add_result(tool_name, tr, _format_tool_summary)
+                    _activity_results.append((tool_name, tr, 0.0, task.params))
                     continue
 
                 # Ask user confirmation for destructive local tools
@@ -15348,14 +10770,20 @@ class ArtheraTerminal:
                     _stop_live()
                     try:
                         _cfg_policy = self.config.get("command_policy", "safe")
-                        if not _confirm_tool_execution(tool_name, tool_params,
-                                                       config_policy=_cfg_policy):
-                            cancelled_by_user = True
-                            if HAS_RICH:
-                                console.print("\n  [dim]Cancelled[/dim]")
+                        approval = _confirm_tool_execution_decision(
+                            tool_name,
+                            tool_params,
+                            config_policy=_cfg_policy,
+                        )
+                        _apply_tool_approval(tool_params, approval)
+                        if not approval.approved:
+                            tool_batch.cancel()
+                            from ui.render.output import print_tool_blocked as _ptb
+                            _ptb(tool_name, "用户取消", console=console, has_rich=HAS_RICH)
                             break
                         # If user chose "Allow & set balanced", persist to config
-                        if tool_params.pop("_upgrade_policy", False):
+                        if approval.upgrade_policy:
+                            tool_params.pop("_upgrade_policy", None)
                             self.config["command_policy"] = "balanced"
                             try:
                                 save_config(self.config)
@@ -15364,82 +10792,115 @@ class ArtheraTerminal:
                             except Exception:
                                 pass
                     except KeyboardInterrupt:
-                        cancelled_by_user = True
+                        tool_batch.cancel()
                         break
 
-                # Fire pre-tool hook (fire-and-forget, never blocks)
-                _run_hook("pre_tool", tool_name, tool_params)
-
                 try:
-                    tool_start = time.time()
-                    if tool_name in LOCAL_TOOLS:
-                        # Inject current config policy for run_command
-                        # (avoids double-blocking after user approval)
-                        if tool_name == "run_command" and "policy" not in tool_params:
-                            tool_params["policy"] = self.config.get("command_policy", "safe")
-                        # Local tools: show spinner for slower ones
-                        _slow_local = {"write_file", "edit_file", "run_command", "search_code"}
-                        if tool_name in _slow_local and HAS_RICH:
-                            with console.status("", spinner="dots", spinner_style="dim"):
-                                tr = execute_local_tool(tool_name, tool_params)
-                        else:
-                            tr = execute_local_tool(tool_name, tool_params)
+                    async def _serial_remote_runner(_tool_name: str, _tool_params: dict) -> dict:
+                        return await execute_aria_tool(
+                            self.api_url,
+                            _tool_name,
+                            _tool_params,
+                            auth_token=auth_token,
+                        )
+
+                    progress_label = task.progress_label(len(pending))
+                    _slow_local = {"write_file", "edit_file", "run_command", "search_code"}
+                    if HAS_RICH and (tool_name not in LOCAL_TOOLS or tool_name in _slow_local):
+                        spinner_label = "" if tool_name in LOCAL_TOOLS else f"[dim]{progress_label}[/dim]"
+                        with console.status(spinner_label, spinner="dots", spinner_style="dim"):
+                            tr, tool_elapsed = await run_serial_tool(
+                                tool_name,
+                                tool_params,
+                                self.tool_executor,
+                                remote_runner=_serial_remote_runner,
+                                hook=_run_hook,
+                            )
                     else:
-                        # Spinner for remote tool calls
-                        progress_label = f"  Running {tool_name}..."
-                        if len(pending) > 1:
-                            progress_label = f"  [{idx+1}/{len(pending)}] Running {tool_name}..."
-                        if HAS_RICH:
-                            with console.status(f"[dim]{progress_label}[/dim]", spinner="dots"):
-                                tr = await execute_aria_tool(
-                                    self.api_url, tool_name, tool_params,
-                                    auth_token=auth_token)
-                        else:
+                        if tool_name not in LOCAL_TOOLS:
                             print(progress_label, end="", flush=True)
-                            tr = await execute_aria_tool(
-                                self.api_url, tool_name, tool_params,
-                                auth_token=auth_token)
-                    tool_elapsed = time.time() - tool_start
-                    tool_time_total += tool_elapsed
-                    # Fire post-tool hook
-                    _run_hook("post_tool", tool_name, tool_params, tr)
+                        tr, tool_elapsed = await run_serial_tool(
+                            tool_name,
+                            tool_params,
+                            self.tool_executor,
+                            remote_runner=_serial_remote_runner,
+                            hook=_run_hook,
+                        )
                 except KeyboardInterrupt:
-                    cancelled_by_user = True
+                    tool_batch.cancel()
                     break
 
-                _print_tool_result(tool_name, tr, tool_elapsed, params=tool_params)
+                _activity_results.append((tool_name, tr, tool_elapsed, tool_params))
+                tool_batch.add_result(tool_name, tr, _format_tool_summary, elapsed=tool_elapsed)
 
-                summary = _format_tool_summary(tool_name, tr)
-                tool_results.append({"tool": tool_name, "result": summary})
+            # ── Render tool results as Activity group or single-line ───────────
+            if _activity_results:
+                from ui.render.output import print_tool_activity_group as _ptag
+                _ptag(
+                    _activity_results,
+                    console=console,
+                    has_rich=HAS_RICH,
+                    rich_box=rich_box,
+                    print_finance_fn=_print_finance_result,
+                    bot_mode=_ARIA_BOT_MODE,
+                )
 
             # User cancelled during tool execution
-            if cancelled_by_user:
-                _stop_live()
-                if HAS_RICH:
-                    console.print("\n[dim]Cancelled[/dim]")
-                else:
-                    print("\n  (cancelled)")
+            turn_state.add_tool_time(tool_batch.elapsed_total)
+            if tool_batch.cancelled:
                 result = {"success": True, "cancelled": True}
                 break
 
-            # Build follow-up message with tool results for next round
-            followup = "Tool results:\n"
-            for tr in tool_results:
-                followup += f"\n[{tr['tool']}]: {tr['result']}\n"
-            followup += "\nPlease continue your analysis using these results."
-
-            self.conversation.append({"role": "assistant", "content": total_response})
-            self.conversation.append({"role": "user", "content": followup})
+            assistant_message, user_message, followup = tool_batch.build_next_turn(turn_state.total_response)
+            self.conversation.append(assistant_message)
+            self.conversation.append(user_message)
             current_message = followup
-            total_response = ""
+            turn_state.reset_response()
 
         # --- End of agentic loop ---
         _esc_watcher.stop()
         self._streaming = False
+        set_robot_state(RobotState.DONE)
         elapsed = time.time() - start_time
 
+        # ── Unified cancellation path ──────────────────────────────────────────
+        # All cancel sources (model cancel, ESC between tools, KeyboardInterrupt)
+        # converge here via result["cancelled"]=True.  A single AgentTurnResult
+        # carries partial text and timing so callers see a consistent shape.
+        if result.get("cancelled"):
+            _stop_live()
+            turn_result = turn_state.build_cancelled_result(
+                elapsed=elapsed,
+                token_count=token_count,
+                thinking_tokens=thinking_tokens,
+            )
+            if HAS_RICH:
+                # Batch-render mode (Ollama): tokens were silently accumulated.
+                # Render whatever was generated before the cancel so the user
+                # can see partial output rather than a blank screen.
+                if turn_result.final_text and _use_batch_render[0]:
+                    _stop_spinner()
+                    console.print(Markdown(_strip_latex(turn_result.final_text)))
+                console.print("\n[dim]Cancelled[/dim]")
+                console.print(Rule(style="dim"))
+            else:
+                if turn_result.final_text:
+                    print(turn_result.final_text)
+                print("\n  (cancelled)")
+            if turn_result.final_text:
+                self.conversation.append(
+                    {"role": "assistant", "content": turn_result.final_text}
+                )
+            return
+
         if result.get("success") and not result.get("cancelled"):
-            final_text = total_response or result.get("response", "")
+            turn_result = turn_state.build_result(
+                elapsed=elapsed,
+                fallback_response=result.get("response", ""),
+                token_count=token_count,
+                thinking_tokens=thinking_tokens,
+            )
+            final_text = turn_result.final_text
 
             # Flush any unclosed LaTeX buffer (e.g. stream cut off mid-formula).
             # This only matters for the non-batch plain-print path; in batch-render
@@ -15471,60 +10932,28 @@ class ArtheraTerminal:
             self.conversation.append({"role": "assistant", "content": final_text})
 
             # Metadata line — detailed stats
-            meta_parts = [f"{elapsed:.1f}s"]
-
-            # Token stats — prefer API usage, fallback to manual count
-            prompt_t = total_usage.get("prompt_tokens", 0)
-            completion_t = total_usage.get("completion_tokens", 0) or token_count
-            think_t = total_usage.get("thinking_tokens", 0) or thinking_tokens
-            total_t = prompt_t + completion_t + think_t
-
-            if total_t > 0:
-                parts = []
-                if prompt_t > 0:
-                    parts.append(f"in: {prompt_t:,}")
-                if completion_t > 0:
-                    parts.append(f"out: {completion_t:,}")
-                if think_t > 0:
-                    parts.append(f"think: {think_t:,}")
-                meta_parts.append(f"{total_t:,} tokens ({', '.join(parts)})")
-                # token/s speed based on output tokens and actual generation time
-                gen_time = elapsed - tool_time_total
-                if completion_t > 0 and gen_time > 0.5:
-                    tps = completion_t / gen_time
-                    meta_parts.append(f"{tps:.0f} t/s")
-            elif token_count > 0:
-                meta_parts.append(f"{token_count:,} tokens")
-                gen_time = elapsed - tool_time_total
-                if gen_time > 0.5:
-                    meta_parts.append(f"{token_count / gen_time:.0f} t/s")
-
-            if tool_time_total > 0:
-                meta_parts.append(f"tools: {tool_time_total:.1f}s")
-            if provider != "aws":
-                meta_parts.append(provider)
-            if all_tools:
-                tool_names = list(dict.fromkeys(all_tools))  # dedupe preserving order
-                meta_parts.append(" ".join(tool_names))
+            metadata = turn_result.metadata
+            prompt_t = metadata.prompt_tokens
+            completion_t = metadata.completion_tokens
+            think_t = metadata.thinking_tokens
 
             if HAS_RICH:
                 copy_hint = "  [dim]/copy[/dim]" if self._last_response else ""
-                console.print(f"\n[dim]{' · '.join(meta_parts)}[/dim]{copy_hint}")
+                console.print(f"\n[dim]{' · '.join(metadata.parts)}[/dim]{copy_hint}")
                 # One-time warning if first response and input tokens are very high
                 # (>2000 for a short message suggests a heavy system prompt)
                 _is_first_turn = (self._session_turns == 0)
                 if _is_first_turn and prompt_t > 2000:
-                    _msg_len = len(message)
-                    _sys_est = max(0, prompt_t - _msg_len // 3)
+                    _sys_est = metadata.system_prompt_estimate(message)
                     if _sys_est > 1500:
                         console.print(
                             f"[dim]  ℹ 系统提示词约 {_sys_est:,} tokens，"
                             f"较长的对话会较快占满上下文。"
                             f"可用 /compact 压缩历史，或用 /clear 重置。[/dim]"
-                        )
+                )
                 console.print(Rule(style="dim"))
             else:
-                print(f"\n{' · '.join(meta_parts)}\n")
+                print(f"\n{' · '.join(metadata.parts)}\n")
 
             # ── Accumulate session-level usage stats (for /cost) ──────────
             self._session_input_tokens  += prompt_t or 0
@@ -15536,7 +10965,7 @@ class ArtheraTerminal:
             # Fire response_done lifecycle hook
             _run_event_hook("response_done", {
                 "ARIA_RESPONSE":  (final_text or "")[:500],
-                "ARIA_PROVIDER":  provider,
+                "ARIA_PROVIDER":  turn_result.provider,
                 "ARIA_TOKENS":    str((prompt_t or 0) + (completion_t or 0)),
                 "ARIA_SESSION":   self.session_id,
             })
@@ -15574,26 +11003,35 @@ class ArtheraTerminal:
                 except Exception:
                     pass
 
+            # Auto-extract preference signals into global memory
+            if self.memory_mgr and final_text:
+                try:
+                    from memory_manager import extract_preference_signal
+                    _sig = extract_preference_signal(message, final_text)
+                    if _sig:
+                        self.memory_mgr.append("user_profile", _sig, title="User Profile")
+                except Exception:
+                    pass
+
     def _bottom_toolbar(self):
         """Bottom toolbar content for prompt_toolkit."""
-        # Context usage estimate
-        conv = self.conversation
-        est_tokens = sum(len(m.get("content", "")) for m in conv) // 3
-        mkey = self.config.get("model", "qwen2.5:7b")
-        max_ctx = get_model_cfg(mkey).get("num_ctx", 16384)
-        ctx_pct = min(100, int(est_tokens / max_ctx * 100))
-        ctx_color = "#606060" if ctx_pct < 60 else ("#aa8800" if ctx_pct < 85 else "#cc4444")
-        ctx_str = f'<style fg="{ctx_color}">ctx {est_tokens:,} / {max_ctx:,}</style>' if conv else ""
-        local_indicator = ' <style fg="#448844">⬡ local</style>' if self.config.get("local_mode") else ""
-        return HTML(
-            f'<style fg="#606060">'
-            f'  {self._status_line()}'
-            f'{local_indicator}'
-            f'  ·  /help'
-            f'  ·  esc cancel'
-            f'{"  ·  " + ctx_str if ctx_str else ""}'
-            f'</style>'
+        model_label, cwd, privacy, est_tokens, max_ctx = self._bottom_toolbar_parts()
+        ctx_color = "#606060" if est_tokens / max_ctx < 0.6 else (
+            "#aa8800" if est_tokens / max_ctx < 0.85 else "#cc4444"
         )
+        return HTML(
+            f'<style fg="#C08050">{model_label}</style>'
+            f'<style fg="#8a8a8a"> · {cwd} · {privacy} · /help · esc · </style>'
+            f'<style fg="{ctx_color}">{est_tokens:,}/{max_ctx:,}</style>'
+        )
+
+    def _bottom_toolbar_plain(self) -> str:
+        model_label, cwd, privacy, est_tokens, max_ctx = self._bottom_toolbar_parts()
+        return f"{model_label} · {cwd} · {privacy} · /help · esc · {est_tokens:,}/{max_ctx:,}"
+
+    def _bottom_toolbar_parts(self):
+        from ui.banner import bottom_toolbar_parts as _btp
+        return _btp(self.conversation, self.config, self._actual_model, get_model_cfg)
 
     async def _startup_health_check(self):
         """Async Ollama + cloud connectivity probe displayed after the header."""
@@ -15614,22 +11052,76 @@ class ArtheraTerminal:
                             _n = len(_tags.get("models", []))
                             self._ollama_alive = True
                             parts.append(
-                                f"[green]● Ollama[/green][dim] · {_n} models[/dim]"
-                                if _n else "[green]● Ollama[/green]"
+                                f"[dim]Ollama · {_n} models[/dim]"
+                                if _n else "[dim]Ollama[/dim]"
                             )
                         else:
-                            parts.append("[dim]○ Ollama[/dim]")
+                            parts.append("[dim]Ollama offline[/dim]")
             except Exception:
-                parts.append("[dim]○ Ollama[/dim]")
+                parts.append("[dim]Ollama offline[/dim]")
 
             # Cloud provider check (only if API key is set)
             if self.config.get("auth_token") or os.getenv("ANTHROPIC_API_KEY"):
-                parts.append("[cyan]● Cloud[/cyan]")
+                parts.append("[dim]Cloud[/dim]")
 
+            # Auto-connect default broker from ~/.arthera/brokers.json
+            if _HAS_BROKERS:
+                try:
+                    _reg = _get_broker_registry()
+                    _broker = _reg.connect_default()
+                    if _broker:
+                        parts.append(f"[dim]{_broker.label} · account connected[/dim]")
+                except Exception as _be:
+                    logger.debug("Auto-connect broker failed: %s", _be)
+
+            # Global memory fact count
+            if getattr(self, "memory_mgr", None):
+                try:
+                    _mcount = self.memory_mgr.fact_count()
+                    if _mcount:
+                        parts.append(f"[dim]memory {_mcount} facts[/dim]")
+                except Exception:
+                    pass
+
+            # Broker connection shown in banner status; log remainder for debug
             if parts:
-                console.print("  " + "  ".join(parts))
+                logger.debug("startup health: %s", "  ".join(parts))
+            # Broker connection shown separately (not in 5-row banner to keep it compact)
+            for p in parts:
+                if "account connected" in p and HAS_RICH:
+                    console.print(f"  {p}")
         except ImportError:
             pass
+
+    async def _alert_watchdog(self):
+        """Background task: check price alerts every 30s and fire notifications."""
+        import asyncio as _asyncio
+        loop = _asyncio.get_event_loop()
+        while self.running:
+            await _asyncio.sleep(30)
+            if not self.running:
+                break
+            try:
+                from data_analysis_tools import check_alerts
+                result = await loop.run_in_executor(None, check_alerts)
+                triggered = result.get("triggered", [])
+                if triggered:
+                    for alrt in triggered:
+                        sym = alrt.get("symbol", "")
+                        cur = alrt.get("triggered_price", "")
+                        if HAS_RICH:
+                            console.print(
+                                f"\n[bold yellow]⚡ 预警触发[/bold yellow] "
+                                f"[cyan]{sym}[/cyan] → {cur}",
+                                highlight=False,
+                            )
+                        try:
+                            from notification_tools import send_alert_notification
+                            await loop.run_in_executor(None, send_alert_notification, alrt)
+                        except Exception as _ne:
+                            logger.debug("Alert notification failed: %s", _ne)
+            except Exception as _we:
+                logger.debug("Alert watchdog error: %s", _we)
 
     async def run_interactive(self):
         """Run the interactive REPL loop."""
@@ -15664,19 +11156,53 @@ class ArtheraTerminal:
                 except Exception:
                     pass
 
+        # ── Start alert watchdog (30s background price-alert checker) ─────
+        asyncio.create_task(self._alert_watchdog())
+
         while self.running:
             try:
                 if self._pt_session:
-                    user_input = await asyncio.get_event_loop().run_in_executor(
-                        None,
-                        lambda: self._pt_session.prompt(
-                            [("class:prompt", "❯ ")],
-                            bottom_toolbar=self._bottom_toolbar,
-                        ),
-                    )
+                    if self.config.get("input_style", "panel") == "panel":
+                        from ui import PanelInputConfig, run_panel_input
+                        set_robot_state(RobotState.IDLE)
+                        _ml, _cwd, _priv, _etok, _mctx = self._bottom_toolbar_parts()
+                        _skills_n = len(SKILLS)
+                        _tools_n = len(LOCAL_TOOLS)
+                        _ollama_st = ""
+                        if getattr(self, "_ollama_alive", False):
+                            _om = len(getattr(self, "_installed_models", set()) or [])
+                            _ollama_st = f"ollama {_om}m" if _om else "ollama ●"
+                        user_input = await asyncio.get_event_loop().run_in_executor(
+                            None,
+                            lambda: run_panel_input(
+                                completer=self._pt_completer,
+                                history=self._pt_history,
+                                config=PanelInputConfig(
+                                    theme=self.config.get("input_theme", "auto"),
+                                    model_label=_ml,
+                                    cwd=_cwd,
+                                    privacy=_priv,
+                                    est_tokens=_etok,
+                                    max_tokens=_mctx,
+                                    tools_count=_tools_n,
+                                    skills_count=_skills_n,
+                                    ollama_status=_ollama_st,
+                                ),
+                            ),
+                        )
+                    else:
+                        user_input = await asyncio.get_event_loop().run_in_executor(
+                            None,
+                            lambda: self._pt_session.prompt(
+                                [("class:prompt", "> ")]
+                                if self.config.get("input_style", "panel") == "box"
+                                else [("class:prompt", "> ")],
+                                bottom_toolbar=self._bottom_toolbar,
+                            ),
+                        )
                     user_input = user_input.strip()
                 elif HAS_RICH:
-                    user_input = console.input("[bold #C08050]❯[/bold #C08050] ").strip()
+                    user_input = console.input("[dim]>[/dim] ").strip()
                 else:
                     user_input = input("> ").strip()
 
@@ -15716,6 +11242,13 @@ class ArtheraTerminal:
 
                 if self.commands.is_command(user_input):
                     await self.commands.execute(user_input)
+                    continue
+
+                # ── Top-level command router (quant CLI style) ─────────────────
+                # Intercepts bare keywords like "analyze AAPL" → /analyze AAPL
+                # so users don't need to type the slash for common quant workflows.
+                _routed = await try_top_level_route(user_input, self.commands)
+                if _routed:
                     continue
 
                 # Auto memory trigger: "记住 X" / "remember that X" → silent /note
@@ -15777,6 +11310,8 @@ class ArtheraTerminal:
 
         deterministic: dict = {"success": False}
         if not _model_has_tools_p:
+            deterministic = _try_handle_broker_query(prompt)
+        if not deterministic.get("success"):
             deterministic = _try_handle_market_snapshot_analysis(prompt)
         if not deterministic.get("success"):
             deterministic = _try_handle_stock_chart_analysis(prompt)
@@ -15927,6 +11462,8 @@ Examples:
     parser.add_argument("--watch", "-w", type=int, metavar="SECS", help="Refresh interval in seconds")
     parser.add_argument("--url", help="Backend API URL")
     parser.add_argument("--local", action="store_true", help="Local-only mode: skip AWS, use Ollama directly")
+    parser.add_argument("--no-banner", action="store_true", help="Skip startup banner (same as --banner off)")
+    parser.add_argument("--banner", choices=["full", "compact", "off"], help="Banner mode: full|compact|off")
     parser.add_argument("--resume", action="store_true", help="Resume last session")
     parser.add_argument("--session", help="Load specific session ID")
     parser.add_argument("command", nargs="?", help="Direct command (quote, backtest, etc.)")
@@ -15946,6 +11483,10 @@ Examples:
         config["model"] = MODELS[mkey]["id"] if mkey in MODELS else args.model
     if getattr(args, "local", False):
         config["local_mode"] = True
+    if getattr(args, "no_banner", False):
+        config["banner"] = "off"
+    elif getattr(args, "banner", None):
+        config["banner"] = args.banner
     if args.thinking:
         config["thinking_mode"] = "thinking"
     if args.url:
@@ -16004,28 +11545,17 @@ Examples:
 
         # Build the command function for potential watch wrapping
         async def run_direct_cmd(_):
-            if cmd == "quote":
-                await terminal.commands.cmd_quote(cmd_args)
-            elif cmd == "backtest":
-                await terminal.commands.cmd_backtest(cmd_args)
-            elif cmd == "health":
-                await terminal.commands.cmd_health(cmd_args)
-            elif cmd == "tools":
-                terminal.commands.cmd_tools(cmd_args)
-            elif cmd == "skills":
-                terminal.commands.cmd_skills(cmd_args)
-            elif cmd == "sessions":
-                terminal.commands.cmd_sessions(cmd_args)
-            elif cmd in ("watch", "watchlist"):
-                terminal.commands.cmd_watch(cmd_args)
-            elif cmd == "export":
-                await terminal.commands.cmd_export(cmd_args)
-            else:
-                await terminal.run_prompt(f"{cmd} {cmd_args}".strip(),
-                                          json_output=args.json, fmt=fmt,
-                                          output_file=output_file, quiet=quiet)
+            await dispatch_direct_command(
+                terminal,
+                cmd,
+                cmd_args,
+                json_output=args.json,
+                fmt=fmt,
+                output_file=output_file,
+                quiet=quiet,
+            )
 
-        if watch_interval and cmd in ("quote", "health"):
+        if watch_interval and is_watchable_direct_command(cmd):
             await terminal.run_watch(run_direct_cmd, watch_interval, cmd_args)
         else:
             await run_direct_cmd(None)
@@ -16033,6 +11563,210 @@ Examples:
 
     # Mode 3: Interactive REPL (default)
     await terminal.run_interactive()
+
+
+# ── Football helper functions (module-level, used by cmd_football) ────────────
+
+def _football_standings(league: str) -> None:
+    from rich.table import Table
+    from rich import box as rich_box
+    from rich.panel import Panel
+    try:
+        from football_data_client import get_standings, LEAGUE_NAMES, _resolve_league
+    except ImportError:
+        console.print("[red]football_data_client.py 未找到[/red]")
+        return
+
+    console.print(f"[dim]获取 {league.upper()} 积分榜…[/dim]")
+    data = get_standings(league)
+    if not data:
+        comp = _resolve_league(league)
+        console.print(
+            f"[yellow]无法获取数据。请设置 FOOTBALL_DATA_API_KEY:[/yellow]\n"
+            f"  1. 访问 football-data.org 免费注册\n"
+            f"  2. 在 ~/.aria/.env 中添加:\n"
+            f"     [cyan]FOOTBALL_DATA_API_KEY=your_key_here[/cyan]"
+        )
+        return
+
+    t = Table(
+        title=f"[bold]{data['league_name']}[/bold]  {data['season_start'][:4]}/{data['season_end'][:4]}",
+        box=rich_box.SIMPLE,
+        show_header=True,
+        header_style="bold",
+        padding=(0, 1),
+    )
+    t.add_column("#",    width=3,  justify="right")
+    t.add_column("球队", width=22)
+    t.add_column("场",   width=4,  justify="right")
+    t.add_column("胜",   width=3,  justify="right", style="green")
+    t.add_column("平",   width=3,  justify="right", style="yellow")
+    t.add_column("负",   width=3,  justify="right", style="red")
+    t.add_column("进/失", width=7, justify="right")
+    t.add_column("净胜", width=5,  justify="right")
+    t.add_column("积分", width=5,  justify="right", style="bold cyan")
+    t.add_column("近5场", width=7)
+
+    for row in data["table"]:
+        gd = row["gd"]
+        gd_str = f"+{gd}" if gd > 0 else str(gd)
+        form_colored = ""
+        for c in (row.get("form") or ""):
+            if c == "W":
+                form_colored += "[green]W[/green]"
+            elif c == "L":
+                form_colored += "[red]L[/red]"
+            elif c == "D":
+                form_colored += "[yellow]D[/yellow]"
+            else:
+                form_colored += c
+        t.add_row(
+            str(row["pos"]),
+            row["team"],
+            str(row["played"]),
+            str(row["w"]),
+            str(row["d"]),
+            str(row["l"]),
+            f"{row['gf']}/{row['ga']}",
+            gd_str,
+            str(row["pts"]),
+            form_colored,
+        )
+
+    console.print(t)
+
+
+def _football_fixtures(league: str, days: int = 7) -> None:
+    from rich.table import Table
+    from rich import box as rich_box
+    try:
+        from football_data_client import get_fixtures, LEAGUE_NAMES, _resolve_league
+    except ImportError:
+        console.print("[red]football_data_client.py 未找到[/red]")
+        return
+
+    comp = _resolve_league(league)
+    league_label = LEAGUE_NAMES.get(comp, comp)
+    console.print(f"[dim]获取 {league_label} 未来 {days} 天赛程…[/dim]")
+
+    matches = get_fixtures(league, days)
+    if matches is None:
+        console.print("[yellow]无法获取数据。请检查 FOOTBALL_DATA_API_KEY 设置。[/yellow]")
+        return
+    if not matches:
+        console.print(f"[dim]未来 {days} 天内暂无赛事[/dim]")
+        return
+
+    t = Table(
+        title=f"[bold]{league_label}[/bold]  未来 {days} 天赛程",
+        box=rich_box.SIMPLE,
+        show_header=True,
+        header_style="bold",
+        padding=(0, 1),
+    )
+    t.add_column("日期(UTC)", width=11)
+    t.add_column("主队",      width=22)
+    t.add_column("",          width=3,  justify="center")
+    t.add_column("客队",      width=22)
+    t.add_column("轮次",      width=5,  justify="right")
+
+    for m in matches:
+        t.add_row(
+            m["date"],
+            m["home"],
+            "vs",
+            m["away"],
+            str(m["matchday"] or m.get("stage", "")),
+        )
+
+    console.print(t)
+
+
+def _football_team(team: str, league: str = "pl") -> None:
+    from rich.table import Table
+    from rich import box as rich_box
+    from rich.panel import Panel
+    try:
+        from football_data_client import get_team_stats
+    except ImportError:
+        console.print("[red]football_data_client.py 未找到[/red]")
+        return
+
+    console.print(f"[dim]获取 {team} 近期数据 ({league.upper()})…[/dim]")
+    stats = get_team_stats(league, team)
+    if not stats:
+        console.print("[yellow]无法获取球队数据。请检查球队名称和联赛代码。[/yellow]")
+        return
+
+    form_colored = ""
+    for c in stats["form"]:
+        if c == "W":   form_colored += "[bold green]W[/bold green]"
+        elif c == "L": form_colored += "[bold red]L[/bold red]"
+        elif c == "D": form_colored += "[bold yellow]D[/bold yellow]"
+
+    summary = (
+        f"[bold]{stats['team']}[/bold]  |  近 {stats['last_n']} 场\n\n"
+        f"  战绩:    {stats['w']}胜  {stats['d']}平  {stats['l']}负\n"
+        f"  进球:    {stats['gf']}球  (场均 {stats['avg_gf']})\n"
+        f"  失球:    {stats['ga']}球  (场均 {stats['avg_ga']})\n"
+        f"  主场进球: 场均 {stats['home_avg_gf']}\n"
+        f"  客场进球: 场均 {stats['away_avg_gf']}\n"
+        f"  近5场:   {form_colored}"
+    )
+    console.print(Panel(summary, title="[bold green]⚽ 球队状态[/bold green]", border_style="green"))
+
+    t = Table(box=rich_box.SIMPLE, show_header=True, padding=(0, 1))
+    t.add_column("日期",     width=10)
+    t.add_column("主队",     width=20)
+    t.add_column("比分",     width=7, justify="center", style="bold")
+    t.add_column("客队",     width=20)
+    t.add_column("",         width=3)
+
+    for r in stats["recent"]:
+        result_style = {"W": "green", "D": "yellow", "L": "red"}.get(r["result"], "dim")
+        t.add_row(
+            r["date"],
+            r["home"],
+            r["score"],
+            r["away"],
+            f"[{result_style}]{r['result']}[/{result_style}]",
+        )
+    console.print(t)
+
+
+def _football_h2h(t1: str, t2: str, league: str = "pl") -> None:
+    from rich.table import Table
+    from rich import box as rich_box
+    from rich.panel import Panel
+    try:
+        from football_data_client import get_head_to_head
+    except ImportError:
+        console.print("[red]football_data_client.py 未找到[/red]")
+        return
+
+    console.print(f"[dim]获取 {t1} vs {t2} 历史对决 ({league.upper()})…[/dim]")
+    data = get_head_to_head(t1, t2, league)
+    if not data:
+        console.print("[yellow]未找到历史对决记录。[/yellow]")
+        return
+
+    summary = (
+        f"[bold]{data['team1']}[/bold] vs [bold]{data['team2']}[/bold]  |  共 {data['total']} 场\n\n"
+        f"  {data['team1']} 胜: [green]{data['team1_wins']}[/green]\n"
+        f"  平局:         [yellow]{data['draws']}[/yellow]\n"
+        f"  {data['team2']} 胜: [red]{data['team2_wins']}[/red]"
+    )
+    console.print(Panel(summary, title="[bold]⚽ 历史交锋[/bold]", border_style="dim"))
+
+    t = Table(box=rich_box.SIMPLE, show_header=True, padding=(0, 1))
+    t.add_column("日期", width=10)
+    t.add_column("主队", width=22)
+    t.add_column("比分", width=7, justify="center", style="bold cyan")
+    t.add_column("客队", width=22)
+
+    for m in data["matches"]:
+        t.add_row(m["date"], m["home"], m["score"], m["away"])
+    console.print(t)
 
 
 if __name__ == "__main__":
