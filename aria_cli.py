@@ -272,6 +272,8 @@ if HAS_RICH:
 # prompt_toolkit re-exports
 if HAS_PT:
     from prompt_toolkit import PromptSession
+    from prompt_toolkit.completion import ConditionalCompleter
+    from prompt_toolkit.filters import Condition
     from prompt_toolkit.formatted_text import HTML
     from prompt_toolkit.history import FileHistory
 # termios — already imported inside ui.console; alias for local use
@@ -10270,9 +10272,19 @@ class ArtheraTerminal:
                 if config.get("input_style", "panel") == "box"
                 else HTML('<style fg="#888888">Ask Aria, edit files, run commands, or /help</style>')
             )
+            # Only show completions when buffer starts with "/" — avoids
+            # triggering the menu on plain chat messages.
+            @Condition
+            def _slash_active() -> bool:
+                try:
+                    buf = self._pt_session.app.current_buffer
+                    return buf.text.lstrip().startswith("/")
+                except Exception:
+                    return False
+            _session_completer = ConditionalCompleter(self._pt_completer, _slash_active)
             self._pt_session = PromptSession(
                 history=self._pt_history,
-                completer=self._pt_completer,
+                completer=_session_completer,
                 complete_while_typing=True,
                 style=ARIA_PT_STYLE,
                 placeholder=_placeholder,
