@@ -26,15 +26,22 @@ from typing import Any, Dict, List, Optional, Type
 from .base import (
     BaseDataSource, QuoteResult, HistoryResult, FundamentalsResult, _detect_market
 )
-from .sources import AkshareSource, YFinanceSource, TushareSource
+from .sources import (
+    AkshareSource, YFinanceSource, TushareSource,
+    FREDSource, EDGARSource, AlphaVantageSource, WorldBankSource,
+)
 
 logger = logging.getLogger(__name__)
 
 # ── 数据源目录 ────────────────────────────────────────────────────────────────
 _SOURCE_REGISTRY: Dict[str, Type[BaseDataSource]] = {
-    "akshare":  AkshareSource,
-    "yfinance": YFinanceSource,
-    "tushare":  TushareSource,
+    "akshare":       AkshareSource,
+    "yfinance":      YFinanceSource,
+    "tushare":       TushareSource,
+    "fred":          FREDSource,
+    "edgar":         EDGARSource,
+    "alpha_vantage": AlphaVantageSource,
+    "world_bank":    WorldBankSource,
 }
 
 
@@ -47,9 +54,10 @@ def register_datasource(name: str, cls: Type[BaseDataSource]) -> None:
 # ── 默认优先级链 ──────────────────────────────────────────────────────────────
 _DEFAULT_CHAINS: Dict[str, List[str]] = {
     "a_share": ["tushare", "akshare"],
-    "us":      ["yfinance"],
+    "us":      ["yfinance", "alpha_vantage", "edgar"],
     "hk":      ["yfinance"],
     "crypto":  ["yfinance"],
+    "macro":   ["fred", "world_bank"],
 }
 
 # ── 配置文件路径 ──────────────────────────────────────────────────────────────

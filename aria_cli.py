@@ -3505,7 +3505,7 @@ def _display_value(value, digits: int = 2, suffix: str = "") -> str:
 
 
 
-def _generate_chart_sync(symbol: str) -> dict:
+def _generate_chart_sync(symbol: str, period: str = "1y") -> dict:
     """
     `/chart` 命令的同步入口：为指定 symbol 生成 HTML 分析图表。
     A股代码先尝试 tushare/akshare 获取数据，美股走 yfinance。
@@ -3518,7 +3518,155 @@ def _generate_chart_sync(symbol: str) -> dict:
         else:
             sym_yf = symbol + ".SZ"
 
-    return _try_handle_stock_chart_analysis_direct(sym_yf)
+    return _try_handle_stock_chart_analysis_direct(sym_yf, period=period)
+
+
+def _fetch_macro_data(indicator: str, country: str = "WLD", days: int = 365):
+    """Fetch macro data from FRED or World Bank, return list of (date, value) tuples."""
+    try:
+        from datasources.sources.fred_source import FREDSource, MACRO_ALIASES
+        if indicator.upper() in MACRO_ALIASES or indicator.upper() in MACRO_ALIASES.values():
+            src = FREDSource()
+            h = src.history(indicator, days=days)
+            if h and h.data is not None and not h.data.empty:
+                return [(str(idx.date()), float(row["close"])) for idx, row in h.data.iterrows()]
+    except Exception as _e:
+        pass
+    try:
+        from datasources.sources.world_bank_source import WorldBankSource
+        src = WorldBankSource()
+        h = src.history(f"{country}:{indicator}", days=days)
+        if h and h.data is not None and not h.data.empty:
+            return [(str(idx.date()), float(row["close"])) for idx, row in h.data.iterrows()]
+    except Exception:
+        pass
+    return None
+
+
+def _fetch_edgar_data(symbol: str, sub: str = "filings"):
+    """Fetch SEC EDGAR data for a US stock."""
+    try:
+        from datasources.sources.edgar_source import EDGARSource
+        src = EDGARSource()
+        if sub == "filings":
+            return src.get_recent_filings(symbol)
+        elif sub == "facts":
+            return src.get_company_facts(symbol)
+        elif sub == "insider":
+            return src.get_insider_trades(symbol)
+    except Exception as _e:
+        pass
+    return None
+
+
+def _test_datasource(name: str) -> None:
+    """Test connectivity of a named data source."""
+    try:
+        from datasources.router import _SOURCE_REGISTRY
+        cls = _SOURCE_REGISTRY.get(name.lower())
+        if not cls:
+            if HAS_RICH:
+                console.print(f"  [red]未知数据源: {name}[/red]")
+            return
+        src = cls()
+        if not src.is_configured():
+            if HAS_RICH:
+                console.print(f"  [yellow]⚠ {name} 未配置（缺少 API key）[/yellow]")
+            return
+        # Try a simple query
+        test_symbol = "AAPL" if "us" in getattr(cls, "markets", []) else "600519"
+        q = src.quote(test_symbol)
+        if HAS_RICH:
+            if q:
+                console.print(f"  [green]✓ {name} 正常 — {test_symbol} = {q.price:.2f}[/green]")
+            else:
+                console.print(f"  [yellow]⚠ {name} 返回空数据[/yellow]")
+    except Exception as e:
+        if HAS_RICH:
+            console.print(f"  [red]✗ {name} 失败: {e}[/red]")
+
+
+def _generate_stat_arb_chart(sym_a: str, sym_b: str, period: str = "2y") -> None:
+    """Generate interactive z-score history chart for stat-arb pair."""
+    try:
+        import yfinance as _yf
+        import numpy as _np
+        import pathlib as _pl
+        import re as _re
+        import json as _json
+
+        raw = _yf.download([sym_a, sym_b], period=period, progress=False, auto_adjust=True)
+        if raw.empty:
+            return
+        # Support both multi-level and flat column formats
+        if isinstance(raw.columns, _pd.MultiIndex):
+            prices = raw["Close"][[sym_a, sym_b]].dropna()
+        else:
+            prices = raw[["Close"]].rename(columns={"Close": sym_a}).dropna()
+            return  # need both
+
+        spread = prices[sym_a] - prices[sym_b]
+        roll   = spread.rolling(60)
+        z      = ((spread - roll.mean()) / roll.std()).dropna()
+
+        x     = [d.strftime("%Y-%m-%d") for d in z.index]
+        z_val = [round(float(v), 3) for v in z.values]
+
+        entry_lo, entry_hi = -2.0, 2.0
+        stop_lo, stop_hi   = -3.5, 3.5
+
+        html = f"""<!DOCTYPE html><html><head><meta charset="utf-8">
+<title>{sym_a}/{sym_b} Z-Score</title>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+</head><body style="background:#0d1117;color:#e6edf3;margin:0;padding:16px;font-family:monospace">
+<h2 style="color:#58a6ff">{sym_a} / {sym_b} — 配对价差 Z-Score ({period})</h2>
+<div id="chart" style="width:100%;height:500px"></div>
+<script>
+const x = {_json.dumps(x)};
+const z = {_json.dumps(z_val)};
+const last_z = z[z.length-1];
+const colors = z.map(v => v > {entry_hi} || v < {entry_lo} ? (Math.abs(v) > {stop_hi} ? '#f85149' : '#f0883e') : '#58a6ff');
+Plotly.newPlot('chart', [
+  {{x, y: z, type:'scatter', mode:'lines', name:'Z-Score',
+    line:{{color:'#58a6ff', width:1.5}}}},
+  {{x:[x[0],x[x.length-1]], y:[{entry_hi},{entry_hi}], type:'scatter', mode:'lines',
+    name:'做空阈值 (+{entry_hi})', line:{{color:'#f0883e', width:1, dash:'dot'}}}},
+  {{x:[x[0],x[x.length-1]], y:[{entry_lo},{entry_lo}], type:'scatter', mode:'lines',
+    name:'做多阈值 ({entry_lo})', line:{{color:'#3fb950', width:1, dash:'dot'}}}},
+  {{x:[x[0],x[x.length-1]], y:[{stop_hi},{stop_hi}], type:'scatter', mode:'lines',
+    name:'止损上轨 (+{stop_hi})', line:{{color:'#f85149', width:1, dash:'dash'}}}},
+  {{x:[x[0],x[x.length-1]], y:[{stop_lo},{stop_lo}], type:'scatter', mode:'lines',
+    name:'止损下轨 ({stop_lo})', line:{{color:'#f85149', width:1, dash:'dash'}}}},
+  {{x:[x[0],x[x.length-1]], y:[0,0], type:'scatter', mode:'lines',
+    name:'均值归零', line:{{color:'#8b949e', width:1}}}}
+], {{
+  paper_bgcolor:'#0d1117', plot_bgcolor:'#161b22',
+  font:{{color:'#e6edf3', family:'monospace'}},
+  xaxis:{{gridcolor:'#21262d', tickfont:{{size:10}}}},
+  yaxis:{{gridcolor:'#21262d', title:'Z-Score'}},
+  legend:{{bgcolor:'#161b22', bordercolor:'#30363d'}},
+  annotations:[{{
+    x:x[x.length-1], y:last_z, text:`当前 Z=${{last_z.toFixed(2)}}`,
+    showarrow:true, arrowcolor:'#e6edf3',
+    font:{{color:'#e6edf3', size:12}}, bgcolor:'#30363d'
+  }}]
+}}, {{responsive:true}});
+</script></body></html>"""
+
+        safe = _re.sub(r"[^A-Za-z0-9_.-]+", "_", f"{sym_a}_{sym_b}")
+        from artifacts import create_artifact
+        art = create_artifact("reports/stat-arb", f"{sym_a}_{sym_b}", f"{safe}_zscore", ".html")
+        art.path.write_text(html, encoding="utf-8")
+        if HAS_RICH:
+            console.print(f"  [dim]Z-Score 图表: [link={art.path}]{art.path}[/link][/dim]")
+            import subprocess
+            try:
+                subprocess.Popen(["open", str(art.path)])
+            except Exception:
+                pass
+    except Exception as _e:
+        if HAS_RICH:
+            console.print(f"  [dim]Z-Score 图表生成跳过: {_e}[/dim]")
 
 
 def _try_handle_broker_query(message: str) -> dict:
@@ -3530,8 +3678,8 @@ def _try_handle_broker_query(message: str) -> dict:
     )
 
 
-def _try_handle_stock_chart_analysis_direct(symbol: str) -> dict:
-    return _src_chart_analysis_direct(symbol)
+def _try_handle_stock_chart_analysis_direct(symbol: str, period: str = "1y") -> dict:
+    return _src_chart_analysis_direct(symbol, period=period)
 
 
 def _try_handle_stock_chart_analysis(message: str) -> dict:
@@ -4789,6 +4937,8 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
             "/factor-lab":    (self.cmd_factor_lab,    "因子分析工作台: /factor-lab AAPL [days=252]"),
             "/execution":     (self.cmd_execution,     "执行算法对比: /execution AAPL buy 100000 [algo=compare]"),
             "/stat-arb":      (self.cmd_stat_arb,      "配对统计套利检验: /stat-arb GLD SLV"),
+            "/edgar":         (self.cmd_edgar,         "SEC EDGAR 财报查询: /edgar AAPL [filings|facts|insider]"),
+            "/datasource":    (self.cmd_datasource,    "数据源管理: /datasource | /datasource test FRED"),
             # ── financial-services 风格 workflow 命令 ────────────────────────────
             "/research":  (self.cmd_research,  "Market Researcher 工作流: /research <symbol>"),
             "/earnings":  (self.cmd_earnings_workflow, "财报分析工作流: /earnings <symbol> [quarter]"),
@@ -4988,6 +5138,8 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
         "/factor-lab":("Usage: /factor-lab [SYMBOL]", ["/factor-lab AAPL", "/factor-lab sh600519"]),
         "/execution": ("Usage: /execution SYMBOL buy|sell QTY [algo=compare] [price=N]", ["/execution AAPL buy 100000", "/execution SPY sell 50000 algo=is"]),
         "/stat-arb":  ("Usage: /stat-arb SYMBOL_A SYMBOL_B [period=2y]", ["/stat-arb GLD SLV", "/stat-arb SPY QQQ period=1y"]),
+        "/edgar":     ("Usage: /edgar SYMBOL [filings|facts|insider]", ["/edgar AAPL", "/edgar MSFT facts", "/edgar TSLA insider"]),
+        "/datasource":("Usage: /datasource | /datasource test SOURCE | /datasource config", ["/datasource", "/datasource test fred", "/datasource config"]),
         "/sector-rotation": ("Usage: /sector-rotation", ["/sector-rotation"]),
         "/auto-strategy":   ("Usage: /auto-strategy [objective] [SYMBOL...]", ["/auto-strategy momentum AAPL", "/auto-strategy mean_reversion SPY"]),
         "/morning-brief":   ("Usage: /morning-brief", ["/morning-brief"]),
@@ -8822,6 +8974,10 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
             {"symbol_a": sym_a, "symbol_b": sym_b, "period": period},
             f"配对检验 {sym_a}/{sym_b}",
         )
+        # Generate interactive z-score chart
+        await asyncio.get_event_loop().run_in_executor(
+            None, lambda: _generate_stat_arb_chart(sym_a, sym_b, period)
+        )
 
     async def cmd_compliance(self, args: str):
         """Compliance check: /compliance <strategy>"""
@@ -9145,21 +9301,33 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
     async def cmd_chart(self, args: str):
         """
         生成股票分析图表（HTML，含K线/均线/RSI/MACD）。
-        Usage: /chart AAPL
-               /chart 600519   (A股，用6位代码)
-               /chart BTC-USD
+        Usage: /chart AAPL [period]
+               /chart 600519 3m   (A股，3个月)
+               /chart BTC-USD 2y
+        支持 period: 1m 3m 6m 1y 2y 3y 5y ytd max
         """
-        symbol = args.strip().upper() or "AAPL"
-        msg = f"生成 {symbol} 分析图表..."
+        _VALID_PERIODS = {"1m","3m","6m","1y","2y","3y","5y","ytd","max",
+                          "1mo","3mo","6mo"}
+        parts  = args.strip().split()
+        period = "1y"
+        symbol_parts = []
+        for p in parts:
+            if p.lower() in _VALID_PERIODS:
+                period = p.lower()
+            else:
+                symbol_parts.append(p.upper())
+        symbol = symbol_parts[0] if symbol_parts else "AAPL"
+
+        msg = f"生成 {symbol} 分析图表 ({period})..."
         if HAS_RICH:
             with console.status(f"[dim]{msg}[/dim]", spinner="dots"):
                 result = await asyncio.get_event_loop().run_in_executor(
-                    None, lambda: _generate_chart_sync(symbol)
+                    None, lambda: _generate_chart_sync(symbol, period=period)
                 )
         else:
             print(f"  {msg}")
             result = await asyncio.get_event_loop().run_in_executor(
-                None, lambda: _generate_chart_sync(symbol)
+                None, lambda: _generate_chart_sync(symbol, period=period)
             )
 
         if result.get("success"):
@@ -9411,6 +9579,233 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
                 "5. One-line thesis"
             )
         await self.terminal._handle_ai_message(prompt)
+
+    async def cmd_macro(self, args: str):
+        """
+        宏观经济指标查询（FRED / 世界银行 / macro_tools）。
+        Usage: /macro                   — 美国宏观全览（macro_tools）
+               /macro us|cn|rates       — 分地区宏观面板
+               /macro US10Y             — 10年美债收益率（FRED）
+               /macro CPI 3y            — CPI通胀历史3年
+               /macro CN:GDP            — 中国GDP（世界银行）
+        支持别名: US10Y US2Y FEDFUNDS CPI PCE GDP UNRATE NFP SP500 VIX M2
+                  USDCNY USDEUR MORTGAGE HOUSING WILSHIRE
+        """
+        parts = args.strip().split()
+
+        # Legacy sub-command routing: us / cn / rates / calendar / (empty)
+        _LEGACY_SUBS = {"us", "cn", "rates", "calendar", "all"}
+        if not parts or (parts and parts[0].lower() in _LEGACY_SUBS):
+            # delegate to old macro_tools behavior
+            try:
+                from macro_tools import get_us_macro, get_cn_macro, get_central_bank_rates
+                region    = parts[0].lower() if parts else "all"
+                indicator = parts[1] if len(parts) > 1 else "all"
+                loop = asyncio.get_event_loop()
+                if region in ("us", "all"):
+                    with console.status("[dim]获取美国宏观数据...[/dim]", spinner="dots") if HAS_RICH else _null_ctx():
+                        r = await loop.run_in_executor(None, lambda: get_us_macro(indicator if region == "us" else "all"))
+                    _render_macro_result(r, "🇺🇸 美国宏观")
+                if region in ("cn", "all"):
+                    with console.status("[dim]获取中国宏观数据...[/dim]", spinner="dots") if HAS_RICH else _null_ctx():
+                        r_cn = await loop.run_in_executor(None, lambda: get_cn_macro("all"))
+                    _render_macro_result(r_cn, "🇨🇳 中国宏观")
+                if region in ("rates", "all"):
+                    with console.status("[dim]获取央行利率...[/dim]", spinner="dots") if HAS_RICH else _null_ctx():
+                        r_rates = await loop.run_in_executor(None, get_central_bank_rates)
+                    _render_cb_rates(r_rates)
+            except ImportError:
+                console.print("  [dim]macro_tools 未找到，请用 /macro US10Y 查询具体指标[/dim]" if HAS_RICH
+                             else "Use /macro US10Y for specific indicators")
+            return
+
+        if not parts:
+            if HAS_RICH:
+                console.print(
+                    "  [dim]用法: /macro US10Y | /macro CPI 3y | /macro CN:GDP\n"
+                    "  可用: US10Y US2Y FEDFUNDS CPI GDP UNRATE NFP SP500 VIX "
+                    "M2 USDCNY USDEUR MORTGAGE[/dim]"
+                )
+            return
+
+        indicator = parts[0].upper()
+        period    = parts[1] if len(parts) > 1 else "1y"
+        country   = "WLD"
+        if ":" in indicator:
+            country, indicator = indicator.split(":", 1)
+
+        # Convert period to days
+        _PERIOD_DAYS = {"1m":30,"3m":90,"6m":180,"1y":365,"2y":730,
+                        "3y":1095,"5y":1825,"10y":3650,"max":365*30}
+        days = _PERIOD_DAYS.get(period.lower(), 365)
+
+        if HAS_RICH:
+            with console.status(f"[dim]获取宏观数据 {indicator}...[/dim]", spinner="dots"):
+                result = await asyncio.get_event_loop().run_in_executor(
+                    None, lambda: _fetch_macro_data(indicator, country, days)
+                )
+        else:
+            result = await asyncio.get_event_loop().run_in_executor(
+                None, lambda: _fetch_macro_data(indicator, country, days)
+            )
+
+        if not result:
+            _print_error(f"无法获取 {indicator} 数据，请检查指标代码或网络连接")
+            return
+
+        if HAS_RICH:
+            from rich.table import Table
+            from rich import box as rich_box
+            table = Table(
+                title=f"[bold]{indicator}[/bold]  [{country}]  最近 {min(10, len(result))} 期",
+                box=rich_box.SIMPLE, show_header=True,
+                header_style="bold dim",
+            )
+            table.add_column("日期", style="dim", width=12)
+            table.add_column("数值", justify="right")
+            table.add_column("环比", justify="right", style="dim")
+            vals = [(str(d), float(v)) for d, v in result[-20:]]
+            for i, (d, v) in enumerate(reversed(vals[-10:])):
+                prev_v = vals[-(i+2)][1] if i+1 < len(vals) else v
+                chg    = v - prev_v
+                chg_str = f"[green]+{chg:.3f}[/green]" if chg > 0 else (
+                          f"[red]{chg:.3f}[/red]" if chg < 0 else "─")
+                table.add_row(d, f"{v:,.4f}", chg_str)
+            console.print(table)
+        else:
+            for d, v in result[-10:]:
+                print(f"  {d}  {v}")
+
+    async def cmd_edgar(self, args: str):
+        """
+        SEC EDGAR 美国上市公司财报与披露查询（完全免费）。
+        Usage: /edgar AAPL              — 最近财报列表
+               /edgar MSFT filings      — 10-K/10-Q 提交记录
+               /edgar TSLA facts        — 财务事实（收入/利润历史）
+               /edgar NVDA insider      — 内幕交易披露 (Form 4)
+        """
+        parts = args.strip().split()
+        if not parts:
+            console.print("  [dim]Usage: /edgar SYMBOL [filings|facts|insider][/dim]" if HAS_RICH
+                         else "Usage: /edgar SYMBOL [filings|facts|insider]")
+            return
+
+        symbol = parts[0].upper()
+        sub    = parts[1].lower() if len(parts) > 1 else "filings"
+
+        if HAS_RICH:
+            with console.status(f"[dim]查询 EDGAR {symbol}...[/dim]", spinner="dots"):
+                result = await asyncio.get_event_loop().run_in_executor(
+                    None, lambda: _fetch_edgar_data(symbol, sub)
+                )
+        else:
+            result = await asyncio.get_event_loop().run_in_executor(
+                None, lambda: _fetch_edgar_data(symbol, sub)
+            )
+
+        if not result:
+            _print_error(f"未找到 {symbol} 的 EDGAR 数据")
+            return
+
+        if HAS_RICH:
+            from rich.table import Table
+            from rich import box as rich_box
+            if sub == "filings":
+                table = Table(title=f"[bold]{symbol}[/bold] SEC 财报提交",
+                              box=rich_box.SIMPLE, header_style="bold dim")
+                table.add_column("类型", width=6)
+                table.add_column("日期", width=12)
+                table.add_column("链接", style="dim")
+                for f in result[:10]:
+                    table.add_row(f.get("form",""), f.get("date",""), f.get("url","")[:60])
+                console.print(table)
+            elif sub == "facts":
+                console.print(f"  [bold]{symbol}[/bold] 财务摘要:")
+                for metric, entries in result.get("metrics", {}).items():
+                    if entries:
+                        latest = entries[0]
+                        console.print(f"  [dim]{metric}[/dim]  {latest.get('val',0):,.0f}  ({latest.get('end','')})")
+            elif sub == "insider":
+                console.print(f"  [bold]{symbol}[/bold] 近期内幕交易 ({len(result)} 条):")
+                for f in result[:10]:
+                    console.print(f"  [dim]{f.get('date','')}[/dim]  Form 4")
+        else:
+            print(f"  {symbol} EDGAR 数据: {len(result) if isinstance(result, list) else 'OK'}")
+
+    async def cmd_datasource(self, args: str):
+        """
+        数据源管理：查看已配置的数据源及其状态。
+        Usage: /datasource             — 列出所有数据源
+               /datasource test FRED   — 测试指定数据源连通性
+               /datasource config      — 显示配置文件路径
+        """
+        sub = args.strip().lower()
+
+        if sub.startswith("test "):
+            src_name = sub[5:].strip()
+            await asyncio.get_event_loop().run_in_executor(
+                None, lambda: _test_datasource(src_name)
+            )
+            return
+
+        if sub == "config":
+            paths = [
+                "~/.aria/datasources.yaml",
+                "~/.aria/.env",
+                "~/.arthera/providers.json",
+            ]
+            if HAS_RICH:
+                console.print("  [bold]数据源配置文件:[/bold]")
+                for p in paths:
+                    import pathlib
+                    full = pathlib.Path(p).expanduser()
+                    exists = "[green]✓[/green]" if full.exists() else "[dim]✗ (未创建)[/dim]"
+                    console.print(f"  {exists}  [dim]{p}[/dim]")
+                console.print("\n  [dim]环境变量: TUSHARE_TOKEN FRED_API_KEY ALPHA_VANTAGE_KEY[/dim]")
+            return
+
+        # Default: list all sources
+        try:
+            from datasources.router import _SOURCE_REGISTRY, DataRouter
+            router = DataRouter()
+        except ImportError:
+            _print_error("datasources 模块未找到")
+            return
+
+        if HAS_RICH:
+            from rich.table import Table
+            from rich import box as rich_box
+            table = Table(title="数据源状态", box=rich_box.SIMPLE, header_style="bold dim")
+            table.add_column("名称", width=16)
+            table.add_column("市场", width=20)
+            table.add_column("需要Key", width=8)
+            table.add_column("状态", width=8)
+            table.add_column("说明")
+            _DESC = {
+                "yfinance":      "Yahoo Finance (免费)",
+                "akshare":       "AkShare A股 (免费)",
+                "tushare":       "Tushare Pro (需Token)",
+                "fred":          "美联储经济数据 (免费)",
+                "edgar":         "SEC EDGAR 财报 (免费)",
+                "alpha_vantage": "Alpha Vantage (免费Key)",
+                "world_bank":    "世界银行 (免费)",
+            }
+            for name, cls in _SOURCE_REGISTRY.items():
+                try:
+                    src = cls()
+                    configured = src.is_configured()
+                    status = "[green]✓ 就绪[/green]" if configured else "[dim]✗ 未配置[/dim]"
+                    needs_key = "是" if cls.requires_key else "否"
+                    markets = ", ".join(getattr(cls, "markets", []))
+                except Exception:
+                    status, needs_key, markets = "[red]错误[/red]", "?", "?"
+                table.add_row(name, markets, needs_key, status, _DESC.get(name, ""))
+            console.print(table)
+            console.print("  [dim]/datasource config — 配置文件路径[/dim]")
+        else:
+            for name, cls in _SOURCE_REGISTRY.items():
+                src = cls()
+                print(f"  {name}: {'ready' if src.is_configured() else 'not configured'}")
 
     # ---- News command ----
     # ── /file 多格式文件分析命令 ──────────────────────────────────────────────
