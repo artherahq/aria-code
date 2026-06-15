@@ -1,7 +1,8 @@
-"""Background PyPI version checker for Aria Code.
+"""Background npm-registry version checker for Aria Code.
 
-Checks PyPI once per 24 hours in a daemon thread so startup is never blocked.
-The result is cached to ~/.arthera/update_check.json and read at banner time.
+Checks registry.npmjs.org once per 24 hours in a daemon thread so startup is
+never blocked.  The result is cached to ~/.arthera/update_check.json and read
+at banner render time.
 
 Public API
 ----------
@@ -16,26 +17,25 @@ Public API
 from __future__ import annotations
 
 import json
-import os
 import threading
 import time
 from pathlib import Path
 from typing import Optional
 
-_PYPI_URL      = "https://pypi.org/pypi/aria-code/json"
+_NPM_URL       = "https://registry.npmjs.org/aria-code/latest"
 _CACHE_FILE    = Path.home() / ".arthera" / "update_check.json"
-_CACHE_TTL_S   = 86_400          # 24 hours
-_FETCH_TIMEOUT = 4               # seconds — give up cleanly on slow networks
+_CACHE_TTL_S   = 86_400      # 24 hours
+_FETCH_TIMEOUT = 4           # seconds — fail cleanly on slow networks
 
-_notice: Optional[str] = None    # populated by background thread
+_notice: Optional[str] = None
 _lock   = threading.Lock()
 
 
 # ── Version comparison ────────────────────────────────────────────────────────
 
 def _parse(v: str) -> tuple[int, ...]:
-    """'4.1.2' → (4, 1, 2).  Tolerates 'v' prefix and non-numeric segments."""
-    parts = []
+    """'4.1.2' → (4, 1, 2).  Tolerates 'v' prefix and non-numeric suffixes."""
+    parts: list[int] = []
     for seg in v.lstrip("v").split("."):
         try:
             parts.append(int(seg))
@@ -68,7 +68,7 @@ def _write_cache(data: dict) -> None:
 # ── Notice builder ────────────────────────────────────────────────────────────
 
 def _build_notice(latest: str, current: str, lang: str) -> str:
-    cmd = f"pip install --upgrade aria-code"
+    cmd = "npm update -g aria-code"
     if lang == "zh":
         return (
             f"[yellow]⬆  新版本可用[/yellow] "
@@ -82,12 +82,12 @@ def _build_notice(latest: str, current: str, lang: str) -> str:
     )
 
 
-# ── Background thread ─────────────────────────────────────────────────────────
+# ── Background worker ─────────────────────────────────────────────────────────
 
 def _worker(current: str, lang: str) -> None:
     global _notice
 
-    # 1. Check cache first — avoid network if still fresh
+    # 1. Serve from cache if still fresh
     cache = _read_cache()
     now   = time.time()
     if cache.get("checked_at", 0) + _CACHE_TTL_S > now:
@@ -95,21 +95,25 @@ def _worker(current: str, lang: str) -> None:
         if latest and _newer(latest, current):
             with _lock:
                 _notice = _build_notice(latest, current, lang)
-        return   # cache is fresh, no network call needed
+        return
 
-    # 2. Fetch PyPI
+    # 2. Fetch npm registry
     try:
         import urllib.request
-        with urllib.request.urlopen(_PYPI_URL, timeout=_FETCH_TIMEOUT) as resp:
+        req = urllib.request.Request(
+            _NPM_URL,
+            headers={"Accept": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=_FETCH_TIMEOUT) as resp:
             data   = json.loads(resp.read())
-            latest = data["info"]["version"]
+            latest = data["version"]
     except Exception:
-        return   # network failure → silently skip, try again next day
+        return   # network error → silently skip, try again next day
 
-    # 3. Write cache
+    # 3. Persist to cache
     _write_cache({"checked_at": now, "latest": latest})
 
-    # 4. Set notice if update available
+    # 4. Set notice
     if _newer(latest, current):
         with _lock:
             _notice = _build_notice(latest, current, lang)
@@ -118,7 +122,7 @@ def _worker(current: str, lang: str) -> None:
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def start_update_check(current_version: str, lang: str = "en") -> None:
-    """Start the background version check.  Call once, early in startup."""
+    """Start background version check. Call once, early in startup."""
     t = threading.Thread(
         target=_worker,
         args=(current_version, lang),
@@ -129,22 +133,18 @@ def start_update_check(current_version: str, lang: str = "en") -> None:
 
 
 def get_update_notice(wait_ms: int = 1200) -> Optional[str]:
-    """Return Rich-markup update notice, or None if up-to-date / not yet known.
+    """Return Rich-markup update notice, or None if up to date / not yet known.
 
-    Waits up to *wait_ms* milliseconds for the background thread so the notice
-    can appear on the very first run after an update (not just the second run).
-    In practice startup takes >1s anyway, so this almost never blocks.
+    Waits up to *wait_ms* ms for the background thread so the notice can appear
+    on the same run (not just next run).  Startup already takes >1s so this
+    almost never adds real delay.
     """
     deadline = time.monotonic() + wait_ms / 1000
     while time.monotonic() < deadline:
         with _lock:
             if _notice is not None:
                 return _notice
-        # Check if thread is still alive — if it finished with no notice, done
-        alive = any(
-            t.name == "aria-update-check"
-            for t in threading.enumerate()
-        )
+        alive = any(t.name == "aria-update-check" for t in threading.enumerate())
         if not alive:
             break
         time.sleep(0.05)
