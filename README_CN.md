@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.png" width="100">
-    <img src="docs/assets/logo-light.png" alt="Aria Code" width="100">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.svg" width="100">
+    <img src="docs/assets/logo-light.svg" alt="Aria Code" width="100">
   </picture>
 </p>
 
