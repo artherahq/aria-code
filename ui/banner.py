@@ -129,6 +129,7 @@ def render_compact_banner(
     cwd: str,
     control_status_rich: str,
     tool_count: int,
+    update_notice: Optional[str] = None,
     console,
     has_rich: bool,
     lang: str = "en",
@@ -145,6 +146,8 @@ def render_compact_banner(
         f"  [dim]·[/dim] [dim]{cwd}[/dim]"
     )
     console.print(f"  [dim]{control_status_rich} · {tool_count} {_tools_word} · /help[/dim]")
+    if update_notice:
+        console.print(f"  {update_notice}")
 
 
 def render_full_banner(
@@ -161,6 +164,7 @@ def render_full_banner(
     badge: str = "",
     installed_models: frozenset = frozenset(),
     best_lite_id: str = "",     # model ID to suggest when lite badge + not installed
+    update_notice: Optional[str] = None,
     console,
     has_rich: bool,
     rich_box,
@@ -239,6 +243,8 @@ def render_full_banner(
             f"[yellow]{_tip}[/yellow]  [dim]{_t('lite', lang)} model — "
             f"[bold]ollama pull {best_lite_id}[/bold] for full {_tools}[/dim]"
         )
+    if update_notice:
+        _info_lines.append(update_notice)
 
     _info = Text.from_markup("\n".join(_info_lines))
 

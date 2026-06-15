@@ -26,7 +26,7 @@ Usage:
     python3 apps/cli/aria_cli.py -p "AAPL PE" --json     # JSON 输出
 """
 
-__version__ = "3.0.0"
+__version__ = "4.0.0"
 
 import sys
 import os
@@ -10327,6 +10327,11 @@ class ArtheraTerminal:
             if _banner_mode == "compact":
                 _model_label = f"{m['name']} {m['version']}" if current_key else current_id
                 from ui.banner import render_compact_banner as _rcb
+                try:
+                    from apps.cli.update_check import get_update_notice as _gun
+                    _update_notice = _gun(wait_ms=1200)
+                except Exception:
+                    _update_notice = None
                 _rcb(
                     version=__version__,
                     model_label=_model_label,
@@ -10334,6 +10339,7 @@ class ArtheraTerminal:
                     cwd=cwd,
                     control_status_rich=self._control_status_label(rich=True),
                     tool_count=tool_count,
+                    update_notice=_update_notice,
                     console=console,
                     has_rich=HAS_RICH,
                     lang=_ui_lang,
@@ -10356,6 +10362,11 @@ class ArtheraTerminal:
 
                 _best_id = (MODELS.get("qwen7b") or {}).get("id", "qwen2.5:7b")
                 from ui.banner import render_full_banner as _rfb, render_try_hints as _rth
+                try:
+                    from apps.cli.update_check import get_update_notice as _gun
+                    _update_notice = _gun(wait_ms=1200)
+                except Exception:
+                    _update_notice = None
                 _rfb(
                     version=__version__,
                     rt_label=_rt_label,
@@ -10369,6 +10380,7 @@ class ArtheraTerminal:
                     badge=_badge,
                     installed_models=frozenset(self._installed_models),
                     best_lite_id=_best_id,
+                    update_notice=_update_notice,
                     console=console,
                     has_rich=HAS_RICH,
                     rich_box=rich_box,
@@ -12151,6 +12163,14 @@ Examples:
     args = parser.parse_args()
 
     config = load_config()
+
+    # ── Start background update check (non-blocking, daemon thread) ──────────
+    try:
+        from apps.cli.update_check import start_update_check
+        _ui_lang_early = config.get("ui_lang", "en") or "en"
+        start_update_check(__version__, lang=_ui_lang_early)
+    except Exception:
+        pass
 
     # Apply syntax theme from config (P3)
     global _SYNTAX_THEME
