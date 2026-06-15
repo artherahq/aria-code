@@ -323,6 +323,8 @@ class MarketCommandsMixin:
                 from football_data_client import predict_wc_match, _find_fifa_rating
                 raw = predict_wc_match(home, away, neutral_venue=True)
                 # Convert dict to a namespace that matches the FootballAgent pred interface
+                _h_cn = raw.get("home_name_cn", home)
+                _a_cn = raw.get("away_name_cn", away)
                 pred = types.SimpleNamespace(
                     home_win   = raw["home_win"],
                     draw       = raw["draw"],
@@ -334,18 +336,29 @@ class MarketCommandsMixin:
                     top_scores = [{"score": s["score"], "prob": s["prob"]} for s in raw["top_scorelines"]],
                     implied_odds= raw["implied_odds"],
                     key_factors= [
-                        f"FIFA排名: {raw['home_name_cn']} #{raw['home_ranking']} · {raw['away_name_cn']} #{raw['away_ranking']}",
-                        f"进攻强度: {raw['home_name_cn']} {raw['home_attack']} · {raw['away_name_cn']} {raw['away_attack']}",
-                        f"防守强度: {raw['home_name_cn']} {raw['home_defense']} · {raw['away_name_cn']} {raw['away_defense']}",
-                        f"校准基础: {raw['calibrated_matches']} 场已完赛 WC 数据" if raw['calibrated_matches'] > 0
+                        f"FIFA排名: {_h_cn} #{raw['home_ranking']} · {_a_cn} #{raw['away_ranking']}",
+                        f"进攻强度: {_h_cn} {raw.get('home_attack', '—')} · {_a_cn} {raw.get('away_attack', '—')}",
+                        f"防守强度: {_h_cn} {raw.get('home_defense', '—')} · {_a_cn} {raw.get('away_defense', '—')}",
+                        f"校准基础: {raw['calibrated_matches']} 场已完赛 WC 数据" if raw.get('calibrated_matches', 0) > 0
                         else "校准基础: FIFA 排名强度估算 (WC 刚开始)",
                     ],
                     analysis   = "",
                     verdict    = (
-                        f"[green]预测: {raw['home_name_cn']} 获胜 ({raw['home_win']:.0%})[/green]" if raw["home_win"] > raw["away_win"] + 0.05
-                        else f"[green]预测: {raw['away_name_cn']} 获胜 ({raw['away_win']:.0%})[/green]" if raw["away_win"] > raw["home_win"] + 0.05
+                        f"[green]预测: {_h_cn} 获胜 ({raw['home_win']:.0%})[/green]" if raw["home_win"] > raw["away_win"] + 0.05
+                        else f"[green]预测: {_a_cn} 获胜 ({raw['away_win']:.0%})[/green]" if raw["away_win"] > raw["home_win"] + 0.05
                         else f"[yellow]预测: 双方势均力敌，平局概率 {raw['draw']:.0%}[/yellow]"
                     ),
+                    # Half-time fields
+                    ht_lambda_home    = raw.get("ht_lambda_home", 0),
+                    ht_lambda_away    = raw.get("ht_lambda_away", 0),
+                    st_lambda_home    = raw.get("st_lambda_home", 0),
+                    st_lambda_away    = raw.get("st_lambda_away", 0),
+                    ht_home_win       = raw.get("ht_home_win", 0),
+                    ht_draw           = raw.get("ht_draw", 0),
+                    ht_away_win       = raw.get("ht_away_win", 0),
+                    ht_top_scorelines = raw.get("ht_top_scorelines", []),
+                    home_name_cn      = _h_cn,
+                    away_name_cn      = _a_cn,
                 )
             except Exception as exc:
                 console.print(f"[red]WC 预测失败: {exc}[/red]")
@@ -435,8 +448,37 @@ class MarketCommandsMixin:
                       f"  │  最可能比分: [bold]{pred.most_likely}[/bold]"
                       f"  │  双方均进球: {pred.btts:.0%}[/dim]")
 
+        # Half-time / second-half breakdown
+        if getattr(pred, "ht_lambda_home", 0) > 0:
+            _h_lbl = getattr(pred, "home_name_cn", home)
+            _a_lbl = getattr(pred, "away_name_cn", away)
+            _ht_best = pred.ht_top_scorelines[0]["score"] if pred.ht_top_scorelines else "0-0"
+            _ht_best_p = pred.ht_top_scorelines[0]["prob"] if pred.ht_top_scorelines else 0
+            _st_best_lh = getattr(pred, "st_lambda_home", 0)
+            _st_best_la = getattr(pred, "st_lambda_away", 0)
+            console.print()
+            console.print(
+                f"  [bold]上半场[/bold]  预期进球 {_h_lbl} [cyan]{pred.ht_lambda_home:.2f}[/cyan] / "
+                f"{_a_lbl} [cyan]{pred.ht_lambda_away:.2f}[/cyan]"
+                f"  │  最可能: [bold]{_ht_best}[/bold] ({_ht_best_p}%)"
+            )
+            console.print(
+                f"  [dim]上半场胜/平/负: {pred.ht_home_win:.0%} / {pred.ht_draw:.0%} / {pred.ht_away_win:.0%}[/dim]"
+            )
+            _ht_scores_str = "  ".join(
+                f"[cyan]{s['score']}[/cyan] {s['prob']}%" for s in pred.ht_top_scorelines[:4]
+            )
+            if _ht_scores_str:
+                console.print(f"  [dim]比分分布: {_ht_scores_str}[/dim]")
+            console.print(
+                f"  [bold]下半场[/bold]  预期进球 {_h_lbl} [green]{_st_best_lh:.2f}[/green] / "
+                f"{_a_lbl} [green]{_st_best_la:.2f}[/green]"
+                f"  [dim](全场 − 上半场)[/dim]"
+            )
+            console.print()
+
         if pred.key_factors:
-            console.print(f"\n  [dim]近期状态:[/dim]")
+            console.print(f"  [dim]近期状态:[/dim]")
             for f_ in pred.key_factors:
                 console.print(f"  [dim]  • {f_}[/dim]")
 

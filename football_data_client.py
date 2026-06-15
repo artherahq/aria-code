@@ -782,6 +782,13 @@ _FIFA_RATINGS: Dict[str, Dict] = {
     "finland":              {"attack": 1.28, "defense": 0.83, "ranking": 43, "name": "芬兰"},
     "greece":               {"attack": 1.30, "defense": 0.82, "ranking": 46, "name": "希腊"},
     "russia":               {"attack": 1.40, "defense": 0.79, "ranking": 26, "name": "俄罗斯"},
+    "kosovo":               {"attack": 1.05, "defense": 1.02, "ranking": 120, "name": "科索沃"},
+    "northern ireland":     {"attack": 1.22, "defense": 0.86, "ranking": 55,  "name": "北爱尔兰"},
+    "albania":              {"attack": 1.28, "defense": 0.83, "ranking": 66,  "name": "阿尔巴尼亚"},
+    "north macedonia":      {"attack": 1.18, "defense": 0.88, "ranking": 72,  "name": "北马其顿"},
+    "iceland":              {"attack": 1.28, "defense": 0.83, "ranking": 65,  "name": "冰岛"},
+    "republic of ireland":  {"attack": 1.22, "defense": 0.84, "ranking": 62,  "name": "爱尔兰"},
+    "ireland":              {"attack": 1.22, "defense": 0.84, "ranking": 62,  "name": "爱尔兰"},
 }
 
 # WC 2026 host nations (slight home-field advantage)
@@ -789,12 +796,17 @@ _WC_HOST_NATIONS = {"united states", "usa", "canada", "mexico"}
 
 
 def _find_fifa_rating(team_name: str) -> Optional[Dict]:
-    """Fuzzy-match team_name against _FIFA_RATINGS dict."""
+    """Fuzzy-match team_name against _FIFA_RATINGS dict. Handles Chinese names."""
+    # Translate Chinese names via _CN_TEAM_MAP (defined later in module; resolved at call time)
+    try:
+        en = _CN_TEAM_MAP.get(team_name)
+        if en:
+            team_name = en
+    except NameError:
+        pass
     low = team_name.lower().strip()
-    # exact match first
     if low in _FIFA_RATINGS:
         return {**_FIFA_RATINGS[low], "key": low}
-    # partial match
     for key, val in _FIFA_RATINGS.items():
         if low in key or key in low:
             return {**val, "key": key}
@@ -812,6 +824,13 @@ def predict_wc_match(
     若模块不可用则回落到原 FIFA 静态表 + 纯泊松预测。
     """
     import math
+
+    # Translate Chinese team names to English (resolved at call time after _CN_TEAM_MAP is defined)
+    try:
+        home_team = _CN_TEAM_MAP.get(home_team, home_team)
+        away_team = _CN_TEAM_MAP.get(away_team, away_team)
+    except NameError:
+        pass
 
     # ── 优先使用新量化引擎 ─────────────────────────────────────────────────────
     try:
@@ -876,6 +895,40 @@ def predict_wc_match(
             "draw": round(1/result["draw"], 2) if result["draw"] > 0.01 else 99,
             "away": round(1/result["away_win"], 2) if result["away_win"] > 0.01 else 99,
         })
+        # Compute HT breakdown from lambda values if not already in result
+        if "ht_lambda_home" not in result:
+            _lh = result.get("lambda_home", 1.2)
+            _la = result.get("lambda_away", 1.0)
+            _ht_frac = 0.42
+            _ht_lh = max(0.1, _lh * _ht_frac)
+            _ht_la = max(0.1, _la * _ht_frac)
+            _st_lh = max(0.1, _lh * (1 - _ht_frac))
+            _st_la = max(0.1, _la * (1 - _ht_frac))
+            _ht_sp: Dict = {}
+            _ht_hw = _ht_dr = _ht_aw = 0.0
+            for _hg in range(9):
+                _ph = _poisson_pmf(_hg, _ht_lh)
+                for _ag in range(9):
+                    _pa = _poisson_pmf(_ag, _ht_la)
+                    _p = _ph * _pa
+                    _ht_sp[(_hg, _ag)] = _p
+                    if _hg > _ag: _ht_hw += _p
+                    elif _hg == _ag: _ht_dr += _p
+                    else: _ht_aw += _p
+            _ht_top = sorted(_ht_sp.items(), key=lambda x: -x[1])[:4]
+            result.update({
+                "ht_lambda_home": round(_ht_lh, 2),
+                "ht_lambda_away": round(_ht_la, 2),
+                "st_lambda_home": round(_st_lh, 2),
+                "st_lambda_away": round(_st_la, 2),
+                "ht_home_win": round(_ht_hw, 3),
+                "ht_draw":     round(_ht_dr, 3),
+                "ht_away_win": round(_ht_aw, 3),
+                "ht_top_scorelines": [
+                    {"score": f"{hg}-{ag}", "prob": round(p * 100, 1)}
+                    for (hg, ag), p in _ht_top
+                ],
+            })
         return result
     except Exception as _e:
         logger.debug(f"[predict_wc_match] 新引擎不可用，回落到原模型: {_e}")
@@ -943,6 +996,25 @@ def predict_wc_match(
     top_scores = sorted(score_probs.items(), key=lambda x: -x[1])[:6]
     btts = 1.0 - _poisson_pmf(0, lambda_home) - _poisson_pmf(0, lambda_away) + _poisson_pmf(0, lambda_home) * _poisson_pmf(0, lambda_away)
 
+    # Half-time prediction: ~42% of goals scored in first 45 min
+    _ht_frac = 0.42
+    ht_lh = max(0.1, lambda_home * _ht_frac)
+    ht_la = max(0.1, lambda_away * _ht_frac)
+    st_lh = max(0.1, lambda_home * (1 - _ht_frac))
+    st_la = max(0.1, lambda_away * (1 - _ht_frac))
+    ht_score_probs: Dict = {}
+    ht_hw = ht_dr = ht_aw = 0.0
+    for hg in range(max_goals):
+        ph = _poisson_pmf(hg, ht_lh)
+        for ag in range(max_goals):
+            pa = _poisson_pmf(ag, ht_la)
+            p = ph * pa
+            ht_score_probs[(hg, ag)] = p
+            if hg > ag: ht_hw += p
+            elif hg == ag: ht_dr += p
+            else: ht_aw += p
+    ht_top = sorted(ht_score_probs.items(), key=lambda x: -x[1])[:4]
+
     def implied(p: float) -> float:
         return round(1 / p, 2) if p > 0.01 else 99.0
 
@@ -975,6 +1047,18 @@ def predict_wc_match(
             "draw": implied(draw),
             "away": implied(away_win),
         },
+        # Half-time / second-half breakdown
+        "ht_lambda_home": round(ht_lh, 2),
+        "ht_lambda_away": round(ht_la, 2),
+        "st_lambda_home": round(st_lh, 2),
+        "st_lambda_away": round(st_la, 2),
+        "ht_home_win":    round(ht_hw, 3),
+        "ht_draw":        round(ht_dr, 3),
+        "ht_away_win":    round(ht_aw, 3),
+        "ht_top_scorelines": [
+            {"score": f"{hg}-{ag}", "prob": round(p * 100, 1)}
+            for (hg, ag), p in ht_top
+        ],
     }
 
 
@@ -1184,6 +1268,8 @@ _CN_TEAM_MAP: Dict[str, str] = {
     "波黑": "bosnia", "波斯尼亚": "bosnia",
     # 加勒比海 / 中北美
     "库拉索": "curacao", "库拉索岛": "curacao", "库拉所": "curacao",
+    "库加索": "curacao",
+    "科索沃": "kosovo", "科索保": "kosovo",
     "特多": "trinidad", "特立尼达和多巴哥": "trinidad",
     "海地": "haiti", "古巴": "cuba", "百慕大": "bermuda",
     "格林纳达": "grenada", "安提瓜": "antigua",
