@@ -17,15 +17,60 @@ from .tool_executor import ToolExecutor
 
 DEFAULT_SERIAL_TOOLS = {"write_file", "edit_file", "run_command"}
 
+# Phrases the model uses to signal task completion
+_DONE_PHRASES = frozenset([
+    "task complete", "task is complete", "all done", "completed successfully",
+    "here is the final", "here's the final", "analysis complete",
+    "任务完成", "已完成", "分析完成", "操作完成", "已经完成", "以下是最终",
+    "i have completed", "i've completed", "the task has been completed",
+])
+
+
+def detect_task_complete(response_text: str) -> bool:
+    """Heuristic: did the AI signal task completion without requesting more tools?"""
+    if not response_text:
+        return False
+    lower = response_text.lower()
+    return any(phrase in lower for phrase in _DONE_PHRASES)
+
 
 def split_tool_calls(
     pending: Sequence[dict],
     serial_tools: Iterable[str] = DEFAULT_SERIAL_TOOLS,
 ) -> Tuple[List[dict], List[dict]]:
-    """Split pending tool calls into parallel-safe and serial batches."""
+    """Split tool calls into parallel-safe and serial batches.
+
+    Beyond the static whitelist, detects data dependencies at runtime:
+    if a later run_command references a file written/edited earlier in
+    the same batch, it is moved to the serial queue so it runs after
+    the write completes.
+    """
     serial = set(serial_tools)
-    parallel_batch = [tc for tc in pending if tc.get("tool") not in serial]
-    serial_batch = [tc for tc in pending if tc.get("tool") in serial]
+    parallel_batch: List[dict] = []
+    serial_batch: List[dict] = []
+    written_paths: set = set()
+
+    for tc in pending:
+        tool = tc.get("tool", "")
+        params = tc.get("params", {})
+
+        if tool in serial:
+            # Track paths being written so dependents can detect the dependency
+            for key in ("path", "file_path", "filename", "target"):
+                p = params.get(key)
+                if p:
+                    written_paths.add(str(p))
+            serial_batch.append(tc)
+        elif tool == "run_command":
+            cmd = str(params.get("command", ""))
+            # If the command references a path currently being written → serial
+            if written_paths and any(p in cmd for p in written_paths):
+                serial_batch.append(tc)
+            else:
+                parallel_batch.append(tc)
+        else:
+            parallel_batch.append(tc)
+
     return parallel_batch, serial_batch
 
 
@@ -482,13 +527,53 @@ async def run_serial_tool(
 
 
 def build_tool_followup(tool_results: Sequence[dict]) -> str:
-    """Build the model follow-up message from summarized tool results."""
-    followup = "Tool results:\n"
+    """Build a structured follow-up message from tool results.
+
+    Each result block is labelled with its tool name and a success/error
+    status so the model can clearly distinguish outcomes and respond
+    appropriately to failures rather than silently ignoring them.
+    """
+    if not tool_results:
+        return "No tool results. Continue with what you know or ask the user for clarification."
+
+    blocks: List[str] = []
+    error_tools: List[str] = []
+
     for item in tool_results:
         tool = item.get("tool", "unknown")
         result = item.get("result", "")
-        followup += f"\n[{tool}]: {result}\n"
-    followup += "\nPlease continue your analysis using these results."
+        result_str = str(result)
+
+        is_error = (
+            result_str.startswith("Error") or
+            result_str.startswith("❌") or
+            "error" in result_str[:80].lower() or
+            "traceback" in result_str[:200].lower() or
+            "exception" in result_str[:200].lower()
+        )
+        if is_error:
+            error_tools.append(tool)
+            blocks.append(f"### [{tool}] ❌ Error\n{result_str}")
+        else:
+            blocks.append(f"### [{tool}] ✓ Success\n{result_str}")
+
+    followup = "## Tool Results\n\n" + "\n\n---\n\n".join(blocks)
+
+    if error_tools:
+        followup += (
+            f"\n\n⚠ Tool(s) returned errors: {', '.join(error_tools)}. "
+            "Read the error carefully. Options: (1) use read_file / search_code to diagnose, "
+            "(2) use edit_file to fix the issue and retry run_command, "
+            "(3) try a different approach. "
+            "Do NOT give up silently — explain what failed and what you tried."
+        )
+    else:
+        followup += (
+            "\n\nAll tools completed successfully. "
+            "If the task is now complete, provide your final response. "
+            "If additional steps are needed, continue using tools."
+        )
+
     return followup
 
 

@@ -32,7 +32,7 @@ _INDEX_FILE = _MEMORY_DIR / "MEMORY.md"
 _PREF_PATTERNS = [
     (r"(我?不喜欢|我?喜欢|prefer(?:ence)?s?|I always|I never|我总是|我通常)", "preference"),
     (r"(我的风险|风险偏好|risk.*(?:低|高|中|保守|激进)|conservative|aggressive)", "risk_profile"),
-    (r"(?:关注|研究|在看|tracking|watching)\s+([A-Z]{1,5}|[0-9]{6})", "watchlist"),
+    (r"(?:关注|研究|在看|tracking|watching)\s*([A-Z0-9，,、和与&/\s]{2,40})", "watchlist"),
     (r"(我的策略|my strategy|我用|I use)\s+(.{4,40})", "strategy"),
 ]
 
@@ -180,24 +180,66 @@ class MemoryManager:
 
 # ── Preference signal extractor (rule-based, zero LLM cost) ──────────────────
 
+# Patterns that signal a user revealed an actionable fact mid-conversation
+_MID_CONV_PATTERNS = [
+    # Explicit remember requests
+    (r"(记住|帮我记|remember that|please remember|note that)\s+(.{5,80})", "user_note"),
+    # Risk / style preferences revealed mid-chat
+    (r"(我(的)?风险|my risk|风险偏好|risk preference|risk tolerance)[^。.]{0,40}(低|高|中|保守|激进|低风险|高风险)", "risk_profile"),
+    (r"(我(喜欢|偏好|倾向|通常用)|I (prefer|like|usually use|always use))\s*(.{4,60})", "preference"),
+    # Symbols the user says they're tracking (single or multiple)
+    (r"(我(在看|关注|持有|跟踪)|I('m)? (watching|tracking|holding))\s*(.{2,40})", "watchlist"),
+    # Explicit remember / 记住 requests
+    (r"(记住|帮我记|please remember|note that)\s*(.{4,80})", "user_note"),
+    # Stop-loss / take-profit thresholds
+    (r"(止损|止盈|stop[- ]loss|take[- ]profit)[^\d]{0,10}(\d+\.?\d*\s*%)", "trading_rule"),
+    # Portfolio size hint (non-sensitive: just "大仓位" not actual amounts)
+    (r"(大仓|小仓|主仓|重仓|满仓|空仓|half position|full position|light position)", "position_style"),
+]
+
+_SENSITIVE_PATTERN_STRICT = re.compile(
+    r"(\d[\d,，.]+(?:万|亿|元|USD|CNY|HKD|K|M)?|\b\d{5,}\b|持仓金额|账户余额|本金)"
+)
+
+
 def extract_preference_signal(user_msg: str, assistant_response: str) -> Optional[str]:
+    """Detect preference/fact signals worth persisting from a user message.
+
+    Returns a single-line fact string or None. Conservative by design —
+    most queries return None. Skips anything containing sensitive amounts.
     """
-    Detect if a user message contains a preference signal worth persisting.
-    Returns a single-line fact string, or None if nothing notable.
-    Deliberately conservative — most queries return None.
-    """
-    if len(assistant_response) < 30:
+    # CJK characters are each 1 codepoint but convey more meaning per char,
+    # so use a shorter minimum (8 chars) to avoid filtering valid short acks.
+    if len(assistant_response) < 8:
+        return None
+    if _SENSITIVE_PATTERN.search(user_msg) or _SENSITIVE_PATTERN_STRICT.search(user_msg):
         return None
 
-    combined = (user_msg + " " + assistant_response[:300]).strip()
-
-    if _SENSITIVE_PATTERN.search(user_msg):
-        return None
-
-    for pattern, category in _PREF_PATTERNS:
+    for pattern, category in _PREF_PATTERNS + _MID_CONV_PATTERNS:
         m = re.search(pattern, user_msg, re.IGNORECASE)
         if m:
             snippet = user_msg[:120].strip().replace("\n", " ")
             return f"[{category}] {snippet}"
 
+    return None
+
+
+def auto_capture_from_turn(
+    user_msg: str,
+    assistant_response: str,
+    memory: "MemoryManager",
+) -> Optional[str]:
+    """Called after each agent turn to auto-persist any detectable user preferences.
+
+    Returns the captured fact string if something was saved, else None.
+    This is intentionally lightweight: it runs synchronously after every turn
+    and must not block or throw.
+    """
+    try:
+        fact = extract_preference_signal(user_msg, assistant_response)
+        if fact:
+            memory.append("user_preferences", fact, title="用户偏好与设置")
+            return fact
+    except Exception:
+        pass
     return None

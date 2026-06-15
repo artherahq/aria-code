@@ -113,20 +113,41 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
     _is_general = (_intent == "general")
 
     # ── Context-aware tool schema filtering ───────────────────────────────────
-    # Prevent tool call pollution: coding/CU tools must not appear in finance
-    # context, or the LLM will call browser_navigate/run_command/pytest instead
-    # of get_market_data when asked about stocks.
+    # Intent drives tool exposure, but cross-intent requests (e.g. "分析AAPL然后
+    # 写一个回测策略") need BOTH market data tools AND coding tools.
+    # Detect overlap by checking if the message contains signals from both domains.
     _CU_TOOL_NAMES = {"browser_navigate", "browser_screenshot",
                       "computer_screenshot", "computer_action"}
     _CODE_TOOL_NAMES = {"read_file", "write_file", "edit_file", "list_files",
                         "search_code", "run_command", "github",
                         "glob", "notebook_read", "notebook_edit"}
-    if _intent in ("finance", "analysis", "realtime"):
-        # Finance context: market data + broker + web_fetch (for news), no coding/CU tools
+
+    _msg_low = message.lower()
+    _has_coding_signal = any(k in _msg_low for k in (
+        "写", "代码", "脚本", "策略", "回测", "生成", "plot", "chart",
+        "python", "write", "script", "code", "backtest", "save", "file",
+    ))
+    _has_finance_signal = any(k in _msg_low for k in (
+        "分析", "股票", "行情", "股价", "市场", "quantitative", "stock",
+        "price", "market", "analyze", "analysis", "ticker",
+    ))
+    _is_cross_intent = _has_coding_signal and _has_finance_signal
+
+    if _intent in ("finance", "analysis", "realtime") and not _is_cross_intent:
+        # Pure finance: market data + broker + web_fetch (for news), no coding/CU tools.
+        # Excluding coding tools prevents the LLM from calling run_command instead of
+        # get_market_data when answering a stock question.
         _excluded = _CU_TOOL_NAMES | _CODE_TOOL_NAMES
         _schemas_for_context = [
             s for s in LOCAL_TOOL_SCHEMAS
             if s.get("function", {}).get("name") not in _excluded
+        ]
+    elif _is_cross_intent:
+        # Cross-intent: expose both finance AND coding tools (minus CU/browser).
+        # Intent hint injected into system prompt guides priority without hard exclusion.
+        _schemas_for_context = [
+            s for s in LOCAL_TOOL_SCHEMAS
+            if s.get("function", {}).get("name") not in _CU_TOOL_NAMES
         ]
     else:
         # Coding/general: all local tools except CU (browser/computer control)
@@ -210,6 +231,16 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
             system_prompt = _base_prompt + _ctx_brief
     else:
         system_prompt = _base_prompt
+
+    # Inject cross-intent hint so the model knows to use both tool sets in order
+    if _is_cross_intent:
+        _cross_hint = (
+            "\n\n## Task Hint\n"
+            "This request spans both **market analysis** and **code generation**. "
+            "Suggested order: (1) fetch market data first, (2) use the data to write/run code. "
+            "Use get_market_data for live prices, then write_file + run_command for scripts.\n"
+        )
+        system_prompt = system_prompt + _cross_hint
 
     # Prepend global user memory (user profile, project history, preferences)
     try:

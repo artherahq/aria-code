@@ -55,6 +55,7 @@ from runtime import (
     ToolTurnPlan,
     ToolExecutor,
     apply_approval_decision,
+    detect_task_complete,
     run_parallel_tools,
     run_serial_tool,
 )
@@ -3590,26 +3591,30 @@ def _strip_tool_call_tags(text: str) -> str:
 
 
 def _compact_messages(messages: list, max_chars: int = 0, model_key: str = "qwen7b") -> list:
-    """Compact older messages when context grows too large (Claude Code pattern).
+    """Smart synchronous compaction for the agentic tool loop.
 
-    Strategy: Keep system prompt + last N messages intact. Compress older tool results
-    to 1-line summaries. This prevents Ollama from losing context on long tool sessions.
+    Strategy (in order of priority):
+    1. Always keep: system prompt + last 8 messages (recent context).
+    2. For middle tool results: extract status line + error details (if any),
+       drop verbose success payloads.
+    3. For middle assistant turns: keep first paragraph + last sentence so
+       the model retains decisions made but not intermediate reasoning.
+    4. Error markers are never discarded — they are critical for self-correction.
+
+    For deep AI-driven summarisation use _smart_compact_async() instead.
     """
     if max_chars <= 0:
-        # Derive limit from get_model_cfg() so community Ollama models (qwen/llama/deepseek)
-        # get their real context window (e.g. 131072) instead of falling back to "prelude" 4096.
         _ctx = get_model_cfg(model_key).get("num_ctx", 16384)
         max_chars = int(_ctx * 3 * 0.80)
     total = sum(len(m.get("content", "")) for m in messages)
     if total <= max_chars:
         return messages
 
-    # Always keep: [0]=system prompt, last 6 messages (recent context)
-    if len(messages) <= 7:
+    if len(messages) <= 8:
         return messages
 
     system = messages[0]
-    keep_tail = 6
+    keep_tail = 8
     middle = messages[1:-keep_tail]
     tail = messages[-keep_tail:]
 
@@ -3617,13 +3622,35 @@ def _compact_messages(messages: list, max_chars: int = 0, model_key: str = "qwen
     for msg in middle:
         content = msg.get("content", "")
         role = msg.get("role", "")
-        if role == "tool" and len(content) > 300:
-            # Compress tool results to first line + truncation
-            first_line = content.split("\n")[0][:200]
-            compacted.append({"role": role, "content": f"{first_line} [compacted]"})
+
+        if role == "tool" and len(content) > 200:
+            lines = content.splitlines()
+            kept: list = []
+            has_error = False
+            for ln in lines[:30]:
+                stripped = ln.strip()
+                if not stripped:
+                    continue
+                low = stripped.lower()
+                if any(kw in low for kw in ("error", "traceback", "exception", "错误", "失败")):
+                    kept.append(stripped)
+                    has_error = True
+                elif len(kept) < 4 and len(stripped) > 8:
+                    kept.append(stripped)
+            summary = " | ".join(kept[:4]) if kept else content[:150]
+            flag = " [⚠ error]" if has_error else " [compacted]"
+            compacted.append({"role": role, "content": f"{summary}{flag}"})
+
         elif role == "assistant" and len(content) > 500:
-            # Compress verbose assistant responses
-            compacted.append({"role": role, "content": content[:300] + "..."})
+            paras = [p.strip() for p in content.split("\n\n") if p.strip()]
+            if len(paras) >= 2:
+                head = paras[0][:280]
+                tail_para = paras[-1][-180:]
+                compacted.append({"role": role,
+                                   "content": f"{head}\n…\n{tail_para} [compacted]"})
+            else:
+                compacted.append({"role": role,
+                                   "content": content[:350] + "… [compacted]"})
         else:
             compacted.append(msg)
 
@@ -6844,21 +6871,37 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
         if not silent and HAS_RICH:
             console.print("[dim]Summarising conversation...[/dim]")
 
-        # Build a dense transcript for the summariser
+        # Build a dense transcript for the summariser.
+        # Tool results get special treatment: extract status + first 3 non-empty lines
+        # rather than raw-truncating, so the summariser sees outcomes not noise.
         transcript_parts = []
         for m in conv:
-            role_label = "User" if m["role"] == "user" else "Aria"
-            # Truncate very long messages for the summary prompt
-            content = m.get("content", "")[:2000]
-            transcript_parts.append(f"{role_label}: {content}")
+            role = m.get("role", "")
+            content = m.get("content", "")
+            if role == "tool":
+                lines = [ln.strip() for ln in content.splitlines() if ln.strip()]
+                has_err = any("error" in ln.lower() or "traceback" in ln.lower() for ln in lines[:10])
+                excerpt = " | ".join(lines[:3]) if lines else content[:200]
+                label = "Tool[⚠ error]" if has_err else "Tool"
+                transcript_parts.append(f"{label}: {excerpt[:300]}")
+            elif role == "user":
+                transcript_parts.append(f"User: {content[:800]}")
+            else:
+                transcript_parts.append(f"Aria: {content[:1200]}")
         transcript = "\n\n".join(transcript_parts)
 
         summary_prompt = (
-            "You are a context compressor. Given the conversation transcript below, "
-            "produce a DENSE SUMMARY in 300 words or fewer. "
-            "Preserve: key decisions, code written, symbols/assets discussed, "
-            "important facts and user preferences. "
-            "Write in third-person present tense.\n\n"
+            "You are a context compressor for a quantitative finance AI assistant.\n"
+            "Given the conversation transcript, produce a DENSE SUMMARY (≤350 words).\n"
+            "You MUST preserve:\n"
+            "  • All ticker symbols / asset names discussed\n"
+            "  • Key numerical results (prices, rates, backtest metrics)\n"
+            "  • Code files written or modified (file paths + purpose)\n"
+            "  • Errors encountered and how they were resolved\n"
+            "  • User preferences or decisions made\n"
+            "  • The last task status (complete / in-progress / blocked)\n"
+            "Write in concise third-person present tense. "
+            "Start with: 'Session summary: ...'\n\n"
             f"TRANSCRIPT:\n{transcript}\n\nSUMMARY:"
         )
 
@@ -6885,18 +6928,20 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
                               else "Compacted (summary fallback)")
             return
 
-        # Build compacted conversation: summary message + last 2 pairs (4 msgs)
-        kept_tail = conv[-4:] if len(conv) >= 4 else conv[:]
+        # Build compacted conversation: summary + last 3 pairs (6 msgs) for
+        # sufficient recency context. The summary acts as a pseudo-system message.
+        kept_tail = conv[-6:] if len(conv) >= 6 else conv[:]
         self.terminal.conversation = [
             {
                 "role": "user",
                 "content": (
-                    f"[Context Summary — earlier conversation compacted]\n\n{summary}"
+                    f"[会话摘要 — 早期对话已压缩]\n\n{summary}\n\n"
+                    f"[以下是最近的对话记录]"
                 )
             },
             {
                 "role": "assistant",
-                "content": "I have the summary. Continuing from where we left off."
+                "content": "已获取摘要，继续之前的工作。"
             },
             *kept_tail,
         ]
@@ -10980,9 +11025,55 @@ class ArtheraTerminal:
             console.print()
         start_time = time.time()
 
-        # --- Agentic loop: may run multiple rounds if AI requests tools ---
-        max_rounds = 10
+        # --- Dynamic max_rounds: scale with task complexity ---
+        # Simple queries get 10 rounds; complex multi-step tasks get up to 20.
+        _task_complexity_signals = (
+            len(message) > 120 or
+            any(kw in message for kw in (
+                "然后", "接着", "最后", "步骤", "并且", "同时",
+                "and then", "step", "finally", "after that", "next",
+                "完整", "全面", "详细", "系统", "comprehensive", "complete",
+            ))
+        )
+        max_rounds = 20 if _task_complexity_signals else 10
+
+        # --- Task decomposition for complex multi-step requests ---
+        # For long or multi-step messages, ask the AI to produce a plan first,
+        # then inject it as context so the agentic loop follows a clear path.
+        _DECOMP_THRESHOLD = 150   # chars
+        _decomp_plan: str = ""
+        if (
+            len(message) > _DECOMP_THRESHOLD and
+            _task_complexity_signals and
+            not any(message.startswith(p) for p in ("/", "!"))  # not a slash command
+        ):
+            _decomp_prompt = (
+                "Break the following user request into a numbered step-by-step execution plan "
+                "(max 8 steps, one line each). Be concrete and tool-aware. "
+                "Output ONLY the numbered list, nothing else.\n\n"
+                f"Request: {message[:600]}"
+            )
+            try:
+                _plan_result = await stream_ollama(
+                    self.config.get("ollama_url", "http://localhost:11434"),
+                    _decomp_prompt,
+                    history=[],
+                    model=self.config.get("model", "qwen2.5:7b"),
+                    enable_tools=False,
+                )
+                if _plan_result.get("success") and _plan_result.get("response"):
+                    _decomp_plan = _plan_result["response"].strip()
+            except Exception:
+                pass  # decomposition is best-effort
+
+        # Inject plan as a prefix to the first turn's message so the AI
+        # follows the decomposed steps rather than free-forming the approach.
         current_message = message
+        if _decomp_plan:
+            current_message = (
+                f"[执行计划]\n{_decomp_plan}\n\n"
+                f"[用户请求]\n{message}"
+            )
         turn_state = AgentTurnState(provider="aws")
         provider = turn_state.provider
         token_count = 0
@@ -11500,7 +11591,20 @@ class ArtheraTerminal:
             # --- Agentic tool loop ---
             pending = result.get("tool_calls_pending", [])
             if not pending:
-                break  # No tools requested, done
+                # Semantic exit: AI returned text without tool calls.
+                # Additionally check if the response contains an explicit
+                # "task complete" signal even after a tool-heavy sequence.
+                break
+
+            # Warn on final available round so user sees progress
+            if round_num == max_rounds - 1:
+                if HAS_RICH:
+                    console.print(
+                        f"  [yellow]⚠ 已达最大工具轮次 ({max_rounds}). "
+                        f"若任务未完成，请继续对话或用 /compact 释放上下文。[/yellow]"
+                    )
+                else:
+                    print(f"  ⚠ Max rounds ({max_rounds}) reached.")
 
             # ── Parallel tool dispatch ─────────────────────────────────────────
             # Read-only / remote tools run concurrently via asyncio.gather().
@@ -11747,6 +11851,13 @@ class ArtheraTerminal:
                 "ARIA_TOKENS":    str((prompt_t or 0) + (completion_t or 0)),
                 "ARIA_SESSION":   self.session_id,
             })
+
+            # Auto-capture user preferences / facts expressed in this turn
+            try:
+                from memory_manager import auto_capture_from_turn as _acft, MemoryManager as _MM
+                _acft(message, final_text or "", _MM())
+            except Exception:
+                pass
 
             # Trim conversation history to prevent unbounded growth
             if len(self.conversation) > 40:
