@@ -1,4 +1,11 @@
 <p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.png" width="100">
+    <img src="docs/assets/logo-light.png" alt="Aria Code" width="100">
+  </picture>
+</p>
+
+<p align="center">
   <img src="https://img.shields.io/badge/中文-README_CN-red?style=flat-square" alt="中文"/>
   <a href="./README_CN.md"><img src="https://img.shields.io/badge/中文文档-README__CN.md-red?style=flat-square" alt="中文"/></a>
   <img src="https://img.shields.io/badge/English-Current-6366f1?style=flat-square" alt="English"/>
@@ -12,7 +19,7 @@
   <img src="https://img.shields.io/github/stars/Cinsoul/Aria-Code?style=for-the-badge&color=f59e0b" alt="stars"/>
 </p>
 
-<h1 align="center">🤖 Aria Code</h1>
+<h1 align="center">Aria Code</h1>
 
 <p align="center">
   <b>AI-powered financial terminal for the command line</b><br>
