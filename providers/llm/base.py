@@ -44,12 +44,15 @@ class ProviderConfig:
     def from_env(cls, name: str, **defaults) -> "ProviderConfig":
         """从环境变量自动读取 API Key（DEEPSEEK_API_KEY / OPENAI_API_KEY 等）"""
         key_map = {
-            "deepseek":  "DEEPSEEK_API_KEY",
-            "openai":    "OPENAI_API_KEY",
-            "anthropic": "ANTHROPIC_API_KEY",
-            "groq":      "GROQ_API_KEY",
-            "together":  "TOGETHER_API_KEY",
-            "dashscope": "DASHSCOPE_API_KEY",
+            "deepseek":    "DEEPSEEK_API_KEY",
+            "openai":      "OPENAI_API_KEY",
+            "anthropic":   "ANTHROPIC_API_KEY",
+            "groq":        "GROQ_API_KEY",
+            "together":    "TOGETHER_API_KEY",
+            "dashscope":   "DASHSCOPE_API_KEY",
+            "siliconflow": "SILICONFLOW_API_KEY",
+            "moonshot":    "MOONSHOT_API_KEY",
+            "zhipu":       "ZHIPUAI_API_KEY",
         }
         env_var = key_map.get(name.lower())
         api_key = os.getenv(env_var, "") if env_var else ""

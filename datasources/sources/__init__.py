@@ -6,9 +6,10 @@ from .edgar_source import EDGARSource
 from .alpha_vantage_source import AlphaVantageSource
 from .world_bank_source import WorldBankSource
 from .web_scraper_source import WebScraperSource
+from .finnhub_source import FinnhubSource
 
 __all__ = [
     "AkshareSource", "YFinanceSource", "TushareSource",
     "FREDSource", "EDGARSource", "AlphaVantageSource",
-    "WorldBankSource", "WebScraperSource",
+    "WorldBankSource", "WebScraperSource", "FinnhubSource",
 ]

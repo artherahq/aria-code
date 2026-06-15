@@ -27,16 +27,29 @@ _BASE = "https://www.alphavantage.co/query"
 
 
 def _load_key() -> str:
-    key = os.getenv("ALPHA_VANTAGE_KEY", "")
+    key = os.getenv("ALPHA_VANTAGE_KEY", "") or os.getenv("ALPHAVANTAGE_KEY", "")
     if not key:
         for p in [Path.home() / ".aria" / ".env", Path.home() / ".arthera" / ".env"]:
             if p.exists():
                 for line in p.read_text(encoding="utf-8").splitlines():
-                    if line.startswith("ALPHA_VANTAGE_KEY="):
+                    if line.startswith(("ALPHA_VANTAGE_KEY=", "ALPHAVANTAGE_KEY=")):
                         key = line.split("=", 1)[1].strip()
                         break
             if key:
                 break
+    if not key:
+        # providers.json 中存储的键名是 "alphavantage"（无下划线）
+        try:
+            import json as _json
+            _p = Path.home() / ".arthera" / "providers.json"
+            if _p.exists():
+                _raw = _json.loads(_p.read_text(encoding="utf-8"))
+                key = (
+                    _raw.get("data", {}).get("alphavantage", {}).get("api_key", "")
+                    or _raw.get("data", {}).get("alpha_vantage", {}).get("api_key", "")
+                )
+        except Exception:
+            pass
     return key
 
 
@@ -136,19 +149,20 @@ class AlphaVantageSource(BaseDataSource):
         data = _fetch({"function": "OVERVIEW", "symbol": symbol, "apikey": self._key})
         if not data or not data.get("Symbol"):
             return None
-        def _f(k):
+        def _f(k, mult: float = 1.0):
             v = data.get(k, "None")
             try:
-                return float(v) if v not in ("None", "-", "") else 0.0
+                fv = float(v) if v not in ("None", "-", "", "0") else None
+                return fv * mult if fv is not None else None
             except ValueError:
-                return 0.0
+                return None
         return FundamentalsResult(
             symbol          = symbol,
             pe_ttm          = _f("TrailingPE"),
             pb              = _f("PriceToBookRatio"),
-            roe             = _f("ReturnOnEquityTTM") * 100,
+            roe             = _f("ReturnOnEquityTTM", 100),
             revenue_growth  = _f("RevenueGrowthQtrlyYOY"),
-            dividend_yield  = _f("DividendYield") * 100,
+            dividend_yield  = _f("DividendYield", 100),
             source          = self.name,
         )
 

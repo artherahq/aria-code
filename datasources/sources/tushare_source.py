@@ -23,7 +23,8 @@ def _load_token() -> str:
         env_paths = [
             Path.cwd() / ".env",
             Path.cwd().parent / ".env",
-            Path("/Users/mac/Desktop/Arthera/.env"),
+            Path.home() / ".aria" / ".env",
+            Path.home() / ".arthera" / ".env",
         ]
         for p in env_paths:
             if p.exists():

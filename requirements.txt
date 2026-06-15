@@ -1,40 +1,135 @@
-# Aria Code CLI — core dependencies
-aiohttp>=3.9.0
-rich>=13.0.0
-prompt_toolkit>=3.0.0
+# Aria Code CLI — dependency manifest
+# =====================================
+# Install:  pip install -r requirements.txt
+# Or run:   bash install.sh   (creates isolated venv automatically)
+#
+# All packages are grouped by function.
+# "Optional" means graceful fallback exists — Aria Code still starts without them,
+# but the tagged features will be unavailable.
 
-# ── Config parsing — used by providers/llm/registry.py and datasources/router.py
-PyYAML>=6.0
+# ─────────────────────────────────────────────────────────────────────────────
+# CORE — required for the CLI to start
+# ─────────────────────────────────────────────────────────────────────────────
+aiohttp>=3.9.0          # async HTTP: Ollama streaming + REST API
+rich>=13.7.0            # terminal UI: tables, panels, markdown, syntax highlight
+prompt_toolkit>=3.0.43  # REPL input: history, autocomplete, keybindings
+PyYAML>=6.0.2           # config parsing: providers, datasources, ariarc
 
-# ── Local LLM & data (all optional — graceful fallback if missing) ─────────
+# ─────────────────────────────────────────────────────────────────────────────
+# MARKET DATA — financial data sources
+# ─────────────────────────────────────────────────────────────────────────────
 
-# US/Global market data
-yfinance>=0.2.40
+# US/Global equities, ETFs, options, macro data
+yfinance>=0.2.55
 
-# A-share (China) market data — akshare is the primary source for A股
-# Covers: quotes, northbound flow, sector data, news, limit-up pool, fundamentals
-akshare>=1.14.0
+# China A-share: quotes, sector flow, limit-up pool, fundamentals, REITs,
+# house price index, macro (CPI/PPI/PMI/GDP/LPR), economic calendar
+akshare>=1.14.68
 
-# A-share alternative (better historical data + financials; requires free token)
-# tushare>=1.2.89
+# Crypto: funding rates, order books, OHLCV across 100+ exchanges
+ccxt>=4.4.0
 
-# Crypto market data
-ccxt>=4.3.0
+# ─────────────────────────────────────────────────────────────────────────────
+# DATA SCIENCE — numerical / tabular computation
+# ─────────────────────────────────────────────────────────────────────────────
+numpy>=1.26.0
+pandas>=2.2.0
+scipy>=1.13.0           # risk metrics, statistics (Sharpe, correlation, VaR)
+pandas_ta>=0.3.14b      # 130+ technical indicators (RSI, MACD, Bollinger, etc.)
 
-# Technical indicators (faster than manual pandas calculations)
-pandas_ta>=0.3.14b
+# ─────────────────────────────────────────────────────────────────────────────
+# FILE ANALYSIS — /file command (PDF/Word/Excel/CSV/JSON/HTML/code/images)
+# ─────────────────────────────────────────────────────────────────────────────
+pdfplumber>=0.11.0      # PDF text + table extraction (preferred PDF parser)
+pypdf>=4.3.0            # PDF fallback parser (lighter, no table detection)
+python-docx>=1.1.2      # Word/DOCX: paragraphs, headings, embedded tables
+openpyxl>=3.1.5         # Excel/XLSX read+write; also used by pandas Excel engine
+beautifulsoup4>=4.12.3  # HTML → clean text extraction (/file load *.html)
+Pillow>=10.4.0          # Image metadata (size, mode, EXIF); base64 for vision models
 
-# Portfolio backtesting (optional — pandas fallback available without it)
-# vectorbt>=0.26.0
+# ─────────────────────────────────────────────────────────────────────────────
+# DATA ANALYSIS — /data sql, /corr, /ptbt, /alert commands
+# ─────────────────────────────────────────────────────────────────────────────
+duckdb>=0.10.3          # in-process SQL analytics: /data sql "SELECT …"
 
-# Scientific computing for risk metrics
-scipy>=1.12.0
+# ─────────────────────────────────────────────────────────────────────────────
+# HTTP — shared transport layer
+# ─────────────────────────────────────────────────────────────────────────────
+requests>=2.32.0        # FRED macro data, Finnhub, alternative.me Fear&Greed
+httpx[http2]>=0.27.0    # async HTTP + HTTP/2: APNs push, Telegram bot, webhooks
+PyJWT>=2.8.0            # JWT signing for APNs ES256 authentication
 
-# ── Dependencies of the above ──────────────────────────────────────────────
-numpy>=1.24.0
-pandas>=2.0.0
-requests>=2.31.0
+# ─────────────────────────────────────────────────────────────────────────────
+# OPTIONAL — broker connectivity (install only what you use)
+# ─────────────────────────────────────────────────────────────────────────────
+# Interactive Brokers (IBKR TWS / IB Gateway)
+# ib_insync>=0.9.86
 
-# ── Dev / test ──────────────────────────────────────────────────────────────
-pytest>=8.0.0
-pytest-asyncio>=0.23.0
+# Futu OpenD (富途牛牛)
+# futu-api>=9.1.5108
+
+# Tiger Securities (老虎证券)
+# tigeropen>=3.2.0
+
+# Longbridge (长桥证券)
+# longbridge>=1.0.22
+
+# Alpaca Markets (US equities, paper trading)
+# alpaca-py>=0.35.0
+
+# Webull
+# webull>=0.3.14
+
+# XTQuant (迅投, 中信/华鑫/浙商 — Windows/Linux only)
+# xtquant  (installed via: pip install xtquant --index-url https://pypi.org/simple/)
+
+# EasyTrader (同花顺/通达信/华泰/国君 — Windows only)
+# easytrader>=0.21.4
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OPTIONAL — enhanced local LLM features
+# ─────────────────────────────────────────────────────────────────────────────
+# Portfolio walk-forward backtesting (vectorized, much faster than pandas loops)
+# vectorbt>=0.26.2
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OPTIONAL — Browser automation + desktop computer use
+# ─────────────────────────────────────────────────────────────────────────────
+# Playwright: headless browser (browser_navigate, browser_screenshot tools)
+#   Install: pip install playwright && playwright install chromium
+playwright>=1.44.0
+
+# Desktop screenshot (computer_screenshot tool)
+mss>=9.0.1              # cross-platform screen capture (fast, no display server needed)
+
+# Mouse/keyboard control (computer_action tool)
+pyautogui>=0.9.54       # cross-platform GUI automation
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OPTIONAL — Daemon, push notifications, scheduled tasks
+# ─────────────────────────────────────────────────────────────────────────────
+apscheduler>=3.10.0     # cron scheduler for aria_daemon.py (morning brief etc.)
+aiofiles>=23.2.0        # async file I/O for Telegram document uploads
+websockets>=12.0        # WebSocket client for aria_relay_client.py
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OPTIONAL — Feishu bot multimodal
+# ─────────────────────────────────────────────────────────────────────────────
+# faster-whisper>=1.0.3  # 本地语音转文字 (需 brew install ffmpeg)
+#   pip install faster-whisper
+# python-docx>=1.1.2     # Word 文件解析（feishu bot /file .docx）— 已在上方 FILE ANALYSIS 列出
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OPTIONAL — report generation and PDF export
+# ─────────────────────────────────────────────────────────────────────────────
+mplfinance>=0.12.9      # professional candlestick + volume charts in /report
+understat>=0.1.0        # football xG data (no API key required)
+duckduckgo-search>=6.0  # zero-config web search fallback (used by web_search tool)
+# weasyprint>=60.0      # PDF export via /report --pdf (requires cairo/pango system libs)
+#   macOS install: brew install cairo pango libffi && pip install weasyprint
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DEV / TEST — only needed for contributors
+# ─────────────────────────────────────────────────────────────────────────────
+pytest>=8.2.0
+pytest-asyncio>=0.23.7

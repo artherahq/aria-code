@@ -1,0 +1,189 @@
+[build-system]
+requires = ["setuptools>=72", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aria-code"
+version = "3.0.0"
+description = "AI-powered financial terminal — local LLM + multi-source market data"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+keywords = ["ai", "llm", "finance", "trading", "terminal", "cli"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Financial and Insurance Industry",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Office/Business :: Financial",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+# ── Core dependencies (always installed) ──────────────────────────────────────
+dependencies = [
+    "aiohttp>=3.9.0",
+    "rich>=13.7.0",
+    "prompt_toolkit>=3.0.43",
+    "PyYAML>=6.0.2",
+    "requests>=2.32.0",
+    "numpy>=1.26.0",
+    "pandas>=2.2.0",
+    "scipy>=1.13.0",
+    "yfinance>=0.2.55",
+    "akshare>=1.14.68",
+    "ccxt>=4.4.0",
+    "pandas_ta>=0.3.14b",
+    # File analysis
+    "pdfplumber>=0.11.0",
+    "pypdf>=4.3.0",
+    "python-docx>=1.1.2",
+    "openpyxl>=3.1.5",
+    "beautifulsoup4>=4.12.3",
+    "Pillow>=10.4.0",
+    # Data analysis
+    "duckdb>=0.10.3",
+]
+
+[project.optional-dependencies]
+
+# ── Broker connectivity ────────────────────────────────────────────────────────
+ibkr = ["ib_insync>=0.9.86"]
+futu = ["futu-api>=9.1.5108"]
+tiger = ["tigeropen>=3.2.0"]
+longbridge = ["longbridge>=1.0.22"]
+alpaca = ["alpaca-py>=0.35.0"]
+webull = ["webull>=0.3.14"]
+
+# All brokers bundle
+brokers = [
+    "ib_insync>=0.9.86",
+    "futu-api>=9.1.5108",
+    "tigeropen>=3.2.0",
+    "longbridge>=1.0.22",
+    "alpaca-py>=0.35.0",
+]
+
+# ── Enhanced backtesting ───────────────────────────────────────────────────────
+backtest = ["vectorbt>=0.26.2"]
+
+# ── Developer tools ────────────────────────────────────────────────────────────
+dev = [
+    "pytest>=8.2.0",
+    "pytest-asyncio>=0.23.7",
+    "ruff>=0.4.0",
+    "mypy>=1.10.0",
+]
+
+# ── Everything ────────────────────────────────────────────────────────────────
+all = [
+    "ib_insync>=0.9.86",
+    "futu-api>=9.1.5108",
+    "tigeropen>=3.2.0",
+    "longbridge>=1.0.22",
+    "alpaca-py>=0.35.0",
+    "vectorbt>=0.26.2",
+    "pytest>=8.2.0",
+    "pytest-asyncio>=0.23.7",
+]
+
+[project.scripts]
+aria-code = "apps.cli.main:main"
+
+[project.urls]
+Homepage = "https://github.com/Cinsoul/aria-code"
+Repository = "https://github.com/Cinsoul/aria-code"
+Issues = "https://github.com/Cinsoul/aria-code/issues"
+
+# ── Package discovery ──────────────────────────────────────────────────────────
+[tool.setuptools]
+py-modules = [
+    "aliyun_data_client",
+    "aria_cli",
+    "aria_daemon",
+    "aria_feishu_bot",
+    "aria_relay_client",
+    "aria_relay_server",
+    "aria_telegram_bot",
+    "ariarc",
+    "artifacts",
+    "backtest_report",
+    "change_store",
+    "command_safety",
+    "data_analysis_tools",
+    "data_cleaner",
+    "data_service",
+    "doctor",
+    "file_analysis_tools",
+    "finance_formulas",
+    "financial_agents",
+    "intent_classifier",
+    "local_finance_tools",
+    "local_llm_provider",
+    "macro_tools",
+    "market_data_client",
+    "mcp_client",
+    "memory_manager",
+    "model_capability",
+    "notification_tools",
+    "plan_utils",
+    "plugin_loader",
+    "portfolio_ledger",
+    "project_tools",
+    "realty_data_tools",
+    "report_generator",
+    "setup_wizard",
+    "strategy_vault",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = [
+    "brokers*",
+    "providers*",
+    "datasources*",
+    "agents*",
+    "apps*",
+    "packages*",
+    "*_tools*",
+    "macro_tools*",
+    "file_analysis_tools*",
+    "realty_data_tools*",
+    "data_analysis_tools*",
+    "project_tools*",
+    "local_finance_tools*",
+    "model_capability*",
+    "intent_classifier*",
+    "ariarc*",
+    "plan_utils*",
+    "command_safety*",
+    "plugin_loader*",
+    "finance_formulas*",
+    "financial_agents*",
+    "strategy_vault*",
+    "market_data_client*",
+    "mcp_client*",
+    "local_llm_provider*",
+    "aliyun_data_client*",
+]
+
+[tool.setuptools.package-data]
+"*" = ["*.yaml", "*.json", "*.md", "*.txt", "*.sh"]
+
+# ── Ruff linting ───────────────────────────────────────────────────────────────
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+select = ["E", "F", "W", "I"]
+ignore = ["E501", "F401", "E402"]
+
+# ── Pytest ─────────────────────────────────────────────────────────────────────
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+python_files = ["test_*.py"]

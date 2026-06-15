@@ -41,6 +41,7 @@ class ModelCapability:
     format: str = "text_only"
     context_window: int = 8192
     thinking: bool = False          # extended-reasoning / <think> tokens
+    vision: bool = False            # supports image / multimodal input
     finance_tuned: bool = False     # model has finance-domain fine-tuning
     # Recommended sampling params
     temperature: float = 0.3
@@ -61,7 +62,7 @@ def is_router_only(cap: "ModelCapability") -> bool:
 def can_handle_coding(cap: "ModelCapability") -> bool:
     """Return True if the model is large/capable enough for code generation tasks."""
     return (
-        cap.format in ("ollama_native", "xml_tags")
+        cap.format in ("ollama_native", "xml_tags", "anthropic_native")
         and cap.context_window >= 8192
         and cap.size_class not in ("nano",)
     )
@@ -109,8 +110,8 @@ _CAPABILITY_TABLE: Dict[str, ModelCapability] = {
     "deepseek-coder-v2":    ModelCapability(tool_calls=True,  format="ollama_native", context_window=65536,  temperature=0.2),
     # ── LLaMA family ───────────────────────────────────────────────────────
     "llama3.3:70b":         ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.3, notes="Meta flagship 2024"),
-    "llama3.2:90b":         ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.3),
-    "llama3.2:11b":         ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.3),
+    "llama3.2:90b":         ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.3, vision=True,  notes="Multimodal, image+text"),
+    "llama3.2:11b":         ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.3, vision=True,  notes="Multimodal, image+text"),
     "llama3.2:3b":          ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.3),
     "llama3.2":             ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.3),
     "llama3.1:405b":        ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.3),
@@ -131,11 +132,25 @@ _CAPABILITY_TABLE: Dict[str, ModelCapability] = {
     "phi3.5":               ModelCapability(tool_calls=True,  format="ollama_native", context_window=16384,  temperature=0.3),
     "phi3":                 ModelCapability(tool_calls=False, format="text_only",     context_window=8192,   temperature=0.3),
     # ── Google Gemma ───────────────────────────────────────────────────────
-    "gemma3:27b":           ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.3),
-    "gemma3:12b":           ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.3),
-    "gemma3:4b":            ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.3),
-    "gemma3":               ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.3),
+    "gemma3:27b":           ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.3, vision=True),
+    "gemma3:12b":           ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.3, vision=True),
+    "gemma3:4b":            ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.3, vision=True),
+    "gemma3":               ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.3, vision=True),
     "gemma2":               ModelCapability(tool_calls=False, format="text_only",     context_window=8192,   temperature=0.3),
+    # ── Vision / multimodal models ─────────────────────────────────────────────
+    "llava:34b":            ModelCapability(tool_calls=False, format="text_only",     context_window=4096,   temperature=0.3, vision=True,  notes="LLaVA 34B vision-language"),
+    "llava:13b":            ModelCapability(tool_calls=False, format="text_only",     context_window=4096,   temperature=0.3, vision=True),
+    "llava:7b":             ModelCapability(tool_calls=False, format="text_only",     context_window=4096,   temperature=0.3, vision=True),
+    "llava":                ModelCapability(tool_calls=False, format="text_only",     context_window=4096,   temperature=0.3, vision=True),
+    "bakllava":             ModelCapability(tool_calls=False, format="text_only",     context_window=4096,   temperature=0.3, vision=True),
+    "moondream":            ModelCapability(tool_calls=False, format="text_only",     context_window=2048,   temperature=0.3, vision=True,  size_class="small", notes="Tiny vision model"),
+    "minicpm-v":            ModelCapability(tool_calls=False, format="text_only",     context_window=8192,   temperature=0.3, vision=True,  size_class="small"),
+    "qwen2-vl:72b":         ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.3, vision=True,  notes="Qwen2-VL 72B multimodal"),
+    "qwen2-vl:7b":          ModelCapability(tool_calls=True,  format="ollama_native", context_window=32768,  temperature=0.3, vision=True),
+    "qwen2-vl":             ModelCapability(tool_calls=True,  format="ollama_native", context_window=32768,  temperature=0.3, vision=True),
+    "qwen2.5vl:72b":        ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.3, vision=True,  notes="Qwen2.5-VL 72B"),
+    "qwen2.5vl:7b":         ModelCapability(tool_calls=True,  format="ollama_native", context_window=32768,  temperature=0.3, vision=True),
+    "qwen2.5vl":            ModelCapability(tool_calls=True,  format="ollama_native", context_window=32768,  temperature=0.3, vision=True),
     # ── Finance-specific ───────────────────────────────────────────────────
     "finma":                ModelCapability(tool_calls=False, format="text_only",     context_window=4096,   temperature=0.3, finance_tuned=True),
     "fingpt":               ModelCapability(tool_calls=False, format="text_only",     context_window=4096,   temperature=0.3, finance_tuned=True),
@@ -150,9 +165,28 @@ _CAPABILITY_TABLE: Dict[str, ModelCapability] = {
     "aria-sonata":               ModelCapability(tool_calls=False, format="xml_tags", context_window=8192,  temperature=0.3, size_class="small",                finance_tuned=True),
     # aria-prelude: nano router model — ONLY for intent classification and routing
     "aria-prelude":              ModelCapability(tool_calls=False, format="router_only", context_window=4096, temperature=0.2, size_class="nano", finance_tuned=True, notes="Nano router — intent classification only"),
+    # ── Anthropic Claude (cloud API via providers/llm/anthropic.py) ───────
+    # format="anthropic_native" → tool calling via Anthropic SDK, not Ollama
+    # All Claude 3+ models share 200K context and native vision support.
+    "claude-opus-4-8":              ModelCapability(tool_calls=True, format="anthropic_native", context_window=200000, temperature=0.3, size_class="large",  vision=True, thinking=True,  notes="Claude Opus 4.8 — most capable"),
+    "claude-opus-4":                ModelCapability(tool_calls=True, format="anthropic_native", context_window=200000, temperature=0.3, size_class="large",  vision=True, thinking=True),
+    "claude-sonnet-4-6":            ModelCapability(tool_calls=True, format="anthropic_native", context_window=200000, temperature=0.3, size_class="large",  vision=True),
+    "claude-sonnet-4":              ModelCapability(tool_calls=True, format="anthropic_native", context_window=200000, temperature=0.3, size_class="large",  vision=True),
+    "claude-haiku-4-5":             ModelCapability(tool_calls=True, format="anthropic_native", context_window=200000, temperature=0.3, size_class="medium", vision=True,               notes="Claude Haiku 4.5 — fast/cheap"),
+    "claude-haiku-4":               ModelCapability(tool_calls=True, format="anthropic_native", context_window=200000, temperature=0.3, size_class="medium", vision=True),
+    # Claude 3.x legacy — still widely used
+    "claude-3-7-sonnet":            ModelCapability(tool_calls=True, format="anthropic_native", context_window=200000, temperature=0.3, size_class="large",  vision=True, thinking=True),
+    "claude-3-5-sonnet":            ModelCapability(tool_calls=True, format="anthropic_native", context_window=200000, temperature=0.3, size_class="large",  vision=True),
+    "claude-3-5-haiku":             ModelCapability(tool_calls=True, format="anthropic_native", context_window=200000, temperature=0.3, size_class="medium", vision=True),
+    "claude-3-opus":                ModelCapability(tool_calls=True, format="anthropic_native", context_window=200000, temperature=0.3, size_class="large",  vision=True, thinking=True),
+    "claude-3-sonnet":              ModelCapability(tool_calls=True, format="anthropic_native", context_window=200000, temperature=0.3, size_class="large",  vision=True),
+    "claude-3-haiku":               ModelCapability(tool_calls=True, format="anthropic_native", context_window=200000, temperature=0.3, size_class="medium", vision=True),
+    # Generic prefix catch-all for future Claude versions (longest-prefix matching ensures
+    # specific entries above still win over this fallback)
+    "claude":                       ModelCapability(tool_calls=True, format="anthropic_native", context_window=200000, temperature=0.3, size_class="large",  vision=True),
     # ── Arthera cloud-routed models (large, run via cloud API) ────────────
-    "gpt-oss:120b":             ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.3, notes="GPT-OSS 120B cloud"),
-    "gpt-oss":                  ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.3, notes="GPT-OSS cloud"),
+    "gpt-oss:120b":             ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.3, vision=True, notes="GPT-OSS 120B cloud"),
+    "gpt-oss":                  ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.3, vision=True, notes="GPT-OSS cloud"),
     "deepseek-v3.1:671b-cloud": ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.3, notes="DeepSeek V3.1 671B cloud"),
 }
 

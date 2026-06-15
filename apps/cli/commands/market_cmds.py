@@ -1,0 +1,808 @@
+"""
+MarketCommandsMixin — Market commands: quote, realty, football, screen, news, screen_cn, limitup, north.
+
+Extracted from aria_cli.py. Methods' __globals__ are rebound to aria_cli's namespace
+by _rebind_mixin_globals() called at module load time.
+"""
+from __future__ import annotations
+
+
+class MarketCommandsMixin:
+    """Mixin: Market commands: quote, realty, football, screen, news, screen_cn, limitup, north."""
+
+    async def cmd_realty(self, args: str):
+        """
+        /realty market [city1] [city2]  — 城市房价指数
+        /realty reit [code]             — REIT 列表或单只分析
+        /realty valuation               — 物业估值计算器（交互式）
+        /realty rent                    — 租金收益率计算（交互式）
+        /realty compare [cities...]     — 多城市对比
+        /realty score                   — 资产区位评分（交互式）
+        /realty us                      — 美国住房数据
+        """
+        import asyncio as _asyncio
+        loop = _asyncio.get_event_loop()
+        parts = args.strip().split() if args.strip() else []
+        sub = parts[0].lower() if parts else "market"
+
+        try:
+            from realty_data_tools import (
+                get_house_price_index, get_re_investment,
+                get_reits_list, get_reit_analysis, get_multi_city_comparison,
+                calc_rental_yield, property_valuation, asset_location_score,
+                get_us_housing_data,
+            )
+        except ImportError as e:
+            if HAS_RICH:
+                console.print(f"[red]realty_data_tools 未加载: {e}[/red]")
+            return
+
+        if sub == "market":
+            city1 = parts[1] if len(parts) > 1 else "北京"
+            city2 = parts[2] if len(parts) > 2 else ("上海" if city1 != "上海" else "北京")
+            import functools as _functools
+            if HAS_RICH:
+                with console.status(f"[dim]获取 {city1}/{city2} 房价指数...[/dim]", spinner="dots"):
+                    r = await loop.run_in_executor(
+                        None, _functools.partial(get_house_price_index, city1, city2)
+                    )
+            else:
+                r = get_house_price_index(city1, city2)
+            _render_house_price(r)
+            # Also show investment data
+            if HAS_RICH:
+                with console.status("[dim]获取房地产投资数据...[/dim]", spinner="dots"):
+                    ri = await loop.run_in_executor(None, get_re_investment)
+            else:
+                ri = get_re_investment()
+            if ri.get("success") and ri.get("latest"):
+                lt = ri["latest"]
+                if HAS_RICH:
+                    console.print(f"\n  [dim]房地产开发投资[/dim]  {lt.get('日期','')}  "
+                                  f"最新值 [bold]{lt.get('最新值','')}[/bold]  "
+                                  f"涨跌 {lt.get('涨跌幅','')}  "
+                                  f"近1年 {lt.get('近1年涨跌幅','')}")
+
+        elif sub == "reit":
+            code = parts[1] if len(parts) > 1 else None
+            if code:
+                if HAS_RICH:
+                    with console.status(f"[dim]分析 {code} REIT...[/dim]", spinner="dots"):
+                        r = await loop.run_in_executor(None, get_reit_analysis, code)
+                else:
+                    r = get_reit_analysis(code)
+                if r.get("success"):
+                    if HAS_RICH:
+                        console.print(f"\n  [bold cyan]{r.get('code','')}[/bold cyan] "
+                                      f"[dim]{r.get('name','')}[/dim]")
+                        console.print(f"  现价 [bold]{r.get('price','')}[/bold]  "
+                                      f"涨跌 {r.get('chg_pct','')}%")
+                        if r.get("return_1y") is not None:
+                            rc = "green" if r["return_1y"] > 0 else "red"
+                            console.print(f"  近1年收益: [{rc}]{r['return_1y']:+.2f}%[/{rc}]")
+                        if r.get("volatility_annual"):
+                            console.print(f"  年化波动率: {r['volatility_annual']:.2f}%")
+                else:
+                    console.print(f"[red]{r.get('error','分析失败')}[/red]") if HAS_RICH else None
+            else:
+                if HAS_RICH:
+                    with console.status("[dim]获取 REIT 列表...[/dim]", spinner="dots"):
+                        r = await loop.run_in_executor(None, get_reits_list)
+                else:
+                    r = get_reits_list()
+                _render_reits_list(r)
+
+        elif sub == "compare":
+            cities = parts[1:] if len(parts) > 1 else None
+            if HAS_RICH:
+                with console.status("[dim]对比多城市房价...[/dim]", spinner="dots"):
+                    r = await loop.run_in_executor(None, get_multi_city_comparison, cities)
+            else:
+                r = get_multi_city_comparison(cities)
+            _render_multi_city(r)
+
+        elif sub in ("rent", "rental"):
+            if HAS_RICH:
+                console.print("[bold]💰 租金收益率计算器[/bold]  [dim](输入 0 跳过可选项)[/dim]")
+            price_wan  = _prompt_float("购入价格(万元): ", 200.0)
+            monthly_rent = _prompt_float("月租金(元): ", 5000.0)
+            annual_costs = _prompt_float("年维护成本(元)[可选]: ", 0.0)
+            loan_ratio = _prompt_float("贷款成数 0-1 (如0.7=七成)[可选]: ", 0.0)
+            p = {"purchase_price": price_wan, "monthly_rent": monthly_rent,
+                 "annual_costs": annual_costs, "loan_ratio": loan_ratio}
+            r = calc_rental_yield(p)
+            _render_rental_yield(r)
+
+        elif sub in ("valuation", "val"):
+            if HAS_RICH:
+                console.print("[bold]🏢 物业估值计算器[/bold]")
+            area = _prompt_float("建筑面积(㎡): ", 100.0)
+            monthly_rent = _prompt_float("月租金(元): ", 5000.0)
+            tier = _prompt_str("区位层级 (tier1/tier2/tier3): ", "tier2")
+            p = {"area_sqm": area, "monthly_rent": monthly_rent, "location_tier": tier}
+            r = property_valuation(p)
+            _render_property_val(r)
+
+        elif sub == "score":
+            if HAS_RICH:
+                console.print("[bold]📍 资产区位评分[/bold]")
+            city  = _prompt_str("城市: ", "上海")
+            area  = _prompt_float("建筑面积(㎡): ", 100.0)
+            floor_n = int(_prompt_float("楼层: ", 1.0))
+            traffic = _prompt_str("客流量 (high/medium/low): ", "medium")
+            fire_ok = _prompt_str("允许明火? (y/n): ", "n").lower() in ("y","yes","是")
+            reno_ok = _prompt_str("允许改造? (y/n): ", "y").lower() in ("y","yes","是")
+            p = {"city": city, "area_sqm": area, "floor": floor_n,
+                 "foot_traffic": traffic, "open_fire_allowed": fire_ok,
+                 "renovation_allowed": reno_ok}
+            r = asset_location_score(p)
+            _render_asset_score(r)
+
+        elif sub == "us":
+            if HAS_RICH:
+                with console.status("[dim]获取美国住房数据...[/dim]", spinner="dots"):
+                    r = await loop.run_in_executor(None, get_us_housing_data)
+            else:
+                r = get_us_housing_data()
+            if not r.get("success"):
+                if HAS_RICH: console.print(f"[red]{r.get('error')}[/red]")
+                return
+            if HAS_RICH:
+                from rich.table import Table as _T
+                from rich import box as _box
+                tb = _T(title="[bold]🏠 美国住房市场数据[/bold]", box=_box.ROUNDED)
+                tb.add_column("指标", style="dim"); tb.add_column("最新值"); tb.add_column("日期", style="dim")
+                for key, val in r.get("data", {}).items():
+                    lt = val.get("latest", {})
+                    v = lt.get("value")
+                    tb.add_row(val.get("label", key), str(v) if v else "—", str(lt.get("date",""))[:7])
+                console.print(tb)
+                for line in r.get("assessment", []):
+                    console.print(f"  [dim]▸ {line}[/dim]")
+
+        else:
+            if HAS_RICH:
+                console.print("[dim]用法: /realty [market|reit|compare|rent|valuation|score|us][/dim]")
+                console.print("[dim]示例: /realty market 北京 上海[/dim]")
+                console.print("[dim]      /realty reit 508603[/dim]")
+                console.print("[dim]      /realty rent  (交互式租金计算)[/dim]")
+                console.print("[dim]      /realty compare 北京 上海 成都 杭州[/dim]")
+
+    async def cmd_football(self, args: str):
+        """
+        足球赛事分析和预测
+
+        子命令:
+          /football standings <联赛>              联赛积分榜
+          /football fixtures  <联赛> [days]       近期赛程（默认7天）
+          /football predict   <主队> vs <客队> [联赛]  比赛预测
+          /football team      <球队名> [联赛]      球队近期状态
+          /football h2h       <队1> vs <队2> [联赛]   历史交锋
+
+        联赛代码: pl/epl/英超  bl/德甲  ll/西甲  sa/意甲  fl1/法甲  cl/欧冠
+        示例:
+          /football standings pl
+          /football predict Arsenal vs Chelsea pl
+          /football team Manchester City pl
+          /football fixtures cl 14
+        """
+        from rich.table import Table
+        from rich import box as rich_box
+        from rich.panel import Panel
+
+        parts = args.strip().split()
+        if not parts:
+            console.print(Panel(
+                "[bold]足球分析命令[/bold]\n\n"
+                "  [cyan]/football standings pl[/cyan]              英超积分榜\n"
+                "  [cyan]/football fixtures cl 14[/cyan]            欧冠未来14天赛程\n"
+                "  [cyan]/football predict Arsenal vs Chelsea[/cyan] 预测比赛结果\n"
+                "  [cyan]/football team Bayern Munich bl[/cyan]     球队近期状态\n"
+                "  [cyan]/football h2h Barcelona vs Real Madrid[/cyan] 历史交锋\n\n"
+                "[dim]联赛: pl/英超  bl/德甲  ll/西甲  sa/意甲  fl1/法甲  cl/欧冠[/dim]\n"
+                "[dim]需要设置 FOOTBALL_DATA_API_KEY（football-data.org 免费注册）[/dim]",
+                title="[bold]⚽ Football Analyst[/bold]",
+                border_style="green",
+            ))
+            return
+
+        sub = parts[0].lower()
+
+        # ── standings ──────────────────────────────────────────────────────────
+        if sub == "standings":
+            league = parts[1] if len(parts) > 1 else "pl"
+            await self._run_in_executor(_football_standings, league)
+
+        # ── fixtures ──────────────────────────────────────────────────────────
+        elif sub in ("fixtures", "schedule", "赛程"):
+            league  = parts[1] if len(parts) > 1 else "pl"
+            days    = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 7
+            await self._run_in_executor(_football_fixtures, league, days)
+
+        # ── predict ───────────────────────────────────────────────────────────
+        elif sub in ("predict", "预测", "prediction"):
+            raw = " ".join(parts[1:])
+            if " vs " in raw.lower():
+                idx     = raw.lower().index(" vs ")
+                home    = raw[:idx].strip()
+                rest    = raw[idx + 4:].strip()
+                away_parts = rest.split()
+                # last token might be league code (including wc/世界杯)
+                from football_data_client import LEAGUE_IDS, TOURNAMENT_CODES
+                _all_codes = {**LEAGUE_IDS, **{k: v for k, v in TOURNAMENT_CODES.items()}}
+                if away_parts and away_parts[-1].lower().replace(" ", "") in _all_codes:
+                    league = away_parts[-1]
+                    away   = " ".join(away_parts[:-1])
+                elif away_parts and away_parts[-1].lower() in ("wc", "worldcup", "世界杯", "ca", "ec"):
+                    league = away_parts[-1]
+                    away   = " ".join(away_parts[:-1])
+                else:
+                    league = "pl"
+                    away   = rest
+                await self._football_predict(home, away, league)
+            else:
+                console.print("[red]用法: /football predict <主队> vs <客队> [联赛/wc][/red]")
+
+        # ── team ──────────────────────────────────────────────────────────────
+        elif sub in ("team", "球队"):
+            rest  = " ".join(parts[1:])
+            from football_data_client import LEAGUE_IDS
+            tokens = rest.split()
+            if tokens and tokens[-1].lower() in LEAGUE_IDS:
+                league = tokens[-1]
+                team   = " ".join(tokens[:-1])
+            else:
+                league = "pl"
+                team   = rest
+            await self._run_in_executor(_football_team, team, league)
+
+        # ── h2h ───────────────────────────────────────────────────────────────
+        elif sub in ("h2h", "历史", "对决"):
+            raw = " ".join(parts[1:])
+            if " vs " in raw.lower():
+                idx  = raw.lower().index(" vs ")
+                t1   = raw[:idx].strip()
+                rest = raw[idx + 4:].strip()
+                from football_data_client import LEAGUE_IDS
+                tokens = rest.split()
+                if tokens and tokens[-1].lower() in LEAGUE_IDS:
+                    league = tokens[-1]
+                    t2     = " ".join(tokens[:-1])
+                else:
+                    league = "pl"
+                    t2     = rest
+                await self._run_in_executor(_football_h2h, t1, t2, league)
+            else:
+                console.print("[red]用法: /football h2h <队1> vs <队2> [联赛][/red]")
+
+        else:
+            # NL intent: /football 预测加拿大跟波黑... or /football 分析...
+            full_args = args.strip()
+            _has_cn = any('一' <= c <= '鿿' for c in full_args)
+            _has_kw = any(k in full_args.lower() for k in (
+                "predict", "preview", "analyze", "analysis", "who wins",
+                "预测", "分析", "谁赢", "比分", "胜率", "谁先", "开球",
+            ))
+            if _has_cn or _has_kw:
+                try:
+                    from football_data_client import get_sports_context_for_query
+                    _sports_ctx = get_sports_context_for_query(full_args)
+                except Exception:
+                    _sports_ctx = ""
+                if _sports_ctx:
+                    _has_quant = "泊松模型量化预测" in _sports_ctx
+                    _title = "⚽ 赛事预测" if _has_quant else "⚽ 赛事数据"
+                    console.print(Panel(
+                        _sports_ctx,
+                        title=f"[bold]{_title}[/bold]",
+                        border_style="cyan" if _has_quant else "blue",
+                    ))
+                else:
+                    console.print(
+                        "[yellow]⚽ 未能找到对应队伍数据。[/yellow]\n"
+                        "请使用格式：[cyan]/football predict 加拿大 vs 波黑 wc[/cyan]"
+                    )
+            else:
+                console.print(f"[red]未知子命令: {sub}[/red]  使用 /football 查看帮助")
+
+    async def _football_predict(self, home: str, away: str, league: str):
+        """Run football match prediction with LLM analysis."""
+        from rich.panel import Panel
+        from rich.table import Table
+        from rich import box as rich_box
+        import types
+
+        console.print(f"[dim]⚽ 分析 {home} vs {away} ({league.upper()})…[/dim]")
+
+        # WC / national team prediction path
+        _wc_leagues = {"wc", "worldcup", "世界杯", "world_cup", "ca", "ec", "afc"}
+        _is_wc = league.lower().replace(" ", "") in _wc_leagues
+
+        if _is_wc:
+            try:
+                from football_data_client import predict_wc_match, _find_fifa_rating
+                raw = predict_wc_match(home, away, neutral_venue=True)
+                # Convert dict to a namespace that matches the FootballAgent pred interface
+                pred = types.SimpleNamespace(
+                    home_win   = raw["home_win"],
+                    draw       = raw["draw"],
+                    away_win   = raw["away_win"],
+                    btts       = raw["btts"],
+                    lambda_home= raw["lambda_home"],
+                    lambda_away= raw["lambda_away"],
+                    most_likely= raw["top_scorelines"][0]["score"] if raw["top_scorelines"] else "1-0",
+                    top_scores = [{"score": s["score"], "prob": s["prob"]} for s in raw["top_scorelines"]],
+                    implied_odds= raw["implied_odds"],
+                    key_factors= [
+                        f"FIFA排名: {raw['home_name_cn']} #{raw['home_ranking']} · {raw['away_name_cn']} #{raw['away_ranking']}",
+                        f"进攻强度: {raw['home_name_cn']} {raw['home_attack']} · {raw['away_name_cn']} {raw['away_attack']}",
+                        f"防守强度: {raw['home_name_cn']} {raw['home_defense']} · {raw['away_name_cn']} {raw['away_defense']}",
+                        f"校准基础: {raw['calibrated_matches']} 场已完赛 WC 数据" if raw['calibrated_matches'] > 0
+                        else "校准基础: FIFA 排名强度估算 (WC 刚开始)",
+                    ],
+                    analysis   = "",
+                    verdict    = (
+                        f"[green]预测: {raw['home_name_cn']} 获胜 ({raw['home_win']:.0%})[/green]" if raw["home_win"] > raw["away_win"] + 0.05
+                        else f"[green]预测: {raw['away_name_cn']} 获胜 ({raw['away_win']:.0%})[/green]" if raw["away_win"] > raw["home_win"] + 0.05
+                        else f"[yellow]预测: 双方势均力敌，平局概率 {raw['draw']:.0%}[/yellow]"
+                    ),
+                )
+            except Exception as exc:
+                console.print(f"[red]WC 预测失败: {exc}[/red]")
+                return
+        else:
+            try:
+                from agents.sports.football_agent import FootballAgent
+
+                agent = FootballAgent(llm_call=None)
+
+                import asyncio
+                pred = await agent.predict(home, away, league, with_llm=False)
+
+                # Try LLM enhancement
+                if hasattr(self, 'terminal') and self.terminal:
+                    try:
+                        llm_prompt = (
+                            f"你是专业足球分析师。简洁分析这场比赛（中文，不超过150字）:\n"
+                            f"{home} vs {away}\n"
+                            f"主队胜: {pred.home_win:.0%}  平: {pred.draw:.0%}  客队胜: {pred.away_win:.0%}\n"
+                            f"预期进球: {pred.lambda_home:.1f} - {pred.lambda_away:.1f}\n"
+                            f"最可能比分: {pred.most_likely}\n"
+                            f"关键因素: {'; '.join(pred.key_factors)}"
+                        )
+                        analysis_text = await asyncio.wait_for(
+                            self.terminal._query_llm_async(llm_prompt),
+                            timeout=30
+                        )
+                        if analysis_text:
+                            pred.analysis = analysis_text
+                    except Exception:
+                        pass
+
+            except Exception as exc:
+                console.print(f"[red]预测失败: {exc}[/red]")
+                return
+
+        # ── display ──────────────────────────────────────────────────────────
+        from rich.columns import Columns
+        from rich.text import Text
+
+        # Probability bars
+        def pct_bar(val: float, width: int = 12) -> str:
+            filled = int(val * width)
+            return "█" * filled + "░" * (width - filled)
+
+        hw_color = "green" if pred.home_win > pred.away_win else "dim"
+        aw_color = "green" if pred.away_win > pred.home_win else "dim"
+        dw_color = "yellow" if pred.draw > 0.28 else "dim"
+
+        prob_table = Table(box=rich_box.SIMPLE, show_header=False, padding=(0, 1))
+        prob_table.add_column("", style="bold", width=16)
+        prob_table.add_column("", width=14)
+        prob_table.add_column("", width=6)
+        prob_table.add_column("", width=8)
+
+        prob_table.add_row(
+            f"[{hw_color}]{home}[/{hw_color}]",
+            f"[{hw_color}]{pct_bar(pred.home_win)}[/{hw_color}]",
+            f"[{hw_color}]{pred.home_win:.0%}[/{hw_color}]",
+            f"[dim]赔率 {pred.implied_odds['home']}[/dim]",
+        )
+        prob_table.add_row(
+            f"[{dw_color}]平局[/{dw_color}]",
+            f"[{dw_color}]{pct_bar(pred.draw)}[/{dw_color}]",
+            f"[{dw_color}]{pred.draw:.0%}[/{dw_color}]",
+            f"[dim]赔率 {pred.implied_odds['draw']}[/dim]",
+        )
+        prob_table.add_row(
+            f"[{aw_color}]{away}[/{aw_color}]",
+            f"[{aw_color}]{pct_bar(pred.away_win)}[/{aw_color}]",
+            f"[{aw_color}]{pred.away_win:.0%}[/{aw_color}]",
+            f"[dim]赔率 {pred.implied_odds['away']}[/dim]",
+        )
+
+        # Top scorelines
+        score_table = Table(box=rich_box.SIMPLE, show_header=True, padding=(0, 2))
+        score_table.add_column("比分", style="bold cyan")
+        score_table.add_column("概率", justify="right")
+        for s in pred.top_scores[:5]:
+            score_table.add_row(s["score"], f"{s['prob']}%")
+
+        title = f"⚽ {home} vs {away}  [{league.upper()}]"
+        console.print(Panel(prob_table, title=f"[bold green]{title}[/bold green]", border_style="green"))
+
+        console.print(f"  [dim]预期进球: {home} {pred.lambda_home:.2f} / {away} {pred.lambda_away:.2f}"
+                      f"  │  最可能比分: [bold]{pred.most_likely}[/bold]"
+                      f"  │  双方均进球: {pred.btts:.0%}[/dim]")
+
+        if pred.key_factors:
+            console.print(f"\n  [dim]近期状态:[/dim]")
+            for f_ in pred.key_factors:
+                console.print(f"  [dim]  • {f_}[/dim]")
+
+        if pred.analysis:
+            console.print(Panel(
+                pred.analysis,
+                title="[bold]AI 分析[/bold]",
+                border_style="dim",
+                padding=(0, 2),
+            ))
+
+        console.print(f"\n  [bold green]{pred.verdict}[/bold green]\n")
+
+    async def cmd_screen(self, args: str):
+        """股票筛选: CN → screen_ashare; US → yfinance 大盘成分筛选."""
+        criteria = args.strip() or ""
+        low = criteria.lower()
+
+        # CN market detection
+        _cn_kw = ("a股", "沪深", "创业板", "科创板", "港股", "cn", "ashare", "沪市", "深市")
+        _is_cn = any(k in low for k in _cn_kw) or any(c.isdigit() for c in criteria[:6])
+
+        if _is_cn:
+            params: Dict[str, Any] = {}
+            for tok in args.split():
+                if "=" in tok:
+                    k, v = tok.split("=", 1)
+                    params[k.strip()] = v.strip()
+            if "screen_ashare" in LOCAL_TOOLS:
+                await self._run_local_tool("screen_ashare", params, "A股选股筛选")
+            else:
+                await self.terminal.send_message(f"帮我筛选A股股票，条件：{criteria or '市值>50亿，非ST，流动性好'}")
+            return
+
+        # US / global: yfinance-based screening on a reference pool
+        import asyncio as _asyncio
+        _loop = _asyncio.get_event_loop()
+
+        _US_POOL = [
+            "AAPL","MSFT","NVDA","GOOGL","AMZN","META","TSLA","BRK-B","JPM","V",
+            "UNH","XOM","JNJ","WMT","MA","PG","LLY","HD","CVX","MRK",
+            "ABBV","PEP","KO","AVGO","COST","BAC","TMO","MCD","ACN","ADBE",
+            "CRM","NFLX","AMD","TXN","QCOM","INTC","CSCO","WFC","PM","VZ",
+            "RTX","HON","AMGN","LIN","DHR","UNP","CAT","SBUX","GS","BA",
+        ]
+
+        # Map common text criteria to filter presets
+        _growth_kw  = ("growth", "成长", "高增速", "tech", "科技", "ai", "人工智能")
+        _value_kw   = ("value", "价值", "低估", "dividend", "分红")
+        _momentum_kw= ("momentum", "动量", "趋势", "breakout", "突破")
+        _is_growth    = any(k in low for k in _growth_kw)
+        _is_value     = any(k in low for k in _value_kw)
+        _is_momentum  = any(k in low for k in _momentum_kw)
+
+        def _fetch_pool():
+            try:
+                import yfinance as _yf
+                tickers = _yf.Tickers(" ".join(_US_POOL))
+                rows = []
+                for sym in _US_POOL:
+                    try:
+                        info = tickers.tickers[sym].fast_info
+                        price     = getattr(info, "last_price", None) or 0
+                        mktcap    = getattr(info, "market_cap", None) or 0
+                        pe        = getattr(info, "pe_ratio", None)
+                        yr_return = getattr(info, "year_change", None)
+                        rows.append({
+                            "symbol": sym, "price": price,
+                            "mktcap": mktcap, "pe": pe,
+                            "yr_return": yr_return,
+                        })
+                    except Exception:
+                        pass
+                return rows
+            except Exception as _e:
+                logger.debug("screen US fetch error: %s", _e)
+                return []
+
+        if HAS_RICH:
+            _status_msg = f"[dim]筛选 {len(_US_POOL)} 只美股 ({criteria or 'top market cap'})…[/dim]"
+            with console.status(_status_msg, spinner="dots"):
+                rows = await _loop.run_in_executor(None, _fetch_pool)
+        else:
+            print("  筛选美股中…")
+            rows = await _loop.run_in_executor(None, _fetch_pool)
+
+        if not rows:
+            await self.terminal.send_message(
+                f"Screen US stocks matching: {criteria or 'large-cap'}. "
+                "Show top 10 with price, P/E, market cap, 1-year return."
+            )
+            return
+
+        # Apply simple filters
+        if _is_growth:
+            rows = [r for r in rows if (r.get("yr_return") or 0) > 0.15]
+        elif _is_value:
+            rows = [r for r in rows if r.get("pe") and 5 < r["pe"] < 20]
+        elif _is_momentum:
+            rows = sorted(rows, key=lambda r: r.get("yr_return") or 0, reverse=True)
+        else:
+            rows = sorted(rows, key=lambda r: r.get("mktcap") or 0, reverse=True)
+
+        rows = rows[:15]
+
+        if not rows:
+            msg = f"[yellow]当前条件 '{criteria}' 无匹配标的（池: {len(_US_POOL)} 只）[/yellow]"
+            console.print(msg) if HAS_RICH else print(msg.replace("[yellow]","").replace("[/yellow]",""))
+            return
+
+        if HAS_RICH:
+            from rich.table import Table as _Tbl
+            t = _Tbl(title=f"美股筛选  {criteria or 'large-cap'}  共 {len(rows)} 只",
+                     show_header=True, box=None, padding=(0, 1))
+            t.add_column("代码",      style="bold", width=8)
+            t.add_column("价格",      justify="right")
+            t.add_column("市值(B$)",  justify="right", style="dim")
+            t.add_column("PE",        justify="right", style="dim")
+            t.add_column("年涨跌%",   justify="right")
+            for r in rows:
+                yr  = r.get("yr_return")
+                yr_s = f"{yr*100:+.1f}%" if yr is not None else "—"
+                yr_color = "green" if (yr or 0) >= 0 else "red"
+                pe_s = f"{r['pe']:.1f}" if r.get("pe") and r["pe"] == r["pe"] else "—"
+                mc_s = f"{r['mktcap']/1e9:.0f}" if (r.get("mktcap") or 0) > 0 else "—"
+                t.add_row(
+                    r["symbol"],
+                    f"{r['price']:.2f}" if r.get("price") else "—",
+                    mc_s, pe_s,
+                    f"[{yr_color}]{yr_s}[/{yr_color}]",
+                )
+            console.print(t)
+            console.print(f"  [dim]来源: yfinance · 池: {len(_US_POOL)} 只大市值美股[/dim]")
+        else:
+            print(f"  美股筛选  {criteria}")
+            for r in rows:
+                yr = r.get("yr_return")
+                yr_s = f"{yr*100:+.1f}%" if yr is not None else "—"
+                print(f"  {r['symbol']:<8} ${r.get('price',0):.2f}  {yr_s}")
+
+    async def cmd_news(self, args: str):
+        """Fetch latest financial news for a topic or symbol.
+
+        Usage: /news [topic|symbol] [--limit N]
+        Examples:
+          /news AAPL
+          /news earnings --limit 10
+          /news crypto --limit 3
+        """
+        parts = args.split()
+        limit = 5
+        topic_parts = []
+        i = 0
+        while i < len(parts):
+            if parts[i] == "--limit" and i + 1 < len(parts):
+                try:
+                    limit = max(1, min(20, int(parts[i + 1])))
+                    i += 2
+                    continue
+                except ValueError:
+                    pass
+            topic_parts.append(parts[i])
+            i += 1
+        topic = " ".join(topic_parts) or "market"
+
+        console.print(f"[dim]Fetching {limit} news items for '{topic}'...[/dim]" if HAS_RICH
+                      else f"Fetching news for {topic}...")
+
+        # Try backend first, then local tools (Finnhub / NewsAPI / AKShare fallback chain)
+        result = await execute_aria_tool(self.terminal.api_url, "analyze_news", {
+            "query": topic, "limit": limit,
+        })
+        if not result.get("success") and "analyze_news" in LOCAL_TOOLS:
+            # Local fallback: uses Finnhub → NewsAPI → AKShare depending on configured keys
+            local_fn = LOCAL_TOOLS["analyze_news"][0]
+            result = await asyncio.get_event_loop().run_in_executor(
+                None, local_fn, {"query": topic, "symbol": topic, "limit": limit}
+            )
+        if result.get("success"):
+            data = result.get("data", {})
+            articles = data.get("articles", data.get("news", data if isinstance(data, list) else []))
+            sentiment = data.get("sentiment", data.get("overall_sentiment", "")) if isinstance(data, dict) else ""
+            if isinstance(articles, list) and articles:
+                if HAS_RICH:
+                    console.print()
+                    if sentiment:
+                        sent_color = "green" if "positive" in sentiment.lower() or "bullish" in sentiment.lower() else (
+                            "red" if "negative" in sentiment.lower() or "bearish" in sentiment.lower() else "yellow"
+                        )
+                        console.print(f"  Sentiment: [{sent_color}]{sentiment}[/{sent_color}]")
+                        console.print()
+                for idx, a in enumerate(articles[:limit], 1):
+                    if isinstance(a, dict):
+                        title = a.get("title", "Untitled")
+                        source = a.get("source", a.get("publisher", ""))
+                        url_item = a.get("url", a.get("link", ""))
+                        pub_date = a.get("published_at", a.get("date", a.get("publishedAt", "")))
+                        if pub_date:
+                            pub_date = pub_date[:10] if len(pub_date) >= 10 else pub_date
+                    else:
+                        title = str(a)
+                        source = pub_date = url_item = ""
+                    if HAS_RICH:
+                        console.print(f"  [bold]{idx}.[/bold] {title}")
+                        meta_parts = [p for p in [source, pub_date] if p]
+                        if meta_parts:
+                            console.print(f"     [dim]{' · '.join(meta_parts)}[/dim]")
+                    else:
+                        meta = f" ({source})" if source else ""
+                        print(f"  {idx}. {title}{meta}")
+                if HAS_RICH:
+                    console.print()
+            else:
+                # Empty articles — show helpful config guidance
+                _data_keys = _load_data_keys()
+                if HAS_RICH:
+                    console.print()
+                    console.print(f"  [dim]未找到 '{topic}' 的相关新闻。[/dim]")
+                    if not _data_keys.get("finnhub") and not _data_keys.get("newsapi"):
+                        console.print("  [dim]配置数据服务 key 可获取更多新闻来源：[/dim]")
+                        console.print("  [dim]  /apikey set finnhub <key>   →  https://finnhub.io/register[/dim]")
+                        console.print("  [dim]  /apikey set newsapi <key>   →  https://newsapi.org/register[/dim]")
+                    console.print()
+        else:
+            # Backend + all local fallbacks unavailable — show actionable config guide
+            err = result.get("error", "")
+            _data_keys = _load_data_keys()
+            _has_finnhub = bool(_data_keys.get("finnhub"))
+            _has_newsapi = bool(_data_keys.get("newsapi"))
+            if HAS_RICH:
+                console.print()
+                console.print(f"  [yellow]⚠ 新闻服务不可用[/yellow]")
+                if not _has_finnhub and not _has_newsapi:
+                    console.print("  [dim]配置以下任意一个数据服务 key 即可获取新闻：[/dim]")
+                    console.print("  [dim]  Finnhub  (免费60次/分) → /apikey set finnhub <key>   注册: https://finnhub.io/register[/dim]")
+                    console.print("  [dim]  NewsAPI  (免费100次/天) → /apikey set newsapi <key>   注册: https://newsapi.org/register[/dim]")
+                else:
+                    console.print(f"  [dim]错误: {err[:120] if err else '获取失败'}[/dim]")
+                console.print(f"  [dim]或使用: /web {topic} latest news — 通过 Brave 搜索[/dim]")
+                console.print()
+            else:
+                print(f"  News unavailable. Configure: /apikey set finnhub <key>")
+
+    async def cmd_quote(self, args: str):
+        symbols = parse_symbols(args, self.terminal.config.get("watchlist", ["AAPL"]))
+
+        # 优先使用 MarketDataClient（真实实时数据，代理绕过）
+        if _HAS_MDC:
+            mdc = _get_mdc()
+            if HAS_RICH:
+                console.print()
+            for symbol in symbols:
+                if HAS_RICH:
+                    with console.status(f"[dim]{symbol}...[/dim]", spinner="dots"):
+                        loop = asyncio.get_event_loop()
+                        r = await loop.run_in_executor(None, mdc.quote, symbol)
+                else:
+                    r = mdc.quote(symbol)
+
+                if r.get("success"):
+                    name    = r.get("name", symbol)
+                    # Supplement Chinese name for A-shares where yfinance returns ASCII
+                    if _is_ashare_symbol(symbol) and (not name or name == symbol or name.replace(" ","").isascii()):
+                        _cn = _ashare_code_to_name(symbol)
+                        if _cn:
+                            name = _cn
+                    print_quote_result(console=console, has_rich=HAS_RICH, symbol=symbol, quote=r, name=name)
+                else:
+                    print_quote_result(console=console, has_rich=HAS_RICH, symbol=symbol, quote=r)
+            if HAS_RICH:
+                console.print()
+            return
+
+        # Fallback：原有 Aria 工具
+        for symbol in symbols:
+            if HAS_RICH:
+                with console.status(f"[dim]Fetching {symbol}...[/dim]", spinner="dots"):
+                    result = await execute_aria_tool(self.terminal.api_url, "get_market_data", {
+                        "symbol": symbol, "market": "US", "period": "1mo"
+                    })
+            else:
+                print(f"Fetching {symbol}...")
+                result = await execute_aria_tool(self.terminal.api_url, "get_market_data", {
+                    "symbol": symbol, "market": "US", "period": "1mo"
+                })
+            if not result:
+                _print_error(f"{symbol}: 数据服务不可用（API未运行）", "tool")
+                continue
+            if result.get("success") and result.get("data"):
+                output = format_quote_output(result)
+                console.print(output)
+            else:
+                _print_error(f"Failed: {result.get('error', 'No data')}")
+
+    async def cmd_screen_cn(self, args: str):
+        """A股选股筛选器 (local, akshare)."""
+        params: Dict[str, Any] = {}
+        for tok in args.split():
+            if "=" in tok:
+                k, v = tok.split("=", 1)
+                params[k.strip()] = v.strip()
+        tool_name = "screen_ashare"
+        if tool_name in LOCAL_TOOLS:
+            await self._run_local_tool(tool_name, params, "A股选股筛选")
+        else:
+            await self.terminal.send_message(f"帮我筛选A股股票，条件：{args or '市值>50亿，非ST，流动性好'}")
+
+    async def cmd_limitup(self, args: str):
+        """A股涨停板池.  Usage: /limitup [YYYY-MM-DD] [code_filter]"""
+        import re as _re_lu
+        arg = args.strip()
+
+        # Detect if arg looks like a stock code (6 digits) vs a date
+        _is_code  = bool(_re_lu.match(r'^[036]\d{5}$', arg))
+        _is_date  = bool(_re_lu.match(r'^\d{4}-\d{2}-\d{2}$', arg))
+        _code_filter = arg if _is_code else None
+        _date_arg    = arg if _is_date else ""
+        params = {"date": _date_arg} if _date_arg else {}
+
+        tool_name = "get_limit_up_pool"
+        if tool_name in LOCAL_TOOLS:
+            await self._run_local_tool(tool_name, params, "涨停板池")
+        else:
+            # Direct akshare fallback — avoids "A股" keyword triggering market snapshot routing
+            try:
+                import akshare as ak
+                from datetime import date as _dt
+                _date_str = (_date_arg.replace("-", "") if _date_arg
+                             else _dt.today().strftime("%Y%m%d"))
+                _df = ak.stock_zt_pool_em(date=_date_str)
+                if _df is not None and not _df.empty:
+                    if _code_filter:
+                        _col = next((c for c in _df.columns if "代码" in str(c) or c == "code"), None)
+                        if _col:
+                            _df = _df[_df[_col].astype(str) == _code_filter]
+                    _count = len(_df)
+                    if HAS_RICH:
+                        from rich.table import Table
+                        _date_label = _date_arg or _dt.today().isoformat()
+                        tbl = Table(title=f"涨停板池 · {_date_label} · {_count}只", show_header=True, header_style="bold")
+                        _col_map = {"代码": "代码", "名称": "名称", "涨停统计": "涨停统计",
+                                    "连续涨停": "连板", "首次封板时间": "首封", "涨停类型": "类型"}
+                        _show_cols = [c for c in _df.columns if c in _col_map]
+                        for c in _show_cols:
+                            tbl.add_column(_col_map.get(c, c), no_wrap=True)
+                        for _, row in _df.head(30).iterrows():
+                            tbl.add_row(*[str(row[c]) for c in _show_cols])
+                        console.print(tbl)
+                    else:
+                        print(f"涨停板池 {_count}只")
+                        for _, row in _df.head(20).iterrows():
+                            print(f"  {row.get('代码','')} {row.get('名称','')}")
+                    return
+            except Exception as _e:
+                pass
+            if HAS_RICH:
+                console.print("[yellow]akshare 暂不可用，涨停板池无法获取[/yellow]")
+            else:
+                print("akshare unavailable, cannot fetch limit-up pool")
+
+    async def cmd_north(self, args: str):
+        """北向资金净流入."""
+        params = {"days": int(args.strip())} if args.strip().isdigit() else {"days": 10}
+        tool_name = "get_northbound_flow"
+        if tool_name in LOCAL_TOOLS:
+            await self._run_local_tool(tool_name, params, "北向资金")
+        else:
+            await self.terminal.send_message("查询最近10天北向资金（沪深港通）净买入情况")
+

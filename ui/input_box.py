@@ -17,11 +17,10 @@ from typing import Callable, Optional
 
 from prompt_toolkit.application import Application
 from prompt_toolkit.buffer import Buffer
-from prompt_toolkit.completion import ConditionalCompleter
-from prompt_toolkit.filters import Condition
 from prompt_toolkit.key_binding import KeyBindings
-from prompt_toolkit.layout import HSplit, Layout, Window
+from prompt_toolkit.layout import Float, FloatContainer, HSplit, Layout, Window
 from prompt_toolkit.layout.controls import FormattedTextControl
+from prompt_toolkit.layout.menus import CompletionsMenu
 from prompt_toolkit.layout.processors import Processor, Transformation
 from prompt_toolkit.styles import Style
 from prompt_toolkit.widgets import TextArea
@@ -241,23 +240,11 @@ def run_panel_input(
         except Exception:
             return ""
 
-    # Only auto-complete when the buffer starts with "/" — avoids triggering
-    # the completion menu on every chat message.
-    _slash_completer = None
-    if completer is not None:
-        @Condition
-        def _is_slash_input() -> bool:
-            try:
-                return text_area.text.lstrip().startswith("/")
-            except Exception:
-                return False
-        _slash_completer = ConditionalCompleter(completer, _is_slash_input)
-
     text_area = TextArea(
         height=1,
         multiline=False,
         wrap_lines=False,
-        completer=_slash_completer,
+        completer=completer,
         complete_while_typing=True,
         history=history,
         prompt="",
@@ -282,16 +269,25 @@ def run_panel_input(
     def _shift_tab(event) -> None:
         event.app.current_buffer.complete_previous()
 
-    root = HSplit([
-        # Divider: transparent bg, dim ─── line
-        Window(height=1,
-               content=FormattedTextControl(lambda: _divider(cfg), focusable=False)),
-        # Input: intentional #1a1a1a bg (Codex-style zone definition)
-        text_area,
-        # Status bar: transparent bg, dim model · cwd
-        Window(height=1,
-               content=FormattedTextControl(lambda: _status_bar(cfg), focusable=False)),
-    ])
+    root = FloatContainer(
+        content=HSplit([
+            # Divider: transparent bg, dim ─── line
+            Window(height=1,
+                   content=FormattedTextControl(lambda: _divider(cfg), focusable=False)),
+            # Input: intentional #1a1a1a bg (Codex-style zone definition)
+            text_area,
+            # Status bar: transparent bg, dim model · cwd
+            Window(height=1,
+                   content=FormattedTextControl(lambda: _status_bar(cfg), focusable=False)),
+        ]),
+        floats=[
+            Float(
+                xcursor=True,
+                ycursor=True,
+                content=CompletionsMenu(max_height=12, scroll_offset=2),
+            )
+        ],
+    )
 
     app: Application = Application(
         layout=Layout(root, focused_element=text_area),

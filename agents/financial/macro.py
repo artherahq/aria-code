@@ -52,7 +52,7 @@ class MacroAgent(BaseAgent):
             "Conclusion: TAILWIND / NEUTRAL / HEADWIND"
         )
 
-        analysis = await self._call_llm(self._SYSTEM, prompt, max_tokens=500)
+        analysis = await self._call_llm(self._SYSTEM, prompt, max_tokens=500, quote=quote)
         if not analysis:
             analysis = _template_macro(symbol, indices)
 

@@ -59,7 +59,7 @@ class RiskAgent(BaseAgent):
             "Output format: Risk Score: X/10\nPOSITION: Y%"
         )
 
-        analysis  = await self._call_llm(self._SYSTEM, prompt, max_tokens=400)
+        analysis  = await self._call_llm(self._SYSTEM, prompt, max_tokens=400, quote=quote)
         if not analysis:
             analysis = _template_risk(symbol, metrics)
 

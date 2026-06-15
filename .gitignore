@@ -2,14 +2,31 @@
 .env
 .env.*
 !.env.example
+!.env.daemon.template
 *.env
 *.pem
 *.key
+*.p8
 *.p12
 *.pfx
+*.crt
+*.cer
 .certs/
 secrets/
 providers.json
+brokers.json
+credentials.json
+*.token
+*.secret
+
+# ── User-specific config (never commit) ───────────────────────────────────────
+.ariarc
+.ariarc.json
+config/providers.yaml
+config/providers.yml
+config/mcp_servers.json
+config/datasources.yaml
+config/datasources.yml
 
 # ── Python ────────────────────────────────────────────────────────────────────
 __pycache__/
@@ -66,3 +83,18 @@ Thumbs.db
 # ── Backup files ──────────────────────────────────────────────────────────────
 *.bak
 *.orig
+
+# ── ML models & trained data (large binary files) ─────────────────────────────
+*.pkl
+*.joblib
+*.pt
+*.pth
+*.onnx
+*.h5
+*.parquet
+
+# ── Local runtime state ───────────────────────────────────────────────────────
+*.log
+*.pid
+*.lock
+nohup.out

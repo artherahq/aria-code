@@ -67,6 +67,15 @@ def _load_api_key() -> str:
                         break
             if key:
                 break
+    if not key:
+        try:
+            import json as _json
+            _p = Path.home() / ".arthera" / "providers.json"
+            if _p.exists():
+                _raw = _json.loads(_p.read_text(encoding="utf-8"))
+                key = _raw.get("data", {}).get("fred", {}).get("api_key", "")
+        except Exception:
+            pass
     return key
 
 
@@ -121,24 +130,19 @@ class FREDSource(BaseDataSource):
         symbol: str,
         days: int = 365,
         interval: str = "1d",
+        _timeout: int = 12,
     ) -> Optional[HistoryResult]:
         try:
             import pandas as pd
-            import urllib.request
+            import urllib.request, json
 
             series_id = self._resolve_series(symbol)
             start = (date.today() - timedelta(days=days)).strftime("%Y-%m-%d")
             end   = date.today().strftime("%Y-%m-%d")
 
-            if self._api_key:
-                url = (
-                    f"{_FRED_API}/series/observations?series_id={series_id}"
-                    f"&observation_start={start}&observation_end={end}"
-                    f"&api_key={self._api_key}&file_type=json"
-                )
+            def _parse_api(url: str) -> Optional[pd.DataFrame]:
                 req = urllib.request.Request(url, headers={"User-Agent": "aria-code/1.0"})
-                with urllib.request.urlopen(req, timeout=10) as resp:
-                    import json
+                with urllib.request.urlopen(req, timeout=_timeout) as resp:
                     data = json.loads(resp.read())
                 obs = data.get("observations", [])
                 rows = []
@@ -149,22 +153,46 @@ class FREDSource(BaseDataSource):
                         pass
                 if not rows:
                     return None
-                df = pd.DataFrame(rows)
-                df["date"] = pd.to_datetime(df["date"])
-                df = df.set_index("date").sort_index()
-            else:
-                url = (
+                _df = pd.DataFrame(rows)
+                _df["date"] = pd.to_datetime(_df["date"])
+                return _df.set_index("date").sort_index()
+
+            def _parse_csv(url: str) -> Optional[pd.DataFrame]:
+                req = urllib.request.Request(url, headers={"User-Agent": "aria-code/1.0"})
+                with urllib.request.urlopen(req, timeout=_timeout) as resp:
+                    _df = pd.read_csv(resp, parse_dates=["DATE"], index_col="DATE")
+                _df.columns = ["close"]
+                _df = _df.replace(".", float("nan")).dropna()
+                _df["close"] = _df["close"].astype(float)
+                return _df if not _df.empty else None
+
+            df = None
+
+            # 优先使用 JSON API（有 key 速率更高）
+            if self._api_key:
+                api_url = (
+                    f"{_FRED_API}/series/observations?series_id={series_id}"
+                    f"&observation_start={start}&observation_end={end}"
+                    f"&api_key={self._api_key}&file_type=json"
+                )
+                try:
+                    df = _parse_api(api_url)
+                except Exception as _e1:
+                    logger.debug(f"[fred] JSON API 失败，尝试 CSV: {_e1}")
+
+            # 回落：免费 CSV 下载接口（无需 key，但国内可能超时）
+            if df is None:
+                csv_url = (
                     f"{_FRED_BASE}{series_id}"
-                    f"&vintage_date={end}"
                     f"&cosd={start}&coed={end}"
                 )
-                req = urllib.request.Request(url, headers={"User-Agent": "aria-code/1.0"})
-                with urllib.request.urlopen(req, timeout=10) as resp:
-                    df = pd.read_csv(resp, parse_dates=["DATE"], index_col="DATE")
-                df.columns = ["close"]
-                df = df.replace(".", float("nan")).dropna()
-                df["close"] = df["close"].astype(float)
+                try:
+                    df = _parse_csv(csv_url)
+                except Exception as _e2:
+                    logger.debug(f"[fred] CSV 也失败: {_e2}")
 
+            if df is None:
+                return None
             return HistoryResult(symbol=symbol, data=df, source=self.name, interval="1d")
         except Exception as e:
             logger.debug(f"[fred] history {symbol} 失败: {e}")

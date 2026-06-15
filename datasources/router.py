@@ -29,6 +29,7 @@ from .base import (
 from .sources import (
     AkshareSource, YFinanceSource, TushareSource,
     FREDSource, EDGARSource, AlphaVantageSource, WorldBankSource,
+    FinnhubSource, WebScraperSource,
 )
 
 logger = logging.getLogger(__name__)
@@ -37,11 +38,13 @@ logger = logging.getLogger(__name__)
 _SOURCE_REGISTRY: Dict[str, Type[BaseDataSource]] = {
     "akshare":       AkshareSource,
     "yfinance":      YFinanceSource,
+    "finnhub":       FinnhubSource,
     "tushare":       TushareSource,
     "fred":          FREDSource,
     "edgar":         EDGARSource,
     "alpha_vantage": AlphaVantageSource,
     "world_bank":    WorldBankSource,
+    "web_scraper":   WebScraperSource,
 }
 
 
@@ -53,11 +56,13 @@ def register_datasource(name: str, cls: Type[BaseDataSource]) -> None:
 
 # ── 默认优先级链 ──────────────────────────────────────────────────────────────
 _DEFAULT_CHAINS: Dict[str, List[str]] = {
-    "a_share": ["tushare", "akshare"],
-    "us":      ["yfinance", "alpha_vantage", "edgar"],
-    "hk":      ["yfinance"],
-    "crypto":  ["yfinance"],
-    "macro":   ["fred", "world_bank"],
+    "a_share":   ["tushare", "akshare"],
+    "us":        ["yfinance", "finnhub", "alpha_vantage", "edgar"],
+    "hk":        ["yfinance", "finnhub", "akshare"],
+    "crypto":    ["yfinance"],
+    "macro":     ["fred", "world_bank"],
+    "forex":     ["alpha_vantage", "yfinance"],
+    "commodity": ["alpha_vantage"],
 }
 
 # ── 配置文件路径 ──────────────────────────────────────────────────────────────

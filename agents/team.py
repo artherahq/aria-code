@@ -50,13 +50,17 @@ class AgentTeam:
         data_router=None,
         on_token: Optional[Callable[[str], None]] = None,
         on_agent_done: Optional[Callable[[str, AgentResult], None]] = None,
+        on_synthesis_start: Optional[Callable[[List["AgentResult"]], None]] = None,
         timeout_per_agent: float = 60.0,
+        lang: str = "zh",
     ):
-        self.llm              = llm_provider
-        self.data             = data_router
-        self.on_token         = on_token
-        self.on_agent_done    = on_agent_done
-        self.timeout          = timeout_per_agent
+        self.llm                = llm_provider
+        self.data               = data_router
+        self.on_token           = on_token
+        self.on_agent_done      = on_agent_done
+        self.on_synthesis_start = on_synthesis_start
+        self.timeout            = timeout_per_agent
+        self.lang               = lang
 
     def _build_agent(self, name: str) -> Optional[BaseAgent]:
         registry = get_registry()
@@ -68,6 +72,7 @@ class AgentTeam:
             llm_provider=self.llm,
             data_router=self.data,
             on_token=self.on_token,
+            lang=self.lang,
         )
 
     async def _run_one(self, agent: BaseAgent, symbol: str) -> AgentResult:
@@ -94,8 +99,8 @@ class AgentTeam:
         names_to_run = agents or DEFAULT_TEAM
         t0 = time.time()
 
-        # 过滤掉 synthesis（最后单独跑）
-        regular = [n for n in names_to_run if n != "synthesis"]
+        # 过滤掉 synthesis 和 debate（各自在并行批次后单独运行）
+        regular = [n for n in names_to_run if n not in ("synthesis", "debate")]
         agent_objects = [a for n in regular if (a := self._build_agent(n))]
 
         if not agent_objects:
@@ -104,9 +109,44 @@ class AgentTeam:
                 error="no_agents_available"
             )
 
-        # 并行执行
+        # 并行执行 — return_exceptions=True 确保单个 agent 异常不取消其余 agent
         tasks   = [self._run_one(a, symbol) for a in agent_objects]
-        results = await asyncio.gather(*tasks, return_exceptions=False)
+        _raw    = await asyncio.gather(*tasks, return_exceptions=True)
+        results: List[AgentResult] = []
+        for _item, _agent in zip(_raw, agent_objects):
+            if isinstance(_item, BaseException):
+                logger.warning("[%s] 意外异常: %s", _agent.name, _item)
+                results.append(AgentResult(
+                    agent=_agent.name, symbol=symbol,
+                    analysis="", confidence=0.0,
+                    error=f"exception: {type(_item).__name__}: {_item}",
+                ))
+            else:
+                results.append(_item)
+
+        # DebateAgent — 显式请求 OR 信号冲突时自动触发
+        explicit_debate = "debate" in names_to_run
+        if explicit_debate or _needs_debate(results):
+            debate_agent = self._build_agent("debate")
+            if debate_agent:
+                debate_data = {"conflicting": [r.to_dict() for r in results if r.success]}
+                try:
+                    debate_result = await asyncio.wait_for(
+                        debate_agent.analyze(symbol, debate_data),
+                        timeout=self.timeout,
+                    )
+                    results.append(debate_result)
+                    logger.info("[debate] %s 信号冲突已调解", symbol)
+                except Exception as e:
+                    logger.warning("[debate] 调解失败: %s", e)
+
+        # Fire on_synthesis_start callback so callers can print the agent table
+        # before synthesis begins streaming tokens.
+        if self.on_synthesis_start:
+            try:
+                self.on_synthesis_start(list(results))
+            except Exception:
+                pass
 
         # synthesis — 把 agent 结果打包进 data，直接调 analyze() 而非 run()
         synthesis_text = ""
@@ -155,6 +195,8 @@ async def run_team(
     data_router=None,
     on_token: Optional[Callable] = None,
     on_agent_done: Optional[Callable] = None,
+    on_synthesis_start: Optional[Callable] = None,
+    lang: str = "zh",
 ) -> TeamResult:
     """
     便捷函数，替代原 financial_agents.run_team_analysis()。
@@ -169,11 +211,21 @@ async def run_team(
         data_router=data_router,
         on_token=on_token,
         on_agent_done=on_agent_done,
+        on_synthesis_start=on_synthesis_start,
+        lang=lang,
     )
     return await team.run(symbol, agents=agents)
 
 
 # ── 内部工具 ──────────────────────────────────────────────────────────────────
+
+def _needs_debate(results: List[AgentResult]) -> bool:
+    """当出现真实多空分歧（至少1个BUY + 1个SELL）时返回 True。"""
+    signals = [r.signal for r in results if r.success and r.signal]
+    bullish = sum(1 for s in signals if s in ("BUY", "STRONG_BUY"))
+    bearish = sum(1 for s in signals if s in ("SELL", "STRONG_SELL"))
+    return bullish >= 1 and bearish >= 1
+
 
 def _vote_signal(results: List[AgentResult]) -> tuple:
     """多数表决最终信号"""
@@ -203,13 +255,20 @@ def _template_synthesis(results: List[AgentResult]) -> str:
     if not results:
         return "分析完成，无结果。"
     lines = ["## 团队分析汇总\n"]
+    failed_count = sum(1 for r in results if not r.success)
+    if failed_count:
+        lines.append(f"> ⚠️ {failed_count}/{len(results)} 个 agent 未能完成分析"
+                     f"（超时或 LLM 不可用），以下结论仅基于成功的 agent。\n")
     for r in results:
         if r.success:
             lines.append(f"**{r.agent.upper()}** ({r.signal}, 置信度 {r.confidence:.0%})")
             for pt in (r.key_points or [])[:3]:
                 lines.append(f"  • {pt}")
         else:
-            lines.append(f"**{r.agent.upper()}** ⚠️ {r.error or '分析失败'}")
+            err_label = "超时" if r.error == "timeout" else (r.error or "分析失败")
+            lines.append(f"**{r.agent.upper()}** ⚠️ {err_label}")
     signal, conf = _vote_signal(results)
     lines.append(f"\n**综合结论**: {signal}（置信度 {conf:.0%}）")
+    if failed_count == len(results):
+        lines.append("\n> ⚠️ 所有 agent 均未成功，此结论仅为默认值，不具参考意义。请确认 LLM 服务正常后重试。")
     return "\n".join(lines)

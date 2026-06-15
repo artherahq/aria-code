@@ -1,0 +1,19 @@
+# Dockerfile.relay — Aria 中继服务器
+# 用于 docker compose up relay-server
+
+FROM python:3.11-slim
+
+WORKDIR /relay
+
+RUN apt-get update && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir fastapi uvicorn[standard] websockets httpx
+
+COPY aria_relay_server.py .
+
+ENV PYTHONUNBUFFERED=1
+
+EXPOSE 8765
+
+CMD ["python3", "aria_relay_server.py"]

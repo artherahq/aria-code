@@ -1,0 +1,203 @@
+"""
+memory_manager.py — Aria Code 全局用户 memory 系统
+
+存储位置：~/.arthera/memory/
+  MEMORY.md                ← 索引（每次启动加载）
+  user_profile.md          ← 用户偏好、交易风格
+  project_<slug>.md        ← /project load 时自动建档
+  research_<topic>.md      ← 研究主题（用户触发时创建）
+
+公开 API：
+  MemoryManager.load_context(max_chars)  → 注入 system prompt
+  MemoryManager.append(slug, content)    → 追加一条事实
+  MemoryManager.upsert_project(name, facts) → 项目建档
+  MemoryManager.list_all()               → 所有条目
+  MemoryManager.clear_all()              → 清空全局 memory
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import re
+from datetime import datetime
+from pathlib import Path
+from typing import Optional
+
+logger = logging.getLogger(__name__)
+
+_MEMORY_DIR = Path.home() / ".arthera" / "memory"
+_INDEX_FILE = _MEMORY_DIR / "MEMORY.md"
+
+_PREF_PATTERNS = [
+    (r"(我?不喜欢|我?喜欢|prefer(?:ence)?s?|I always|I never|我总是|我通常)", "preference"),
+    (r"(我的风险|风险偏好|risk.*(?:低|高|中|保守|激进)|conservative|aggressive)", "risk_profile"),
+    (r"(?:关注|研究|在看|tracking|watching)\s+([A-Z]{1,5}|[0-9]{6})", "watchlist"),
+    (r"(我的策略|my strategy|我用|I use)\s+(.{4,40})", "strategy"),
+]
+
+_SENSITIVE_PATTERN = re.compile(
+    r"(\d+[\.,]\d{2,}(?:%|元|USD|HKD|CNY|万|亿)?|持仓|盈亏|亏损|盈利|买入|卖出|成本价)"
+)
+
+
+def _slugify(name: str) -> str:
+    name = re.sub(r"[^\w\-]", "_", name.lower())
+    return re.sub(r"_+", "_", name).strip("_")[:40]
+
+
+class MemoryManager:
+    def __init__(self, root: Optional[Path] = None):
+        self.root = root or _MEMORY_DIR
+        self.root.mkdir(parents=True, exist_ok=True)
+        self._index = self.root / "MEMORY.md"
+
+    # ── Index management ──────────────────────────────────────────────────────
+
+    def _read_index(self) -> list[dict]:
+        if not self._index.exists():
+            return []
+        entries = []
+        for line in self._index.read_text(encoding="utf-8").splitlines():
+            m = re.match(r"-\s+\[(.+?)\]\((.+?)\)\s*—\s*(.*)", line)
+            if m:
+                entries.append({"title": m.group(1), "file": m.group(2), "summary": m.group(3)})
+        return entries
+
+    def _write_index(self, entries: list[dict]) -> None:
+        lines = ["# Aria Memory Index\n"]
+        for e in entries:
+            lines.append(f"- [{e['title']}]({e['file']}) — {e['summary']}")
+        self._index.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def _upsert_index(self, file: str, title: str, summary: str) -> None:
+        entries = self._read_index()
+        for e in entries:
+            if e["file"] == file:
+                e["title"] = title
+                e["summary"] = summary
+                self._write_index(entries)
+                return
+        entries.append({"title": title, "file": file, "summary": summary})
+        self._write_index(entries)
+
+    # ── Public API ────────────────────────────────────────────────────────────
+
+    def load_context(self, max_chars: int = 500) -> str:
+        """Return a compact memory block for injection into the system prompt."""
+        if not self._index.exists():
+            return ""
+        snippets = []
+        for entry in self._read_index():
+            fpath = self.root / entry["file"]
+            if not fpath.exists():
+                continue
+            text = fpath.read_text(encoding="utf-8").strip()
+            lines = [l for l in text.splitlines() if l.strip() and not l.startswith("#")]
+            snippets.extend(lines[:6])
+
+        if not snippets:
+            return ""
+
+        block = "\n".join(snippets)
+        if len(block) > max_chars:
+            block = block[:max_chars] + "…"
+        return f"## User Memory\n{block}\n"
+
+    def append(self, slug: str, content: str, title: Optional[str] = None) -> None:
+        """Append a fact to slug.md, creating the file if needed."""
+        if _SENSITIVE_PATTERN.search(content):
+            logger.debug("Memory: skipping sensitive content: %s…", content[:40])
+            return
+
+        slug = _slugify(slug)
+        fpath = self.root / f"{slug}.md"
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+        if not fpath.exists():
+            _title = title or slug.replace("_", " ").title()
+            fpath.write_text(f"# {_title}\n\n", encoding="utf-8")
+            self._upsert_index(fpath.name, _title, content[:80])
+
+        with fpath.open("a", encoding="utf-8") as f:
+            f.write(f"- [{ts}] {content}\n")
+
+        entry = next((e for e in self._read_index() if e["file"] == fpath.name), None)
+        if entry:
+            entry["summary"] = content[:80]
+            self._write_index(self._read_index())
+
+        logger.debug("Memory: appended to %s: %s", fpath.name, content[:60])
+
+    def upsert_project(self, name: str, facts: dict) -> None:
+        """Create or refresh a project memory file."""
+        slug = f"project_{_slugify(name)}"
+        fpath = self.root / f"{slug}.md"
+        langs = ", ".join(facts.get("languages", [])[:4]) or "unknown"
+        ptype = facts.get("type", "unknown")
+        root  = facts.get("root", "")
+        ts    = facts.get("last_loaded", datetime.now().isoformat())[:10]
+        syms  = ", ".join(facts.get("default_symbols", [])[:5])
+
+        lines = [
+            f"# Project: {name}",
+            f"",
+            f"- **type**: {ptype}",
+            f"- **languages**: {langs}",
+            f"- **root**: {root}",
+            f"- **last loaded**: {ts}",
+        ]
+        if syms:
+            lines.append(f"- **default symbols**: {syms}")
+
+        fpath.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        summary = f"{ptype} · {langs} · last {ts}"
+        self._upsert_index(fpath.name, f"Project: {name}", summary)
+        logger.debug("Memory: upserted project %s", name)
+
+    def list_all(self) -> list[dict]:
+        """Return all memory entries with their file content."""
+        result = []
+        for entry in self._read_index():
+            fpath = self.root / entry["file"]
+            content = fpath.read_text(encoding="utf-8").strip() if fpath.exists() else ""
+            result.append({**entry, "content": content})
+        return result
+
+    def clear_all(self) -> int:
+        """Delete all memory files and reset the index. Returns count deleted."""
+        count = 0
+        for fpath in self.root.glob("*.md"):
+            if fpath.name != "MEMORY.md":
+                fpath.unlink()
+                count += 1
+        self._index.write_text("# Aria Memory Index\n", encoding="utf-8")
+        return count
+
+    def fact_count(self) -> int:
+        return len(self._read_index())
+
+
+# ── Preference signal extractor (rule-based, zero LLM cost) ──────────────────
+
+def extract_preference_signal(user_msg: str, assistant_response: str) -> Optional[str]:
+    """
+    Detect if a user message contains a preference signal worth persisting.
+    Returns a single-line fact string, or None if nothing notable.
+    Deliberately conservative — most queries return None.
+    """
+    if len(assistant_response) < 30:
+        return None
+
+    combined = (user_msg + " " + assistant_response[:300]).strip()
+
+    if _SENSITIVE_PATTERN.search(user_msg):
+        return None
+
+    for pattern, category in _PREF_PATTERNS:
+        m = re.search(pattern, user_msg, re.IGNORECASE)
+        if m:
+            snippet = user_msg[:120].strip().replace("\n", " ")
+            return f"[{category}] {snippet}"
+
+    return None

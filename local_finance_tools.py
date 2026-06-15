@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import traceback
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
@@ -875,21 +876,26 @@ def _get_sector_performance(params: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 def _get_northbound_flow(params: dict) -> dict:
-    days = int(params.get("days", 10))
     if not _HAS_AK:
         return {"success": False, "error": "akshare not installed"}
     try:
-        df = ak.stock_hsgt_north_net_flow_in_em(symbol="沪深港通")
-        df = df.tail(days)
-        latest_flow = float(df.iloc[-1].get("当日净买额", df.iloc[-1].iloc[1]))
-        total_flow  = float(df.iloc[:, 1].sum())
+        # stock_hsgt_fund_flow_summary_em returns today's 沪深港通 summary.
+        # 成交净买额 is already in 亿元 — no further scaling needed.
+        df = ak.stock_hsgt_fund_flow_summary_em()
+        north = df[df["资金方向"] == "北向"]
+        if north.empty:
+            return {"success": False, "error": "No northbound data in response"}
+        sh_flow = float(north[north["板块"] == "沪股通"]["成交净买额"].sum())
+        sz_flow = float(north[north["板块"] == "深股通"]["成交净买额"].sum())
+        total   = round(sh_flow + sz_flow, 2)
         return {
-            "success":      True,
-            "latest_net_buy_yi": round(latest_flow / 1e8, 2),
-            "total_net_buy_yi":  round(total_flow / 1e8, 2),
-            "days":         days,
-            "trend":        "inflow" if total_flow > 0 else "outflow",
-            "provider":     "akshare",
+            "success":           True,
+            "latest_net_buy_yi": total,
+            "sh_net_buy_yi":     round(sh_flow, 2),
+            "sz_net_buy_yi":     round(sz_flow, 2),
+            "total_net_buy_yi":  total,
+            "trend":             "inflow" if total > 0 else "outflow",
+            "provider":          "akshare",
         }
     except Exception as exc:
         return {"success": False, "error": str(exc)}
@@ -1173,8 +1179,79 @@ def _analyze_news(params: dict) -> dict:
             "avg_score": round(avg_score, 3), "provider": "newsapi",
         }
 
-    # ── 4. No data available ──────────────────────────────────────────────────
-    tip = "配置数据服务 key: /apikey set finnhub <key> 或 /apikey set newsapi <key>"
+    # ── 4. yfinance news (free, no key, US/HK/global stocks) ─────────────────
+    yf_sym = symbol.upper() if symbol else ""
+    if yf_sym and not _is_ashare(yf_sym):
+        try:
+            import yfinance as yf
+            ticker = yf.Ticker(yf_sym)
+            raw_news = ticker.news or []
+            news_list = []
+            for item in raw_news[:limit]:
+                content = item.get("content", {})
+                title = (
+                    content.get("title")
+                    or item.get("title", "")
+                )
+                pub = (
+                    content.get("pubDate")
+                    or item.get("providerPublishTime", "")
+                )
+                url = (
+                    content.get("canonicalUrl", {}).get("url")
+                    or item.get("link", "")
+                )
+                provider = (
+                    content.get("provider", {}).get("displayName")
+                    or item.get("publisher", "")
+                )
+                if not title:
+                    continue
+                score = _score_sentiment(title)
+                news_list.append({
+                    "title":     title,
+                    "time":      str(pub),
+                    "url":       url,
+                    "publisher": provider,
+                    "sentiment": "positive" if score > 0 else ("negative" if score < 0 else "neutral"),
+                    "score":     score,
+                })
+            if news_list:
+                avg_score = sum(n["score"] for n in news_list) / len(news_list)
+                return {
+                    "success": True, "symbol": yf_sym, "news": news_list,
+                    "overall_sentiment": "positive" if avg_score > 0.1 else ("negative" if avg_score < -0.1 else "neutral"),
+                    "avg_score": round(avg_score, 3), "provider": "yfinance",
+                }
+        except Exception:
+            pass
+
+    # ── 5. web_search fallback — search "[symbol] news" ──────────────────────
+    ws_query = f"{topic or symbol} stock news latest" if (topic or symbol) else ""
+    if ws_query:
+        ws_result = _web_search({"query": ws_query, "max_results": limit})
+        if ws_result.get("success") and ws_result.get("results"):
+            news_list = []
+            for item in ws_result["results"]:
+                title = item.get("title", "")
+                score = _score_sentiment(title)
+                news_list.append({
+                    "title":     title,
+                    "url":       item.get("url", ""),
+                    "publisher": item.get("source", ""),
+                    "sentiment": "positive" if score > 0 else ("negative" if score < 0 else "neutral"),
+                    "score":     score,
+                })
+            if news_list:
+                avg_score = sum(n["score"] for n in news_list) / len(news_list)
+                return {
+                    "success": True, "symbol": topic or symbol, "news": news_list,
+                    "overall_sentiment": "positive" if avg_score > 0.1 else ("negative" if avg_score < -0.1 else "neutral"),
+                    "avg_score": round(avg_score, 3), "provider": ws_result.get("provider", "web_search"),
+                }
+
+    # ── 6. No data available ──────────────────────────────────────────────────
+    tip = "配置数据服务 key: /apikey set finnhub <key> 或 /apikey set newsapi <key>；或设置 BRAVE_SEARCH_API_KEY 启用网页搜索"
     return {"success": False, "error": tip}
 
 
@@ -1575,39 +1652,6 @@ def _df_tail(df: pd.DataFrame, n: int = 5) -> List[Dict]:
     return records
 
 
-# ---------------------------------------------------------------------------
-# Tool registry
-# ---------------------------------------------------------------------------
-
-# (handler, description)
-LOCAL_FINANCE_TOOL_REGISTRY: Dict[str, Tuple] = {
-    # ── Market data (cloud → local fallback) ─────────────────────────────
-    "get_market_data":        (_get_market_data,        "Stock/ETF quotes and OHLCV history (A股/US/global, cloud-backed)"),
-    "get_crypto_data":        (_get_crypto_data,        "Cryptocurrency OHLCV and ticker data via ccxt/yfinance"),
-    "get_forex_data":         (_get_forex_data,         "Foreign exchange rates (yfinance)"),
-    "get_commodities_data":   (_get_commodities_data,   "Commodity futures prices: gold, oil, copper, wheat, etc. (yfinance)"),
-    "get_futures_data":       (_get_futures_data,       "Equity index futures: S&P, NASDAQ, VIX, Nikkei, etc. (yfinance)"),
-    # ── Factor & signal (cloud → local fallback) ─────────────────────────
-    "calculate_factors":      (_calculate_factors,      "Technical factors: RSI, MACD, MA gaps, volatility, momentum, trend score (cloud-enhanced)"),
-    "get_ai_signal":          (_get_ai_signal,          "AI trading signal: BUY/SELL/HOLD with confidence and reasoning (Alibaba Cloud DeepSeek)"),
-    "get_market_insights":    (_get_market_insights,    "AI narrative market insights for a basket of symbols (Alibaba Cloud)"),
-    "get_predictions":        (_get_predictions,        "ML-powered 5/10-day return predictions (Alibaba Cloud LightGBM/XGBoost)"),
-    # ── Backtest (cloud ML → local pandas fallback) ───────────────────────
-    "backtest_strategy":      (_backtest_strategy,      "Run a local pandas backtest: sma_cross | rsi_mean_revert | momentum | buy_hold"),
-    "cloud_backtest":         (_cloud_backtest,         "Full ML-powered backtest via Alibaba Cloud QuantEngine (rebalance freq, dynamic position)"),
-    # ── Risk & portfolio ──────────────────────────────────────────────────
-    "get_risk_metrics":       (_get_risk_metrics,       "VaR, CVaR, max drawdown, Sharpe, Calmar, skew, kurtosis"),
-    "optimize_positions":     (_optimize_positions,     "Portfolio optimisation: max_sharpe | min_var | equal_weight"),
-    # ── A股 data services ─────────────────────────────────────────────────
-    "get_sector_performance": (_get_sector_performance, "Sector performance ranking (A股 industry / US SPDR ETFs)"),
-    "get_northbound_flow":    (_get_northbound_flow,    "北向资金 (沪深港通) net buy flow via akshare"),
-    "screen_ashare":          (_screen_ashare,          "A股选股筛选: PE, ROE, market cap, momentum"),
-    "get_limit_up_pool":      (_get_limit_up_pool,      "A股涨停板池 (today's limit-up stocks via akshare)"),
-    "get_market_indices":     (_get_market_indices,     "Global market indices: US, CN, EU, crypto, commodities"),
-    # ── News & macro ──────────────────────────────────────────────────────
-    "analyze_news":           (_analyze_news,           "News sentiment analysis (A股 via akshare)"),
-    "get_bonds_data":         (_get_bonds_data,         "US Treasury yield curve (yfinance)"),
-}
 
 # OpenAI/Ollama tool schemas for local finance tools
 LOCAL_FINANCE_TOOL_SCHEMAS = [
@@ -1939,8 +1983,1013 @@ LOCAL_FINANCE_TOOL_SCHEMAS = [
             },
         },
     },
+    # ── web_search ────────────────────────────────────────────────────────────
+    {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": (
+                "Search the web for current information. "
+                "USE THIS PROACTIVELY when the user asks about: recent news, latest earnings, "
+                "new IPO stocks (e.g. SPCX/SpaceX), price targets, analyst upgrades/downgrades, "
+                "M&A deals, regulatory decisions, macro events, or anything that may have changed "
+                "after your training cutoff. Do NOT rely on training data for current events — "
+                "always search first. Chain with web_fetch to read full articles."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query":       {"type": "string",  "description": "Search query, include ticker and topic, e.g. 'SPCX SpaceX earnings Q1 2026'"},
+                    "max_results": {"type": "integer", "description": "Number of results (default 5, max 10)"},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    # ── web_fetch ─────────────────────────────────────────────────────────────
+    {
+        "type": "function",
+        "function": {
+            "name": "web_fetch",
+            "description": (
+                "Fetch a URL and return the page text. Use after web_search to read full article content, "
+                "SEC filings, earnings reports, or any webpage. Automatically strips HTML tags."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url":      {"type": "string",  "description": "Full URL to fetch"},
+                    "timeout":  {"type": "integer", "description": "Timeout seconds (default 15)"},
+                },
+                "required": ["url"],
+            },
+        },
+    },
+    # ── get_forex_data ────────────────────────────────────────────────────────
+    {
+        "type": "function",
+        "function": {
+            "name": "get_forex_data",
+            "description": "Get exchange rate data for currency pairs (e.g. USD/CNY, EUR/USD, USD/JPY). Returns OHLCV and current rate.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pair":   {"type": "string", "description": "Currency pair e.g. USDCNY=X, EURUSD=X, USDJPY=X"},
+                    "period": {"type": "string", "description": "1d | 5d | 1mo | 3mo | 1y (default 1mo)"},
+                },
+                "required": ["pair"],
+            },
+        },
+    },
+    # ── get_options_chain ─────────────────────────────────────────────────────
+    {
+        "type": "function",
+        "function": {
+            "name": "get_options_chain",
+            "description": "Retrieve options chain for a US stock: calls & puts with strike, expiry, IV, delta, volume, OI. Use for options strategy analysis.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "symbol":  {"type": "string",  "description": "US stock ticker e.g. SPCX, AAPL, TSLA"},
+                    "expiry":  {"type": "string",  "description": "Expiration date YYYY-MM-DD or leave blank for nearest"},
+                    "option_type": {"type": "string", "description": "call | put | both (default both)"},
+                },
+                "required": ["symbol"],
+            },
+        },
+    },
+    # ── peer_comparison ───────────────────────────────────────────────────────
+    {
+        "type": "function",
+        "function": {
+            "name": "peer_comparison",
+            "description": "Compare a stock against sector peers on valuation (PE/PB), profitability (ROE), market cap. Automatically selects peers if not specified.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "symbol": {"type": "string",      "description": "Target stock ticker"},
+                    "peers":  {"type": "array", "items": {"type": "string"}, "description": "Peer tickers (optional, auto-selected if omitted)"},
+                },
+                "required": ["symbol"],
+            },
+        },
+    },
+    # ── piotroski_fscore ──────────────────────────────────────────────────────
+    {
+        "type": "function",
+        "function": {
+            "name": "piotroski_fscore",
+            "description": "Calculate Piotroski F-Score (0-9) for financial health assessment. Score ≥7 = strong, ≤2 = weak. Use for fundamental stock screening.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "symbol": {"type": "string", "description": "Stock ticker"},
+                },
+                "required": ["symbol"],
+            },
+        },
+    },
+    # ── altman_zscore ─────────────────────────────────────────────────────────
+    {
+        "type": "function",
+        "function": {
+            "name": "altman_zscore",
+            "description": "Calculate Altman Z-Score for bankruptcy risk. Z>2.99 = safe, 1.81-2.99 = grey zone, <1.81 = distress. Use when user asks about company financial risk.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "symbol": {"type": "string", "description": "Stock ticker"},
+                },
+                "required": ["symbol"],
+            },
+        },
+    },
+    # ── calculate_ichimoku ────────────────────────────────────────────────────
+    {
+        "type": "function",
+        "function": {
+            "name": "calculate_ichimoku",
+            "description": "Calculate Ichimoku Cloud indicators (Tenkan, Kijun, Senkou A/B, Chikou). Provides cloud support/resistance levels and trend signals.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "symbol": {"type": "string", "description": "Stock or crypto ticker"},
+                    "period": {"type": "string", "description": "Price history period: 3mo | 6mo | 1y (default 6mo)"},
+                },
+                "required": ["symbol"],
+            },
+        },
+    },
+    # ── get_fear_greed_index ──────────────────────────────────────────────────
+    {
+        "type": "function",
+        "function": {
+            "name": "get_fear_greed_index",
+            "description": "Get CNN Fear & Greed Index (0-100) for overall market sentiment. Use when user asks about market sentiment, risk appetite, or broad market mood.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    },
+    # ── get_funding_rates ─────────────────────────────────────────────────────
+    {
+        "type": "function",
+        "function": {
+            "name": "get_funding_rates",
+            "description": "Get perpetual futures funding rates for crypto assets (BTC, ETH, etc.) from major exchanges. Positive rate = longs pay shorts (bullish); negative = shorts pay longs (bearish).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "symbol": {"type": "string", "description": "Crypto symbol e.g. BTC, ETH, SOL"},
+                },
+                "required": ["symbol"],
+            },
+        },
+    },
+    # ── walk_forward_backtest ─────────────────────────────────────────────────
+    {
+        "type": "function",
+        "function": {
+            "name": "walk_forward_backtest",
+            "description": "Run walk-forward validation backtest: train on rolling windows then test out-of-sample to avoid overfitting. More robust than simple backtest.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "symbol":        {"type": "string", "description": "Stock ticker"},
+                    "strategy":      {"type": "string", "description": "Strategy name: sma_cross | rsi_reversal | macd_trend"},
+                    "train_months":  {"type": "integer", "description": "Training window in months (default 12)"},
+                    "test_months":   {"type": "integer", "description": "Test window in months (default 3)"},
+                },
+                "required": ["symbol", "strategy"],
+            },
+        },
+    },
 ]
 
+
+# ---------------------------------------------------------------------------
+# 19. Piotroski F-Score  (基本面质量评分, 0–9)
+# ---------------------------------------------------------------------------
+
+def _piotroski_fscore(params: dict) -> dict:
+    """
+    Piotroski F-Score: 9项二元信号综合判断财务质量。
+    ≥7 = 高质量(做多信号), ≤3 = 低质量(做空信号), 4-6 = 中性。
+    """
+    symbol = params.get("symbol", "AAPL")
+    if not _HAS_YF:
+        return {"success": False, "error": "yfinance not installed"}
+
+    try:
+        tkr  = yf.Ticker(symbol)
+        info = tkr.info or {}
+        bs_annual   = tkr.balance_sheet    if hasattr(tkr, "balance_sheet")    else None
+        is_annual   = tkr.income_stmt      if hasattr(tkr, "income_stmt")      else None
+        cf_annual   = tkr.cashflow         if hasattr(tkr, "cashflow")         else None
+
+        def _get(df, row, col=0):
+            try:
+                if df is None or df.empty: return None
+                matches = [r for r in df.index if row.lower() in str(r).lower()]
+                if not matches: return None
+                val = df.loc[matches[0]].iloc[col]
+                return float(val) if val is not None and str(val) not in ("nan","None") else None
+            except Exception:
+                return None
+
+        scores: Dict[str, Any] = {}
+
+        # ── Profitability (4 signals) ──────────────────────────────────────
+        roa = info.get("returnOnAssets") or _get(is_annual, "Net Income")
+        scores["F1_ROA_positive"]     = int((roa or 0) > 0)
+
+        cfo = _get(cf_annual, "Operating Cash Flow") or _get(cf_annual, "Total Cash From Operating")
+        scores["F2_CFO_positive"]     = int((cfo or 0) > 0)
+
+        # ROA change (current vs prior year)
+        net_inc_cur  = _get(is_annual, "Net Income", 0)
+        net_inc_prev = _get(is_annual, "Net Income", 1)
+        ta_cur       = _get(bs_annual, "Total Assets", 0)
+        ta_prev      = _get(bs_annual, "Total Assets", 1)
+        roa_cur  = (net_inc_cur  / ta_cur)  if (ta_cur  and net_inc_cur  is not None) else None
+        roa_prev = (net_inc_prev / ta_prev) if (ta_prev and net_inc_prev is not None) else None
+        scores["F3_ROA_increasing"]   = int(roa_cur > roa_prev) if (roa_cur is not None and roa_prev is not None) else 0
+
+        # Accruals: CFO > ROA × Total Assets
+        scores["F4_CFO_gt_ROA"]       = int((cfo or 0) > (roa or 0) * (ta_cur or 1))
+
+        # ── Leverage, Liquidity (3 signals) ───────────────────────────────
+        ltd_cur  = _get(bs_annual, "Long Term Debt", 0)
+        ltd_prev = _get(bs_annual, "Long Term Debt", 1)
+        scores["F5_Leverage_lower"]   = int((ltd_cur or 0) < (ltd_prev or 0)) if ltd_prev is not None else 0
+
+        ca_cur   = _get(bs_annual, "Current Assets", 0)
+        ca_prev  = _get(bs_annual, "Current Assets", 1)
+        cl_cur   = _get(bs_annual, "Current Liabilities", 0) or _get(bs_annual, "Total Current Liabilities", 0)
+        cl_prev  = _get(bs_annual, "Current Liabilities", 1) or _get(bs_annual, "Total Current Liabilities", 1)
+        cr_cur   = (ca_cur  / cl_cur)  if (cl_cur  and ca_cur)  else None
+        cr_prev  = (ca_prev / cl_prev) if (cl_prev and ca_prev) else None
+        scores["F6_CurrentRatio_up"]  = int(cr_cur > cr_prev) if (cr_cur and cr_prev) else 0
+
+        # No dilution: shares outstanding not increasing
+        shares_cur  = info.get("sharesOutstanding") or _get(bs_annual, "Ordinary Shares Number", 0)
+        shares_prev = _get(bs_annual, "Ordinary Shares Number", 1)
+        scores["F7_NoDilution"]       = int((shares_cur or 1) <= (shares_prev or 1)) if shares_prev else 1
+
+        # ── Operating Efficiency (2 signals) ──────────────────────────────
+        rev_cur  = _get(is_annual, "Total Revenue", 0)
+        rev_prev = _get(is_annual, "Total Revenue", 1)
+        gp_cur   = _get(is_annual, "Gross Profit", 0)
+        gp_prev  = _get(is_annual, "Gross Profit", 1)
+        gm_cur   = (gp_cur  / rev_cur)  if (rev_cur  and gp_cur)  else None
+        gm_prev  = (gp_prev / rev_prev) if (rev_prev and gp_prev) else None
+        scores["F8_GrossMargin_up"]   = int(gm_cur > gm_prev) if (gm_cur is not None and gm_prev is not None) else 0
+
+        at_cur  = (rev_cur  / ta_cur)  if (ta_cur  and rev_cur)  else None
+        at_prev = (rev_prev / ta_prev) if (ta_prev and rev_prev) else None
+        scores["F9_AssetTurnover_up"] = int(at_cur > at_prev) if (at_cur is not None and at_prev is not None) else 0
+
+        fscore = sum(scores.values())
+
+        if fscore >= 7:
+            verdict, color = "高质量 — 做多信号", "bullish"
+        elif fscore <= 3:
+            verdict, color = "低质量 — 做空信号", "bearish"
+        else:
+            verdict, color = "中性", "neutral"
+
+        return {
+            "success":  True,
+            "symbol":   symbol,
+            "f_score":  fscore,
+            "verdict":  verdict,
+            "signal":   color,
+            "scores":   scores,
+            "provider": "yfinance",
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+# ---------------------------------------------------------------------------
+# 20. Altman Z-Score  (破产风险预测)
+# ---------------------------------------------------------------------------
+
+def _altman_zscore(params: dict) -> dict:
+    """
+    Altman Z''-Score（适合非制造业，使用 4 变量版）。
+    Z > 2.6 = 安全区，1.1–2.6 = 灰色区，< 1.1 = 破产风险。
+    """
+    symbol = params.get("symbol", "AAPL")
+    if not _HAS_YF:
+        return {"success": False, "error": "yfinance not installed"}
+
+    try:
+        tkr  = yf.Ticker(symbol)
+        info = tkr.info or {}
+        bs   = tkr.balance_sheet if hasattr(tkr, "balance_sheet") else None
+        is_  = tkr.income_stmt   if hasattr(tkr, "income_stmt")   else None
+
+        def _g(df, row, col=0):
+            try:
+                if df is None or df.empty: return None
+                m = [r for r in df.index if row.lower() in str(r).lower()]
+                if not m: return None
+                v = df.loc[m[0]].iloc[col]
+                return float(v) if str(v) not in ("nan","None","") else None
+            except Exception:
+                return None
+
+        ta      = _g(bs, "Total Assets") or info.get("totalAssets")
+        tl      = (_g(bs, "Total Liabilities Net Minority Interest") or
+                   _g(bs, "Total Liabilities"))
+        ca      = _g(bs, "Current Assets")
+        cl      = (_g(bs, "Total Current Liabilities") or _g(bs, "Current Liabilities"))
+        re      = _g(bs, "Retained Earnings")
+        ebit    = _g(is_, "EBIT") or _g(is_, "Operating Income")
+        revenue = _g(is_, "Total Revenue")
+        market_cap = info.get("marketCap")
+        bv_equity   = info.get("bookValue", 0) or 0
+        shares_out  = info.get("sharesOutstanding", 0) or 0
+        book_equity = bv_equity * shares_out
+
+        if not ta or ta == 0:
+            return {"success": False, "error": "无法获取总资产数据"}
+
+        # Working capital / Total Assets  (X1)
+        wc = (ca or 0) - (cl or 0)
+        x1 = wc / ta
+
+        # Retained Earnings / Total Assets  (X2)
+        x2 = (re or 0) / ta
+
+        # EBIT / Total Assets  (X3)
+        x3 = (ebit or 0) / ta
+
+        # Book/Market Value of Equity / Total Liabilities  (X4 — Z'' uses book)
+        bv = book_equity or (market_cap or 0)
+        x4 = bv / (tl or 1)
+
+        # Z'' = 6.56·X1 + 3.26·X2 + 6.72·X3 + 1.05·X4
+        z = 6.56 * x1 + 3.26 * x2 + 6.72 * x3 + 1.05 * x4
+        z = round(z, 3)
+
+        if z > 2.6:
+            zone = "安全区"
+            risk = "low"
+        elif z > 1.1:
+            zone = "灰色区（不确定）"
+            risk = "medium"
+        else:
+            zone = "破产风险区"
+            risk = "high"
+
+        return {
+            "success":  True,
+            "symbol":   symbol,
+            "z_score":  z,
+            "zone":     zone,
+            "risk":     risk,
+            "components": {
+                "X1_working_capital_ratio": round(x1, 4),
+                "X2_retained_earnings_ratio": round(x2, 4),
+                "X3_ebit_ratio": round(x3, 4),
+                "X4_equity_to_debt": round(x4, 4),
+            },
+            "formula":  "Z'' = 6.56·X1 + 3.26·X2 + 6.72·X3 + 1.05·X4",
+            "provider": "yfinance",
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+# ---------------------------------------------------------------------------
+# 21. Options Chain  (期权链)
+# ---------------------------------------------------------------------------
+
+def _get_options_chain(params: dict) -> dict:
+    """
+    获取股票期权链（via yfinance）。
+    返回最近到期日的 calls + puts 列表。
+    """
+    symbol  = str(params.get("symbol", "AAPL")).strip().upper()
+    expiry  = params.get("expiry", "")      # "YYYY-MM-DD" or "" = nearest
+    opt_type = params.get("type", "both").lower()  # "calls" | "puts" | "both"
+    limit   = int(params.get("limit", 15))
+
+    if not _HAS_YF:
+        return {"success": False, "error": "yfinance not installed"}
+
+    try:
+        tkr = yf.Ticker(symbol)
+        dates = tkr.options
+        if not dates:
+            return {"success": False, "error": f"{symbol} 无可用期权数据"}
+
+        if expiry and expiry in dates:
+            exp = expiry
+        else:
+            exp = dates[0]  # nearest expiry
+
+        chain = tkr.option_chain(exp)
+        price = (tkr.info or {}).get("regularMarketPrice") or (tkr.info or {}).get("currentPrice") or 0
+
+        def _fmt(df):
+            if df is None or df.empty:
+                return []
+            cols = [c for c in ["strike","lastPrice","bid","ask","volume","openInterest",
+                                 "impliedVolatility","inTheMoney"] if c in df.columns]
+            df = df[cols].head(limit)
+            rows = df.to_dict("records")
+            for r in rows:
+                iv = r.get("impliedVolatility")
+                r["iv_pct"] = round(iv * 100, 1) if iv else None
+            return rows
+
+        result: Dict[str, Any] = {
+            "success":     True,
+            "symbol":      symbol,
+            "price":       price,
+            "expiry":      exp,
+            "all_expiries": list(dates[:6]),
+            "provider":    "yfinance",
+        }
+        if opt_type in ("calls", "both"):
+            result["calls"] = _fmt(chain.calls)
+        if opt_type in ("puts", "both"):
+            result["puts"]  = _fmt(chain.puts)
+
+        return result
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+# ---------------------------------------------------------------------------
+# 22. Ichimoku Cloud  (一目均衡表)
+# ---------------------------------------------------------------------------
+
+def _calculate_ichimoku(params: dict) -> dict:
+    """
+    一目均衡表指标计算。
+    返回 Tenkan-sen(转换线), Kijun-sen(基准线), Senkou Span A/B(先行带),
+    Chikou(迟行线), 以及云层厚度与当前信号。
+    """
+    symbol = str(params.get("symbol", "AAPL")).strip().upper()
+    period = params.get("period", "6mo")
+
+    if not _HAS_YF:
+        return {"success": False, "error": "yfinance not installed"}
+
+    try:
+        df = yf.Ticker(symbol).history(period=period)
+        if df is None or len(df) < 52:
+            return {"success": False, "error": "历史数据不足（至少需要 52 天）"}
+
+        high = df["High"].astype(float)
+        low  = df["Low"].astype(float)
+        close= df["Close"].astype(float)
+
+        def _mid(h, l, n):
+            return (h.rolling(n).max() + l.rolling(n).min()) / 2
+
+        tenkan  = _mid(high, low, 9)
+        kijun   = _mid(high, low, 26)
+        senkou_a = ((tenkan + kijun) / 2).shift(26)
+        senkou_b = _mid(high, low, 52).shift(26)
+        chikou  = close.shift(-26)
+
+        t  = round(float(tenkan.iloc[-1]), 3)
+        k  = round(float(kijun.iloc[-1]), 3)
+        sa = round(float(senkou_a.iloc[-1]), 3) if not pd.isna(senkou_a.iloc[-1]) else None
+        sb = round(float(senkou_b.iloc[-1]), 3) if not pd.isna(senkou_b.iloc[-1]) else None
+        c  = round(float(close.iloc[-1]), 3)
+        ck = round(float(chikou.iloc[-53]) if len(chikou) > 53 else float(chikou.iloc[0]), 3)
+
+        # Signal
+        above_cloud = sa is not None and sb is not None and c > max(sa, sb)
+        below_cloud = sa is not None and sb is not None and c < min(sa, sb)
+        bullish_tk  = t > k
+        cloud_color = "绿云(多)" if (sa and sb and sa > sb) else "红云(空)"
+
+        if above_cloud and bullish_tk:
+            signal = "强势多头"
+        elif above_cloud:
+            signal = "偏多（价格在云上方）"
+        elif below_cloud and not bullish_tk:
+            signal = "强势空头"
+        elif below_cloud:
+            signal = "偏空（价格在云下方）"
+        else:
+            signal = "震荡（价格在云内）"
+
+        return {
+            "success":     True,
+            "symbol":      symbol,
+            "price":       c,
+            "tenkan":      t,
+            "kijun":       k,
+            "senkou_a":    sa,
+            "senkou_b":    sb,
+            "chikou":      ck,
+            "cloud_color": cloud_color,
+            "cloud_thickness": round(abs((sa or 0) - (sb or 0)), 3),
+            "signal":      signal,
+            "above_cloud": above_cloud,
+            "below_cloud": below_cloud,
+            "tk_cross":    "金叉(多)" if bullish_tk else "死叉(空)",
+            "provider":    "yfinance",
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+# ---------------------------------------------------------------------------
+# 23. Crypto Fear & Greed Index  + Funding Rates
+# ---------------------------------------------------------------------------
+
+def _get_fear_greed_index(params: dict) -> dict:
+    """加密货币恐惧贪婪指数（来源: alternative.me，无需 API Key）。"""
+    try:
+        import urllib.request, json as _json
+        with urllib.request.urlopen(
+            "https://api.alternative.me/fng/?limit=7&format=json", timeout=6
+        ) as resp:
+            data = _json.loads(resp.read().decode())
+        items = data.get("data", [])
+        if not items:
+            return {"success": False, "error": "No data returned"}
+        latest   = items[0]
+        value    = int(latest.get("value", 0))
+        label_en = latest.get("value_classification", "")
+        label_cn_map = {
+            "Extreme Fear": "极度恐惧",
+            "Fear":         "恐惧",
+            "Neutral":      "中性",
+            "Greed":        "贪婪",
+            "Extreme Greed":"极度贪婪",
+        }
+        label_cn = label_cn_map.get(label_en, label_en)
+        history  = [{"date": i.get("timestamp",""), "value": int(i.get("value",0)),
+                     "label": i.get("value_classification","")} for i in items]
+        return {
+            "success":  True,
+            "value":    value,
+            "label":    label_cn,
+            "label_en": label_en,
+            "history":  history,
+            "signal":   "做空" if value >= 75 else "做多" if value <= 25 else "中性",
+            "provider": "alternative.me",
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def _get_funding_rates(params: dict) -> dict:
+    """
+    获取永续合约资金费率 (via ccxt)。
+    支持 binance, okx, bybit 等主流交易所。
+    高正费率 → 多头过多 → 看空信号；负费率 → 空头过多 → 看多信号。
+    """
+    exchange_id = params.get("exchange", "binance").lower()
+    symbols = params.get("symbols", ["BTC/USDT", "ETH/USDT", "SOL/USDT"])
+    if isinstance(symbols, str):
+        symbols = [s.strip() for s in symbols.replace(",", " ").split()]
+
+    try:
+        import ccxt as _ccxt
+    except ImportError:
+        return {"success": False, "error": "ccxt 未安装: pip install ccxt"}
+
+    # Try exchanges in order; fall back if load_markets fails (network/region issues)
+    _exchange_fallback = [exchange_id] if exchange_id != "binance" else ["binance", "okx", "bybit"]
+
+    for _exid in _exchange_fallback:
+        try:
+            exchange_cls = getattr(_ccxt, _exid, None)
+            if not exchange_cls:
+                continue
+            ex = exchange_cls({"options": {"defaultType": "future"}})
+            try:
+                ex.load_markets()
+            except Exception as _lm_err:
+                _lm_msg = str(_lm_err)
+                if len(_lm_msg) > 100 or "http" in _lm_msg or "GET" in _lm_msg or "POST" in _lm_msg:
+                    _lm_msg = f"无法连接 {_exid} 期货市场（网络或区域限制）"
+                if _exid == _exchange_fallback[-1]:
+                    return {"success": False, "error": f"{_exid}: {_lm_msg}"}
+                continue
+
+            results = []
+            for sym in symbols:
+                try:
+                    fi = ex.fetch_funding_rate(sym)
+                    rate = fi.get("fundingRate") or fi.get("funding_rate") or 0
+                    next_time = fi.get("fundingDatetime") or fi.get("nextFundingDatetime") or ""
+                    annualized = round(float(rate) * 3 * 365 * 100, 2)  # 8h intervals
+                    results.append({
+                        "symbol":       sym,
+                        "rate":         round(float(rate) * 100, 4),
+                        "rate_pct":     f"{float(rate)*100:.4f}%",
+                        "annualized":   f"{annualized:.1f}%",
+                        "next_funding": str(next_time)[:16],
+                        "signal":       "空" if float(rate) > 0.0005 else "多" if float(rate) < -0.0001 else "中性",
+                    })
+                except Exception:
+                    pass
+
+            if not results:
+                if _exid == _exchange_fallback[-1]:
+                    return {"success": False, "error": f"已尝试 {', '.join(_exchange_fallback)}，均未能获取资金费率数据"}
+                continue
+
+            avg_rate = sum(r["rate"] for r in results) / len(results)
+            return {
+                "success":     True,
+                "exchange":    _exid,
+                "rates":       results,
+                "avg_rate":    round(avg_rate, 4),
+                "market_bias": "多头过热(偏空)" if avg_rate > 0.05 else "空头过多(偏多)" if avg_rate < -0.01 else "均衡",
+                "provider":    "ccxt",
+            }
+        except Exception as e:
+            _err_msg = str(e)
+            if len(_err_msg) > 100 or "http" in _err_msg or "GET" in _err_msg or "POST" in _err_msg:
+                _err_msg = f"无法连接 {_exid}（网络或区域限制）"
+            if _exid == _exchange_fallback[-1]:
+                return {"success": False, "error": _err_msg}
+
+    return {"success": False, "error": "所有备用交易所均连接失败"}
+
+
+# ---------------------------------------------------------------------------
+# 24. Walk-Forward Backtest  (滚动验证)
+# ---------------------------------------------------------------------------
+
+def _walk_forward_backtest(params: dict) -> dict:
+    """
+    Walk-Forward 滚动回测：将历史分成 N 个窗口，每窗口 in-sample 优化、
+    out-of-sample 验证，评估策略真实泛化能力。
+    """
+    symbol   = params.get("symbol", "AAPL")
+    strategy = params.get("strategy", "sma_crossover")
+    periods  = int(params.get("periods", 5))      # number of WF windows
+    train_r  = float(params.get("train_ratio", 0.7))
+    period   = params.get("period", "5y")
+
+    if not _HAS_YF:
+        return {"success": False, "error": "yfinance not installed"}
+
+    try:
+        import numpy as np
+        tkr = yf.Ticker(symbol)
+        df  = tkr.history(period=period)
+        if df is None or len(df) < 200:
+            return {"success": False, "error": "历史数据不足（需要至少 200 天）"}
+
+        close = df["Close"].astype(float).values
+        n     = len(close)
+        window_size = n // periods
+
+        window_results = []
+        for i in range(periods):
+            start = i * window_size
+            end   = start + window_size if i < periods - 1 else n
+            split = start + int((end - start) * train_r)
+
+            train = close[start:split]
+            test  = close[split:end]
+
+            if len(test) < 20:
+                continue
+
+            # Simple parameter: SMA crossover with different windows
+            best_sharpe = -np.inf
+            best_fast, best_slow = 10, 30
+
+            if strategy in ("sma_crossover", "ma_crossover"):
+                for fast in (5, 10, 15, 20):
+                    for slow in (20, 30, 40, 60):
+                        if fast >= slow or len(train) <= slow:
+                            continue
+                        sig = np.where(
+                            np.convolve(train, np.ones(fast)/fast, mode="valid")
+                            [-(len(train)-slow+1):] >
+                            np.convolve(train, np.ones(slow)/slow, mode="valid"),
+                            1, 0
+                        )
+                        if len(sig) < 2: continue
+                        rets = np.diff(train[-len(sig):]) / train[-len(sig):-1]
+                        strat_rets = rets * sig[:-1]
+                        sr = (np.mean(strat_rets) / (np.std(strat_rets) + 1e-8)) * np.sqrt(252)
+                        if sr > best_sharpe:
+                            best_sharpe, best_fast, best_slow = sr, fast, slow
+
+            # Out-of-sample evaluation with best params
+            if len(test) <= best_slow:
+                continue
+            fast_ma = np.convolve(test, np.ones(best_fast)/best_fast, mode="valid")
+            slow_ma = np.convolve(test, np.ones(best_slow)/best_slow, mode="valid")
+            n_sig   = min(len(fast_ma), len(slow_ma))
+            signals = np.where(fast_ma[-n_sig:] > slow_ma[-n_sig:], 1, 0)
+            rets_test = np.diff(test[-n_sig:]) / test[-n_sig:-1]
+            strat_rets_oos = rets_test * signals[:-1]
+            bh_rets        = rets_test
+
+            oos_total  = float(np.prod(1 + strat_rets_oos) - 1)
+            bh_total   = float(np.prod(1 + bh_rets) - 1)
+            oos_sharpe = float(np.mean(strat_rets_oos) / (np.std(strat_rets_oos) + 1e-8)) * np.sqrt(252)
+            dd_vals    = np.maximum.accumulate(np.cumprod(1 + strat_rets_oos)) - np.cumprod(1 + strat_rets_oos)
+            max_dd     = float(np.max(dd_vals) / np.maximum.accumulate(np.cumprod(1 + strat_rets_oos))[-1])
+
+            window_results.append({
+                "window":         i + 1,
+                "train_bars":     split - start,
+                "test_bars":      end - split,
+                "best_fast":      best_fast,
+                "best_slow":      best_slow,
+                "oos_return":     round(oos_total, 4),
+                "bh_return":      round(bh_total, 4),
+                "oos_sharpe":     round(oos_sharpe, 3),
+                "max_drawdown":   round(max_dd, 4),
+                "alpha":          round(oos_total - bh_total, 4),
+            })
+
+        if not window_results:
+            return {"success": False, "error": "回测窗口计算失败"}
+
+        avg_oos_ret   = sum(w["oos_return"] for w in window_results) / len(window_results)
+        avg_sharpe    = sum(w["oos_sharpe"] for w in window_results) / len(window_results)
+        avg_alpha     = sum(w["alpha"] for w in window_results) / len(window_results)
+        pct_win       = sum(1 for w in window_results if w["oos_return"] > 0) / len(window_results)
+
+        verdict = (
+            "策略泛化能力强" if avg_alpha > 0.02 and avg_sharpe > 0.5
+            else "策略泛化能力中等" if avg_alpha > 0
+            else "策略泛化能力弱（过拟合风险）"
+        )
+
+        return {
+            "success":           True,
+            "symbol":            symbol,
+            "strategy":          strategy,
+            "windows":           window_results,
+            "avg_oos_return":    round(avg_oos_ret, 4),
+            "avg_sharpe":        round(avg_sharpe, 3),
+            "avg_alpha":         round(avg_alpha, 4),
+            "win_rate_windows":  round(pct_win, 2),
+            "verdict":           verdict,
+            "provider":          "local",
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+# ---------------------------------------------------------------------------
+# 25. Peer Comparison  (同行对比)
+# ---------------------------------------------------------------------------
+
+def _peer_comparison(params: dict) -> dict:
+    """
+    同行估值与表现对比。
+    返回 PE/PB/ROE/YTD收益/股息率/市值 横向对比表。
+    """
+    symbol = str(params.get("symbol", "AAPL")).strip().upper()
+    peers  = params.get("peers", [])  # list of ticker strings
+    if isinstance(peers, str):
+        peers = [p.strip().upper() for p in peers.replace(",", " ").split() if p.strip()]
+
+    # Auto-suggest peers from yfinance sector info if not provided
+    if not peers and _HAS_YF:
+        try:
+            info = yf.Ticker(symbol).info or {}
+            # yfinance doesn't give peers directly; use sector to build manual map
+            _SECTOR_PEERS = {
+                "Technology":   ["AAPL","MSFT","GOOGL","META","NVDA","AMZN"],
+                "Financials":   ["JPM","BAC","GS","MS","WFC","C"],
+                "Healthcare":   ["JNJ","LLY","ABBV","MRK","PFE","UNH"],
+                "Consumer Cyclical": ["AMZN","TSLA","HD","MCD","NKE","SBUX"],
+                "Energy":       ["XOM","CVX","COP","SLB","EOG","OXY"],
+            }
+            sector = info.get("sector", "")
+            default_list = _SECTOR_PEERS.get(sector, ["SPY"])
+            peers = [p for p in default_list if p != symbol][:5]
+        except Exception:
+            pass
+
+    if not peers:
+        return {"success": False, "error": "请提供 peers 参数，如: peers=['MSFT','GOOGL','META']"}
+
+    all_symbols = [symbol] + [p for p in peers if p != symbol]
+
+    if not _HAS_YF:
+        return {"success": False, "error": "yfinance not installed"}
+
+    rows = []
+    for sym in all_symbols[:8]:
+        try:
+            info = yf.Ticker(sym).info or {}
+            price  = info.get("regularMarketPrice") or info.get("currentPrice") or 0
+            prev   = info.get("regularMarketPreviousClose") or price
+            pe     = info.get("trailingPE") or info.get("forwardPE")
+            pb     = info.get("priceToBook")
+            roe    = info.get("returnOnEquity")
+            dy     = info.get("dividendYield")
+            mc     = info.get("marketCap")
+            ytd    = (price / prev - 1) if prev else None
+            rows.append({
+                "symbol":    sym,
+                "name":      (info.get("shortName") or sym)[:12],
+                "price":     round(price, 2),
+                "pe":        round(pe, 1)  if pe  else None,
+                "pb":        round(pb, 2)  if pb  else None,
+                "roe_pct":   round(roe * 100, 1) if roe else None,
+                "div_yield": round(dy * 100, 2)  if dy  else None,
+                "market_cap_b": round(mc / 1e9, 1) if mc else None,
+                "is_target": sym == symbol,
+            })
+        except Exception:
+            pass
+
+    if not rows:
+        return {"success": False, "error": "无法获取对比数据"}
+
+    # Relative rankings
+    pe_vals  = [r["pe"]   for r in rows if r["pe"] is not None]
+    pb_vals  = [r["pb"]   for r in rows if r["pb"] is not None]
+    roe_vals = [r["roe_pct"] for r in rows if r["roe_pct"] is not None]
+
+    target_row = next((r for r in rows if r["is_target"]), rows[0])
+    analysis = []
+    if target_row.get("pe") and pe_vals:
+        med_pe = sorted(pe_vals)[len(pe_vals)//2]
+        vs = "高估" if target_row["pe"] > med_pe * 1.2 else "低估" if target_row["pe"] < med_pe * 0.8 else "合理"
+        analysis.append(f"PE {target_row['pe']:.1f}x vs 同行中位数 {med_pe:.1f}x → {vs}")
+    if target_row.get("roe_pct") and roe_vals:
+        avg_roe = sum(roe_vals) / len(roe_vals)
+        vs = "优于同行" if target_row["roe_pct"] > avg_roe else "低于同行"
+        analysis.append(f"ROE {target_row['roe_pct']:.1f}% vs 同行均值 {avg_roe:.1f}% → {vs}")
+
+    return {
+        "success":   True,
+        "symbol":    symbol,
+        "peers":     peers,
+        "table":     rows,
+        "analysis":  analysis,
+        "provider":  "yfinance",
+    }
+
+
+def _web_search(params: dict) -> dict:
+    """Web search: Brave → Tavily → DuckDuckGo fallback chain."""
+    query      = str(params.get("query", "")).strip()
+    num        = min(int(params.get("num_results", params.get("max_results", 5))), 10)
+    if not query:
+        return {"success": False, "error": "query is required"}
+
+    # ── 1. Brave Search API ───────────────────────────────────────────────────
+    brave_key = os.getenv("BRAVE_SEARCH_API_KEY")
+    if brave_key:
+        try:
+            import urllib.request as _req
+            import urllib.parse as _parse
+            import gzip as _gzip
+            url = "https://api.search.brave.com/res/v1/web/search?" + _parse.urlencode({
+                "q": query, "count": num, "search_lang": "zh", "safesearch": "moderate",
+            })
+            req = _req.Request(url, headers={
+                "Accept":               "application/json",
+                "Accept-Encoding":      "gzip",
+                "X-Subscription-Token": brave_key,
+            })
+            with _req.urlopen(req, timeout=10) as r:
+                raw = r.read()
+                if r.headers.get("Content-Encoding") == "gzip":
+                    raw = _gzip.decompress(raw)
+                data = json.loads(raw)
+            results = []
+            for item in data.get("web", {}).get("results", [])[:num]:
+                results.append({
+                    "title":   item.get("title", ""),
+                    "url":     item.get("url", ""),
+                    "snippet": item.get("description", ""),
+                })
+            return {"success": True, "query": query, "results": results, "provider": "brave"}
+        except Exception as e:
+            logger.debug("Brave search failed: %s; trying duckduckgo_search", e)
+
+    # ── 2. Tavily API (designed for AI agents, generous free tier) ───────────
+    tavily_key = os.getenv("TAVILY_API_KEY")
+    if tavily_key:
+        try:
+            import urllib.request as _req2
+            import urllib.parse as _parse2
+            req2 = _req2.Request(
+                "https://api.tavily.com/search",
+                data=json.dumps({"api_key": tavily_key, "query": query, "max_results": num, "search_depth": "basic"}).encode(),
+                headers={"Content-Type": "application/json"},
+            )
+            with _req2.urlopen(req2, timeout=10) as r2:
+                data2 = json.loads(r2.read())
+            results = [
+                {"title": item.get("title", ""), "url": item.get("url", ""), "snippet": item.get("content", "")[:300]}
+                for item in data2.get("results", [])[:num]
+            ]
+            if results:
+                return {"success": True, "query": query, "results": results, "provider": "tavily"}
+        except Exception as e:
+            logger.debug("Tavily search failed: %s", e)
+
+    # ── 3. DuckDuckGo (free, no key, but rate-limited) ────────────────────────
+    try:
+        import warnings as _w
+        with _w.catch_warnings():
+            _w.simplefilter("ignore")
+            from duckduckgo_search import DDGS
+        results = []
+        for item in DDGS().text(query, max_results=num):
+            results.append({
+                "title":   item.get("title", ""),
+                "url":     item.get("href", ""),
+                "snippet": item.get("body", ""),
+            })
+        if results:
+            return {"success": True, "query": query, "results": results, "provider": "duckduckgo"}
+        return {
+            "success": False,
+            "query":   query,
+            "results": [],
+            "error":   (
+                "DuckDuckGo returned no results (rate-limited). "
+                "推荐配置: BRAVE_SEARCH_API_KEY (免费2000次/月) 或 TAVILY_API_KEY (AI专用, 免费1000次/月)"
+            ),
+        }
+    except ImportError:
+        pass
+    except Exception as e:
+        logger.debug("duckduckgo_search failed: %s", e)
+
+    return {
+        "success": False,
+        "query":   query,
+        "results": [],
+        "error":   (
+            "无可用搜索服务。推荐配置:\n"
+            "  BRAVE_SEARCH_API_KEY — https://brave.com/search/api/ (免费2000次/月)\n"
+            "  TAVILY_API_KEY       — https://tavily.com (AI专用, 免费1000次/月)\n"
+            "  或安装: pip install duckduckgo-search"
+        ),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Tool registry  (must be after all function definitions)
+# ---------------------------------------------------------------------------
+
+LOCAL_FINANCE_TOOL_REGISTRY: Dict[str, Tuple] = {
+    # ── Market data (cloud → local fallback) ─────────────────────────────
+    "get_market_data":        (_get_market_data,        "Stock/ETF quotes and OHLCV history (A股/US/global, cloud-backed)"),
+    "get_crypto_data":        (_get_crypto_data,        "Cryptocurrency OHLCV and ticker data via ccxt/yfinance"),
+    "get_forex_data":         (_get_forex_data,         "Foreign exchange rates (yfinance)"),
+    "get_commodities_data":   (_get_commodities_data,   "Commodity futures prices: gold, oil, copper, wheat, etc. (yfinance)"),
+    "get_futures_data":       (_get_futures_data,       "Equity index futures: S&P, NASDAQ, VIX, Nikkei, etc. (yfinance)"),
+    # ── Factor & signal (cloud → local fallback) ─────────────────────────
+    "calculate_factors":      (_calculate_factors,      "Technical factors: RSI, MACD, MA gaps, volatility, momentum, trend score (cloud-enhanced)"),
+    "get_ai_signal":          (_get_ai_signal,          "AI trading signal: BUY/SELL/HOLD with confidence and reasoning (Alibaba Cloud DeepSeek)"),
+    "get_market_insights":    (_get_market_insights,    "AI narrative market insights for a basket of symbols (Alibaba Cloud)"),
+    "get_predictions":        (_get_predictions,        "ML-powered 5/10-day return predictions (Alibaba Cloud LightGBM/XGBoost)"),
+    # ── Backtest (cloud ML → local pandas fallback) ───────────────────────
+    "backtest_strategy":      (_backtest_strategy,      "Run a local pandas backtest: sma_cross | rsi_mean_revert | momentum | buy_hold"),
+    "cloud_backtest":         (_cloud_backtest,         "Full ML-powered backtest via Alibaba Cloud QuantEngine (rebalance freq, dynamic position)"),
+    # ── Risk & portfolio ──────────────────────────────────────────────────
+    "get_risk_metrics":       (_get_risk_metrics,       "VaR, CVaR, max drawdown, Sharpe, Calmar, skew, kurtosis"),
+    "optimize_positions":     (_optimize_positions,     "Portfolio optimisation: max_sharpe | min_var | equal_weight"),
+    # ── A股 data services ─────────────────────────────────────────────────
+    "get_sector_performance": (_get_sector_performance, "Sector performance ranking (A股 industry / US SPDR ETFs)"),
+    "get_northbound_flow":    (_get_northbound_flow,    "北向资金 (沪深港通) net buy flow via akshare"),
+    "screen_ashare":          (_screen_ashare,          "A股选股筛选: PE, ROE, market cap, momentum"),
+    "get_limit_up_pool":      (_get_limit_up_pool,      "A股涨停板池 (today's limit-up stocks via akshare)"),
+    "get_market_indices":     (_get_market_indices,     "Global market indices: US, CN, EU, crypto, commodities"),
+    # ── News & macro ──────────────────────────────────────────────────────
+    "analyze_news":           (_analyze_news,           "News sentiment analysis (A股 via akshare)"),
+    "get_bonds_data":         (_get_bonds_data,         "US Treasury yield curve (yfinance)"),
+    # ── Quality scores ────────────────────────────────────────────────────
+    "piotroski_fscore":       (_piotroski_fscore,       "Piotroski F-Score (0-9): 财务质量评分，≥7 高质量做多，≤3 低质量做空"),
+    "altman_zscore":          (_altman_zscore,          "Altman Z''-Score: 企业破产风险预测，>2.6安全，<1.1高风险"),
+    # ── Options ───────────────────────────────────────────────────────────
+    "get_options_chain":      (_get_options_chain,      "期权链: 获取股票的 calls/puts，含行权价、隐含波动率、未平仓量"),
+    # ── Technical indicators ──────────────────────────────────────────────
+    "calculate_ichimoku":     (_calculate_ichimoku,     "一目均衡表 Ichimoku Cloud: 转换线/基准线/先行带/迟行线，含信号判断"),
+    # ── Crypto ────────────────────────────────────────────────────────────
+    "get_fear_greed_index":   (_get_fear_greed_index,   "加密恐惧贪婪指数 (0-100)，>75极度贪婪/做空信号，<25极度恐惧/做多信号"),
+    "get_funding_rates":      (_get_funding_rates,      "永续合约资金费率 (ccxt): 高正费率=多头过热，负费率=空头过多"),
+    # ── Portfolio / backtesting ───────────────────────────────────────────
+    "walk_forward_backtest":  (_walk_forward_backtest,  "Walk-Forward 滚动回测：N个窗口验证策略泛化能力，避免过拟合"),
+    "peer_comparison":        (_peer_comparison,        "同行对比: PE/PB/ROE/市值/股息率横向比较，自动识别同行业股票"),
+    # ── Web search ────────────────────────────────────────────────────────
+    "web_search":             (_web_search,             "Web search via Brave Search API or DuckDuckGo fallback; set BRAVE_SEARCH_API_KEY for higher quota"),
+}
 
 # ---------------------------------------------------------------------------
 # Registration helper

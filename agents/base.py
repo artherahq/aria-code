@@ -61,17 +61,33 @@ class BaseAgent(ABC):
     name:        str = "base"
     description: str = "基础 Agent"
 
+    # Post-training IPO facts injected into every agent's system prompt
+    _POST_TRAINING_FACTS = (
+        "\n\n## ⚡ Critical post-training facts (override training memory)\n"
+        "- **SPCX** = SpaceX (Space Exploration Technologies Corp.) — IPO'd June 12, 2026 "
+        "on NASDAQ. It is NOT an ETF. ⛔ Never say 'SPCX is a China ETF' or 'SPCX is private'.\n"
+        "- **2026 FIFA World Cup** opened June 11, 2026 in USA/Canada/Mexico.\n"
+    )
+
+    # Language rule injected per-call based on detected user language
+    _LANG_RULES = {
+        "zh": "\n\n## Language rule\nRespond in Chinese (中文). Technical terms (RSI, MACD, P/E, EPS) may stay in English.\n",
+        "en": "\n\n## Language rule\nRespond in English.\n",
+    }
+
     def __init__(
         self,
         llm_provider=None,         # BaseLLMProvider 实例（可选，None 则用模板生成）
         data_router=None,          # DataRouter 实例（可选）
         on_token: Optional[Callable[[str], None]] = None,  # 流式 token 回调
         config: Optional[Dict] = None,
+        lang: str = "zh",          # user language: "zh" | "en"
     ):
         self.llm      = llm_provider
         self.data     = data_router
         self.on_token = on_token
         self.config   = config or {}
+        self.lang     = lang
 
     async def fetch_data(self, symbol: str) -> Dict[str, Any]:
         """
@@ -89,15 +105,36 @@ class BaseAgent(ABC):
             logger.debug(f"[{self.name}] fetch quote {symbol}: {e}")
         return result
 
+    def _data_guard(self, quote: Dict[str, Any]) -> str:
+        """Return a warning string if real data is unavailable; empty string if data is present."""
+        price = quote.get("price") if quote else None
+        if not price or float(price) == 0:
+            return (
+                "\n\n## ⛔ DATA UNAVAILABLE — STRICT RULES\n"
+                "Real market data could not be fetched (price=0 or missing).\n"
+                "You MUST:\n"
+                "1. State clearly that no real data is available.\n"
+                "2. NEVER invent specific prices, P/E ratios, EPS, revenue, RSI, MACD, or any numbers.\n"
+                "3. NEVER give specific price targets, stop-loss levels, or entry prices.\n"
+                "4. Give only qualitative analysis based on publicly known company characteristics.\n"
+                "5. End with the signal word (BUY/HOLD/SELL) but with low confidence (≤40%).\n"
+            )
+        return ""
+
     async def _call_llm(
         self,
         system: str,
         user: str,
         max_tokens: int = 800,
+        quote: Optional[Dict[str, Any]] = None,
     ) -> str:
         """调用 LLM 生成分析文本（无 LLM 时返回空字符串）"""
         if not self.llm:
             return ""
+        # Inject language rule + post-training facts + data guard into system prompt
+        _lang_rule = self._LANG_RULES.get(self.lang, self._LANG_RULES["zh"])
+        _data_warn = self._data_guard(quote or {})
+        system = system + self._POST_TRAINING_FACTS + _lang_rule + _data_warn
         from providers.llm.base import Message
         messages = [
             Message(role="system", content=system),

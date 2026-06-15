@@ -45,6 +45,12 @@ _try_import_builtin("agents.financial.macro",       "macro")
 _try_import_builtin("agents.financial.fundamental",  "fundamental")
 _try_import_builtin("agents.financial.risk",         "risk")
 _try_import_builtin("agents.financial.synthesis",    "synthesis")
+_try_import_builtin("agents.financial.news",         "news")
+_try_import_builtin("agents.financial.catalyst",     "catalyst")
+_try_import_builtin("agents.financial.debate",       "debate")
+_try_import_builtin("agents.financial.earnings",     "earnings")
+_try_import_builtin("agents.financial.sector",       "sector")
+_try_import_builtin("agents.portfolio_agent",        "portfolio")
 
 # ── 经营权共创平台 Agent 包 ────────────────────────────────────────────────────
 _try_import_builtin("agents.realty.asset_diagnosis",  "asset_diagnosis")

@@ -56,7 +56,7 @@ class TechnicalAgent(BaseAgent):
             "5) Conclusion: BULLISH / NEUTRAL / BEARISH"
         )
 
-        analysis = await self._call_llm(self._SYSTEM, prompt, max_tokens=600)
+        analysis = await self._call_llm(self._SYSTEM, prompt, max_tokens=600, quote=quote)
         if not analysis:
             analysis = _template_analysis(symbol, price, history)
 
@@ -175,21 +175,46 @@ def _format_indicators(history: Dict) -> str:
 
 
 def _extract_signal(analysis: str, history: Dict) -> str:
+    import re as _re
     text = analysis.upper()
+
+    # Unambiguous strong signals always win
     if "STRONG_BUY" in text or "强烈买入" in text:
         return "STRONG_BUY"
     if "STRONG_SELL" in text or "强烈卖出" in text:
         return "STRONG_SELL"
-    if "BULLISH" in text or "看多" in text or "BUY" in text:
+
+    # The LLM prompt asks the model to conclude with BULLISH/NEUTRAL/BEARISH.
+    # Use the LAST occurrence — it's the conclusion, not mid-text context like
+    # "a potential BULLISH reversal" appearing before "currently BEARISH".
+    matches = _re.findall(r'\b(BULLISH|BEARISH|NEUTRAL)\b', text)
+    if matches:
+        last = matches[-1]
+        if last == "BULLISH":
+            return "BUY"
+        if last == "BEARISH":
+            return "SELL"
+        # NEUTRAL → fall through to quantitative check below
+
+    # Explicit Chinese directional signals
+    if "看多" in analysis:
         return "BUY"
-    if "BEARISH" in text or "看空" in text or "SELL" in text:
+    if "看空" in analysis:
         return "SELL"
-    # 基于指标推断
-    rsi = history.get("rsi", 50)
-    if rsi < 30:
-        return "BUY"
-    if rsi > 70:
-        return "SELL"
+
+    # Quantitative fallback: score RSI + MACD crossover
+    rsi  = history.get("rsi", 50)
+    macd = history.get("macd", 0)
+    msig = history.get("macd_signal", 0)
+    score = 0
+    if rsi < 30:    score += 2   # oversold — strong mean-reversion signal
+    elif rsi < 45:  score -= 1
+    elif rsi > 70:  score -= 2   # overbought
+    elif rsi > 55:  score += 1
+    if macd > msig: score += 1
+    elif macd < msig: score -= 1
+    if score >= 2:  return "BUY"
+    if score <= -2: return "SELL"
     return "HOLD"
 
 

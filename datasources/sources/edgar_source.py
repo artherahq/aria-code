@@ -19,12 +19,14 @@ from typing import Any, Dict, List, Optional
 
 from ..base import BaseDataSource, FundamentalsResult, QuoteResult
 
+import os as _os
+
 logger = logging.getLogger(__name__)
 
 _EDGAR_API    = "https://data.sec.gov"
 _EDGAR_WWW    = "https://www.sec.gov"
 _HEADERS      = {
-    "User-Agent": "aria-code cinsoul9@gmail.com",  # SEC requires self-identification
+    "User-Agent": _os.environ.get("EDGAR_USER_AGENT", "aria-code contact@example.com"),  # SEC requires self-identification
     "Accept-Encoding": "gzip, deflate",
 }
 

@@ -56,15 +56,15 @@ class HistoryResult:
 
 @dataclass
 class FundamentalsResult:
-    symbol:         str
-    pe_ttm:         float = 0.0
-    pb:             float = 0.0
-    roe:            float = 0.0
-    revenue_growth: float = 0.0
-    net_profit_growth: float = 0.0
-    dividend_yield: float = 0.0
-    total_mv:       float = 0.0
-    source:         str   = ""
+    symbol:            str
+    pe_ttm:            Optional[float] = None
+    pb:                Optional[float] = None
+    roe:               Optional[float] = None
+    revenue_growth:    Optional[float] = None
+    net_profit_growth: Optional[float] = None
+    dividend_yield:    Optional[float] = None
+    total_mv:          Optional[float] = None
+    source:            str             = ""
 
 
 # ── 基类 ──────────────────────────────────────────────────────────────────────
@@ -118,20 +118,49 @@ class BaseDataSource(ABC):
 def _detect_market(symbol: str) -> str:
     """简单推断 symbol 所属市场"""
     s = symbol.upper().replace(" ", "")
+
     # 加密货币
-    if "/" in s or s in ("BTC", "ETH", "SOL", "DOGE", "BNB"):
+    if "/" in s or s in ("BTC", "ETH", "SOL", "DOGE", "BNB", "ADA", "XRP"):
         return "crypto"
+    if s.endswith(("-USD", "-USDT", "-BTC")) or s.endswith("USDT"):
+        return "crypto"
+
+    # 大宗商品
+    _COMMODITIES = {"WTI", "BRENT", "GOLD", "SILVER", "COPPER",
+                    "ALUMINUM", "WHEAT", "CORN", "SOYBEAN", "NATGAS", "GAS"}
+    if s in _COMMODITIES:
+        return "commodity"
+
+    # 外汇（格式: USDCNY, USD/CNY, EURUSD 等）
+    _FX_CURRENCIES = {"USD", "EUR", "GBP", "JPY", "CNY", "HKD",
+                      "AUD", "CAD", "CHF", "KRW", "SGD", "INR"}
+    if len(s) == 6 and s[:3] in _FX_CURRENCIES and s[3:] in _FX_CURRENCIES:
+        return "forex"
+    if "/" in s:
+        parts = s.split("/")
+        if len(parts) == 2 and parts[0] in _FX_CURRENCIES and parts[1] in _FX_CURRENCIES:
+            return "forex"
+
     # A股：数字代码 or 带前缀
     if s.startswith(("SH", "SZ", "BJ")):
         return "a_share"
     try:
-        n = int(s[:6])
+        int(s[:6])
         if len(s) == 6 or (len(s) > 6 and not s[6:].isalpha()):
             return "a_share"
     except ValueError:
         pass
+
     # 港股
     if s.endswith(".HK") or (s.isdigit() and len(s) == 5):
         return "hk"
+
+    # 宏观指标
+    _MACRO = {"GDP", "CPI", "CPIYOY", "PCE", "UNRATE", "NFP", "FEDFUNDS",
+              "US10Y", "US2Y", "US3M", "VIX", "M2", "MORTGAGE", "HOUSING",
+              "SP500", "NASDAQ", "WILSHIRE", "USDCNY", "USDINR", "USDEUR"}
+    if s in _MACRO:
+        return "macro"
+
     # 默认美股
     return "us"

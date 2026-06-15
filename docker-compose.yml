@@ -1,0 +1,136 @@
+version: "3.9"
+
+# ── Aria Code — Docker 部署方案 ────────────────────────────────────────────────
+#
+# 场景 A — 单用户（本机运行，含 Ollama）:
+#   docker compose up aria-local
+#
+# 场景 B — 多用户中继服务器（你部署，所有用户共用）:
+#   docker compose up relay-server
+#
+# 场景 C — 完整生产套件（中继 + Caddy 反代 + Ollama）:
+#   docker compose --profile full up
+
+services:
+
+  # ── 场景 A：本地 Aria 实例 ──────────────────────────────────────────────────
+  aria-local:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: aria-code:local
+    restart: unless-stopped
+    volumes:
+      - "${HOME}/.aria:/root/.aria"        # 持久化配置和会话
+      - "${HOME}/.ollama:/root/.ollama"    # 复用宿主 Ollama 模型（节省磁盘）
+    environment:
+      - ARIA_RELAY_URL=${ARIA_RELAY_URL:-wss://relay.aria.ai}
+      - ARIA_RELAY_CLIENT_ID=${ARIA_RELAY_CLIENT_ID}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - FEISHU_APP_ID=${FEISHU_APP_ID:-}
+      - FEISHU_APP_SECRET=${FEISHU_APP_SECRET:-}
+      - FEISHU_WEBHOOK_URL=${FEISHU_WEBHOOK_URL:-}
+      - OLLAMA_BASE_URL=http://ollama:11434
+    depends_on:
+      ollama:
+        condition: service_healthy
+    networks:
+      - aria-net
+    command: python3 aria_daemon.py
+
+  # ── 中继客户端（在 aria-local 基础上额外运行 relay client）──────────────────
+  aria-relay-client:
+    image: aria-code:local
+    restart: unless-stopped
+    volumes:
+      - "${HOME}/.aria:/root/.aria"
+    environment:
+      - ARIA_RELAY_URL=${ARIA_RELAY_URL:-wss://relay.aria.ai}
+      - ARIA_RELAY_CLIENT_ID=${ARIA_RELAY_CLIENT_ID}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - FEISHU_APP_ID=${FEISHU_APP_ID:-}
+      - FEISHU_APP_SECRET=${FEISHU_APP_SECRET:-}
+      - OLLAMA_BASE_URL=http://ollama:11434
+    depends_on:
+      - aria-local
+      - ollama
+    networks:
+      - aria-net
+    command: python3 aria_relay_client.py
+
+  # ── 场景 B：中继服务器（产品方部署一次）────────────────────────────────────
+  relay-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.relay
+    image: aria-relay-server:latest
+    restart: unless-stopped
+    ports:
+      - "8765:8765"
+    volumes:
+      - relay-data:/data
+    environment:
+      - FEISHU_APP_ID=${FEISHU_APP_ID}
+      - FEISHU_APP_SECRET=${FEISHU_APP_SECRET}
+      - RELAY_SECRET=${RELAY_SECRET:-}
+      - DB_PATH=/data/relay.db
+      - MESSAGE_TIMEOUT=90
+      - PORT=8765
+    networks:
+      - aria-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8765/status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ── Caddy 反向代理（自动 HTTPS）─────────────────────────────────────────────
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["full"]
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      - aria-net
+    depends_on:
+      - relay-server
+
+  # ── Ollama 本地 LLM ─────────────────────────────────────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    volumes:
+      - ollama-models:/root/.ollama
+    networks:
+      - aria-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+    # GPU support: uncomment if you have NVIDIA GPU
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+volumes:
+  relay-data:
+  ollama-models:
+  caddy-data:
+  caddy-config:
+
+networks:
+  aria-net:
+    driver: bridge

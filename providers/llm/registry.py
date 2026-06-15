@@ -185,9 +185,22 @@ def _build_cfg(name: str, model: Optional[str] = None) -> ProviderConfig:
     cfg = ProviderConfig.from_env(name)
     file_cfg = _load_provider_cfg_from_file(name)
 
-    # 补充 api_key（文件里的）
+    # 补充 api_key（文件里的）— 环境变量已在 from_env() 中优先读取；
+    # 文件是后备：提示用户改用环境变量以避免明文存储 key。
     if not cfg.api_key and file_cfg.get("api_key"):
         cfg.api_key = file_cfg["api_key"]
+        _env_names = {
+            "deepseek": "DEEPSEEK_API_KEY", "openai": "OPENAI_API_KEY",
+            "anthropic": "ANTHROPIC_API_KEY", "groq": "GROQ_API_KEY",
+            "siliconflow": "SILICONFLOW_API_KEY", "moonshot": "MOONSHOT_API_KEY",
+            "zhipu": "ZHIPUAI_API_KEY", "dashscope": "DASHSCOPE_API_KEY",
+        }
+        if name.lower() in _env_names:
+            logger.warning(
+                "⚠ API key for '%s' loaded from ~/.arthera/providers.json (plaintext). "
+                "Migrate to env var: export %s=<key>  then remove api_key from providers.json.",
+                name, _env_names[name.lower()],
+            )
     # 补充 base_url（支持用户自定义端点 / 代理）
     if not cfg.base_url and file_cfg.get("base_url"):
         cfg.base_url = file_cfg["base_url"]

@@ -30,8 +30,11 @@ from aria_cli import (
     _is_coding_request,
     _is_analysis_request,
     _ACTIVE_WRITE_POLICY,
+    _ACTIVE_PERMISSION_MODE,
+    _ACTIVE_NETWORK_ENABLED,
     _sync_write_policy,
 )
+from change_store import ChangeConflictError, GLOBAL_CHANGE_STORE
 
 
 # ============================================================================
@@ -105,9 +108,24 @@ class TestFileTools(unittest.TestCase):
         content = "import os\nimport sys\n\nx = 42\nprint('result:', x)\n"
         result = _tool_write_file({"path": self.test_file, "content": content})
         self.assertTrue(result["success"], result.get("error"))
+        self.assertTrue(result["data"]["applied"])
+        self.assertIn("change_id", result["data"])
         read = _tool_read_file({"path": self.test_file})
         self.assertTrue(read["success"])
         self.assertIn("x = 42", read["data"]["content"])
+
+    def test_stage_only_write_requires_explicit_apply(self):
+        content = "import os\nimport sys\n\nx = 99\nprint('result:', x)\n"
+        result = _tool_write_file({"path": self.test_file, "content": content, "stage_only": True})
+        self.assertTrue(result["success"], result.get("error"))
+        self.assertFalse(result["data"]["applied"])
+        self.assertFalse(os.path.exists(self.test_file))
+
+        change_id = result["data"]["change_id"]
+        GLOBAL_CHANGE_STORE.apply(change_id)
+        self.assertTrue(os.path.exists(self.test_file))
+        read = _tool_read_file({"path": self.test_file})
+        self.assertIn("x = 99", read["data"]["content"])
 
     def test_read_nonexistent_file(self):
         result = _tool_read_file({"path": "/tmp/nonexistent_aria_test_xyz.txt"})
@@ -130,8 +148,24 @@ class TestFileTools(unittest.TestCase):
             "new_string": "x = 42",
         })
         self.assertTrue(result["success"], result.get("error"))
+        self.assertTrue(result["data"]["applied"])
         read = _tool_read_file({"path": self.test_file})
         self.assertIn("x = 42", read["data"]["content"])
+
+    def test_stage_only_edit_conflict_detection(self):
+        _tool_write_file({"path": self.test_file, "content": "import os\n\nx = 1\nprint(x)\n"})
+        result = _tool_edit_file({
+            "path": self.test_file,
+            "old_string": "x = 1",
+            "new_string": "x = 7",
+            "stage_only": True,
+        })
+        self.assertTrue(result["success"], result.get("error"))
+        change_id = result["data"]["change_id"]
+        with open(self.test_file, "w", encoding="utf-8") as f:
+            f.write("import os\n\nx = 3\nprint(x)\n")
+        with self.assertRaises(ChangeConflictError):
+            GLOBAL_CHANGE_STORE.apply(change_id)
 
     def test_edit_file_old_string_not_found(self):
         _tool_write_file({"path": self.test_file, "content": "x = 1\nprint(x)\n"})
@@ -222,7 +256,7 @@ class TestPromptRouting(unittest.TestCase):
 
 class TestConfig(unittest.TestCase):
     def test_default_config_has_required_keys(self):
-        for key in ("api_url", "model", "thinking_mode", "command_policy", "watchlist"):
+        for key in ("api_url", "model", "thinking_mode", "command_policy", "permission_mode", "network_enabled", "watchlist"):
             self.assertIn(key, DEFAULT_CONFIG)
 
     def test_resolve_model_key_aliases(self):
@@ -383,6 +417,14 @@ class TestWritePolicy(unittest.TestCase):
         self.assertEqual(_ACTIVE_WRITE_POLICY[0], "confirm_outside")
         _sync_write_policy({})  # missing key → defaults to desktop_only
         self.assertEqual(_ACTIVE_WRITE_POLICY[0], "desktop_only")
+
+    def test_sync_permission_and_network_policy(self):
+        _sync_write_policy({"permission_mode": "read-only", "network_enabled": False})
+        self.assertEqual(_ACTIVE_PERMISSION_MODE[0], "read-only")
+        self.assertFalse(_ACTIVE_NETWORK_ENABLED[0])
+        _sync_write_policy({})
+        self.assertEqual(_ACTIVE_PERMISSION_MODE[0], "workspace-write")
+        self.assertTrue(_ACTIVE_NETWORK_ENABLED[0])
 
     def test_default_config_has_write_policy(self):
         self.assertIn("write_policy", DEFAULT_CONFIG)

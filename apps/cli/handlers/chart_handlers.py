@@ -24,139 +24,416 @@ def _fmt_int(value) -> str:
         return "N/A"
 
 
+def _review_chart(symbol: str, last_close: float, high_52w: float, low_52w: float,
+                  rsi14, ma20, ma60, bb_up, bb_lo, sup3, res3, n_bars: int) -> list[str]:
+    """
+    自审函数：检查图表数据质量，返回问题列表（空列表 = 通过）。
+    在 cmd_chart 中调用，用于发现并反馈图表异常。
+    """
+    issues = []
+    if last_close <= 0:
+        issues.append("价格数据异常（收盘价 ≤ 0）")
+    if n_bars < 20:
+        issues.append(f"历史数据不足 20 根 K 线（仅 {n_bars} 根），指标不可靠")
+    if rsi14 is None:
+        issues.append("RSI 计算失败（数据可能不足 14 根）")
+    elif not (0 < rsi14 < 100):
+        issues.append(f"RSI 值异常: {rsi14:.1f}（应在 0-100 之间）")
+    if ma20 and last_close > 0:
+        if abs(ma20 / last_close - 1) > 0.5:
+            issues.append(f"MA20 偏离价格超 50%，数据可能存在复权误差（MA20={ma20:.2f} 价格={last_close:.2f}）")
+    if bb_up and bb_lo and bb_up <= bb_lo:
+        issues.append("布林带上下轨计算倒置（BB_UP <= BB_LO）")
+    if sup3 and min(sup3) >= last_close:
+        issues.append("支撑位计算有误（支撑位不应高于现价）")
+    if res3 and max(res3) <= last_close:
+        issues.append("阻力位计算有误（阻力位不应低于现价）")
+    price_range_pct = (high_52w - low_52w) / low_52w * 100 if low_52w > 0 else 0
+    if price_range_pct > 1000:
+        issues.append(f"52周价格波动超 1000%（{price_range_pct:.0f}%），可能存在股票分拆/复权问题")
+    return issues
+
+
 def handle_stock_chart_analysis_direct(symbol: str, period: str = "1y") -> dict:
-    """直接调用图表逻辑（不经过消息解析）"""
+    """
+    生成专业股票分析图表 (HTML)，并自审数据质量。
+    四面板：K线+均线+布林带 / 成交量 / RSI(14) / MACD柱状图
+    A股（.SS/.SZ）自动切换红涨绿跌配色。
+    """
     import html as _html
+    import math
     try:
         import pandas as _pd
         import yfinance as _yf
     except Exception as exc:
         return {"success": False, "error": f"缺少依赖: {exc}"}
 
-    # Normalize period aliases
     _PERIOD_MAP = {
         "1m": "1mo", "3m": "3mo", "6m": "6mo",
-        "1y": "1y", "2y": "2y", "3y": "3y", "5y": "5y",
+        "1y": "1y",  "2y": "2y",  "3y": "3y", "5y": "5y",
         "ytd": "ytd", "max": "max",
     }
     period = _PERIOD_MAP.get(period.lower(), period)
 
+    # A股判断（影响K线颜色惯例）
+    is_ashare = symbol.upper().endswith((".SS", ".SZ"))
+
+    # ── 获取历史数据 ────────────────────────────────────────────────────────────
     ticker = _yf.Ticker(symbol)
+    hist   = None
+    err1   = ""
     try:
-        hist = ticker.history(period=period, interval="1d", auto_adjust=False)
-    except Exception:
-        hist = None
+        hist = ticker.history(period=period, interval="1d", auto_adjust=True)
+        if hist is not None and not hist.empty and "Close" not in hist.columns:
+            hist.columns = [c.title() for c in hist.columns]
+    except Exception as exc:
+        err1 = str(exc)
 
     if hist is None or hist.empty:
-        return {"success": False, "error": f"无法获取 {symbol} 行情数据"}
+        try:
+            import requests as _req
+            p2   = int(time.time())
+            _DAY = {"1mo": 35, "3mo": 100, "6mo": 185, "ytd": 370,
+                    "1y": 370, "2y": 740, "3y": 1100, "5y": 1830, "max": 7300}
+            p1   = p2 - _DAY.get(period, 370) * 86400
+            url  = (f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+                    f"?period1={p1}&period2={p2}&interval=1d&events=history")
+            r    = _req.get(url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
+            r.raise_for_status()
+            res  = (r.json().get("chart", {}).get("result") or [None])[0]
+            if res:
+                q    = ((res.get("indicators") or {}).get("quote") or [{}])[0]
+                hist = _pd.DataFrame({
+                    "Open":   q.get("open",   []),
+                    "High":   q.get("high",   []),
+                    "Low":    q.get("low",    []),
+                    "Close":  q.get("close",  []),
+                    "Volume": q.get("volume", []),
+                }, index=_pd.to_datetime(res.get("timestamp", []), unit="s")).dropna(subset=["Close"])
+        except Exception as exc:
+            return {"success": False, "error": f"无法获取 {symbol} 数据: {err1 or exc}"}
+
+    if hist is None or hist.empty:
+        return {"success": False, "error": f"无法获取 {symbol} 历史数据"}
 
     hist = hist.dropna(subset=["Close"]).copy()
-    hist["MA20"] = hist["Close"].rolling(20).mean()
-    hist["MA50"] = hist["Close"].rolling(50).mean()
-    delta = hist["Close"].diff()
-    gain  = delta.clip(lower=0).rolling(14).mean()
-    loss  = (-delta.clip(upper=0)).rolling(14).mean()
-    hist["RSI14"] = 100 - (100 / (1 + gain / loss.replace(0, _pd.NA)))
-    ema12 = hist["Close"].ewm(span=12, adjust=False).mean()
-    ema26 = hist["Close"].ewm(span=26, adjust=False).mean()
-    hist["MACD"]        = ema12 - ema26
-    hist["MACD_SIGNAL"] = hist["MACD"].ewm(span=9, adjust=False).mean()
+
+    # ── 指标计算 ────────────────────────────────────────────────────────────────
+    hist["MA20"]    = hist["Close"].rolling(20).mean()
+    hist["MA60"]    = hist["Close"].rolling(60).mean()
+    _std20          = hist["Close"].rolling(20).std()
+    hist["BB_UP"]   = hist["MA20"] + 2 * _std20
+    hist["BB_LO"]   = hist["MA20"] - 2 * _std20
+    _delta          = hist["Close"].diff()
+    _gain           = _delta.clip(lower=0).rolling(14).mean()
+    _loss           = (-_delta.clip(upper=0)).rolling(14).mean()
+    hist["RSI14"]   = 100 - (100 / (1 + _gain / _loss.replace(0, _pd.NA)))
+    _ema12          = hist["Close"].ewm(span=12, adjust=False).mean()
+    _ema26          = hist["Close"].ewm(span=26, adjust=False).mean()
+    hist["MACD"]    = _ema12 - _ema26
+    hist["MACD_SIG"]= hist["MACD"].ewm(span=9, adjust=False).mean()
+    hist["MACD_HIS"]= hist["MACD"] - hist["MACD_SIG"]
 
     last       = hist.iloc[-1]
     last_close = float(last["Close"])
+    high_52w   = float(hist["High"].max()) if "High" in hist.columns else float(hist["Close"].max())
+    low_52w    = float(hist["Low"].min())  if "Low"  in hist.columns else float(hist["Close"].min())
+    ma20       = float(last["MA20"])     if _pd.notna(last["MA20"])     else None
+    ma60       = float(last["MA60"])     if _pd.notna(last["MA60"])     else None
+    bb_up      = float(last["BB_UP"])    if _pd.notna(last["BB_UP"])    else None
+    bb_lo      = float(last["BB_LO"])    if _pd.notna(last["BB_LO"])    else None
+    rsi14      = float(last["RSI14"])    if _pd.notna(last["RSI14"])    else None
+    macd_v     = float(last["MACD"])     if _pd.notna(last["MACD"])     else None
+    macd_s_val = float(last["MACD_SIG"]) if _pd.notna(last["MACD_SIG"]) else None
+
+    # ── 支撑/阻力（10棒摆动点，去重后取最近3个）──────────────────────────────
+    _sup_lvls: list[float] = []
+    _res_lvls: list[float] = []
+    if "High" in hist.columns and "Low" in hist.columns and len(hist) >= 20:
+        _win = 10  # 10棒窗口过滤噪音，比5棒更稳健
+        _h   = hist["High"].values
+        _l   = hist["Low"].values
+        for i in range(_win, len(hist) - _win):
+            if float(_h[i]) == float(max(_h[i - _win:i + _win + 1])):
+                _res_lvls.append(float(_h[i]))
+            if float(_l[i]) == float(min(_l[i - _win:i + _win + 1])):
+                _sup_lvls.append(float(_l[i]))
+    # MA 作为动态支撑/阻力
+    if ma20:
+        (_sup_lvls if last_close > ma20 else _res_lvls).append(ma20)
+    if ma60:
+        (_sup_lvls if last_close > ma60 else _res_lvls).append(ma60)
+    # 布林带
+    if bb_lo:
+        _sup_lvls.append(bb_lo)
+    if bb_up:
+        _res_lvls.append(bb_up)
+    sup3 = sorted(set(round(v, 2) for v in _sup_lvls if v < last_close), reverse=True)[:3]
+    res3 = sorted(set(round(v, 2) for v in _res_lvls if v > last_close))[:3]
+
+    # ── 基本面 ──────────────────────────────────────────────────────────────────
     info = {}
     try:
         info = ticker.get_info() or {}
     except Exception:
         pass
+    name       = info.get("longName") or info.get("shortName") or symbol
+    currency   = info.get("currency") or ("CNY" if is_ashare else "USD")
+    pe         = info.get("trailingPE")
+    pb         = info.get("priceToBook")
+    roe        = info.get("returnOnEquity")
+    div_yield  = info.get("trailingAnnualDividendYield") or info.get("dividendYield")
+    market_cap = info.get("marketCap")
 
-    name     = info.get("longName") or info.get("shortName") or symbol
-    currency = info.get("currency", "USD")
+    def _fv(v, mult=1.0, pct=False):
+        if v is None or (isinstance(v, float) and (math.isnan(v) or v == 0)):
+            return "—"
+        x = float(v) * mult
+        return f"{x:.2f}%" if pct else f"{x:,.2f}"
 
-    safe_sym = re.sub(r"[^A-Za-z0-9_.-]+", "_", symbol)
+    def _mcap(v):
+        if not v:
+            return "—"
+        if v >= 1e12: return f"{v/1e12:.2f}T"
+        if v >= 1e9:  return f"{v/1e9:.1f}B"
+        if v >= 1e8:  return f"{v/1e8:.1f}亿"
+        return f"{v:,.0f}"
+
+    trend    = ("偏多" if ma20 and ma60 and last_close > ma20 > ma60 else
+                "偏空" if ma20 and ma60 and last_close < ma20 < ma60 else "震荡")
+    rsi_view = ("超买" if rsi14 and rsi14 >= 70 else "超卖" if rsi14 and rsi14 <= 30 else "中性")
+    momentum = "MACD↑多" if macd_v and macd_s_val and macd_v > macd_s_val else "MACD↓弱"
+
+    # ── K线颜色惯例 ────────────────────────────────────────────────────────────
+    # 中国A股：红涨绿跌  |  美股/港股/加密：绿涨红跌
+    if is_ashare:
+        inc_color = "#dc2626"   # 红 = 涨
+        dec_color = "#16a34a"   # 绿 = 跌
+        vol_up_c  = "rgba(220,38,38,0.75)"
+        vol_dn_c  = "rgba(22,163,74,0.75)"
+        macd_pos  = "rgba(220,38,38,0.75)"
+        macd_neg  = "rgba(22,163,74,0.75)"
+    else:
+        inc_color = "#16a34a"   # 绿 = 涨
+        dec_color = "#dc2626"   # 红 = 跌
+        vol_up_c  = "rgba(22,163,74,0.75)"
+        vol_dn_c  = "rgba(220,38,38,0.75)"
+        macd_pos  = "rgba(22,163,74,0.75)"
+        macd_neg  = "rgba(220,38,38,0.75)"
+
+    # ── 序列化 ──────────────────────────────────────────────────────────────────
+    def _ser(col):
+        return json.dumps([None if (v is None or (isinstance(v, float) and math.isnan(v)))
+                           else round(float(v), 4) for v in hist[col]])
+
+    def _ser_int(col):
+        if col not in hist.columns:
+            return "[]"
+        return json.dumps([None if (v is None or (isinstance(v, float) and math.isnan(v)))
+                           else int(float(v)) for v in hist[col]])
+
+    x_dates = json.dumps([idx.strftime("%Y-%m-%d") for idx in hist.index])
+    open_s  = _ser("Open")  if "Open"  in hist.columns else _ser("Close")
+    high_s  = _ser("High")  if "High"  in hist.columns else _ser("Close")
+    low_s   = _ser("Low")   if "Low"   in hist.columns else _ser("Close")
+    close_s = _ser("Close")
+    vol_s   = _ser_int("Volume")
+    ma20_s  = _ser("MA20")
+    ma60_s  = _ser("MA60")
+    bbup_s  = _ser("BB_UP")
+    bblo_s  = _ser("BB_LO")
+    rsi_s   = _ser("RSI14")
+    macd_s2 = _ser("MACD")
+    macds_s = _ser("MACD_SIG")
+    macdh_s = _ser("MACD_HIS")
+
+    # 成交量/MACD颜色（JSON 串）
+    closes = hist["Close"].values
+    vol_colors = json.dumps([
+        vol_up_c if (i > 0 and not math.isnan(float(closes[i])) and
+                     float(closes[i]) >= float(closes[i-1])) else vol_dn_c
+        for i in range(len(closes))
+    ])
+    macd_colors = json.dumps([
+        macd_pos if (v is not None and not math.isnan(float(v)) and float(v) >= 0) else macd_neg
+        for v in hist["MACD_HIS"].values
+    ])
+
+    # 支撑/阻力 shapes（只绘制在价格面板 y轴内）
+    sup_shapes = "".join(
+        f'{{type:"line",xref:"paper",x0:0,x1:1,yref:"y",y0:{v},y1:{v},'
+        f'line:{{color:"#22c55e",width:1.2,dash:"dot"}}}},'
+        for v in sup3
+    )
+    res_shapes = "".join(
+        f'{{type:"line",xref:"paper",x0:0,x1:1,yref:"y",y0:{v},y1:{v},'
+        f'line:{{color:"#f97316",width:1.2,dash:"dot"}}}},'
+        for v in res3
+    )
+
+    # ── 自审 ────────────────────────────────────────────────────────────────────
+    review_issues = _review_chart(
+        symbol, last_close, high_52w, low_52w,
+        rsi14, ma20, ma60, bb_up, bb_lo, sup3, res3, len(hist)
+    )
+
+    # ── 生成 HTML ────────────────────────────────────────────────────────────────
+    safe_sym  = re.sub(r"[^A-Za-z0-9_.-]+", "_", symbol)
     from artifacts import create_artifact, write_artifact_metadata, write_artifact_raw_data
     _artifact = create_artifact("reports/stock-charts", symbol, f"{safe_sym}_chart", ".html")
-    out_file = _artifact.path
+    out_file  = _artifact.path
 
-    x        = [idx.strftime("%Y-%m-%d") for idx in hist.index]
-    close_v  = [None if _pd.isna(v) else round(float(v), 4) for v in hist["Close"]]
-    ma20_v   = [None if _pd.isna(v) else round(float(v), 4) for v in hist["MA20"]]
-    ma50_v   = [None if _pd.isna(v) else round(float(v), 4) for v in hist["MA50"]]
-    rsi_v    = [None if _pd.isna(v) else round(float(v), 1) for v in hist["RSI14"]]
-    macd_v   = [None if _pd.isna(v) else round(float(v), 4) for v in hist["MACD"]]
-    macd_s_v = [None if _pd.isna(v) else round(float(v), 4) for v in hist["MACD_SIGNAL"]]
+    # 配色标注
+    color_note = "红涨绿跌（A股惯例）" if is_ashare else "绿涨红跌（国际惯例）"
+    rsi_color  = "red" if rsi14 and rsi14 >= 70 else ("green" if rsi14 and rsi14 <= 30 else "")
+    cg = lambda ok: "green" if ok else "red"
 
-    rsi14  = float(last["RSI14"]) if _pd.notna(last.get("RSI14")) else None
-    ma20   = float(last["MA20"]) if _pd.notna(last.get("MA20")) else None
-    ma50   = float(last["MA50"]) if _pd.notna(last.get("MA50")) else None
-    macd_l = float(last["MACD"]) if _pd.notna(last.get("MACD")) else None
-    macd_s = float(last["MACD_SIGNAL"]) if _pd.notna(last.get("MACD_SIGNAL")) else None
+    cards_html = f"""
+  <div class="card"><div class="lbl">最新收盘</div><div class="val">{currency} {last_close:,.2f}</div></div>
+  <div class="card"><div class="lbl">52周区间</div><div class="val small">{low_52w:,.2f} — {high_52w:,.2f}</div></div>
+  <div class="card"><div class="lbl">MA20</div><div class="val {cg(ma20 and last_close>ma20)}">{f'{ma20:,.2f}' if ma20 else '—'}</div></div>
+  <div class="card"><div class="lbl">MA60</div><div class="val {cg(ma60 and last_close>ma60)}">{f'{ma60:,.2f}' if ma60 else '—'}</div></div>
+  <div class="card"><div class="lbl">布林上/下轨</div><div class="val small">{f'{bb_up:,.2f}' if bb_up else '—'} / {f'{bb_lo:,.2f}' if bb_lo else '—'}</div></div>
+  <div class="card"><div class="lbl">RSI(14)</div><div class="val {rsi_color}">{f'{rsi14:.1f}' if rsi14 else '—'} {rsi_view}</div></div>
+  <div class="card"><div class="lbl">趋势 / 动能</div><div class="val">{trend} · {momentum}</div></div>
+  <div class="card"><div class="lbl">P/E</div><div class="val">{_fv(pe)}</div></div>
+  <div class="card"><div class="lbl">P/B</div><div class="val">{_fv(pb)}</div></div>
+  <div class="card"><div class="lbl">ROE</div><div class="val">{_fv(roe, 100, pct=True)}</div></div>
+  <div class="card"><div class="lbl">股息率</div><div class="val">{_fv(div_yield, 100, pct=True)}</div></div>
+  <div class="card"><div class="lbl">市值</div><div class="val">{_mcap(market_cap)}</div></div>"""
+    if sup3:
+        cards_html += f'\n  <div class="card sup"><div class="lbl">支撑位</div><div class="val small">{" / ".join(str(v) for v in sup3)}</div></div>'
+    if res3:
+        cards_html += f'\n  <div class="card res"><div class="lbl">阻力位</div><div class="val small">{" / ".join(str(v) for v in res3)}</div></div>'
 
-    trend    = ("偏多" if ma20 and ma50 and last_close > ma20 > ma50 else
-                "偏空" if ma20 and ma50 and last_close < ma20 < ma50 else "震荡")
-    rsi_view = ("超买" if rsi14 and rsi14 >= 70 else "超卖" if rsi14 and rsi14 <= 30 else "中性")
-    momentum = "MACD偏多" if macd_l and macd_s and macd_l > macd_s else "MACD偏弱"
+    warn_html = ""
+    if review_issues:
+        warn_items = "".join(f"<li>{_html.escape(iss)}</li>" for iss in review_issues)
+        warn_html = f'<div class="warn"><strong>⚠ 图表自审发现 {len(review_issues)} 个问题：</strong><ul>{warn_items}</ul></div>'
 
     html_doc = f"""<!doctype html>
-<html lang="zh-CN"><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{_html.escape(name)} 分析图表</title>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{_html.escape(name)} ({_html.escape(symbol)}) 分析图表</title>
 <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
 <style>
-  body{{margin:0;font-family:-apple-system,sans-serif;background:#f7f8fa;color:#17202a}}
-  main{{max-width:1100px;margin:0 auto;padding:24px}}
-  h1{{margin:0 0 4px;font-size:24px}} .meta{{color:#667085;font-size:13px;margin-bottom:16px}}
-  .grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px;margin:12px 0}}
-  .card{{background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:12px}}
-  .lbl{{color:#667085;font-size:11px}} .val{{font-size:17px;font-weight:650;margin-top:3px}}
-  .green{{color:#16a34a}} .red{{color:#dc2626}} .note{{color:#9ca3af;font-size:12px;margin-top:12px}}
-</style></head>
-<body><main>
-<h1>{_html.escape(name)} ({_html.escape(symbol)})</h1>
-<p class="meta">生成时间: {datetime.now():%Y-%m-%d %H:%M} | 数据来源: Yahoo Finance | Aria Code</p>
-<div class="grid">
-  <div class="card"><div class="lbl">最新收盘</div>
-    <div class="val">{currency} {last_close:,.2f}</div></div>
-  <div class="card"><div class="lbl">MA20</div>
-    <div class="val {'green' if ma20 and last_close > ma20 else 'red'}">{f'{ma20:,.2f}' if ma20 else '—'}</div></div>
-  <div class="card"><div class="lbl">MA50</div>
-    <div class="val {'green' if ma50 and last_close > ma50 else 'red'}">{f'{ma50:,.2f}' if ma50 else '—'}</div></div>
-  <div class="card"><div class="lbl">RSI(14)</div>
-    <div class="val {'red' if rsi14 and rsi14>=70 else 'green' if rsi14 and rsi14<=30 else ''}">{f'{rsi14:.1f}' if rsi14 else '—'} {rsi_view}</div></div>
-  <div class="card"><div class="lbl">趋势</div><div class="val">{trend}</div></div>
-  <div class="card"><div class="lbl">动能</div><div class="val">{momentum}</div></div>
+  *{{box-sizing:border-box}}
+  body{{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f0f2f5;color:#17202a}}
+  main{{max-width:1320px;margin:0 auto;padding:18px 20px}}
+  h1{{margin:0 0 2px;font-size:21px;font-weight:700}}
+  .meta{{color:#6b7280;font-size:11.5px;margin-bottom:12px}}
+  .cards{{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:7px;margin-bottom:12px}}
+  .card{{background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:9px 11px}}
+  .card.sup{{border-left:3px solid #22c55e}} .card.res{{border-left:3px solid #f97316}}
+  .lbl{{color:#6b7280;font-size:10.5px;font-weight:500;text-transform:uppercase;letter-spacing:.3px}}
+  .val{{font-size:14px;font-weight:700;margin-top:2px}} .val.small{{font-size:11.5px;font-weight:600}}
+  .green{{color:#16a34a}} .red{{color:#dc2626}}
+  #chart{{background:#fff;border:1px solid #e5e7eb;border-radius:10px}}
+  .footer{{color:#9ca3af;font-size:11px;margin-top:8px;text-align:center}}
+  .warn{{background:#fef3c7;border:1px solid #f59e0b;border-radius:8px;padding:10px 14px;margin-bottom:10px;font-size:12px;color:#92400e}}
+  .warn ul{{margin:4px 0 0 16px;padding:0}}
+</style>
+</head>
+<body>
+<main>
+<h1>{_html.escape(name)} <span style="font-weight:400;color:#6b7280">({_html.escape(symbol)})</span></h1>
+<p class="meta">生成: {datetime.now():%Y-%m-%d %H:%M}  ·  数据: Yahoo Finance  ·  周期: {period}  ·  配色: {color_note}  ·  Aria Code</p>
+{warn_html}<div class="cards">{cards_html}
 </div>
-<div id="price-chart"></div>
-<div id="rsi-chart" style="margin-top:8px"></div>
-<div id="macd-chart" style="margin-top:8px"></div>
-<p class="note">⚠️ 本图表仅供参考，不构成投资建议。</p>
+<div id="chart"></div>
+<p class="footer">⚠ 仅供参考，不构成投资建议。&nbsp; 绿虚线=支撑位 &nbsp;|&nbsp; 橙虚线=阻力位</p>
 </main>
 <script>
-const x={x};
-Plotly.newPlot('price-chart',[
-  {{x,y:{close_v},type:'scatter',name:'收盘价',line:{{color:'#2563eb',width:2}}}},
-  {{x,y:{ma20_v}, type:'scatter',name:'MA20', line:{{color:'#f59e0b',width:1.5,dash:'dot'}}}},
-  {{x,y:{ma50_v}, type:'scatter',name:'MA50', line:{{color:'#ef4444',width:1.5,dash:'dot'}}}}
-],{{title:'{_html.escape(symbol)} 价格走势',height:340,plot_bgcolor:'#fff',
-   paper_bgcolor:'#fff',xaxis:{{showgrid:true,gridcolor:'#f3f4f6'}},
-   yaxis:{{showgrid:true,gridcolor:'#f3f4f6',title:'价格 ({currency})'}}}},
-  {{responsive:true,displaylogo:false}});
-Plotly.newPlot('rsi-chart',[
-  {{x,y:{rsi_v},type:'scatter',name:'RSI(14)',line:{{color:'#8b5cf6',width:1.5}}}}
-],{{title:'RSI(14)',height:180,plot_bgcolor:'#fff',paper_bgcolor:'#fff',
-   shapes:[{{type:'line',x0:x[0],x1:x[x.length-1],y0:70,y1:70,
-              line:{{color:'#dc2626',width:1,dash:'dot'}}}},
-             {{type:'line',x0:x[0],x1:x[x.length-1],y0:30,y1:30,
-              line:{{color:'#16a34a',width:1,dash:'dot'}}}}]}},
-  {{responsive:true,displaylogo:false}});
-Plotly.newPlot('macd-chart',[
-  {{x,y:{macd_v},  type:'scatter',name:'MACD', line:{{color:'#2563eb',width:1.5}}}},
-  {{x,y:{macd_s_v},type:'scatter',name:'Signal',line:{{color:'#f59e0b',width:1.5,dash:'dot'}}}}
-],{{title:'MACD',height:180,plot_bgcolor:'#fff',paper_bgcolor:'#fff'}},
-  {{responsive:true,displaylogo:false}});
-</script></body></html>"""
+const x      = {x_dates};
+const op     = {open_s};
+const hi     = {high_s};
+const lo     = {low_s};
+const cl     = {close_s};
+const vol    = {vol_s};
+const volClr = {vol_colors};
+const ma20   = {ma20_s};
+const ma60   = {ma60_s};
+const bbUp   = {bbup_s};
+const bbLo   = {bblo_s};
+const rsi    = {rsi_s};
+const macd   = {macd_s2};
+const macdSg = {macds_s};
+const macdHi = {macdh_s};
+const macdHiClr = {macd_colors};
+
+const traces = [
+  /* K线 */
+  {{x,open:op,high:hi,low:lo,close:cl,type:"candlestick",name:"K线",
+    increasing:{{line:{{color:"{inc_color}"}},fillcolor:"{inc_color}"}},
+    decreasing:{{line:{{color:"{dec_color}"}},fillcolor:"{dec_color}"}},
+    yaxis:"y",whiskerwidth:0.3}},
+  /* 布林上轨 */
+  {{x,y:bbUp,type:"scatter",mode:"lines",name:"BB上轨",
+    line:{{color:"rgba(99,102,241,0.6)",width:1}},yaxis:"y"}},
+  /* 布林下轨（填充，hover隐藏避免重复） */
+  {{x,y:bbLo,type:"scatter",mode:"lines",name:"BB下轨",
+    line:{{color:"rgba(99,102,241,0.6)",width:1}},
+    fill:"tonexty",fillcolor:"rgba(99,102,241,0.07)",
+    showlegend:false,hoverinfo:"skip",yaxis:"y"}},
+  /* MA20 */
+  {{x,y:ma20,type:"scatter",mode:"lines",name:"MA20",
+    line:{{color:"#f59e0b",width:1.5}},yaxis:"y"}},
+  /* MA60 */
+  {{x,y:ma60,type:"scatter",mode:"lines",name:"MA60",
+    line:{{color:"#ef4444",width:1.5,dash:"dot"}},yaxis:"y"}},
+  /* 成交量 */
+  {{x,y:vol,type:"bar",name:"成交量",marker:{{color:volClr}},yaxis:"y2",showlegend:false}},
+  /* RSI */
+  {{x,y:rsi,type:"scatter",mode:"lines",name:"RSI(14)",
+    line:{{color:"#8b5cf6",width:1.5}},yaxis:"y3"}},
+  /* MACD 柱 */
+  {{x,y:macdHi,type:"bar",name:"MACD柱",marker:{{color:macdHiClr}},yaxis:"y4",showlegend:false}},
+  /* MACD 线 */
+  {{x,y:macd,type:"scatter",mode:"lines",name:"MACD",
+    line:{{color:"#2563eb",width:1.5}},yaxis:"y4"}},
+  /* Signal 线 */
+  {{x,y:macdSg,type:"scatter",mode:"lines",name:"Signal",
+    line:{{color:"#f59e0b",width:1.5,dash:"dot"}},yaxis:"y4"}}
+];
+
+const layout = {{
+  height:820,
+  /* 右边距加大：确保Y轴完整数字不被截断 */
+  margin:{{l:8,r:80,t:14,b:28}},
+  paper_bgcolor:"#fff",plot_bgcolor:"#fff",
+  hovermode:"x unified",
+  legend:{{orientation:"h",y:1.025,x:0,font:{{size:11}},bgcolor:"rgba(255,255,255,0.8)"}},
+  xaxis:{{domain:[0,1],type:"date",rangeslider:{{visible:false}},
+          gridcolor:"#f1f5f9",showgrid:true}},
+  /* 面板分配：价格60% / 成交量11% / RSI10% / MACD11% */
+  yaxis: {{domain:[0.25,1],   side:"right",gridcolor:"#f1f5f9",
+           title:{{text:"价格 ({currency})",font:{{size:11}}}},tickfont:{{size:11}}}},
+  yaxis2:{{domain:[0.145,0.22],side:"right",gridcolor:"#f1f5f9",
+           showticklabels:false,title:""}},
+  yaxis3:{{domain:[0.075,0.135],side:"right",range:[0,100],gridcolor:"#f1f5f9",
+           title:{{text:"RSI",font:{{size:11}}}},tickfont:{{size:10}}}},
+  yaxis4:{{domain:[0,0.065],  side:"right",gridcolor:"#f1f5f9",
+           title:{{text:"MACD",font:{{size:11}}}},tickfont:{{size:10}}}},
+  shapes:[
+    {{type:"line",xref:"paper",x0:0,x1:1,yref:"y3",y0:70,y1:70,
+      line:{{color:"rgba(220,38,38,0.6)",width:1,dash:"dot"}}}},
+    {{type:"line",xref:"paper",x0:0,x1:1,yref:"y3",y0:30,y1:30,
+      line:{{color:"rgba(22,163,74,0.6)",width:1,dash:"dot"}}}},
+    {{type:"line",xref:"paper",x0:0,x1:1,yref:"y4",y0:0,y1:0,
+      line:{{color:"#94a3b8",width:0.8}}}},
+    {sup_shapes}{res_shapes}
+  ]
+}};
+Plotly.newPlot("chart",traces,layout,{{responsive:true,displaylogo:false,
+  modeBarButtonsToRemove:["autoScale2d","lasso2d","select2d"]}});
+</script>
+</body>
+</html>"""
 
     out_file.write_text(html_doc, encoding="utf-8")
+
     _raw_prices = []
     try:
         _raw_prices = hist.reset_index().tail(370).to_dict(orient="records")
@@ -170,39 +447,31 @@ Plotly.newPlot('macd-chart',[
         "data": {
             "provider_chain": ["yfinance"],
             "rows": int(len(hist)),
-            "missing_fields": [
-                k for k, v in {
-                    "ma20": ma20,
-                    "ma50": ma50,
-                    "rsi14": rsi14,
-                    "macd": macd_l,
-                    "macd_signal": macd_s,
-                }.items()
-                if v is None
-            ],
+            "panels": ["candlestick", "bollinger", "ma20", "ma60", "volume", "rsi14", "macd"],
+            "color_convention": "ashare_red_up" if is_ashare else "western_green_up",
         },
+        "review": {"issues": review_issues, "passed": len(review_issues) == 0},
         "metrics": {
-            "last_close": last_close,
-            "trend": trend,
-            "rsi14": rsi14,
-            "momentum": momentum,
+            "last_close": last_close, "high_52w": high_52w, "low_52w": low_52w,
+            "trend": trend, "rsi14": rsi14, "momentum": momentum,
+            "support": sup3, "resistance": res3,
         },
     })
     write_artifact_raw_data(_artifact, {
-        "symbol": symbol,
-        "provider": "yfinance",
-        "info": info,
-        "prices": _raw_prices,
+        "symbol": symbol, "provider": "yfinance", "info": info, "prices": _raw_prices,
     })
     return {
-        "success":    True,
-        "chart_path": str(out_file),
-        "response":   f"图表已生成：{out_file.name}",
-        "symbol":     symbol,
-        "last_close": last_close,
-        "trend":      trend,
-        "rsi":        rsi14,
-        "momentum":   momentum,
+        "success":       True,
+        "chart_path":    str(out_file),
+        "response":      f"图表已生成：{out_file.name}",
+        "symbol":        symbol,
+        "last_close":    last_close,
+        "trend":         trend,
+        "rsi":           rsi14,
+        "momentum":      momentum,
+        "support":       sup3,
+        "resistance":    res3,
+        "review_issues": review_issues,
     }
 
 

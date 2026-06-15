@@ -40,19 +40,19 @@ class FundamentalAgent(BaseAgent):
     async def analyze(self, symbol: str, data: Dict[str, Any]) -> AgentResult:
         quote = data.get("quote", {})
         fund  = data.get("fundamentals", {})
-        price = quote.get("price", 0)
-        pe    = fund.get("pe_ttm") or quote.get("pe_ttm", 0)
-        pb    = fund.get("pb")     or quote.get("pb",     0)
-        roe   = fund.get("roe",    0)
-        rev_g = fund.get("revenue_growth", 0)
-        div_y = fund.get("dividend_yield", 0)
+        price = _num_or_none(quote.get("price"))
+        pe    = _num_or_none(fund.get("pe_ttm") or quote.get("pe_ttm"))
+        pb    = _num_or_none(fund.get("pb")     or quote.get("pb"))
+        roe   = _num_or_none(fund.get("roe"))
+        rev_g = _num_or_none(fund.get("revenue_growth"))
+        div_y = _num_or_none(fund.get("dividend_yield"))
 
         fund_str = (
-            f"  PE(TTM): {pe:.1f}x\n"
-            f"  PB:      {pb:.2f}x\n"
-            f"  ROE:     {roe:.1f}%\n"
-            f"  Revenue growth: {rev_g:.1f}%\n"
-            f"  Dividend yield: {div_y:.2f}%"
+            f"  PE(TTM): {_fmt_num(pe, 1, 'x')}\n"
+            f"  PB:      {_fmt_num(pb, 2, 'x')}\n"
+            f"  ROE:     {_fmt_num(roe, 1, '%')}\n"
+            f"  Revenue growth: {_fmt_num(rev_g, 1, '%')}\n"
+            f"  Dividend yield: {_fmt_num(div_y, 2, '%')}"
         ) if pe or pb else "  (fundamental data unavailable)"
 
         prompt = (
@@ -67,12 +67,12 @@ class FundamentalAgent(BaseAgent):
             "Conclusion: UNDERVALUED / FAIRLY_VALUED / OVERVALUED"
         )
 
-        analysis  = await self._call_llm(self._SYSTEM, prompt, max_tokens=500)
+        analysis  = await self._call_llm(self._SYSTEM, prompt, max_tokens=500, quote=quote)
         if not analysis:
             analysis = _template_fundamental(symbol, pe, pb, roe, rev_g)
 
-        signal     = _extract_signal(analysis, pe)
-        confidence = _calc_confidence(pe, pb, roe)
+        signal     = _extract_signal(analysis, pe or 0)
+        confidence = _calc_confidence(pe or 0, pb or 0, roe or 0)
         key_points = _extract_key_points(analysis)
 
         return AgentResult(
@@ -81,6 +81,22 @@ class FundamentalAgent(BaseAgent):
             signal=signal, key_points=key_points,
             data_used={"pe": pe, "pb": pb, "roe": roe},
         )
+
+
+def _num_or_none(value: Any) -> Optional[float]:
+    try:
+        if value is None:
+            return None
+        out = float(value)
+        return out if out != 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _fmt_num(value: Optional[float], digits: int = 1, suffix: str = "") -> str:
+    if value is None:
+        return "数据不足"
+    return f"{value:.{digits}f}{suffix}"
 
 
 def _extract_signal(text: str, pe: float = 0) -> str:
@@ -116,13 +132,14 @@ def _extract_key_points(text: str) -> List[str]:
     return points[:4]
 
 
-def _template_fundamental(symbol: str, pe: float, pb: float,
-                           roe: float, rev_g: float) -> str:
-    valuation = "低估" if pe and pe < 15 else ("高估" if pe and pe > 40 else "合理")
+def _template_fundamental(symbol: str, pe: Optional[float], pb: Optional[float],
+                           roe: Optional[float], rev_g: Optional[float]) -> str:
+    valuation = "低估" if pe and pe < 15 else ("高估" if pe and pe > 40 else "数据不足")
+    conclusion = "UNDERVALUED" if pe and pe < 15 else ("OVERVALUED" if pe and pe > 40 else "DATA_LIMITED")
     return (
         f"{symbol} 基本面分析（模板）:\n"
-        f"• 估值：PE={pe:.0f}x  PB={pb:.1f}x  → {valuation}\n"
-        f"• 盈利能力：ROE={roe:.1f}%  营收增速={rev_g:.1f}%\n"
-        "• 建议结合行业对比和管理层指引综合判断\n"
-        f"• 结论: {'UNDERVALUED' if pe and pe<15 else 'FAIRLY_VALUED'}"
+        f"• 估值：PE={_fmt_num(pe, 1, 'x')}  PB={_fmt_num(pb, 2, 'x')}  → {valuation}\n"
+        f"• 盈利能力：ROE={_fmt_num(roe, 1, '%')}  营收增速={_fmt_num(rev_g, 1, '%')}\n"
+        "• 基本面数据不足时，不应把缺失值当作 0；建议结合财报和行业对比复核\n"
+        f"• 结论: {conclusion}"
     )

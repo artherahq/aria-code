@@ -33,6 +33,7 @@ import os
 import threading
 import time
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -40,6 +41,30 @@ import pandas as pd
 import requests
 
 logger = logging.getLogger(__name__)
+logging.getLogger("yfinance").setLevel(logging.CRITICAL)
+logging.getLogger("curl_cffi").setLevel(logging.CRITICAL)
+
+
+def _friendly_market_error(symbol: str, providers: List[str], detail: Any = "") -> str:
+    """Return a user-facing market data error without leaking vendor internals."""
+    tried = " -> ".join(providers) if providers else "market data providers"
+    detail_text = str(detail).lower()
+    if any(token in detail_text for token in ("timeout", "timed out", "curl: (28)", "read timed out")):
+        reason = "连接超时"
+    elif any(token in detail_text for token in ("connection", "network", "remote", "refused")):
+        reason = "网络连接不可用"
+    elif any(token in detail_text for token in ("rate", "429", "too many")):
+        reason = "数据源限流"
+    else:
+        reason = "数据源暂时不可用"
+    return f"{reason}，已尝试 {tried}，暂时无法获取 {symbol} 行情。请稍后重试或切换数据源。"
+
+
+def _is_valid_price(value: Any) -> bool:
+    try:
+        return float(value) > 0
+    except (TypeError, ValueError):
+        return False
 
 # ── Simple in-process cache (TTL-based) ─────────────────────────────────────
 
@@ -63,9 +88,14 @@ _cache = _Cache()
 
 
 def _session() -> requests.Session:
-    """Return a requests Session that bypasses system proxy."""
+    """Return a requests Session for Chinese financial APIs.
+
+    Uses the system proxy (HTTP_PROXY / HTTPS_PROXY) when set — users outside
+    China need a proxy/VPN to reach Eastmoney servers.  Previously trust_env=False
+    was set here, which bypassed the proxy and caused connection failures for
+    non-China IPs.
+    """
     s = requests.Session()
-    s.trust_env = False          # ignore HTTP_PROXY / HTTPS_PROXY
     s.headers.update({
         "User-Agent": (
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -77,14 +107,34 @@ def _session() -> requests.Session:
     return s
 
 
+def _session_no_proxy() -> requests.Session:
+    """Return a requests Session that explicitly bypasses any system proxy.
+
+    Use for globally-accessible endpoints (Yahoo Finance, Alpha Vantage) that
+    should NOT go through a China-routing VPN.
+    """
+    s = requests.Session()
+    s.trust_env = False
+    s.headers.update({
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0 Safari/537.36"
+        ),
+    })
+    return s
+
+
 # ── Symbol classification ────────────────────────────────────────────────────
 
 def _is_ashare(symbol: str) -> bool:
     s = symbol.strip().upper()
+    if s.endswith((".SZ", ".SS", ".SH")):
+        s = s.rsplit(".", 1)[0]
     digits = s.lstrip("SZ").lstrip("SH")
     return (
         (s.startswith(("60","00","30","68","83","87")) and s.isdigit() and len(s) == 6)
-        or (s.startswith("SH") or s.startswith("SZ"))
+        or (s.startswith(("SH", "SZ")) and s[2:].isdigit() and len(s[2:]) == 6)
         or digits.isdigit() and len(digits) == 6
     )
 
@@ -92,7 +142,10 @@ def _is_crypto(symbol: str) -> bool:
     return "/" in symbol or symbol.upper().endswith(("USDT","BTC","ETH","BNB"))
 
 def _normalise_ashare(symbol: str) -> str:
-    s = symbol.strip().upper().lstrip("SH").lstrip("SZ")
+    s = symbol.strip().upper()
+    if s.endswith((".SZ", ".SS", ".SH")):
+        s = s.rsplit(".", 1)[0]
+    s = s.lstrip("SH").lstrip("SZ")
     s = s.lstrip("0") if s.startswith(("60","00","30","68","83","87")) else s
     return s.zfill(6)
 
@@ -122,8 +175,110 @@ class MarketDataClient:
     _EM_FIELDS = "f43,f44,f45,f46,f47,f48,f57,f58,f169,f170,f171,f116,f117,f162,f167,f168"
 
     def __init__(self, alpha_vantage_key: str = ""):
-        self._sess  = _session()
+        self._sess   = _session()
         self._av_key = alpha_vantage_key or os.getenv("ALPHA_VANTAGE_KEY", "")
+        self._fh_key = self._load_finnhub_key()
+
+    @staticmethod
+    def _load_finnhub_key() -> str:
+        """Read Finnhub API key from env var or ~/.arthera/providers.json."""
+        key = os.getenv("FINNHUB_API_KEY", "") or os.getenv("FINNHUB_KEY", "")
+        if key:
+            return key
+        try:
+            p = Path.home() / ".arthera" / "providers.json"
+            if p.exists():
+                raw = json.loads(p.read_text(encoding="utf-8"))
+                key = raw.get("data", {}).get("finnhub", {}).get("api_key", "")
+                if key:
+                    return key
+        except Exception:
+            pass
+        return ""
+
+    def _quote_finnhub(self, symbol: str) -> Dict[str, Any]:
+        """Finnhub quote fallback — uses configured API key."""
+        if not self._fh_key:
+            return {"success": False, "error": "no finnhub key", "symbol": symbol}
+        try:
+            url = f"https://finnhub.io/api/v1/quote?symbol={symbol.upper()}&token={self._fh_key}"
+            r   = self._sess.get(url, timeout=6)
+            if r.status_code != 200:
+                return {"success": False, "error": f"HTTP {r.status_code}", "symbol": symbol}
+            d = r.json()
+            price = float(d.get("c") or 0)
+            if price <= 0:
+                return {"success": False, "error": "price=0 from finnhub", "symbol": symbol}
+            prev = float(d.get("pc") or price)
+            chg_p = round((price - prev) / prev * 100, 2) if prev else 0
+            name = symbol
+            mktcap = None
+            currency = "USD"
+            try:
+                prof_url = f"https://finnhub.io/api/v1/stock/profile2?symbol={symbol.upper()}&token={self._fh_key}"
+                pr = self._sess.get(prof_url, timeout=5).json()
+                name = pr.get("name") or symbol
+                mktcap = (float(pr.get("marketCapitalization") or 0) * 1e6) or None
+                currency = pr.get("currency") or "USD"
+            except Exception:
+                pass
+            return {
+                "success":    True,
+                "symbol":     symbol.upper(),
+                "name":       name,
+                "price":      price,
+                "change":     round(price - prev, 4),
+                "change_pct": chg_p,
+                "volume":     int(d.get("v") or 0),
+                "market_cap": mktcap,
+                "high":       round(float(d.get("h") or 0), 2),
+                "low":        round(float(d.get("l") or 0), 2),
+                "open":       round(float(d.get("o") or 0), 4),
+                "prev_close": round(prev, 4),
+                "currency":   currency,
+                "market":     "US",
+                "provider":   "finnhub",
+                "timestamp":  datetime.now().isoformat(),
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e), "symbol": symbol}
+
+    def _history_finnhub(self, symbol: str, days: int, interval: str) -> Dict[str, Any]:
+        """Finnhub candle history fallback."""
+        if not self._fh_key:
+            return {"success": False, "error": "no finnhub key", "symbol": symbol}
+        resolution = "D" if interval in ("1d", "day", "daily") else "60"
+        _end   = int(time.time())
+        _start = int((datetime.now() - timedelta(days=days + 5)).timestamp())
+        try:
+            url = (f"https://finnhub.io/api/v1/stock/candle?symbol={symbol.upper()}"
+                   f"&resolution={resolution}&from={_start}&to={_end}&token={self._fh_key}")
+            r = self._sess.get(url, timeout=10)
+            if r.status_code != 200:
+                return {"success": False, "error": f"HTTP {r.status_code}", "symbol": symbol}
+            d = r.json()
+            if d.get("s") != "ok" or not d.get("c"):
+                return {"success": False, "error": "no candle data", "symbol": symbol}
+            records = [
+                {
+                    "date":   datetime.utcfromtimestamp(t).strftime("%Y-%m-%d"),
+                    "open":   round(float(o), 4),
+                    "high":   round(float(h), 4),
+                    "low":    round(float(l), 4),
+                    "close":  round(float(c), 4),
+                    "volume": int(v),
+                }
+                for t, o, h, l, c, v in zip(
+                    d["t"], d["o"], d["h"], d["l"], d["c"], d.get("v", [0]*len(d["c"]))
+                )
+            ]
+            return {
+                "success": True, "symbol": symbol.upper(),
+                "data": records, "provider": "finnhub",
+                "interval": interval, "count": len(records),
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e), "symbol": symbol}
 
     # ── Public API ───────────────────────────────────────────────────────────
 
@@ -224,57 +379,75 @@ class MarketDataClient:
             return hist
         try:
             df = pd.DataFrame(hist["data"])
-            df["close"] = pd.to_numeric(df["close"])
-            df["high"]  = pd.to_numeric(df["high"])
-            df["low"]   = pd.to_numeric(df["low"])
+            if df.empty:
+                return {"success": False, "error": "empty history dataframe", "symbol": symbol}
+            df["close"] = pd.to_numeric(df["close"], errors="coerce")
+            df["high"]  = pd.to_numeric(df.get("high",  df["close"]), errors="coerce")
+            df["low"]   = pd.to_numeric(df.get("low",   df["close"]), errors="coerce")
+            df.dropna(subset=["close"], inplace=True)
             close = df["close"]
+            n = len(close)
+            if n < 2:
+                return {"success": False, "error": f"insufficient data: {n} bars", "symbol": symbol}
 
-            # RSI(14)
-            delta = close.diff()
-            gain  = delta.clip(lower=0).rolling(14).mean()
-            loss  = (-delta.clip(upper=0)).rolling(14).mean()
-            rs    = gain / loss.replace(0, np.nan)
-            rsi   = (100 - 100 / (1 + rs)).iloc[-1]
+            result: Dict[str, Any] = {
+                "success": True,
+                "symbol": symbol,
+                "provider": "local_pandas",
+                "data_provider": hist.get("provider"),
+                "provider_chain": hist.get("provider_chain") or [hist.get("provider", "history")],
+            }
 
-            # MACD(12,26,9)
-            ema12  = close.ewm(span=12).mean()
-            ema26  = close.ewm(span=26).mean()
-            macd   = ema12 - ema26
-            signal = macd.ewm(span=9).mean()
-            hist_m = macd - signal
+            # Current price (always available if n >= 1)
+            result["price"] = round(float(close.iloc[-1]), 4)
 
-            # Bollinger Bands(20)
-            ma20  = close.rolling(20).mean()
-            std20 = close.rolling(20).std()
-            bb_upper = (ma20 + 2 * std20).iloc[-1]
-            bb_lower = (ma20 - 2 * std20).iloc[-1]
-            bb_mid   = ma20.iloc[-1]
+            # RSI(14) — needs at least 15 bars
+            if n >= 15:
+                delta = close.diff()
+                gain  = delta.clip(lower=0).rolling(14).mean()
+                loss  = (-delta.clip(upper=0)).rolling(14).mean()
+                rs    = gain / loss.replace(0, np.nan)
+                rsi_s = 100 - 100 / (1 + rs)
+                rsi_v = rsi_s.iloc[-1]
+                result["rsi"] = round(float(rsi_v), 2) if not np.isnan(rsi_v) else None
+
+            # MACD(12,26,9) — needs at least 27 bars
+            if n >= 27:
+                ema12  = close.ewm(span=12).mean()
+                ema26  = close.ewm(span=26).mean()
+                macd_l = ema12 - ema26
+                sig_l  = macd_l.ewm(span=9).mean()
+                hist_m = macd_l - sig_l
+                result["macd"]       = round(float(macd_l.iloc[-1]), 4)
+                result["macd_signal"]= round(float(sig_l.iloc[-1]),  4)
+                result["macd_hist"]  = round(float(hist_m.iloc[-1]), 4)
+
+            # Bollinger Bands(20) — needs at least 20 bars
+            if n >= 20:
+                ma20  = close.rolling(20).mean()
+                std20 = close.rolling(20).std()
+                bb_u  = (ma20 + 2 * std20).iloc[-1]
+                bb_l  = (ma20 - 2 * std20).iloc[-1]
+                bb_m  = ma20.iloc[-1]
+                if not any(np.isnan(v) for v in (bb_u, bb_l, bb_m)):
+                    result["bb_upper"] = round(float(bb_u), 4)
+                    result["bb_mid"]   = round(float(bb_m), 4)
+                    result["bb_lower"] = round(float(bb_l), 4)
+                    result["bb_position"] = round(
+                        (result["price"] - float(bb_l)) /
+                        max(float(bb_u - bb_l), 1e-9), 4
+                    )
 
             # Moving averages
-            mas = {}
-            for n in [5, 10, 20, 60, 120]:
-                if len(close) >= n:
-                    mas[f"ma{n}"] = round(float(close.rolling(n).mean().iloc[-1]), 4)
+            for ma_n in [5, 10, 20, 60, 120]:
+                if n >= ma_n:
+                    v = close.rolling(ma_n).mean().iloc[-1]
+                    if not np.isnan(v):
+                        result[f"ma{ma_n}"] = round(float(v), 4)
 
-            current_price = float(close.iloc[-1])
-            return {
-                "success": True,
-                "symbol":  symbol,
-                "price":   current_price,
-                "rsi":     round(float(rsi), 2) if not np.isnan(rsi) else None,
-                "macd":    round(float(macd.iloc[-1]), 4),
-                "macd_signal": round(float(signal.iloc[-1]), 4),
-                "macd_hist":   round(float(hist_m.iloc[-1]), 4),
-                "bb_upper": round(float(bb_upper), 4),
-                "bb_mid":   round(float(bb_mid), 4),
-                "bb_lower": round(float(bb_lower), 4),
-                "bb_position": round((current_price - float(bb_lower)) /
-                                     max(float(bb_upper - bb_lower), 1e-9), 4),
-                **mas,
-                "provider": "local_pandas",
-            }
+            return result
         except Exception as e:
-            return {"success": False, "error": str(e)}
+            return {"success": False, "error": str(e), "symbol": symbol}
 
     def fundamentals(self, symbol: str) -> Dict[str, Any]:
         """US stock fundamentals via yfinance."""
@@ -312,20 +485,53 @@ class MarketDataClient:
                 "provider": "yfinance",
             }
         except Exception as e:
+            # Finnhub fundamentals fallback
+            if self._fh_key:
+                try:
+                    m_url = (f"https://finnhub.io/api/v1/stock/metric?symbol={symbol.upper()}"
+                             f"&metric=all&token={self._fh_key}")
+                    m_r = self._sess.get(m_url, timeout=8)
+                    if m_r.status_code == 200:
+                        m = m_r.json().get("metric") or {}
+                        p_url = (f"https://finnhub.io/api/v1/stock/profile2?symbol={symbol.upper()}"
+                                 f"&token={self._fh_key}")
+                        p_r = self._sess.get(p_url, timeout=5)
+                        prof = p_r.json() if p_r.status_code == 200 else {}
+                        return {
+                            "success":        True,
+                            "symbol":         symbol,
+                            "name":           prof.get("name", symbol),
+                            "sector":         prof.get("gsector", ""),
+                            "industry":       prof.get("gind", ""),
+                            "market_cap":     (float(prof.get("marketCapitalization") or 0) * 1e6) or None,
+                            "pe_ratio":       m.get("peTTM"),
+                            "fwd_pe":         m.get("peExclExtraTTM"),
+                            "pb_ratio":       m.get("pbAnnual") or m.get("pbQuarterly"),
+                            "ev_ebitda":      m.get("currentEv/freeCashFlowAnnual"),
+                            "dividend_yield": m.get("dividendYieldIndicatedAnnual"),
+                            "52w_high":       m.get("52WeekHigh"),
+                            "52w_low":        m.get("52WeekLow"),
+                            "beta":           m.get("beta"),
+                            "eps":            m.get("epsInclExtraItemsTTM"),
+                            "provider":       "finnhub",
+                        }
+                except Exception:
+                    pass
             return {"success": False, "error": str(e), "symbol": symbol}
 
     # ── US / Global (yfinance) ───────────────────────────────────────────────
 
     def _quote_yfinance(self, symbol: str) -> Dict[str, Any]:
-        try:
-            import yfinance as yf
-            t    = yf.Ticker(symbol)
-            fi   = t.fast_info
+        import yfinance as yf
+
+        def _attempt_fast_info():
+            t  = yf.Ticker(symbol)
+            fi = t.fast_info
             info = {}
             try:
                 info = t.info or {}
-            except Exception:
-                pass
+            except Exception as _e:
+                logger.debug("yfinance t.info slow/failed for %s: %s", symbol, _e)
             price = float(fi.last_price or 0)
             prev  = float(fi.previous_close or price)
             chg   = price - prev
@@ -348,80 +554,136 @@ class MarketDataClient:
                 "provider":   "yfinance",
                 "timestamp":  datetime.now().isoformat(),
             }
+
+        # Primary attempt
+        try:
+            return _attempt_fast_info()
         except Exception as e:
-            return {"success": False, "error": str(e), "symbol": symbol}
+            err_text = str(e).lower()
+            is_rate_limit = any(t in err_text for t in ("too many", "rate", "429", "429"))
+            if not is_rate_limit:
+                return {"success": False, "error": str(e), "symbol": symbol}
+
+        # Rate-limited: wait 3s then retry once
+        logger.debug("yfinance rate-limited for %s, retrying in 3s…", symbol)
+        time.sleep(3)
+        try:
+            return _attempt_fast_info()
+        except Exception:
+            pass
+
+        # Final fallback: yf.download (different API endpoint, avoids rate limit)
+        try:
+            from datetime import date as _date, timedelta as _td
+            df = yf.download(
+                symbol,
+                start=(_date.today() - _td(days=5)).isoformat(),
+                end=_date.today().isoformat(),
+                interval="1d", auto_adjust=True, progress=False, timeout=15,
+            )
+            if not df.empty:
+                if hasattr(df.columns, "levels"):
+                    df.columns = df.columns.droplevel(1) if len(df.columns.levels) > 1 else df.columns
+                last = df.iloc[-1]
+                price = round(float(last.get("Close", 0)), 4)
+                prev_row = df.iloc[-2] if len(df) >= 2 else last
+                prev  = round(float(prev_row.get("Close", price)), 4)
+                chg   = round(price - prev, 4)
+                chg_p = round(chg / prev * 100 if prev else 0, 2)
+                return {
+                    "success":    True,
+                    "symbol":     symbol.upper(),
+                    "name":       "",
+                    "price":      price,
+                    "change":     chg,
+                    "change_pct": chg_p,
+                    "volume":     int(last.get("Volume", 0)),
+                    "market_cap": None,
+                    "high":       round(float(last.get("High", 0)), 2),
+                    "low":        round(float(last.get("Low",  0)), 2),
+                    "open":       round(float(last.get("Open", 0)), 4),
+                    "prev_close": prev,
+                    "currency":   "USD",
+                    "market":     "US",
+                    "provider":   "yfinance_download",
+                    "timestamp":  datetime.now().isoformat(),
+                }
+        except Exception as _dl_err:
+            logger.debug("yfinance download fallback also failed for %s: %s", symbol, _dl_err)
+
+        # Finnhub fallback when yfinance is completely exhausted
+        if self._fh_key:
+            fh = self._quote_finnhub(symbol)
+            if fh.get("success"):
+                return fh
+
+        return {"success": False, "error": "yfinance rate-limited or no data", "symbol": symbol}
 
     def _history_yfinance(self, symbol: str, days: int, interval: str) -> Dict[str, Any]:
-        try:
-            import yfinance as yf
-            period_map = {1: "5d", 5: "5d", 30: "1mo", 60: "3mo",
-                          90: "3mo", 120: "6mo", 180: "6mo",
-                          252: "1y", 365: "1y", 730: "2y", 1260: "5y"}
-            period = period_map.get(days) or f"{days}d"
-            iv_map = {"1d": "1d", "1h": "1h", "15m": "15m", "5m": "5m"}
-            iv = iv_map.get(interval, "1d")
-            df = yf.Ticker(symbol).history(period=period, interval=iv)
-            if df.empty:
-                return {"success": False, "error": "No data returned", "symbol": symbol}
+        import yfinance as yf
+        period_map = {1: "5d", 5: "5d", 30: "1mo", 60: "3mo",
+                      90: "3mo", 120: "6mo", 180: "6mo",
+                      252: "1y", 365: "1y", 730: "2y", 1260: "5y"}
+        period = period_map.get(days) or f"{days}d"
+        iv_map = {"1d": "1d", "1h": "1h", "15m": "15m", "5m": "5m"}
+        iv = iv_map.get(interval, "1d")
+
+        def _df_to_records(df) -> list:
             records = []
             for ts, row in df.iterrows():
                 records.append({
                     "date":   str(ts.date()) if hasattr(ts, "date") else str(ts)[:10],
-                    "open":   round(float(row["Open"]), 4),
-                    "high":   round(float(row["High"]), 4),
-                    "low":    round(float(row["Low"]), 4),
-                    "close":  round(float(row["Close"]), 4),
-                    "volume": int(row["Volume"]),
+                    "open":   round(float(row.get("Open",  row.get("open",  0))), 4),
+                    "high":   round(float(row.get("High",  row.get("high",  0))), 4),
+                    "low":    round(float(row.get("Low",   row.get("low",   0))), 4),
+                    "close":  round(float(row.get("Close", row.get("close", 0))), 4),
+                    "volume": int(row.get("Volume", row.get("volume", 0))),
                 })
-            return {"success": True, "symbol": symbol, "data": records,
-                    "provider": "yfinance", "count": len(records)}
-        except Exception as e:
-            return {"success": False, "error": str(e), "symbol": symbol}
+            return records
+
+        # Primary: Ticker.history()
+        try:
+            df = yf.Ticker(symbol).history(period=period, interval=iv, auto_adjust=True)
+            if not df.empty:
+                records = _df_to_records(df)
+                return {"success": True, "symbol": symbol, "data": records,
+                        "provider": "yfinance", "count": len(records)}
+        except Exception as _e:
+            logger.debug("yfinance history primary failed for %s: %s — trying download fallback", symbol, _e)
+
+        # Fallback: yf.download() uses a different API endpoint, more resilient to rate limits
+        try:
+            from datetime import date, timedelta as _td
+            end_dt = date.today()
+            start_dt = end_dt - _td(days=days + 5)
+            df2 = yf.download(symbol, start=start_dt.isoformat(), end=end_dt.isoformat(),
+                              interval=iv, auto_adjust=True, progress=False, timeout=15)
+            if not df2.empty:
+                # yf.download may return MultiIndex columns when single ticker
+                if hasattr(df2.columns, "levels"):
+                    df2.columns = df2.columns.droplevel(1) if len(df2.columns.levels) > 1 else df2.columns
+                records = _df_to_records(df2)
+                return {"success": True, "symbol": symbol, "data": records,
+                        "provider": "yfinance_download", "count": len(records)}
+        except Exception as _e:
+            logger.debug("yfinance download fallback also failed for %s: %s", symbol, _e)
+
+        # Finnhub candle fallback
+        if self._fh_key:
+            fh = self._history_finnhub(symbol, days, interval)
+            if fh.get("success"):
+                return fh
+
+        return {"success": False, "error": "yfinance rate-limited or no data", "symbol": symbol}
 
     # ── A-share (Eastmoney push2 API) ────────────────────────────────────────
 
     def _quote_ashare(self, symbol: str) -> Dict[str, Any]:
-        """A股报价: yfinance (.SS/.SZ) 为主，东方财富 API 为辅."""
+        """A股报价: 东方财富优先，yfinance 仅作为末级 fallback."""
         code = _normalise_ashare(symbol)
+        errors: List[str] = []
 
-        # ── 主路径: yfinance（支持代理环境）────────────────────────────────
-        try:
-            import yfinance as yf
-            # 判断交易所: 6/688开头 → 上交所(.SS), 其余 → 深交所(.SZ)
-            suffix = ".SS" if code.startswith(("6", "688", "83", "87")) else ".SZ"
-            yf_sym = code + suffix
-            t      = yf.Ticker(yf_sym)
-            fi     = t.fast_info
-            price  = float(fi.last_price or 0)
-            prev   = float(fi.previous_close or price)
-            chg    = price - prev
-            chg_p  = chg / prev * 100 if prev else 0
-            info   = {}
-            try: info = t.info or {}
-            except Exception: pass
-            name = info.get("longName") or info.get("shortName") or code
-            return {
-                "success":    True,
-                "symbol":     code,
-                "name":       name,
-                "price":      round(price, 4),
-                "change":     round(chg, 4),
-                "change_pct": round(chg_p, 2),
-                "volume":     int(fi.three_month_average_volume or 0),
-                "market_cap": fi.market_cap,
-                "high":       round(float(fi.day_high or 0), 2),
-                "low":        round(float(fi.day_low  or 0), 2),
-                "open":       round(float(fi.open     or 0), 4),
-                "prev_close": round(prev, 4),
-                "currency":   "CNY",
-                "market":     "CN",
-                "provider":   "yfinance",
-                "timestamp":  datetime.now().isoformat(),
-            }
-        except Exception as yf_err:
-            logger.debug("yfinance A-share failed %s: %s", code, yf_err)
-
-        # ── 备用路径: 东方财富 push2 API ─────────────────────────────────
+        # ── 主路径: 东方财富 push2 API ─────────────────────────────────
         secid = _ashare_secid(code)
         try:
             r = self._sess.get(self.EM_QUOTE_URL, params={
@@ -429,12 +691,14 @@ class MarketDataClient:
                 "fields": self._EM_FIELDS,
                 "ut":     "bd1d9ddb04089700cf9c27f6f7426281",
                 "fltt": 2, "invt": 2,
-            }, timeout=8)
+            }, timeout=6)
             d = r.json().get("data", {}) or {}
-            price    = float(d.get("f43", 0))
-            prev     = float(d.get("f46", price))
+            price = float(d.get("f43", 0))
+            if not _is_valid_price(price):
+                raise ValueError("empty Eastmoney quote")
             chg      = float(d.get("f169", 0))
             chg_pct  = float(d.get("f170", 0))
+            prev     = round(price - chg, 4)  # f46=今开(open), not 昨收; derive from change
             return {
                 "success":    True,
                 "symbol":     code,
@@ -447,22 +711,216 @@ class MarketDataClient:
                 "market_cap": float(d.get("f116", 0)) * 1e4,
                 "high":       float(d.get("f44", 0)),
                 "low":        float(d.get("f45", 0)),
+                "open":       float(d.get("f46", 0)),
                 "prev_close": prev,
                 "currency":   "CNY",
                 "market":     "CN",
                 "provider":   "eastmoney",
+                "provider_chain": ["eastmoney"],
                 "timestamp":  datetime.now().isoformat(),
             }
         except Exception as em_err:
-            return {"success": False, "error": str(em_err), "symbol": symbol}
+            errors.append(f"eastmoney: {em_err}")
+            logger.debug("Eastmoney A-share failed %s: %s", code, em_err)
+
+        # ── 备用路径 1: 腾讯行情 qt.gtimg.cn ─────────────────────────────────
+        try:
+            prefix = "sz" if code.startswith(("0", "3")) else "sh"
+            r = self._sess.get(f"https://qt.gtimg.cn/q={prefix}{code}", timeout=6)
+            raw = r.text.strip()
+            if raw and "=" in raw:
+                val = raw.split("=", 1)[1].strip().strip('"').strip("'")
+                flds = val.split("~")
+                if len(flds) > 10 and flds[3]:
+                    price  = float(flds[3])
+                    prev   = float(flds[4] or price)
+                    chg    = price - prev
+                    chg_p  = chg / prev * 100 if prev else 0
+                    if _is_valid_price(price):
+                        return {
+                            "success":    True,
+                            "symbol":     code,
+                            "name":       flds[1] or code,
+                            "price":      round(price, 4),
+                            "change":     round(chg, 4),
+                            "change_pct": round(chg_p, 2),
+                            "volume":     int(float(flds[6] or 0)) * 100,
+                            "high":       round(float(flds[33] if len(flds) > 33 and flds[33] else price), 2),
+                            "low":        round(float(flds[34] if len(flds) > 34 and flds[34] else price), 2),
+                            "open":       round(float(flds[5] or price), 4),
+                            "prev_close": round(prev, 4),
+                            "currency":   "CNY",
+                            "market":     "CN",
+                            "provider":   "tencent",
+                            "provider_chain": ["eastmoney", "tencent"],
+                            "timestamp":  datetime.now().isoformat(),
+                        }
+                raise ValueError(f"invalid tencent price: {flds[3] if len(flds) > 3 else 'N/A'}")
+        except Exception as tx_err:
+            errors.append(f"tencent: {tx_err}")
+            logger.debug("Tencent A-share failed %s: %s", code, tx_err)
+
+        # ── 备用路径 2: 新浪行情 hq.sinajs.cn ────────────────────────────────
+        try:
+            prefix = "sz" if code.startswith(("0", "3")) else "sh"
+            r = self._sess.get(f"https://hq.sinajs.cn/list={prefix}{code}",
+                               headers={"Referer": "https://finance.sina.com.cn/"},
+                               timeout=6)
+            raw = r.text.strip()
+            if raw and "=" in raw:
+                val = raw.split("=", 1)[1].strip().strip('"').strip("'")
+                flds = val.split(",")
+                if len(flds) > 9 and flds[3]:
+                    price  = float(flds[3])
+                    prev   = float(flds[2] or price)
+                    chg    = price - prev
+                    chg_p  = chg / prev * 100 if prev else 0
+                    if _is_valid_price(price):
+                        return {
+                            "success":    True,
+                            "symbol":     code,
+                            "name":       flds[0] or code,
+                            "price":      round(price, 4),
+                            "change":     round(chg, 4),
+                            "change_pct": round(chg_p, 2),
+                            "volume":     int(float(flds[8] or 0)),
+                            "turnover":   float(flds[9] or 0),
+                            "high":       round(float(flds[4] or price), 2),
+                            "low":        round(float(flds[5] or price), 2),
+                            "open":       round(float(flds[1] or price), 4),
+                            "prev_close": round(prev, 4),
+                            "currency":   "CNY",
+                            "market":     "CN",
+                            "provider":   "sina",
+                            "provider_chain": ["eastmoney", "tencent", "sina"],
+                            "timestamp":  datetime.now().isoformat(),
+                        }
+                raise ValueError(f"invalid sina price: {flds[3] if len(flds) > 3 else 'N/A'}")
+        except Exception as sina_err:
+            errors.append(f"sina: {sina_err}")
+            logger.debug("Sina A-share failed %s: %s", code, sina_err)
+
+        # ── 备用路径 3: AKShare snapshot（如果本地安装）──────────────────────
+        # AKShare uses its own requests sessions; clear proxy env vars so it
+        # connects directly instead of routing through the China VPN (which
+        # rejects AKShare's Eastmoney endpoints with ProxyError).
+        try:
+            import akshare as ak
+            import os as _ak_os
+            _ak_proxy_bk = {k: _ak_os.environ.pop(k, None)
+                            for k in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy")}
+            try:
+                df = ak.stock_zh_a_spot_em()
+            finally:
+                for _k, _v in _ak_proxy_bk.items():
+                    if _v is not None: _ak_os.environ[_k] = _v
+            row = df[df["代码"].astype(str) == code]
+            if row.empty:
+                raise ValueError("empty AKShare quote")
+            item = row.iloc[0]
+            price = float(item.get("最新价", 0))
+            if not _is_valid_price(price):
+                raise ValueError("empty AKShare price")
+            return {
+                "success":    True,
+                "symbol":     code,
+                "name":       str(item.get("名称", code)),
+                "price":      price,
+                "change":     float(item.get("涨跌额", 0) or 0),
+                "change_pct": float(item.get("涨跌幅", 0) or 0),
+                "volume":     int(float(item.get("成交量", 0) or 0)),
+                "turnover":   float(item.get("成交额", 0) or 0),
+                "market_cap": float(item.get("总市值", 0) or 0),
+                "high":       float(item.get("最高", 0) or 0),
+                "low":        float(item.get("最低", 0) or 0),
+                "open":       float(item.get("今开", 0) or 0),
+                "prev_close": float(item.get("昨收", 0) or 0),
+                "currency":   "CNY",
+                "market":     "CN",
+                "provider":   "akshare",
+                "provider_chain": ["eastmoney", "tencent", "sina", "akshare"],
+                "timestamp":  datetime.now().isoformat(),
+            }
+        except Exception as ak_err:
+            errors.append(f"akshare: {ak_err}")
+            logger.debug("AKShare A-share failed %s: %s", code, ak_err)
+
+        # ── 末级 fallback: yfinance via Yahoo Finance（全球可访问，明确绕过代理）──
+        # Yahoo Finance is accessible globally; bypass any China-routing proxy so
+        # this fallback works even when the VPN/proxy is down.
+        try:
+            import yfinance as yf
+            import os as _os
+            suffix = ".SS" if code.startswith(("6", "688", "83", "87")) else ".SZ"
+            yf_sym = code + suffix
+            # Temporarily clear proxy env vars so yfinance connects directly to Yahoo
+            _proxy_backup = {k: _os.environ.pop(k, None)
+                             for k in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy")}
+            try:
+                t  = yf.Ticker(yf_sym)
+                fi = t.fast_info
+                price = float(fi.last_price or 0)
+                if not _is_valid_price(price):
+                    # fast_info may return None outside trading hours; use history
+                    h = t.history(period="2d", auto_adjust=True)
+                    if h.empty:
+                        raise ValueError("empty yfinance history")
+                    price = float(h["Close"].iloc[-1])
+                    prev  = float(h["Close"].iloc[-2]) if len(h) >= 2 else price
+                else:
+                    prev = float(fi.previous_close or price)
+            finally:
+                for k, v in _proxy_backup.items():
+                    if v is not None:
+                        _os.environ[k] = v
+            if not _is_valid_price(price):
+                raise ValueError("empty yfinance quote")
+            chg   = price - prev
+            chg_p = chg / prev * 100 if prev else 0
+            return {
+                "success":    True,
+                "symbol":     code,
+                "name":       code,
+                "price":      round(price, 4),
+                "change":     round(chg, 4),
+                "change_pct": round(chg_p, 2),
+                "volume":     int(getattr(fi, "three_month_average_volume", None) or 0),
+                "market_cap": getattr(fi, "market_cap", None),
+                "high":       round(float(getattr(fi, "day_high",  None) or 0), 2),
+                "low":        round(float(getattr(fi, "day_low",   None) or 0), 2),
+                "open":       round(float(getattr(fi, "open",      None) or 0), 4),
+                "prev_close": round(prev, 4),
+                "currency":   "CNY",
+                "market":     "CN",
+                "provider":   "yfinance",
+                "provider_chain": ["eastmoney", "tencent", "sina", "akshare", "yfinance"],
+                "timestamp":  datetime.now().isoformat(),
+            }
+        except Exception as yf_err:
+            errors.append(f"yfinance: {yf_err}")
+            logger.debug("yfinance A-share failed %s: %s", code, yf_err)
+
+        return {
+            "success": False,
+            "symbol": code,
+            "market": "CN",
+            "provider_chain": ["eastmoney", "tencent", "sina", "akshare", "yfinance"],
+            "error": _friendly_market_error(
+                code, ["Eastmoney", "腾讯", "新浪", "AKShare", "Yahoo Finance"],
+                "; ".join(errors)
+            ),
+            "debug_error": "; ".join(errors),
+        }
 
     def _history_ashare(self, symbol: str, days: int, interval: str) -> Dict[str, Any]:
         code  = _normalise_ashare(symbol)
         secid = _ashare_secid(code)
+        errors: List[str] = []
         klt_map = {"1d": 101, "1w": 102, "1mo": 103, "1h": 60, "30m": 30}
         klt = klt_map.get(interval, 101)
         end_date   = datetime.now().strftime("%Y%m%d%H%M%S")
-        start_date = (datetime.now() - timedelta(days=days)).strftime("%Y%m%d")
+
+        # ── 主路径: 东方财富历史 K线（通过系统代理）──────────────────────────
         try:
             r = self._sess.get(self.EM_HIST_URL, params={
                 "secid":   secid,
@@ -489,10 +947,147 @@ class MarketDataClient:
                         "low":    float(parts[4]),
                         "volume": int(float(parts[5])),
                     })
-            return {"success": True, "symbol": code, "name": name,
-                    "data": records, "provider": "eastmoney", "count": len(records)}
-        except Exception as e:
-            return {"success": False, "error": str(e), "symbol": symbol}
+            if records:
+                return {"success": True, "symbol": code, "name": name,
+                        "data": records, "provider": "eastmoney",
+                        "provider_chain": ["eastmoney"], "count": len(records)}
+            raise ValueError("empty Eastmoney kline response")
+        except Exception as em_err:
+            errors.append(f"eastmoney: {em_err}")
+            logger.debug("Eastmoney history failed %s: %s", code, em_err)
+
+        # ── 备用 1: 新浪 K线（scale=240 = 日线，datalen ≈ days）────────────────
+        try:
+            import json as _json
+            prefix = "sz" if code.startswith(("0", "3")) else "sh"
+            datalen = min(max(days, 60), 1023)
+            r = self._sess.get(
+                "https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData",
+                params={"symbol": f"{prefix}{code}", "scale": 240, "ma": "no", "datalen": datalen},
+                headers={"Referer": "https://finance.sina.com.cn/"},
+                timeout=10,
+            )
+            raw_list = _json.loads(r.text) if r.status_code == 200 else []
+            records = []
+            for item in raw_list:
+                records.append({
+                    "date":   item["day"],
+                    "open":   float(item.get("open",  0)),
+                    "high":   float(item.get("high",  0)),
+                    "low":    float(item.get("low",   0)),
+                    "close":  float(item.get("close", 0)),
+                    "volume": int(float(item.get("volume", 0))),
+                })
+            if records:
+                return {"success": True, "symbol": code, "name": code,
+                        "data": records, "provider": "sina",
+                        "provider_chain": ["eastmoney", "sina"], "count": len(records)}
+            raise ValueError("empty Sina kline response")
+        except Exception as sina_err:
+            errors.append(f"sina: {sina_err}")
+            logger.debug("Sina history failed %s: %s", code, sina_err)
+
+        # ── 备用 2: AKShare 历史数据（如果本地安装）──────────────────────────
+        if interval == "1d":
+            try:
+                import akshare as ak
+                import os as _ak_os
+                start_date = (datetime.now() - timedelta(days=days + 30)).strftime("%Y%m%d")
+                end_day = datetime.now().strftime("%Y%m%d")
+                _ak_proxy_bk = {k: _ak_os.environ.pop(k, None)
+                                for k in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy")}
+                try:
+                    df = ak.stock_zh_a_hist(
+                        symbol=code,
+                        period="daily",
+                        start_date=start_date,
+                        end_date=end_day,
+                        adjust="qfq",
+                    )
+                finally:
+                    for _k, _v in _ak_proxy_bk.items():
+                        if _v is not None:
+                            _ak_os.environ[_k] = _v
+                if df.empty:
+                    raise ValueError("empty AKShare history")
+                records = []
+                for _, row in df.tail(days + 5).iterrows():
+                    records.append({
+                        "date":   str(row.get("日期", ""))[:10],
+                        "open":   float(row.get("开盘", 0) or 0),
+                        "high":   float(row.get("最高", 0) or 0),
+                        "low":    float(row.get("最低", 0) or 0),
+                        "close":  float(row.get("收盘", 0) or 0),
+                        "volume": int(float(row.get("成交量", 0) or 0)),
+                    })
+                if records:
+                    return {"success": True, "symbol": code, "name": code,
+                            "data": records, "provider": "akshare",
+                            "provider_chain": ["eastmoney", "sina", "akshare"],
+                            "count": len(records)}
+                raise ValueError("empty AKShare records")
+            except Exception as ak_err:
+                errors.append(f"akshare: {ak_err}")
+                logger.debug("AKShare history failed %s: %s", code, ak_err)
+        else:
+            errors.append(f"akshare: unsupported interval {interval}")
+
+        # ── 备用 3: yfinance Yahoo Finance（绕过代理，全球可访问）────────────────
+        try:
+            import yfinance as yf
+            import os as _os
+            suffix = ".SS" if code.startswith(("6", "688", "83", "87")) else ".SZ"
+            yf_sym = code + suffix
+            period_map = {30: "1mo", 60: "3mo", 90: "3mo", 120: "6mo",
+                          180: "6mo", 252: "1y", 365: "1y", 730: "2y"}
+            period = period_map.get(days) or f"{days}d"
+            iv_map = {"1d": "1d", "1h": "1h", "15m": "15m"}
+            iv = iv_map.get(interval, "1d")
+
+            _proxy_backup = {k: _os.environ.pop(k, None)
+                             for k in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy")}
+            try:
+                df = yf.Ticker(yf_sym).history(period=period, interval=iv, auto_adjust=True)
+                if df.empty:
+                    df = yf.download(yf_sym, period=period, interval=iv,
+                                     auto_adjust=True, progress=False, timeout=15)
+                    if hasattr(df.columns, "levels") and len(df.columns.levels) > 1:
+                        df.columns = df.columns.droplevel(1)
+            finally:
+                for k, v in _proxy_backup.items():
+                    if v is not None:
+                        _os.environ[k] = v
+
+            if df.empty:
+                raise ValueError("empty yfinance dataframe")
+            records = []
+            for ts, row in df.iterrows():
+                records.append({
+                    "date":   str(ts.date()) if hasattr(ts, "date") else str(ts)[:10],
+                    "open":   round(float(row.get("Open",  row.get("open",  0))), 4),
+                    "high":   round(float(row.get("High",  row.get("high",  0))), 4),
+                    "low":    round(float(row.get("Low",   row.get("low",   0))), 4),
+                    "close":  round(float(row.get("Close", row.get("close", 0))), 4),
+                    "volume": int(row.get("Volume", row.get("volume", 0))),
+                })
+            return {"success": True, "symbol": code, "name": code,
+                    "data": records, "provider": "yfinance",
+                    "provider_chain": ["eastmoney", "sina", "akshare", "yfinance"],
+                    "count": len(records)}
+        except Exception as yf_err:
+            errors.append(f"yfinance: {yf_err}")
+            logger.debug("yfinance history fallback failed %s: %s", code, yf_err)
+            return {
+                "success": False,
+                "symbol": code,
+                "market": "CN",
+                "provider_chain": ["eastmoney", "sina", "akshare", "yfinance"],
+                "error": _friendly_market_error(
+                    code, ["Eastmoney", "新浪", "AKShare", "Yahoo Finance"],
+                    "; ".join(errors),
+                ),
+                "debug_error": "; ".join(errors),
+            }
 
     def _fundamentals_ashare(self, symbol: str) -> Dict[str, Any]:
         """A股基本面：东方财富个股资金流."""
@@ -615,8 +1210,8 @@ class MarketDataClient:
                         "change":     round(price - prev, 4),
                         "market":     "US" if sym.startswith("^") else "COMMOD",
                     }
-                except Exception:
-                    pass
+                except Exception as _e:
+                    logger.debug("Global index fetch failed for %s: %s", sym, _e)
         except Exception as e:
             logger.debug("Global indices yfinance error: %s", e)
 
@@ -638,7 +1233,7 @@ class MarketDataClient:
             sz   = data.get("s3n", {}) or {}   # 深股通
             def _val(obj, key):
                 try: return float(obj.get(key, 0)) / 1e8   # 元 → 亿
-                except: return 0.0
+                except (KeyError, ValueError, TypeError): return 0.0
             sh_net = _val(sh, "f2")
             sz_net = _val(sz, "f2")
             total  = sh_net + sz_net
@@ -672,11 +1267,11 @@ class MarketDataClient:
                 stocks.append({
                     "code":       d.get("f12",""),
                     "name":       d.get("f14",""),
-                    "price":      round(float(d.get("f2",0))/100, 2),
-                    "change_pct": round(float(d.get("f3",0))/100, 2),
+                    "price":      round(float(d.get("f2",0)), 2),    # fltt=2 → already in ¥
+                    "change_pct": round(float(d.get("f3",0)), 2),    # already in %
                     "volume":     int(d.get("f5",0)),
                     "turnover":   float(d.get("f6",0)),
-                    "amplitude":  round(float(d.get("f7",0))/100, 2),
+                    "amplitude":  round(float(d.get("f7",0)), 2),    # already in %
                 })
             return {"success": True, "market": "CN", "stocks": stocks,
                     "count": len(stocks), "provider": "eastmoney"}
@@ -697,8 +1292,8 @@ class MarketDataClient:
                     chg_p = (p-prev)/prev*100 if prev else 0
                     results.append({"symbol": sym, "price": round(p,2),
                                     "change_pct": round(chg_p,2)})
-                except Exception:
-                    pass
+                except Exception as _e:
+                    logger.debug("Screener quote failed for %s: %s", sym, _e)
             return {"success": True, "market": "US", "stocks": results,
                     "count": len(results), "provider": "yfinance"}
         except Exception as e:

@@ -1,0 +1,226 @@
+"""Startup banner and status-label rendering for Aria Code.
+
+All functions accept only primitive values (strings, dicts, ints, bools)
+so aria_cli.py can do data gathering while this module owns all display.
+
+Public surface
+--------------
+    render_compact_banner(...)   — one-line banner (banner=compact)
+    render_full_banner(...)      — robot-face + grid panel (banner=full)
+    render_try_hints(console)    — "try analyze AAPL · /help" line below panel
+    privacy_status_label(...)
+    control_status_label(...)
+    ollama_status_label(...)
+    bottom_toolbar_parts(...)
+"""
+
+from __future__ import annotations
+
+import os
+import shutil
+from typing import Optional
+
+
+# ── Status label helpers ───────────────────────────────────────────────────────
+
+def privacy_status_label(config: dict, rich: bool = False) -> str:
+    sharing = bool(config.get("data_sharing", False))
+    upload  = bool(config.get("feedback_upload", False))
+    if sharing and upload:
+        return "[#C08050]sharing on[/#C08050]" if rich else "sharing on"
+    return "local-only"
+
+
+def control_status_label(config: dict, rich: bool = False) -> str:
+    permission = config.get("permission_mode", "workspace-write")
+    network    = "network on" if bool(config.get("network_enabled", True)) else "network off"
+    privacy    = privacy_status_label(config, rich=rich)
+    return f"{permission} · {network} · privacy {privacy}"
+
+
+def ollama_status_label(
+    ollama_alive: bool,
+    installed_models: set,
+    config: dict,
+    rich: bool = False,
+) -> str:
+    count = len(installed_models)
+    has_cloud = bool(
+        config.get("auth_token")
+        or os.getenv("ANTHROPIC_API_KEY")
+        or os.getenv("OPENAI_API_KEY")
+        or os.getenv("DEEPSEEK_API_KEY")
+    )
+    cloud_tag = ("  [dim]· cloud ✓[/dim]" if rich else "  · cloud ✓") if has_cloud else ""
+    if ollama_alive:
+        label = f"Ollama online · {count} model{'s' if count != 1 else ''}"
+        return f"{label}{cloud_tag}"
+    base = "Ollama offline"
+    if has_cloud:
+        return (f"{base}  [dim]· cloud ✓[/dim]" if rich else f"{base}  · cloud ✓")
+    return base
+
+
+def bottom_toolbar_parts(
+    conversation: list,
+    config: dict,
+    actual_model: Optional[str],
+    get_model_cfg_fn,
+) -> tuple:
+    """Return (model_label, cwd, privacy, est_tokens, max_ctx)."""
+    est_tokens = sum(len(m.get("content", "")) for m in conversation) // 3
+    mkey       = config.get("model", "qwen2.5:7b")
+    max_ctx    = get_model_cfg_fn(mkey).get("num_ctx", 16384)
+    cwd = os.getcwd()
+    home = os.path.expanduser("~")
+    if cwd.startswith(home):
+        cwd = "~" + cwd[len(home):]
+    model_label = actual_model or mkey
+    if len(model_label) > 28:
+        model_label = "…" + model_label[-27:]
+    if len(cwd) > 34:
+        cwd = "…" + cwd[-33:]
+    privacy = "sharing" if bool(config.get("data_sharing", False)) else "local-only"
+    return model_label, cwd, privacy, est_tokens, max_ctx
+
+
+# ── Banner renderers ───────────────────────────────────────────────────────────
+
+_MASCOT = "[bold #C08050]▣[/bold #C08050]"
+
+
+def render_compact_banner(
+    *,
+    version: str,
+    model_label: str,
+    runtime: str,       # "cloud" | "local"
+    cwd: str,
+    control_status_rich: str,
+    tool_count: int,
+    console,
+    has_rich: bool,
+) -> None:
+    if not has_rich:
+        print(f"  Aria Code v{version}  {model_label}  {cwd}")
+        return
+    _rt = "[dim]cloud[/dim]" if runtime == "cloud" else "[dim]local[/dim]"
+    console.print(
+        f"  {_MASCOT} [bold]Aria Code[/bold] [dim]v{version}[/dim]"
+        f"  [dim]·[/dim] {model_label} {_rt}"
+        f"  [dim]·[/dim] [dim]{cwd}[/dim]"
+    )
+    console.print(f"  [dim]{control_status_rich} · {tool_count} tools · /help[/dim]")
+
+
+def render_full_banner(
+    *,
+    version: str,
+    rt_label: str,              # Rich markup: "GPT-OSS 120B  [dim]cloud[/dim]"
+    cwd: str,
+    control_status_rich: str,
+    ollama_status_rich: str,
+    tool_count: int,
+    skill_count: int,
+    auto_healed_from: str = "",
+    current_id: str = "",
+    badge: str = "",
+    installed_models: frozenset = frozenset(),
+    best_lite_id: str = "",     # model ID to suggest when lite badge + not installed
+    console,
+    has_rich: bool,
+    rich_box,
+) -> None:
+    if not has_rich:
+        print(f"\n  Aria Code v{version}  local-first agent")
+        print(f"  model       {rt_label}")
+        print(f"  workspace   {cwd}")
+        print(f"  {control_status_rich}")
+        print(f"  {ollama_status_rich}")
+        print("─" * 60)
+        return
+
+    from rich.table import Table
+    from rich.text import Text
+
+    # Left column: robot face — copper-frame display with eye sockets
+    _BF  = "bold #C08050"   # outer frame
+    _SK  = "#7A4E2A"        # eye socket lines (darker copper)
+    _EY  = "bold #D4904A"   # eye symbol highlight
+    _MT  = "dim #C08050"    # mouth & brand
+    _face = Text()
+    _face.append(" ▸ A R I A\n", style=_MT)
+    _face.append("╔══════════════╗\n", style=_BF)
+    _face.append("║  ", style=_BF)
+    _face.append("┌──┐", style=_SK)
+    _face.append("  ", style=_BF)
+    _face.append("┌──┐", style=_SK)
+    _face.append("  ║\n", style=_BF)
+    _face.append("║  ", style=_BF)
+    _face.append("│", style=_SK)
+    _face.append("▣ ", style=_EY)
+    _face.append("│", style=_SK)
+    _face.append("  ", style=_BF)
+    _face.append("│", style=_SK)
+    _face.append("▣ ", style=_EY)
+    _face.append("│", style=_SK)
+    _face.append("  ║\n", style=_BF)
+    _face.append("║  ", style=_BF)
+    _face.append("└──┘", style=_SK)
+    _face.append("  ", style=_BF)
+    _face.append("└──┘", style=_SK)
+    _face.append("  ║\n", style=_BF)
+    _face.append("║  ──────────  ║\n", style=_MT)
+    _face.append("╚══════════════╝",   style=_BF)
+
+    # Right column: status info
+    _info_lines = [
+        f"[bold]Aria Code[/bold]  [dim]v{version}[/dim]  [dim]local-first agent[/dim]",
+        f"[dim]{'model':<10}[/dim]{rt_label}",
+        f"[dim]{'workspace':<10}[/dim][dim]{cwd}[/dim]",
+        f"[dim]{'mode':<10}[/dim]{control_status_rich}",
+        f"[dim]{'status':<10}[/dim]{ollama_status_rich}",
+        f"[dim]{'':10}quant · {tool_count} tools · {skill_count} skills[/dim]",
+    ]
+    if auto_healed_from:
+        _info_lines.append(
+            f"[dim]⚙ auto-matched[/dim]  "
+            f"[yellow]{auto_healed_from}[/yellow]"
+            f" [dim]→[/dim] [bold]{current_id}[/bold]"
+        )
+    if badge == "Fast" and best_lite_id and best_lite_id not in installed_models:
+        _info_lines.append(
+            f"[yellow]tip[/yellow]  [dim]lite model — "
+            f"[bold]ollama pull {best_lite_id}[/bold] for full tools[/dim]"
+        )
+
+    _info = Text.from_markup("\n".join(_info_lines))
+
+    _grid = Table.grid(padding=(0, 2))
+    _grid.add_column(no_wrap=True, vertical="top")
+    _grid.add_column(vertical="top")
+    _grid.add_row(_face, _info)
+
+    from rich.panel import Panel
+    console.print(Panel(_grid, box=rich_box.ROUNDED, border_style="dim", padding=(0, 1)))
+
+
+def render_try_hints(console, has_rich: bool) -> None:
+    """Print the 'try analyze AAPL · /project load ./myapp · /help' hint line."""
+    if not has_rich:
+        return
+    tcols = shutil.get_terminal_size((80, 24)).columns
+    hints = [
+        ("[#C08050]analyze AAPL[/#C08050]",         12),
+        ("[#C08050]/project load ./myapp[/#C08050]", 22),
+        ("[#C08050]/privacy[/#C08050]",               8),
+        ("[dim]/help[/dim]",                          5),
+    ]
+    sep   = "  [dim]·[/dim]  "
+    parts = []
+    used  = 8  # "  try  " prefix width
+    for hint_rich, hint_len in hints:
+        cost = hint_len + (5 if parts else 0)
+        if used + cost <= tcols - 4:
+            parts.append(hint_rich)
+            used += cost
+    console.print("  [dim]try[/dim]  " + sep.join(parts) + "\n")

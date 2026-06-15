@@ -138,6 +138,7 @@ from apps.cli.utils.market_detect import (  # noqa: F401 — re-exported
     _re_sym, _STOCK_PATTERN,
     _CRYPTO_WORDS, _COMPANY_TO_TICKER,
     _BROKER_INTENT_KW, _is_broker_intent,
+    _is_broker_setup_intent, _detect_broker_type,
     _FINANCIAL_TERMS_BLOCKLIST,
     _extract_market_symbol, _extract_market_symbols, _extract_symbol_from_history,
     _is_stock_chart_analysis_request,
@@ -272,8 +273,6 @@ if HAS_RICH:
 # prompt_toolkit re-exports
 if HAS_PT:
     from prompt_toolkit import PromptSession
-    from prompt_toolkit.completion import ConditionalCompleter
-    from prompt_toolkit.filters import Condition
     from prompt_toolkit.formatted_text import HTML
     from prompt_toolkit.history import FileHistory
 # termios — already imported inside ui.console; alias for local use
@@ -289,7 +288,22 @@ from ui.picker import arrow_select as _arrow_select, run_picker_in_thread as _ru
 # Configuration & Persistent Memory
 # ============================================================================
 
-CONFIG_DIR = pathlib.Path.home() / ".arthera"
+def _resolve_config_dir() -> pathlib.Path:
+    """Resolve the user config directory.
+
+    Priority:
+      1. ARIA_HOME environment variable (explicit override)
+      2. ~/.arthera  — legacy path, kept for backward compat if it exists
+      3. ~/.aria-code — new default for fresh installs
+    """
+    if "ARIA_HOME" in os.environ:
+        return pathlib.Path(os.environ["ARIA_HOME"]).expanduser()
+    legacy = pathlib.Path.home() / ".arthera"
+    if legacy.exists():
+        return legacy
+    return pathlib.Path.home() / ".aria-code"
+
+CONFIG_DIR = _resolve_config_dir()
 CONFIG_FILE = CONFIG_DIR / "config.json"
 HISTORY_FILE = CONFIG_DIR / "history"
 SESSIONS_DIR = CONFIG_DIR / "sessions"
@@ -355,9 +369,346 @@ _DATA_SIGNUP_URLS: Dict[str, str] = {
     "twelvedata":   "https://twelvedata.com/register",
 }
 
+# LLM provider signup URLs
+_LLM_SIGNUP_URLS: Dict[str, str] = {
+    "deepseek":    "https://platform.deepseek.com/api_keys",
+    "openai":      "https://platform.openai.com/api-keys",
+    "anthropic":   "https://console.anthropic.com/settings/keys",
+    "claude":      "https://console.anthropic.com/settings/keys",
+    "groq":        "https://console.groq.com/keys",
+    "together":    "https://api.together.ai/settings/api-keys",
+    "dashscope":   "https://dashscope.console.aliyun.com/apiKey",
+    "aliyun":      "https://dashscope.console.aliyun.com/apiKey",
+    "siliconflow": "https://cloud.siliconflow.cn/account/ak",
+    "moonshot":    "https://platform.moonshot.cn/console/api-keys",
+    "zhipu":       "https://open.bigmodel.cn/usercenter/apikeys",
+}
+
+# One-line description for each provider (shown in picker)
+_PROVIDER_DESC: Dict[str, str] = {
+    # LLM
+    "deepseek":    "DeepSeek-V3/R1  强推理·中文优秀·价格极低",
+    "openai":      "GPT-4o / o1-mini  最广泛兼容",
+    "anthropic":   "Claude Sonnet/Opus  长文档·代码·分析",
+    "groq":        "Llama3/Mixtral  超高速推理 (免费额度)",
+    "together":    "开源模型聚合  Llama/Qwen/Yi 等",
+    "dashscope":   "通义千问系列  阿里云  国内访问稳定",
+    "siliconflow": "Qwen/GLM/DeepSeek  国内多模型聚合",
+    "moonshot":    "Kimi  超长上下文 128K  中文理解强",
+    "zhipu":       "智谱 GLM-4  中文推理·代码生成",
+    # Data
+    "finnhub":     "实时美股行情+新闻  免费 60次/min",
+    "alphavantage":"美股历史数据+技术指标  免费 25次/day",
+    "polygon":     "美股全量数据+期权链  免费层可用",
+    "fmp":         "财务报表+估值数据  免费层",
+    "twelvedata":  "全球行情  A股/港股/美股  免费 800次/day",
+    "newsapi":     "全球新闻聚合  免费 100次/day",
+    "coingecko":   "加密货币行情+项目数据  基础免费",
+    "tavily":      "AI搜索引擎  1000次/month 免费",
+    "brave":       "网页搜索  2000次/month 免费",
+}
+
+# Detailed guide: where to get key + what it unlocks (shown in Panel before input)
+_PROVIDER_GUIDE: Dict[str, str] = {
+    "deepseek": (
+        "1. 打开 platform.deepseek.com/api_keys\n"
+        "2. 注册/登录 → 点击「创建 API Key」\n"
+        "3. 复制 sk-xxxxxxxx 格式的密钥\n\n"
+        "解锁: DeepSeek-V3 (最强中文推理) · DeepSeek-R1 (CoT思维链)\n"
+        "价格: V3 约 ¥1/百万 token，远低于 GPT-4o"
+    ),
+    "openai": (
+        "1. 打开 platform.openai.com/api-keys\n"
+        "2. 登录 → 「Create new secret key」\n"
+        "3. 复制 sk-proj-xxxxxxxx 格式密钥\n\n"
+        "解锁: GPT-4o / GPT-4o-mini / o1 / o1-mini\n"
+        "注意: 需绑定付款方式才能使用 GPT-4o"
+    ),
+    "anthropic": (
+        "1. 打开 console.anthropic.com/settings/keys\n"
+        "2. 登录 → 「Create Key」\n"
+        "3. 复制 sk-ant-xxxxxxxx 格式密钥\n\n"
+        "解锁: Claude Sonnet 4 · Claude Opus · Claude Haiku\n"
+        "优势: 200K上下文·长文档分析·代码审查最强"
+    ),
+    "groq": (
+        "1. 打开 console.groq.com/keys\n"
+        "2. 登录 → 「Create API Key」\n"
+        "3. 复制 gsk_xxxxxxxx 格式密钥\n\n"
+        "解锁: Llama3-70B · Mixtral · Gemma\n"
+        "优势: 每秒 500+ tokens，目前最快的免费推理"
+    ),
+    "together": (
+        "1. 打开 api.together.ai/settings/api-keys\n"
+        "2. 注册 → 「Create API Key」\n"
+        "3. 复制 xxxxxxxx 格式密钥\n\n"
+        "解锁: Llama3/Qwen/DeepSeek/Yi 等 100+ 开源模型\n"
+        "新用户赠 $5 免费额度"
+    ),
+    "dashscope": (
+        "1. 打开 dashscope.console.aliyun.com/apiKey\n"
+        "2. 用阿里云账号登录\n"
+        "3. 点击「创建新的 API-KEY」\n\n"
+        "解锁: 通义千问2.5 / 通义千问Max / 通义千问Long\n"
+        "优势: 国内访问无需代理，中文理解优秀"
+    ),
+    "siliconflow": (
+        "1. 打开 cloud.siliconflow.cn/account/ak\n"
+        "2. 注册/登录 → 「创建 API Key」\n"
+        "3. 复制密钥\n\n"
+        "解锁: Qwen2.5 / GLM-4 / DeepSeek / Yi 等\n"
+        "新用户赠 14元免费额度，国内直连"
+    ),
+    "moonshot": (
+        "1. 打开 platform.moonshot.cn/console/api-keys\n"
+        "2. 注册/登录 → 「新建 API Key」\n"
+        "3. 复制 sk-xxxxxxxx 格式密钥\n\n"
+        "解锁: Kimi (moonshot-v1-8k/32k/128k)\n"
+        "优势: 128K超长上下文，处理长文档首选"
+    ),
+    "zhipu": (
+        "1. 打开 open.bigmodel.cn/usercenter/apikeys\n"
+        "2. 注册/登录 → 「添加新的 API Key」\n"
+        "3. 复制密钥\n\n"
+        "解锁: GLM-4 / GLM-4-Flash / GLM-4V (多模态)\n"
+        "GLM-4-Flash 速度快，新用户有免费额度"
+    ),
+    # Data services
+    "finnhub": (
+        "1. 打开 finnhub.io/register 注册\n"
+        "2. 进入 Dashboard → 复制 API Key\n\n"
+        "解锁: 美股实时报价 · 公司新闻 · 基本面数据\n"
+        "免费额度: 60次/分钟，足够个人使用"
+    ),
+    "alphavantage": (
+        "1. 打开 alphavantage.co/support/#api-key\n"
+        "2. 填写邮箱 → 即时获取 Key\n\n"
+        "解锁: 美股日K/周K历史数据 · RSI/MACD等技术指标\n"
+        "免费额度: 25次/天，500次/月"
+    ),
+    "polygon": (
+        "1. 打开 polygon.io/signup 注册\n"
+        "2. Dashboard → API Keys → 复制 Key\n\n"
+        "解锁: 美股实时+历史 · 期权链 · 新闻\n"
+        "免费层: 延迟15分钟数据，基础期权数据"
+    ),
+    "fmp": (
+        "1. 打开 financialmodelingprep.com/register\n"
+        "2. 注册 → Dashboard → 复制 API Key\n\n"
+        "解锁: 财报(资产负债表/利润表) · PE/PB等估值\n"
+        "免费层: 250次/天，历史财报数据"
+    ),
+    "twelvedata": (
+        "1. 打开 twelvedata.com/register 注册\n"
+        "2. Dashboard → API Keys → 复制\n\n"
+        "解锁: 全球行情 (A股/港股/美股/加密/外汇)\n"
+        "免费额度: 800次/天，支持日K历史数据"
+    ),
+    "newsapi": (
+        "1. 打开 newsapi.org/register 注册\n"
+        "2. 注册后即显示 API Key\n\n"
+        "解锁: 全球新闻聚合 · 按股票名称搜索相关新闻\n"
+        "免费层: 100次/天（仅限开发者模式）"
+    ),
+    "coingecko": (
+        "1. 打开 coingecko.com/en/api 注册\n"
+        "2. 选择 Demo 计划 (免费) → 生成 Key\n\n"
+        "解锁: 加密货币实时价格 · 历史数据 · 项目信息\n"
+        "Demo Key: 30次/分钟，基础行情足够"
+    ),
+    "tavily": (
+        "1. 打开 app.tavily.com 注册\n"
+        "2. 控制台 → 复制 API Key (tvly-xxxxxxxx)\n\n"
+        "解锁: AI优化的网页搜索，返回结构化摘要\n"
+        "免费额度: 1000次/月"
+    ),
+    "brave": (
+        "1. 打开 api.search.brave.com/app/keys\n"
+        "2. 注册 → 「Add Key」→ 选择 Free 计划\n\n"
+        "解锁: 网页搜索 (无追踪，隐私优先)\n"
+        "免费额度: 2000次/月"
+    ),
+}
+
+
+def _test_api_key(provider: str, key: str) -> tuple:
+    """Test if an API key is valid. Returns (ok: bool, message: str)."""
+    import urllib.request as _ur
+    import urllib.error as _ue
+    import json as _json
+
+    provider = provider.lower()
+
+    try:
+        # ── Anthropic (different auth scheme) ────────────────────────────────
+        if provider in ("anthropic", "claude"):
+            req = _ur.Request(
+                "https://api.anthropic.com/v1/models",
+                headers={
+                    "x-api-key": key,
+                    "anthropic-version": "2023-06-01",
+                },
+            )
+            with _ur.urlopen(req, timeout=8) as r:
+                return True, f"✅ Anthropic  HTTP {r.status}  key 有效"
+
+        # ── ZhiPu (JWT-based, just try /v1/models) ───────────────────────────
+        if provider == "zhipu":
+            base = _PROVIDER_BASE_URLS.get("zhipu", "https://open.bigmodel.cn/api/paas/v4")
+            req = _ur.Request(
+                base.rstrip("/") + "/models",
+                headers={"Authorization": f"Bearer {key}"},
+            )
+            try:
+                with _ur.urlopen(req, timeout=8) as r:
+                    return True, f"✅ 智谱 GLM  HTTP {r.status}  key 有效"
+            except _ue.HTTPError as e:
+                if e.code in (401, 403):
+                    return False, f"❌ 智谱 GLM  HTTP {e.code}  key 无效"
+                return True, f"✅ 智谱 GLM  HTTP {e.code}  可连接"
+
+        # ── Standard OpenAI-compat LLM providers ─────────────────────────────
+        if provider in _PROVIDER_BASE_URLS:
+            base = _PROVIDER_BASE_URLS[provider].rstrip("/")
+            url = base + "/v1/models"
+            req = _ur.Request(url, headers={"Authorization": f"Bearer {key}"})
+            try:
+                with _ur.urlopen(req, timeout=8) as r:
+                    return True, f"✅ {provider.capitalize()}  HTTP {r.status}  key 有效"
+            except _ue.HTTPError as e:
+                if e.code in (401, 403):
+                    return False, f"❌ {provider.capitalize()}  HTTP {e.code}  key 无效或已过期"
+                return True, f"✅ {provider.capitalize()}  HTTP {e.code}  可连接"
+
+        # ── Data services ─────────────────────────────────────────────────────
+        if provider == "finnhub":
+            url = f"https://finnhub.io/api/v1/quote?symbol=AAPL&token={key}"
+            req = _ur.Request(url, headers={"User-Agent": "aria-code/1.0"})
+            with _ur.urlopen(req, timeout=8) as r:
+                body = _json.loads(r.read())
+                if body.get("error"):
+                    return False, f"❌ Finnhub  error: {body['error']}"
+                price = body.get("c", "?")
+                return True, f"✅ Finnhub  AAPL现价 ${price}  key 有效"
+
+        if provider == "alphavantage":
+            url = f"https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=AAPL&apikey={key}"
+            req = _ur.Request(url, headers={"User-Agent": "aria-code/1.0"})
+            with _ur.urlopen(req, timeout=10) as r:
+                body = _json.loads(r.read())
+                if "Information" in body:
+                    return False, f"❌ Alpha Vantage  超出频率限制或 key 无效"
+                if "Global Quote" in body and body["Global Quote"]:
+                    price = body["Global Quote"].get("05. price", "?")
+                    return True, f"✅ Alpha Vantage  AAPL=${price}  key 有效"
+                return False, f"❌ Alpha Vantage  返回异常: {str(body)[:80]}"
+
+        if provider == "polygon":
+            url = f"https://api.polygon.io/v2/aggs/ticker/AAPL/range/1/day/2024-01-09/2024-01-09?adjusted=true&sort=asc&limit=1&apiKey={key}"
+            req = _ur.Request(url, headers={"User-Agent": "aria-code/1.0"})
+            try:
+                with _ur.urlopen(req, timeout=8) as r:
+                    body = _json.loads(r.read())
+                    if body.get("status") == "OK":
+                        return True, f"✅ Polygon  {body.get('resultsCount', 0)} 条数据  key 有效"
+                    return False, f"❌ Polygon  {body.get('status', 'unknown')}: {body.get('error', '')}"
+            except _ue.HTTPError as e:
+                if e.code == 403:
+                    return False, f"❌ Polygon  HTTP 403  key 无效"
+                return True, f"✅ Polygon  HTTP {e.code}  可连接"
+
+        if provider == "fmp":
+            url = f"https://financialmodelingprep.com/api/v3/quote/AAPL?apikey={key}"
+            req = _ur.Request(url, headers={"User-Agent": "aria-code/1.0"})
+            with _ur.urlopen(req, timeout=8) as r:
+                body = _json.loads(r.read())
+                if isinstance(body, list) and body:
+                    price = body[0].get("price", "?")
+                    return True, f"✅ FMP  AAPL=${price}  key 有效"
+                if isinstance(body, dict) and "Error Message" in body:
+                    return False, f"❌ FMP  {body['Error Message']}"
+                return False, f"❌ FMP  返回异常: {str(body)[:80]}"
+
+        if provider == "twelvedata":
+            url = f"https://api.twelvedata.com/api_usage?apikey={key}"
+            req = _ur.Request(url, headers={"User-Agent": "aria-code/1.0"})
+            with _ur.urlopen(req, timeout=8) as r:
+                body = _json.loads(r.read())
+                if body.get("status") == "error":
+                    return False, f"❌ TwelveData  {body.get('message', 'key 无效')}"
+                used = body.get("current_usage", {}).get("daily", {}).get("used", "?")
+                limit = body.get("current_usage", {}).get("daily", {}).get("limit", "?")
+                return True, f"✅ TwelveData  今日已用 {used}/{limit}  key 有效"
+
+        if provider == "newsapi":
+            url = f"https://newsapi.org/v2/top-headlines?country=us&pageSize=1&apiKey={key}"
+            req = _ur.Request(url, headers={"User-Agent": "aria-code/1.0"})
+            try:
+                with _ur.urlopen(req, timeout=8) as r:
+                    body = _json.loads(r.read())
+                    if body.get("status") == "ok":
+                        return True, f"✅ NewsAPI  {body.get('totalResults', 0)} 条新闻  key 有效"
+                    return False, f"❌ NewsAPI  {body.get('message', 'key 无效')}"
+            except _ue.HTTPError as e:
+                err_body = _json.loads(e.read().decode()) if e.read else {}
+                return False, f"❌ NewsAPI  HTTP {e.code}  {err_body.get('message', '')}"
+
+        if provider == "coingecko":
+            url = "https://pro-api.coingecko.com/api/v3/ping"
+            req = _ur.Request(url, headers={"x-cg-pro-api-key": key, "User-Agent": "aria-code/1.0"})
+            try:
+                with _ur.urlopen(req, timeout=8) as r:
+                    return True, f"✅ CoinGecko Pro  key 有效"
+            except _ue.HTTPError as e:
+                if e.code == 401:
+                    url2 = f"https://api.coingecko.com/api/v3/ping?x_cg_demo_api_key={key}"
+                    req2 = _ur.Request(url2, headers={"User-Agent": "aria-code/1.0"})
+                    try:
+                        with _ur.urlopen(req2, timeout=8) as r2:
+                            return True, f"✅ CoinGecko Demo  key 有效"
+                    except Exception:
+                        pass
+                return False, f"❌ CoinGecko  HTTP {e.code}  key 无效"
+
+        if provider == "tavily":
+            import urllib.parse as _up
+            data = _json.dumps({"api_key": key, "query": "test", "max_results": 1}).encode()
+            req = _ur.Request(
+                "https://api.tavily.com/search",
+                data=data,
+                headers={"Content-Type": "application/json", "User-Agent": "aria-code/1.0"},
+            )
+            try:
+                with _ur.urlopen(req, timeout=10) as r:
+                    return True, f"✅ Tavily  HTTP {r.status}  key 有效"
+            except _ue.HTTPError as e:
+                if e.code == 401:
+                    return False, f"❌ Tavily  HTTP 401  key 无效"
+                return True, f"✅ Tavily  HTTP {e.code}  可连接"
+
+        if provider == "brave":
+            req = _ur.Request(
+                "https://api.search.brave.com/res/v1/web/search?q=AAPL&count=1",
+                headers={"X-Subscription-Token": key, "User-Agent": "aria-code/1.0"},
+            )
+            try:
+                with _ur.urlopen(req, timeout=8) as r:
+                    return True, f"✅ Brave Search  HTTP {r.status}  key 有效"
+            except _ue.HTTPError as e:
+                if e.code == 401:
+                    return False, f"❌ Brave Search  HTTP 401  key 无效"
+                return True, f"✅ Brave Search  HTTP {e.code}  可连接"
+
+        return False, f"⚠ 未知 provider '{provider}'，无法测试"
+
+    except _ue.URLError as e:
+        return False, f"❌ 网络错误: {e.reason}"
+    except Exception as e:
+        return False, f"❌ 测试失败: {e}"
+
 
 def _load_providers_json() -> Dict[str, Any]:
-    """Load ~/.arthera/providers.json and return the 'llm' section.
+    """Load providers.json from the Aria config dir and return the 'llm' section.
 
     Returns an empty dict if the file doesn't exist or is malformed.
     """
@@ -371,7 +722,7 @@ def _load_providers_json() -> Dict[str, Any]:
 
 
 def _save_providers_json(llm_section: Dict[str, Any]) -> None:
-    """Persist LLM provider API keys to ~/.arthera/providers.json."""
+    """Persist LLM provider API keys to providers.json in the Aria config dir."""
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     existing: Dict = {}
     if PROVIDERS_FILE.exists():
@@ -384,7 +735,7 @@ def _save_providers_json(llm_section: Dict[str, Any]) -> None:
 
 
 def _save_data_key(service: str, key: str) -> None:
-    """Persist a data service API key to ~/.arthera/providers.json under 'data' section."""
+    """Persist a data service API key to providers.json under 'data' section."""
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     existing: Dict = {}
     if PROVIDERS_FILE.exists():
@@ -492,7 +843,7 @@ def _run_event_hook(event: str, env_extra: dict = None):
     """
     import subprocess as _sp, os as _os
     dirs = [
-        pathlib.Path.home() / ".arthera" / "hooks",
+        CONFIG_DIR / "hooks",
         pathlib.Path.cwd() / ".aria" / "hooks",
     ]
     env = dict(_os.environ)
@@ -1999,7 +2350,7 @@ LOCAL_TOOL_SCHEMAS = [
                     },
                     "broker_id": {
                         "type": "string",
-                        "description": "Optional broker id from ~/.arthera/brokers.json. Omit to use the active/default broker.",
+                        "description": f"Optional broker id from {CONFIG_DIR}/brokers.json. Omit to use the active/default broker.",
                     },
                     "status": {
                         "type": "string",
@@ -4932,7 +5283,7 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
             "/init":      (self.cmd_init,      "为当前项目生成 ARIA.md: /init [--force]"),
             "/review":    (self.cmd_review,    "AI 代码审查: /review [file] | /review --staged"),
             # ── Provider / 模型配置（Open Interpreter 风格）───────────────────
-            "/apikey":    (self.cmd_apikey,    "Cloud API Key 管理: /apikey set|list|remove|test"),
+            "/apikey":    (self.cmd_apikey,    "API Key 向导: /apikey → 交互配置  /apikey list|test|remove"),
             "/setup":     (self.cmd_setup,     "首次配置向导: /setup"),
             # ── 量化专属（Aria 独有）────────────────────────────────────────────
             "/auto-strategy": (self.cmd_auto_strategy, "AI 策略自动优化闭环: /auto-strategy momentum SPY --target sharpe=1.5"),
@@ -5117,7 +5468,7 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
         "/skills":    ("Usage: /skills", ["/skills"]),
         "/tools":     ("Usage: /tools [list|call TOOL_NAME]", ["/tools", "/tools list"]),
         "/data":      ("Usage: /data [SYMBOL] [field]", ["/data AAPL", "/data sh600519 history"]),
-        "/apikey":    ("Usage: /apikey [set|get|list|delete] [provider] [key]", ["/apikey set openai sk-...", "/apikey list", "/apikey delete groq"]),
+        "/apikey":    ("Usage: /apikey → 向导  /apikey list → 查看  /apikey test <p> → 测试  /apikey set <p> <k>", ["/apikey", "/apikey list", "/apikey test deepseek", "/apikey set openai sk-..."]),
         "/ariarc":    ("Usage: /ariarc [show|init|set key=val]", ["/ariarc show", "/ariarc init", "/ariarc set default_symbols=AAPL,MSFT"]),
         "/setup":     ("Usage: /setup [mcp|broker|keys|all]", ["/setup", "/setup mcp", "/setup keys"]),
         "/doctor":    ("Usage: /doctor", ["/doctor"]),
@@ -9080,7 +9431,7 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
             console.print()
         else:
             if not reg:
-                print("  No MCP servers. Configure ~/.arthera/mcp_servers.json")
+                print(f"  No MCP servers. Configure {CONFIG_DIR}/mcp_servers.json")
             else:
                 for s in reg.status():
                     print(f"  {'●' if s['running'] else '○'} {s['name']:20s} {s['tool_count']} tools")
@@ -9333,16 +9684,35 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
             )
 
         if result.get("success"):
-            path = result.get("chart_path", "")
+            path    = result.get("chart_path", "")
+            issues  = result.get("review_issues") or []
+            sup3    = result.get("support") or []
+            res3    = result.get("resistance") or []
+            rsi_val = result.get("rsi")
             if HAS_RICH:
                 console.print(f"\n  ✅ 图表已生成: [link={path}]{path}[/link]")
-                console.print(f"  [dim]浏览器打开: open \"{path}\"[/dim]")
+                console.print(
+                    f"  [dim]趋势: {result.get('trend','—')}  "
+                    f"RSI: {f'{rsi_val:.1f}' if rsi_val else '—'}  "
+                    f"支撑: {'/'.join(str(v) for v in sup3) or '—'}  "
+                    f"阻力: {'/'.join(str(v) for v in res3) or '—'}[/dim]"
+                )
+                if issues:
+                    console.print(f"  [yellow]⚠ 自审发现 {len(issues)} 个问题:[/yellow]")
+                    for iss in issues:
+                        console.print(f"    [yellow]· {iss}[/yellow]")
+                else:
+                    console.print("  [green dim]✓ 自审通过（数据质量正常）[/green dim]")
             else:
                 print(f"\n  ✅ 图表已生成: {path}")
-                print(f"  浏览器打开: open \"{path}\"")
-            import subprocess, sys
+                print(f"  趋势: {result.get('trend','—')}  RSI: {f'{rsi_val:.1f}' if rsi_val else '—'}")
+                if issues:
+                    print(f"  ⚠ 自审发现 {len(issues)} 个问题:")
+                    for iss in issues:
+                        print(f"    · {iss}")
+            import subprocess as _sp
             try:
-                subprocess.Popen(["open", path])
+                _sp.Popen(["open", path])
             except Exception:
                 pass
         else:
@@ -9754,7 +10124,7 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
             paths = [
                 "~/.aria/datasources.yaml",
                 "~/.aria/.env",
-                "~/.arthera/providers.json",
+                str(CONFIG_DIR / "providers.json"),
             ]
             if HAS_RICH:
                 console.print("  [bold]数据源配置文件:[/bold]")
@@ -10272,19 +10642,9 @@ class ArtheraTerminal:
                 if config.get("input_style", "panel") == "box"
                 else HTML('<style fg="#888888">Ask Aria, edit files, run commands, or /help</style>')
             )
-            # Only show completions when buffer starts with "/" — avoids
-            # triggering the menu on plain chat messages.
-            @Condition
-            def _slash_active() -> bool:
-                try:
-                    buf = self._pt_session.app.current_buffer
-                    return buf.text.lstrip().startswith("/")
-                except Exception:
-                    return False
-            _session_completer = ConditionalCompleter(self._pt_completer, _slash_active)
             self._pt_session = PromptSession(
                 history=self._pt_history,
-                completer=_session_completer,
+                completer=self._pt_completer,
                 complete_while_typing=True,
                 style=ARIA_PT_STYLE,
                 placeholder=_placeholder,
@@ -10545,6 +10905,17 @@ class ArtheraTerminal:
                 _model_has_tools = bool(_mc.tool_calls and _mc.context_window >= 8192)
             except Exception:
                 pass
+
+        # ── Broker setup intent: intercept before LLM / deterministic routing ──
+        if _is_broker_setup_intent(message):
+            _btype = _detect_broker_type(message)
+            if HAS_RICH:
+                from apps.cli.utils.market_detect import _BROKER_SETUP_NAMES
+                _display = _BROKER_SETUP_NAMES.get(_btype, ("",))[0] if _btype else ""
+                _label = f"  正在启动{_display}配置向导…" if _display else "  正在启动券商配置向导…"
+                console.print(f"\n[bold]Aria[/bold]  [dim]{_label}[/dim]\n")
+            await self.commands._cmd_broker_add(_btype)
+            return
 
         deterministic: dict = {"success": False}
         if not _model_has_tools:
@@ -11714,6 +12085,17 @@ class ArtheraTerminal:
                 _model_has_tools_p = bool(_mc_p.tool_calls and _mc_p.context_window >= 8192)
             except Exception:
                 pass
+
+        # ── Broker setup intent: intercept before LLM / deterministic routing ──
+        if _is_broker_setup_intent(prompt):
+            _btype_p = _detect_broker_type(prompt)
+            if HAS_RICH:
+                from apps.cli.utils.market_detect import _BROKER_SETUP_NAMES
+                _display_p = _BROKER_SETUP_NAMES.get(_btype_p, ("",))[0] if _btype_p else ""
+                _label_p = f"  正在启动{_display_p}配置向导…" if _display_p else "  正在启动券商配置向导…"
+                console.print(f"\n[bold]Aria[/bold]  [dim]{_label_p}[/dim]\n")
+            await self.commands._cmd_broker_add(_btype_p)
+            return
 
         deterministic: dict = {"success": False}
         if not _model_has_tools_p:

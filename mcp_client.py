@@ -323,6 +323,15 @@ class MCPToolRegistry:
             desc    = cfg.get("description", "")
             if not command:
                 continue
+            if not cfg.get("enabled", True):
+                logger.debug("MCP server %r disabled in config, skipping", name)
+                continue
+            # expand ${VAR} placeholders in args and env values
+            def _expand(s: str) -> str:
+                import re as _re
+                return _re.sub(r'\$\{(\w+)\}', lambda m: os.environ.get(m.group(1), m.group(0)), s)
+            args = [_expand(a) for a in args]
+            env  = {k: _expand(v) for k, v in env.items() if v}
             srv = MCPServer(name=name, command=command, args=args, env=env, description=desc)
             ok  = await srv.start()
             if ok:

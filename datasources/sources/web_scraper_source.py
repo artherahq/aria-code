@@ -21,6 +21,8 @@ import urllib.parse
 import urllib.request
 from typing import Any, Dict, List, Optional
 
+from ..base import BaseDataSource, FundamentalsResult, HistoryResult, QuoteResult
+
 logger = logging.getLogger(__name__)
 
 _DEFAULT_HEADERS = {
@@ -204,13 +206,39 @@ def scrape_szse_financials(symbol: str) -> Optional[Dict]:
 
 # ─── 统一爬虫接口 ─────────────────────────────────────────────────────────────
 
-class WebScraperSource:
+class WebScraperSource(BaseDataSource):
     """
     公开网页数据爬虫 — 汇总多个免费公开金融数据网站。
-    用于补充 API 数据源的缺失数据。
+    实现 BaseDataSource 接口以便接入路由器；quote/history 委托给主数据源，
+    fundamentals() 提供爬取的补充数据（公告、交易所基本信息等）。
     """
 
-    name = "web_scraper"
+    name         = "web_scraper"
+    markets      = ["a_share", "us"]
+    requires_key = False
+
+    def is_configured(self) -> bool:
+        return True
+
+    def quote(self, symbol: str) -> Optional[QuoteResult]:
+        return None  # 不提供实时行情，由 akshare/yfinance 负责
+
+    def fundamentals(self, symbol: str) -> Optional[FundamentalsResult]:
+        """从交易所公开页面补充基本信息（仅 A 股）。"""
+        s = symbol.replace(".SS", "").replace(".SZ", "").zfill(6)
+        info = None
+        if s.startswith(("6", "9")):
+            info = scrape_sse_financials(s)
+        elif s.startswith(("0", "3")):
+            info = scrape_szse_financials(s)
+        if not info:
+            return None
+        return FundamentalsResult(
+            symbol = symbol,
+            source = self.name,
+        )
+
+    # ── 扩展方法（供上层直接调用） ─────────────────────────────────────────────
 
     def get_announcements(self, symbol: str, count: int = 10) -> List[Dict]:
         """A股公告列表（东方财富）。"""
@@ -244,7 +272,7 @@ class WebScraperSource:
                     results[sym] = self.get_news(sym)
                 elif data_type == "revenue":
                     results[sym] = self.get_historical_revenue(sym)
-                time.sleep(1.0)  # 礼貌性速率限制
+                time.sleep(1.0)
             except Exception as e:
                 results[sym] = {"error": str(e)}
         return results

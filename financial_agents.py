@@ -33,6 +33,29 @@ from typing import Any, Callable, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 
+def _is_present(v: Any) -> bool:
+    return v not in (None, "", "N/A", "-", "nan")
+
+
+def _fmt_value(v: Any, digits: int = 2, suffix: str = "") -> str:
+    if not _is_present(v):
+        return "—"
+    try:
+        if isinstance(v, (int, float)):
+            return f"{float(v):,.{digits}f}{suffix}"
+        return str(v)
+    except Exception:
+        return str(v)
+
+
+def _join_metric_lines(rows: List[tuple[str, Any]], *, empty: str) -> str:
+    lines = []
+    for label, value in rows:
+        if _is_present(value) and value != "—":
+            lines.append(f"  {label}: {value}")
+    return "\n".join(lines) if lines else f"  {empty}"
+
+
 # ── Lightweight Ollama caller (no extra deps) ────────────────────────────────
 
 async def _ollama_chat(
@@ -198,31 +221,39 @@ async def _fundamental_agent(
     tech = market_data.get("technicals", {})
 
     if fund.get("success"):
-        fund_text = f"""
-财务指标:
-  市值: {_fmt_cap(fund.get('market_cap'))}
-  PE(TTM): {fund.get('pe_ratio', 'N/A')}  |  远期PE: {fund.get('fwd_pe', 'N/A')}
-  PB: {fund.get('pb_ratio', 'N/A')}  |  PS: {fund.get('ps_ratio', 'N/A')}
-  EV/EBITDA: {fund.get('ev_ebitda', 'N/A')}
-  营收: {_fmt_cap(fund.get('revenue'))}
-  净利润: {_fmt_cap(fund.get('net_income'))}
-  EPS: {fund.get('eps', 'N/A')}  |  预测EPS: {fund.get('fwd_eps', 'N/A')}
-  Beta: {fund.get('beta', 'N/A')}
-  52周高点: {fund.get('52w_high', 'N/A')}  |  52周低点: {fund.get('52w_low', 'N/A')}
-  分析师目标价: {fund.get('analyst_target', 'N/A')}
-  分析师评级: {fund.get('recommendation', 'N/A')}
-  所在行业: {fund.get('sector', 'N/A')} / {fund.get('industry', 'N/A')}"""
+        sector = " / ".join(x for x in (fund.get("sector"), fund.get("industry")) if _is_present(x))
+        fund_rows = [
+            ("市值", _fmt_cap(fund.get("market_cap"))),
+            ("PE(TTM)", _fmt_value(fund.get("pe_ratio"))),
+            ("远期PE", _fmt_value(fund.get("fwd_pe"))),
+            ("PB", _fmt_value(fund.get("pb_ratio"))),
+            ("PS", _fmt_value(fund.get("ps_ratio"))),
+            ("EV/EBITDA", _fmt_value(fund.get("ev_ebitda"))),
+            ("营收", _fmt_cap(fund.get("revenue"))),
+            ("净利润", _fmt_cap(fund.get("net_income"))),
+            ("EPS", _fmt_value(fund.get("eps"))),
+            ("预测EPS", _fmt_value(fund.get("fwd_eps"))),
+            ("Beta", _fmt_value(fund.get("beta"))),
+            ("52周高点", _fmt_value(fund.get("52w_high"))),
+            ("52周低点", _fmt_value(fund.get("52w_low"))),
+            ("分析师目标价", _fmt_value(fund.get("analyst_target"))),
+            ("分析师评级", fund.get("recommendation")),
+            ("所在行业", sector),
+        ]
+        fund_text = "\n财务指标:\n" + _join_metric_lines(fund_rows, empty="基本面字段未返回")
     else:
-        p = quote_d.get('price', 'N/A')
-        fund_text = f"\n当前价格: {p}  (基本面数据暂不可用，请从价格和技术面推断)"
+        p = _fmt_value(quote_d.get("price"))
+        fund_text = f"\n当前价格: {p}\n  基本面数据暂不可用，请明确说明估值判断受限。"
 
     tech_text = ""
     if tech.get("success"):
-        tech_text = f"""
-技术面补充:
-  RSI(14): {tech.get('rsi', 'N/A')}
-  MA20: {tech.get('ma20', 'N/A')}  |  MA60: {tech.get('ma60', 'N/A')}
-  布林带位置: {_fmt_pct(tech.get('bb_position'))} (0=下轨, 1=上轨)"""
+        tech_rows = [
+            ("RSI(14)", _fmt_value(tech.get("rsi"))),
+            ("MA20", _fmt_value(tech.get("ma20"))),
+            ("MA60", _fmt_value(tech.get("ma60"))),
+            ("布林带位置", _fmt_pct(tech.get("bb_position"))),
+        ]
+        tech_text = "\n技术面补充:\n" + _join_metric_lines(tech_rows, empty="技术面字段未返回")
 
     prompt = f"""你是顶级机构股票研究员，专注基本面深度研究。请分析 {symbol}。
 
@@ -297,15 +328,25 @@ async def _technical_agent(
     # 布林带位置
     bb_label = "触下轨(超卖)" if bb_pos < 0.2 else "触上轨(超买)" if bb_pos > 0.8 else "中轨附近"
 
-    tech_context = f"""
-技术指标 (实时):
-  当前价格: {price}
-  RSI(14): {rsi:.1f} [{rsi_label}]{trend_text}
-  MACD: {macd:.4f}  Signal: {macd_s:.4f}  Histogram: {macd_h:.4f} [{macd_signal_txt}]
-  布林带位置: {bb_pos:.2f} [{bb_label}]
-  MA5: {tech.get('ma5','N/A')}  MA10: {tech.get('ma10','N/A')}  MA20: {tech.get('ma20','N/A')}
-  MA60: {tech.get('ma60','N/A')}  MA120: {tech.get('ma120','N/A')}
-  布林上轨: {tech.get('bb_upper','N/A')}  中轨: {tech.get('bb_mid','N/A')}  下轨: {tech.get('bb_lower','N/A')}"""
+    tech_rows = [
+        ("当前价格", _fmt_value(price)),
+        ("RSI(14)", f"{float(rsi):.1f} [{rsi_label}]" if _is_present(rsi) else None),
+        ("MACD", f"{float(macd):.4f}"),
+        ("Signal", f"{float(macd_s):.4f}"),
+        ("Histogram", f"{float(macd_h):.4f} [{macd_signal_txt}]" if _is_present(macd_h) else None),
+        ("布林带位置", f"{float(bb_pos):.2f} [{bb_label}]" if _is_present(bb_pos) else None),
+        ("MA5", _fmt_value(tech.get("ma5"))),
+        ("MA10", _fmt_value(tech.get("ma10"))),
+        ("MA20", _fmt_value(tech.get("ma20"))),
+        ("MA60", _fmt_value(tech.get("ma60"))),
+        ("MA120", _fmt_value(tech.get("ma120"))),
+        ("布林上轨", _fmt_value(tech.get("bb_upper"))),
+        ("布林中轨", _fmt_value(tech.get("bb_mid"))),
+        ("布林下轨", _fmt_value(tech.get("bb_lower"))),
+    ]
+    tech_context = "\n技术指标 (实时):\n" + _join_metric_lines(tech_rows, empty="技术指标字段未返回")
+    if trend_text:
+        tech_context += trend_text
 
     prompt = f"""你是专业量化技术分析师。请基于以下技术数据分析 {symbol}。
 
@@ -368,21 +409,26 @@ async def _risk_agent(
         max_dd  = float(dd.min())
         max_dd_text = f"最大回撤(样本内): {max_dd:.1f}%"
 
-    beta   = fund.get("beta", "N/A") if fund.get("success") else "N/A"
-    mktcap = _fmt_cap(fund.get("market_cap")) if fund.get("success") else "N/A"
+    beta   = _fmt_value(fund.get("beta")) if fund.get("success") else "—"
+    mktcap = _fmt_cap(fund.get("market_cap")) if fund.get("success") else "—"
 
     portfolio_text = (f"\n当前持仓: {', '.join(portfolio_symbols[:8])}"
                       if portfolio_symbols else "")
 
+    risk_rows = [
+        ("当前价格", _fmt_value(quote_d.get("price"))),
+        ("Beta(vs市场)", beta),
+        ("市值", mktcap),
+        ("波动率", vol_text),
+        ("最大回撤", max_dd_text),
+        ("RSI", _fmt_value(tech.get("rsi")) if tech.get("success") else "—"),
+    ]
+    risk_text = _join_metric_lines(risk_rows, empty="风险字段未返回")
+
     prompt = f"""你是机构风控官，负责评估投资风险和仓位管理。请分析 {symbol}。
 
 【风险数据】
-  当前价格: {quote_d.get('price', 'N/A')}
-  Beta(vs市场): {beta}
-  市值: {mktcap}
-  {vol_text}
-  {max_dd_text}
-  RSI: {tech.get('rsi','N/A') if tech.get('success') else 'N/A'}{portfolio_text}
+{risk_text}{portfolio_text}
 
 请提供：
 1. **风险评级** (低/中/高/极高) 并说明理由
@@ -434,14 +480,15 @@ async def _synthesis_agent(
         )
 
     quote_d = market_data.get("quote", {})
-    price   = quote_d.get("price", "N/A")
+    price   = _fmt_value(quote_d.get("price"))
     name    = quote_d.get("name", symbol)
-    chg_pct = quote_d.get("change_pct", 0)
+    chg_pct = quote_d.get("change_pct")
+    chg_text = f"{float(chg_pct):+.2f}%" if _is_present(chg_pct) else "—"
 
     combined = "\n\n".join(sections)
 
     prompt = f"""你是量化基金首席投资官(CIO)。以下是你的专业团队对 {name}({symbol}) 的独立分析报告。
-当前价格: {price}  今日涨跌: {chg_pct:+.2f}%
+当前价格: {price}  今日涨跌: {chg_text}
 
 ━━━━━━━━━━━━━━━━━━━━━━
 {combined}
@@ -601,7 +648,7 @@ async def run_team_analysis(
 
 def _fmt_cap(v) -> str:
     if v is None:
-        return "N/A"
+        return "—"
     try:
         v = float(v)
         if v >= 1e12:
@@ -618,7 +665,7 @@ def _fmt_cap(v) -> str:
 
 def _fmt_pct(v) -> str:
     if v is None:
-        return "N/A"
+        return "—"
     try:
         return f"{float(v):.2f}"
     except Exception:
