@@ -36,6 +36,10 @@
   <a href="#-架构">架构</a>
 </p>
 
+<p align="center">
+  <img src="docs/assets/demo.gif" alt="Aria Code demo" width="860"/>
+</p>
+
 ---
 
 ## 什么是 Aria Code？
