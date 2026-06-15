@@ -1,0 +1,5 @@
+# Only ship the three files that matter: package.json + bin + scripts
+*.md
+*.log
+node_modules/
+.DS_Store

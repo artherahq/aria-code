@@ -3,8 +3,16 @@
   "version": "4.0.0",
   "description": "AI-powered financial terminal — local LLM + 19+ cloud providers + real-time market data",
   "keywords": [
-    "ai", "llm", "finance", "trading", "terminal", "cli",
-    "stocks", "quantitative", "ollama", "investment"
+    "ai",
+    "llm",
+    "finance",
+    "trading",
+    "terminal",
+    "cli",
+    "stocks",
+    "quantitative",
+    "ollama",
+    "investment"
   ],
   "homepage": "https://github.com/Cinsoul/Aria-Code#readme",
   "bugs": {
@@ -17,7 +25,7 @@
   "license": "MIT",
   "author": "Cinsoul",
   "bin": {
-    "aria-code": "./bin/aria-code.js"
+    "aria-code": "bin/aria-code.js"
   },
   "scripts": {
     "postinstall": "node scripts/postinstall.js"
