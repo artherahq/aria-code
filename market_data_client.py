@@ -44,6 +44,10 @@ logger = logging.getLogger(__name__)
 logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 logging.getLogger("curl_cffi").setLevel(logging.CRITICAL)
 
+# 东方财富 API 公开默认令牌（非个人凭证，各开源项目通用值）
+# 可通过环境变量覆盖：export EASTMONEY_UT=your_token
+_EM_UT = os.environ.get("EASTMONEY_UT", "bd1d9ddb04089700cf9c27f6f7426281")
+
 
 def _friendly_market_error(symbol: str, providers: List[str], detail: Any = "") -> str:
     """Return a user-facing market data error without leaking vendor internals."""
@@ -689,7 +693,7 @@ class MarketDataClient:
             r = self._sess.get(self.EM_QUOTE_URL, params={
                 "secid":  secid,
                 "fields": self._EM_FIELDS,
-                "ut":     "bd1d9ddb04089700cf9c27f6f7426281",
+                "ut":     _EM_UT,
                 "fltt": 2, "invt": 2,
             }, timeout=6)
             d = r.json().get("data", {}) or {}
@@ -930,7 +934,7 @@ class MarketDataClient:
                 "end":     end_date,
                 "fields1": "f1,f2,f3,f4,f5,f6",
                 "fields2": "f51,f52,f53,f54,f55,f56",
-                "ut":      "bd1d9ddb04089700cf9c27f6f7426281",
+                "ut":      _EM_UT,
             }, timeout=10)
             raw = r.json().get("data", {}) or {}
             name = raw.get("name", code)
@@ -1170,7 +1174,7 @@ class MarketDataClient:
                 "fltt": 2, "invt": 2,
                 "fields": "f1,f2,f3,f4,f12,f14",
                 "secids": cn_secids,
-                "ut": "bd1d9ddb04089700cf9c27f6f7426281",
+                "ut": _EM_UT,
             }, timeout=8)
             for item in r.json().get("data",{}).get("diff",[]):
                 code = item.get("f12","")
@@ -1226,7 +1230,7 @@ class MarketDataClient:
                 "fields1": "f1,f2,f3,f4",
                 "fields2": "f51,f52,f53,f54,f55,f56,f57,f58",
                 "klt": 101, "lmt": 5,
-                "ut": "bd1d9ddb04089700cf9c27f6f7426281",
+                "ut": _EM_UT,
             }, timeout=8)
             data = r.json().get("data", {}) or {}
             sh   = data.get("s2n", {}) or {}   # 沪股通
@@ -1256,7 +1260,7 @@ class MarketDataClient:
         try:
             r = self._sess.get(self.EM_HOT_URL, params={
                 "pn": 1, "pz": top_n, "po": 1, "np": 1,
-                "ut": "bd1d9ddb04089700cf9c27f6f7426281",
+                "ut": _EM_UT,
                 "fltt": 2, "invt": 2, "fid": "f6",
                 "fs": "m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23",
                 "fields": "f2,f3,f4,f5,f6,f7,f12,f14,f62",
