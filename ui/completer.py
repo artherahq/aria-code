@@ -33,7 +33,7 @@ _CATS: List[Tuple[Tuple[str, ...], str]] = [
       "/review", "/vision", "/browser", "/web"),                        "工具"),
     (("/config", "/model", "/apikey", "/setup", "/local", "/mcp",
       "/memory", "/cost", "/version"),                                   "设置"),
-    (("/help", "/clear", "/exit", "/quit", "/history", "/session"),     "系统"),
+    (("/help", "/clear", "/btw", "/recap", "/exit", "/quit", "/history", "/session"), "系统"),
 ]
 
 _CAT_BADGE: dict[str, str] = {
@@ -135,6 +135,7 @@ def _highlighted(name: str, matched_indices: List[int]) -> List[Tuple[str, str]]
 
 
 if HAS_PT:
+    import os as _os
     from prompt_toolkit.completion import Completer, Completion
     from prompt_toolkit.formatted_text import FormattedText
     from prompt_toolkit.styles import Style as PTStyle
@@ -146,6 +147,11 @@ if HAS_PT:
         Activates the moment the user types "/" (complete_while_typing=True
         is already set in PromptSession, so no extra keypress is needed).
 
+        Triggers:
+          /      → show ALL slash commands (fuzzy matched)
+          @      → file/directory path autocomplete (@ anywhere in input)
+          !      → shell history autocomplete (first word after !)
+
         Matching:
           /          → show ALL commands sorted by category order
           /ch        → fuzzy-match "ch" against command names, highlight hits
@@ -156,6 +162,7 @@ if HAS_PT:
         def __init__(self, commands_dict: dict, skills: list, watchlist: list):
             self.commands = commands_dict
             self.skills   = skills
+            self._shell_history: list[str] = []  # populated by REPL after ! commands
             self.symbols  = sorted(set([
                 "AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA", "META",
                 "NFLX", "AMD", "INTC", "SPY", "QQQ", "DIA", "IWM",
@@ -174,6 +181,30 @@ if HAS_PT:
         def get_completions(self, document, complete_event) -> Iterator[Completion]:
             text = document.text_before_cursor
             ltext = text.lstrip()
+
+            # ── @ file path autocomplete ────────────────────────────────────
+            # Triggered any time text contains "@" — complete path after it.
+            at_idx = text.rfind("@")
+            if at_idx != -1:
+                path_frag = text[at_idx + 1:]
+                # Only complete if fragment has no spaces (i.e. contiguous word)
+                if " " not in path_frag:
+                    yield from self._file_completions(path_frag, at_idx + 1)
+                    return
+
+            # ── ! shell command autocomplete ────────────────────────────────
+            if ltext.startswith("!"):
+                shell_frag = ltext[1:].lstrip()
+                if shell_frag:
+                    for hist_cmd in reversed(self._shell_history):
+                        if hist_cmd.startswith(shell_frag) and hist_cmd != shell_frag:
+                            yield Completion(
+                                hist_cmd,
+                                start_position=-(len(ltext) - 1),
+                                display=FormattedText([("class:fz-hi", hist_cmd)]),
+                                display_meta="shell history",
+                            )
+                return
 
             # Only activate for slash commands
             if not ltext.startswith("/"):
@@ -239,6 +270,42 @@ if HAS_PT:
                     display         = FormattedText(display_parts),
                     display_meta    = meta_str,
                 )
+
+        def _file_completions(self, frag: str, cursor_offset: int) -> Iterator[Completion]:
+            """Yield file/directory completions for @<frag>."""
+            try:
+                if frag.startswith("~"):
+                    frag = _os.path.expanduser(frag)
+                base_dir = _os.path.dirname(frag) or "."
+                prefix   = _os.path.basename(frag)
+                if not _os.path.isdir(base_dir):
+                    return
+                for entry in sorted(_os.listdir(base_dir))[:40]:
+                    if entry.startswith("."):
+                        continue
+                    if not entry.lower().startswith(prefix.lower()):
+                        continue
+                    full = _os.path.join(base_dir, entry) if base_dir != "." else entry
+                    is_dir = _os.path.isdir(_os.path.join(base_dir, entry))
+                    display_parts = [("class:fz-hi", prefix), ("", entry[len(prefix):])]
+                    if is_dir:
+                        display_parts.append(("class:fz-cat", "/"))
+                    yield Completion(
+                        full + ("/" if is_dir else ""),
+                        start_position=-len(frag),
+                        display=FormattedText(display_parts),
+                        display_meta="dir" if is_dir else "file",
+                    )
+            except Exception:
+                pass
+
+        def add_shell_history(self, cmd: str) -> None:
+            """Called by REPL after each ! command to update shell autocomplete."""
+            cmd = cmd.strip()
+            if cmd and cmd not in self._shell_history:
+                self._shell_history.append(cmd)
+                if len(self._shell_history) > 200:
+                    self._shell_history = self._shell_history[-200:]
 
     # ── Style ────────────────────────────────────────────────────────────────
     # Matches the GitHub dark palette used in input_box.py.

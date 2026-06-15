@@ -703,7 +703,7 @@ def _try_handle_market_snapshot_analysis(message: str, history: list = None) -> 
                     quote = {
                         "success": True, "symbol": symbol,
                         "price": round(_fh["c"], 2),
-                        "change_pct": round((_fh["c"] - _fh["pc"]) / _fh["pc"] * 100, 2) if _fh.get("pc") else 0,
+                        "change_pct": round(float(_fh.get("dp") or 0), 2),
                         "high": round(_fh.get("h", 0), 2),
                         "low":  round(_fh.get("l", 0), 2),
                         "currency": "USD", "provider": "finnhub",

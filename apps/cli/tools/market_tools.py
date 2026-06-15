@@ -121,11 +121,10 @@ def tool_get_market_data(params: dict) -> dict:
                 if _r.status_code == 200:
                     _fh = _r.json()
                     if _fh.get("c"):
-                        _pc = _fh.get("pc") or _fh["c"]
                         quote = {
                             "success": True, "symbol": symbol,
                             "price": round(_fh["c"], 4),
-                            "change_pct": round((_fh["c"] - _pc) / _pc * 100, 2) if _pc else 0,
+                            "change_pct": round(float(_fh.get("dp") or 0), 4),
                             "high": round(_fh.get("h", 0), 4),
                             "low": round(_fh.get("l", 0), 4),
                             "currency": "USD", "provider": "finnhub",

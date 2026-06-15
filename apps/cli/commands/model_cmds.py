@@ -15,7 +15,7 @@ class ModelCommandsMixin:
 
         # ── "provider/model" format (Open Interpreter style) ─────────────────
         # Examples: /model deepseek/deepseek-chat  /model ollama/qwen2.5:7b
-        #           /model openai/gpt-4o           /model groq/llama-3.3-70b
+        #           /model openai/gpt-4.5          /model openai/o3  /model openai/o4-mini
         if "/" in name and not name.startswith("http"):
             _prov, _mod = name.split("/", 1)
             _prov = _prov.strip().lower()
@@ -64,17 +64,26 @@ class ModelCommandsMixin:
         # ── Interactive picker (Codex style: numbered list + descriptions) ────
         ollama_url  = self.terminal.config.get("ollama_url", "http://localhost:11434")
         current_id  = self.terminal.config.get("model", "qwen2.5:7b")
+        try:
+            from apps.cli.i18n import t as _i18nt
+            _lang = self.terminal.config.get("ui_lang", "en") or "en"
+            _i18n = lambda k: _i18nt(k, lang=_lang)
+        except Exception:
+            _lang = "en"
+            _i18n = lambda k: k
 
         rich_models, ollama_err = detect_ollama_models_rich(ollama_url)
         installed_names = {m["name"] for m in rich_models}
         aria_ids        = {m["id"] for m in MODELS.values()}
 
         # ── Build picker title (one line, shown inside arrow_select header) ──
+        _sel_model = _i18n("select_model")
+        _installed = _i18n("installed")
         if ollama_err:
-            _picker_title = f"Select Model  [Ollama: {ollama_err[:40]}]"
+            _picker_title = f"{_sel_model}  [Ollama: {ollama_err[:40]}]"
         else:
             n_installed = sum(1 for m in MODELS.values() if m["id"] in installed_names)
-            _picker_title = f"Select Model   {n_installed}/{len(MODELS)} installed  ·  /model <id> or number"
+            _picker_title = f"{_sel_model}   {n_installed}/{len(MODELS)} {_installed}  ·  /model <id> or number"
 
         def _status_tag(mid: str, badge: str) -> str:
             """Return short status: ● installed / ○ not installed / ☁ cloud"""
@@ -189,7 +198,8 @@ class ModelCommandsMixin:
 
         community = [cm for cm in rich_models if cm["name"] not in aria_ids]
         if community:
-            options.append(("  ── Community ─────────────────", ""))
+            _comm_label = _i18n("community_models")
+            options.append((f"  ── {_comm_label} ──", ""))
             all_ids.append(None)
             for cm in community:
                 mid    = cm["name"]
@@ -199,7 +209,8 @@ class ModelCommandsMixin:
                 num += 1
 
         if ollama_err and not rich_models:
-            options.append(("  ── Ollama unreachable ─────────", ""))
+            _unreach = _i18n("ollama_unreachable")
+            options.append((f"  ── {_unreach} ──────────", ""))
             all_ids.append(None)
 
         # ── Run thread-based arrow picker (short labels = no line wrap) ────
@@ -212,7 +223,8 @@ class ModelCommandsMixin:
                 max_visible=len(options),
             )
             if choice < 0:
-                console.print("[dim]Cancelled[/dim]" if HAS_RICH else "Cancelled")
+                _msg = _i18n("cancelled")
+                console.print(f"[dim]{_msg}[/dim]" if HAS_RICH else _msg)
                 return
             if all_ids[choice] is None:
                 current_idx = min(choice + 1, len(options) - 1)
@@ -507,8 +519,14 @@ class ModelCommandsMixin:
             console.print(f"[green]{msg}[/green]") if HAS_RICH else print(msg)
 
         elif sub == "list":
-            _LLM_ORDER = ["deepseek", "anthropic", "openai", "groq", "siliconflow",
-                          "dashscope", "moonshot", "zhipu", "together"]
+            _LLM_ORDER = [
+                # 国际
+                "deepseek", "anthropic", "openai", "google", "xai",
+                "groq", "mistral", "cohere", "perplexity", "together",
+                # 国内
+                "siliconflow", "dashscope", "moonshot", "zhipu",
+                "baidu", "bytedance", "minimax", "stepfun", "01ai",
+            ]
             _DATA_ORDER = ["finnhub", "alphavantage", "twelvedata", "polygon",
                            "fmp", "newsapi", "coingecko", "tavily", "brave"]
             data_configured = _load_data_keys()
@@ -621,8 +639,14 @@ class ModelCommandsMixin:
             return False
 
         # ── 分组构建 picker ───────────────────────────────────────────────────
-        _LLM_ORDER = ["deepseek", "anthropic", "openai", "groq", "siliconflow",
-                      "dashscope", "moonshot", "zhipu", "together"]
+        _LLM_ORDER = [
+            # 国际
+            "deepseek", "anthropic", "openai", "google", "xai",
+            "groq", "mistral", "cohere", "perplexity", "together",
+            # 国内
+            "siliconflow", "dashscope", "moonshot", "zhipu",
+            "baidu", "bytedance", "minimax", "stepfun", "01ai",
+        ]
         _DATA_ORDER = ["finnhub", "alphavantage", "twelvedata", "polygon",
                        "fmp", "newsapi", "coingecko", "tavily", "brave"]
 
@@ -807,13 +831,27 @@ class ModelCommandsMixin:
         # ── Section 2: Cloud provider API keys ───────────────────────────────
         pjson = _load_providers_json()
         _CLOUD_LIST = [
-            ("deepseek",    "DeepSeek",   "deepseek/deepseek-chat"),
-            ("openai",      "OpenAI",     "openai/gpt-4o"),
-            ("groq",        "Groq",       "groq/llama-3.3-70b-versatile"),
-            ("anthropic",   "Anthropic",  "anthropic/claude-3-5-sonnet"),
-            ("together",    "Together",   "together/meta-llama/Meta-Llama-3-70B"),
-            ("siliconflow", "SiliconFlow","siliconflow/deepseek-ai/DeepSeek-V3"),
-            ("moonshot",    "Moonshot",   "moonshot/moonshot-v1-8k"),
+            # ── 国际云端 ────────────────────────────────────────────────
+            ("deepseek",    "DeepSeek",      "deepseek/deepseek-chat"),
+            ("anthropic",   "Anthropic",     "anthropic/claude-sonnet-4-6"),
+            ("openai",      "OpenAI",        "openai/gpt-4.5"),
+            ("google",      "Google Gemini", "google/gemini-2.0-flash-exp"),
+            ("xai",         "xAI Grok",      "xai/grok-3-fast"),
+            ("groq",        "Groq",          "groq/llama-3.3-70b-versatile"),
+            ("mistral",     "Mistral",       "mistral/mistral-large-latest"),
+            ("cohere",      "Cohere",        "cohere/command-r-plus"),
+            ("perplexity",  "Perplexity",    "perplexity/sonar-pro"),
+            ("together",    "Together",      "together/meta-llama/Meta-Llama-3.1-70B"),
+            # ── 国内云端 ────────────────────────────────────────────────
+            ("siliconflow", "SiliconFlow",   "siliconflow/Qwen/Qwen2.5-7B-Instruct"),
+            ("dashscope",   "DashScope",     "dashscope/qwen-max"),
+            ("moonshot",    "Moonshot Kimi", "moonshot/moonshot-v1-128k"),
+            ("zhipu",       "Zhipu GLM",     "zhipu/glm-4-plus"),
+            ("baidu",       "Baidu ERNIE",   "baidu/ernie-4.5-turbo-128k"),
+            ("bytedance",   "ByteDance",     "bytedance/<endpoint-id>"),
+            ("minimax",     "MiniMax",       "minimax/MiniMax-Text-01"),
+            ("stepfun",     "StepFun",       "stepfun/step-2-16k"),
+            ("01ai",        "01.AI Yi",      "01ai/yi-large"),
         ]
         if HAS_RICH:
             console.print()
@@ -1158,6 +1196,22 @@ class ModelCommandsMixin:
                         msg = "input_theme must be: auto | dark | light"
                         console.print(f"[red]{msg}[/red]" if HAS_RICH else msg)
                         return
+                elif key == "ui_lang":
+                    if val not in {"zh", "en", "ja", "ko", "auto"}:
+                        msg = "ui_lang must be: zh | en | auto  (auto = detect from OS locale)"
+                        console.print(f"[red]{msg}[/red]" if HAS_RICH else msg)
+                        return
+                    if val == "auto":
+                        try:
+                            from apps.cli.i18n import detect_system_lang as _dsl
+                            val = _dsl()
+                        except Exception:
+                            val = "en"
+                    msg = f"✓ UI 语言已设为 {val}  (重启生效)" if val == "zh" else f"✓ UI language set to {val}  (takes effect on restart)"
+                    console.print(f"[green]{msg}[/green]") if HAS_RICH else print(msg)
+                    self.terminal.config[key] = val
+                    save_config(self.terminal.config)
+                    return
                 elif key == "notify_webhook":
                     # /config set notify_webhook=https://qyapi.weixin.qq.com/...
                     # 写入 ~/.arthera/config.json（notification_tools 直接读取）

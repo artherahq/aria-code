@@ -21,21 +21,46 @@ import shutil
 from typing import Optional
 
 
+def _t(key: str, lang: str) -> str:
+    """Thin wrapper around i18n.t() — tolerates import failure."""
+    try:
+        from apps.cli.i18n import t as _translate
+        return _translate(key, lang=lang)
+    except Exception:
+        _fallback = {
+            "sharing_on": "sharing on", "local_only": "local-only",
+            "network_on": "network on", "network_off": "network off",
+            "privacy": "privacy", "ollama_online": "Ollama online",
+            "ollama_offline": "Ollama offline", "cloud": "cloud",
+            "local_first_agent": "local-first agent",
+            "model": "model", "workspace": "workspace",
+            "mode": "mode", "status": "status",
+            "tools": "tools", "skills": "skills", "quant": "quant",
+            "try": "try", "local": "local", "lite": "lite",
+        }
+        return _fallback.get(key, key)
+
+
 # ── Status label helpers ───────────────────────────────────────────────────────
 
-def privacy_status_label(config: dict, rich: bool = False) -> str:
+def privacy_status_label(config: dict, rich: bool = False, lang: str = "") -> str:
     sharing = bool(config.get("data_sharing", False))
     upload  = bool(config.get("feedback_upload", False))
+    _lang   = lang or config.get("ui_lang", "en")
     if sharing and upload:
-        return "[#C08050]sharing on[/#C08050]" if rich else "sharing on"
-    return "local-only"
+        label = _t("sharing_on", _lang)
+        return f"[#C08050]{label}[/#C08050]" if rich else label
+    return _t("local_only", _lang)
 
 
-def control_status_label(config: dict, rich: bool = False) -> str:
+def control_status_label(config: dict, rich: bool = False, lang: str = "") -> str:
+    _lang      = lang or config.get("ui_lang", "en")
     permission = config.get("permission_mode", "workspace-write")
-    network    = "network on" if bool(config.get("network_enabled", True)) else "network off"
-    privacy    = privacy_status_label(config, rich=rich)
-    return f"{permission} · {network} · privacy {privacy}"
+    net_key    = "network_on" if bool(config.get("network_enabled", True)) else "network_off"
+    network    = _t(net_key, _lang)
+    priv_label = _t("privacy", _lang)
+    privacy    = privacy_status_label(config, rich=rich, lang=_lang)
+    return f"{permission} · {network} · {priv_label} {privacy}"
 
 
 def ollama_status_label(
@@ -43,7 +68,9 @@ def ollama_status_label(
     installed_models: set,
     config: dict,
     rich: bool = False,
+    lang: str = "",
 ) -> str:
+    _lang = lang or config.get("ui_lang", "en")
     count = len(installed_models)
     has_cloud = bool(
         config.get("auth_token")
@@ -51,13 +78,18 @@ def ollama_status_label(
         or os.getenv("OPENAI_API_KEY")
         or os.getenv("DEEPSEEK_API_KEY")
     )
-    cloud_tag = ("  [dim]· cloud ✓[/dim]" if rich else "  · cloud ✓") if has_cloud else ""
+    cloud_tag = (
+        f"  [dim]· {_t('cloud', _lang)} ✓[/dim]" if rich
+        else f"  · {_t('cloud', _lang)} ✓"
+    ) if has_cloud else ""
+    model_word = _t("model_singular" if count == 1 else "model_plural", _lang)
     if ollama_alive:
-        label = f"Ollama online · {count} model{'s' if count != 1 else ''}"
+        label = f"{_t('ollama_online', _lang)} · {count} {model_word}"
         return f"{label}{cloud_tag}"
-    base = "Ollama offline"
+    base = _t("ollama_offline", _lang)
     if has_cloud:
-        return (f"{base}  [dim]· cloud ✓[/dim]" if rich else f"{base}  · cloud ✓")
+        return (f"{base}  [dim]· {_t('cloud', _lang)} ✓[/dim]" if rich
+                else f"{base}  · {_t('cloud', _lang)} ✓")
     return base
 
 
@@ -99,17 +131,20 @@ def render_compact_banner(
     tool_count: int,
     console,
     has_rich: bool,
+    lang: str = "en",
 ) -> None:
     if not has_rich:
         print(f"  Aria Code v{version}  {model_label}  {cwd}")
         return
-    _rt = "[dim]cloud[/dim]" if runtime == "cloud" else "[dim]local[/dim]"
+    _rt_word = _t("cloud", lang) if runtime == "cloud" else _t("local", lang)
+    _rt = f"[dim]{_rt_word}[/dim]"
+    _tools_word = _t("tools", lang)
     console.print(
         f"  {_MASCOT} [bold]Aria Code[/bold] [dim]v{version}[/dim]"
         f"  [dim]·[/dim] {model_label} {_rt}"
         f"  [dim]·[/dim] [dim]{cwd}[/dim]"
     )
-    console.print(f"  [dim]{control_status_rich} · {tool_count} tools · /help[/dim]")
+    console.print(f"  [dim]{control_status_rich} · {tool_count} {_tools_word} · /help[/dim]")
 
 
 def render_full_banner(
@@ -129,11 +164,23 @@ def render_full_banner(
     console,
     has_rich: bool,
     rich_box,
+    lang: str = "en",
 ) -> None:
+    _lfa    = _t("local_first_agent", lang)
+    _model  = _t("model", lang)
+    _ws     = _t("workspace", lang)
+    _mode   = _t("mode", lang)
+    _stat   = _t("status", lang)
+    _tools  = _t("tools", lang)
+    _skills = _t("skills", lang)
+    _quant  = _t("quant", lang)
+    _tip    = _t("tip", lang)
+    _amatch = _t("auto_matched", lang)
+
     if not has_rich:
-        print(f"\n  Aria Code v{version}  local-first agent")
-        print(f"  model       {rt_label}")
-        print(f"  workspace   {cwd}")
+        print(f"\n  Aria Code v{version}  {_lfa}")
+        print(f"  {_model:<10}{rt_label}")
+        print(f"  {_ws:<10}{cwd}")
         print(f"  {control_status_rich}")
         print(f"  {ollama_status_rich}")
         print("─" * 60)
@@ -174,23 +221,23 @@ def render_full_banner(
 
     # Right column: status info
     _info_lines = [
-        f"[bold]Aria Code[/bold]  [dim]v{version}[/dim]  [dim]local-first agent[/dim]",
-        f"[dim]{'model':<10}[/dim]{rt_label}",
-        f"[dim]{'workspace':<10}[/dim][dim]{cwd}[/dim]",
-        f"[dim]{'mode':<10}[/dim]{control_status_rich}",
-        f"[dim]{'status':<10}[/dim]{ollama_status_rich}",
-        f"[dim]{'':10}quant · {tool_count} tools · {skill_count} skills[/dim]",
+        f"[bold]Aria Code[/bold]  [dim]v{version}[/dim]  [dim]{_lfa}[/dim]",
+        f"[dim]{_model:<10}[/dim]{rt_label}",
+        f"[dim]{_ws:<10}[/dim][dim]{cwd}[/dim]",
+        f"[dim]{_mode:<10}[/dim]{control_status_rich}",
+        f"[dim]{_stat:<10}[/dim]{ollama_status_rich}",
+        f"[dim]{'':10}{_quant} · {tool_count} {_tools} · {skill_count} {_skills}[/dim]",
     ]
     if auto_healed_from:
         _info_lines.append(
-            f"[dim]⚙ auto-matched[/dim]  "
+            f"[dim]⚙ {_amatch}[/dim]  "
             f"[yellow]{auto_healed_from}[/yellow]"
             f" [dim]→[/dim] [bold]{current_id}[/bold]"
         )
     if badge == "Fast" and best_lite_id and best_lite_id not in installed_models:
         _info_lines.append(
-            f"[yellow]tip[/yellow]  [dim]lite model — "
-            f"[bold]ollama pull {best_lite_id}[/bold] for full tools[/dim]"
+            f"[yellow]{_tip}[/yellow]  [dim]{_t('lite', lang)} model — "
+            f"[bold]ollama pull {best_lite_id}[/bold] for full {_tools}[/dim]"
         )
 
     _info = Text.from_markup("\n".join(_info_lines))
@@ -204,17 +251,25 @@ def render_full_banner(
     console.print(Panel(_grid, box=rich_box.ROUNDED, border_style="dim", padding=(0, 1)))
 
 
-def render_try_hints(console, has_rich: bool) -> None:
+def render_try_hints(console, has_rich: bool, lang: str = "en") -> None:
     """Print the 'try analyze AAPL · /project load ./myapp · /help' hint line."""
     if not has_rich:
         return
     tcols = shutil.get_terminal_size((80, 24)).columns
-    hints = [
-        ("[#C08050]analyze AAPL[/#C08050]",         12),
-        ("[#C08050]/project load ./myapp[/#C08050]", 22),
-        ("[#C08050]/privacy[/#C08050]",               8),
-        ("[dim]/help[/dim]",                          5),
-    ]
+    if lang == "zh":
+        hints = [
+            ("[#C08050]分析 AAPL[/#C08050]",           6),
+            ("[#C08050]/project load ./myapp[/#C08050]", 22),
+            ("[#C08050]/privacy[/#C08050]",              8),
+            ("[dim]/help[/dim]",                         5),
+        ]
+    else:
+        hints = [
+            ("[#C08050]analyze AAPL[/#C08050]",         12),
+            ("[#C08050]/project load ./myapp[/#C08050]", 22),
+            ("[#C08050]/privacy[/#C08050]",               8),
+            ("[dim]/help[/dim]",                          5),
+        ]
     sep   = "  [dim]·[/dim]  "
     parts = []
     used  = 8  # "  try  " prefix width
@@ -223,4 +278,5 @@ def render_try_hints(console, has_rich: bool) -> None:
         if used + cost <= tcols - 4:
             parts.append(hint_rich)
             used += cost
-    console.print("  [dim]try[/dim]  " + sep.join(parts) + "\n")
+    _try_word = _t("try", lang)
+    console.print(f"  [dim]{_try_word}[/dim]  " + sep.join(parts) + "\n")

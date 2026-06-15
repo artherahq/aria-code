@@ -8,6 +8,7 @@ from .notebook_tools import (
     tool_notebook_edit,
 )
 from .market_tools import tool_get_market_data, tool_broker_query, tool_broker_order
+from .write_tools import tool_write_file, tool_edit_file
 
 __all__ = [
     "ToolContext",
@@ -16,6 +17,9 @@ __all__ = [
     "tool_list_files",
     "tool_search_code",
     "tool_glob",
+    # write / edit tools (use lazy imports to avoid circular dep)
+    "tool_write_file",
+    "tool_edit_file",
     # system tools
     "tool_run_command",
     "tool_web_fetch",

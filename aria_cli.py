@@ -276,6 +276,7 @@ if HAS_PT:
     from prompt_toolkit import PromptSession
     from prompt_toolkit.formatted_text import HTML
     from prompt_toolkit.history import FileHistory
+    from prompt_toolkit.key_binding import KeyBindings as _PTKeyBindings
 # termios — already imported inside ui.console; alias for local use
 if _HAS_TERMIOS:
     import termios, tty, select as _select
@@ -313,32 +314,72 @@ PROVIDERS_FILE = CONFIG_DIR / "providers.json"  # Cloud API keys (Open Interpret
 # ── Cloud Provider key map ───────────────────────────────────────────────────
 # Maps provider short name → environment variable name for API key.
 _PROVIDER_KEY_MAP: Dict[str, str] = {
+    # ── 国际主流 ──────────────────────────────────────────────────────
     "deepseek":    "DEEPSEEK_API_KEY",
     "openai":      "OPENAI_API_KEY",
     "anthropic":   "ANTHROPIC_API_KEY",
     "claude":      "ANTHROPIC_API_KEY",
     "groq":        "GROQ_API_KEY",
     "together":    "TOGETHER_API_KEY",
+    "google":      "GOOGLE_API_KEY",
+    "gemini":      "GOOGLE_API_KEY",        # alias
+    "xai":         "XAI_API_KEY",
+    "grok":        "XAI_API_KEY",           # alias
+    "mistral":     "MISTRAL_API_KEY",
+    "cohere":      "COHERE_API_KEY",
+    "perplexity":  "PERPLEXITY_API_KEY",
+    # ── 国内主流 ──────────────────────────────────────────────────────
     "dashscope":   "DASHSCOPE_API_KEY",
-    "aliyun":      "DASHSCOPE_API_KEY",
+    "aliyun":      "DASHSCOPE_API_KEY",     # alias
     "siliconflow": "SILICONFLOW_API_KEY",
     "moonshot":    "MOONSHOT_API_KEY",
     "zhipu":       "ZHIPUAI_API_KEY",
+    "glm":         "ZHIPUAI_API_KEY",       # alias
+    "baidu":       "QIANFAN_ACCESS_KEY",
+    "ernie":       "QIANFAN_ACCESS_KEY",    # alias
+    "qianfan":     "QIANFAN_ACCESS_KEY",    # alias
+    "bytedance":   "ARK_API_KEY",
+    "doubao":      "ARK_API_KEY",           # alias
+    "ark":         "ARK_API_KEY",           # alias
+    "minimax":     "MINIMAX_API_KEY",
+    "stepfun":     "STEPFUN_API_KEY",
+    "01ai":        "ONEAI_API_KEY",
+    "yi":          "ONEAI_API_KEY",         # alias
 }
 
-# Default base URLs for cloud providers
+# Default base URLs for cloud providers (OpenAI-compatible unless noted)
 _PROVIDER_BASE_URLS: Dict[str, str] = {
+    # ── 国际主流 ──────────────────────────────────────────────────────
     "deepseek":    "https://api.deepseek.com",
     "openai":      "https://api.openai.com",
     "anthropic":   "https://api.anthropic.com",
     "claude":      "https://api.anthropic.com",
     "groq":        "https://api.groq.com/openai",
     "together":    "https://api.together.xyz",
+    "google":      "https://generativelanguage.googleapis.com/v1beta/openai",
+    "gemini":      "https://generativelanguage.googleapis.com/v1beta/openai",
+    "xai":         "https://api.x.ai/v1",
+    "grok":        "https://api.x.ai/v1",
+    "mistral":     "https://api.mistral.ai/v1",
+    "cohere":      "https://api.cohere.ai/compatibility/v1",
+    "perplexity":  "https://api.perplexity.ai",
+    # ── 国内主流 ──────────────────────────────────────────────────────
     "dashscope":   "https://dashscope.aliyuncs.com/compatible-mode",
     "aliyun":      "https://dashscope.aliyuncs.com/compatible-mode",
     "siliconflow": "https://api.siliconflow.cn",
     "moonshot":    "https://api.moonshot.cn/v1",
     "zhipu":       "https://open.bigmodel.cn/api/paas/v4",
+    "glm":         "https://open.bigmodel.cn/api/paas/v4",
+    "baidu":       "https://qianfan.baidubce.com/v2",
+    "ernie":       "https://qianfan.baidubce.com/v2",
+    "qianfan":     "https://qianfan.baidubce.com/v2",
+    "bytedance":   "https://ark.cn-beijing.volces.com/api/v3",
+    "doubao":      "https://ark.cn-beijing.volces.com/api/v3",
+    "ark":         "https://ark.cn-beijing.volces.com/api/v3",
+    "minimax":     "https://api.minimax.chat/v1",
+    "stepfun":     "https://api.stepfun.com/v1",
+    "01ai":        "https://api.lingyiwanwu.com/v1",
+    "yi":          "https://api.lingyiwanwu.com/v1",
 }
 
 
@@ -372,32 +413,60 @@ _DATA_SIGNUP_URLS: Dict[str, str] = {
 
 # LLM provider signup URLs
 _LLM_SIGNUP_URLS: Dict[str, str] = {
+    # ── 国际主流 ──────────────────────────────────────────────────────
     "deepseek":    "https://platform.deepseek.com/api_keys",
     "openai":      "https://platform.openai.com/api-keys",
     "anthropic":   "https://console.anthropic.com/settings/keys",
     "claude":      "https://console.anthropic.com/settings/keys",
     "groq":        "https://console.groq.com/keys",
     "together":    "https://api.together.ai/settings/api-keys",
+    "google":      "https://aistudio.google.com/app/apikey",
+    "gemini":      "https://aistudio.google.com/app/apikey",
+    "xai":         "https://console.x.ai",
+    "grok":        "https://console.x.ai",
+    "mistral":     "https://console.mistral.ai/api-keys",
+    "cohere":      "https://dashboard.cohere.com/api-keys",
+    "perplexity":  "https://www.perplexity.ai/settings/api",
+    # ── 国内主流 ──────────────────────────────────────────────────────
     "dashscope":   "https://dashscope.console.aliyun.com/apiKey",
     "aliyun":      "https://dashscope.console.aliyun.com/apiKey",
     "siliconflow": "https://cloud.siliconflow.cn/account/ak",
     "moonshot":    "https://platform.moonshot.cn/console/api-keys",
     "zhipu":       "https://open.bigmodel.cn/usercenter/apikeys",
+    "baidu":       "https://qianfan.cloud.baidu.com/user/accessToken",
+    "ernie":       "https://qianfan.cloud.baidu.com/user/accessToken",
+    "bytedance":   "https://ark.volcengine.com/api-key",
+    "doubao":      "https://ark.volcengine.com/api-key",
+    "minimax":     "https://platform.minimaxi.com/user-center/basic-information/interface-key",
+    "stepfun":     "https://platform.stepfun.com/interface-key",
+    "01ai":        "https://platform.lingyiwanwu.com/apikeys",
+    "yi":          "https://platform.lingyiwanwu.com/apikeys",
 }
 
 # One-line description for each provider (shown in picker)
 _PROVIDER_DESC: Dict[str, str] = {
-    # LLM
+    # ── 国际 LLM ──────────────────────────────────────────────────────
     "deepseek":    "DeepSeek-V3/R1  强推理·中文优秀·价格极低",
-    "openai":      "GPT-4o / o1-mini  最广泛兼容",
-    "anthropic":   "Claude Sonnet/Opus  长文档·代码·分析",
-    "groq":        "Llama3/Mixtral  超高速推理 (免费额度)",
-    "together":    "开源模型聚合  Llama/Qwen/Yi 等",
-    "dashscope":   "通义千问系列  阿里云  国内访问稳定",
-    "siliconflow": "Qwen/GLM/DeepSeek  国内多模型聚合",
-    "moonshot":    "Kimi  超长上下文 128K  中文理解强",
-    "zhipu":       "智谱 GLM-4  中文推理·代码生成",
-    # Data
+    "openai":      "GPT-4.5 / o3 / o4-mini / o3-pro  最广泛兼容·持续更新",
+    "anthropic":   "Claude Sonnet 4 / Opus 4  长文档·代码·分析",
+    "groq":        "Llama3/Qwen  超高速推理 (免费额度)",
+    "together":    "开源模型聚合  Llama/Qwen/DeepSeek 等 100+ 模型",
+    "google":      "Gemini 2.5 Pro / 2.0 Flash  多模态·超长上下文",
+    "xai":         "Grok-3 / Grok-3-Fast  实时网络数据·Twitter整合",
+    "mistral":     "Mistral Large / Codestral  欧洲顶级·代码生成强",
+    "cohere":      "Command R+  RAG检索增强·企业文档处理",
+    "perplexity":  "Sonar  实时联网搜索·研究报告",
+    # ── 国内 LLM ──────────────────────────────────────────────────────
+    "dashscope":   "通义千问 Max/Long/Turbo  阿里云·国内访问稳定",
+    "siliconflow": "Qwen/GLM/DeepSeek  国内多模型聚合·价格低",
+    "moonshot":    "Kimi  超长上下文 128K  中文理解·长文档",
+    "zhipu":       "GLM-4-Plus / GLM-4-Flash  中文推理·代码生成",
+    "baidu":       "ERNIE 4.5 Turbo  百度文心·国内最强中文",
+    "bytedance":   "Doubao / 豆包  字节跳动·多模态·免费额度大",
+    "minimax":     "MiniMax-Text-01  百万Token上下文",
+    "stepfun":     "Step-2-16K  阶跃星辰·复杂推理",
+    "01ai":        "Yi-Large / Yi-Vision  零一万物·中英双语",
+    # ── Data ──────────────────────────────────────────────────────────
     "finnhub":     "实时美股行情+新闻  免费 60次/min",
     "alphavantage":"美股历史数据+技术指标  免费 25次/day",
     "polygon":     "美股全量数据+期权链  免费层可用",
@@ -529,6 +598,129 @@ _PROVIDER_GUIDE: Dict[str, str] = {
         "解锁: 网页搜索 (无追踪，隐私优先)\n"
         "免费额度: 2000次/月"
     ),
+    # ── 新增国际 Provider ──────────────────────────────────────────────
+    "google": (
+        "1. 打开 aistudio.google.com/app/apikey\n"
+        "2. 用 Google 账号登录 → 「Create API key」\n"
+        "3. 复制 AIzaSy... 格式的密钥\n\n"
+        "解锁: Gemini 2.5 Pro · Gemini 2.0 Flash · 多模态视觉\n"
+        "用法: /model google/gemini-2.0-flash-exp\n"
+        "免费额度: Flash 每分钟 15次，每天 1500次"
+    ),
+    "gemini": (
+        "同 google provider，填入 Google AI Studio 的 API Key\n\n"
+        "推荐模型:\n"
+        "  gemini-2.5-pro        — 最强推理，128K 上下文\n"
+        "  gemini-2.0-flash-exp  — 超快，每分钟 15 次免费\n"
+        "  gemini-1.5-flash      — 稳定版，适合生产\n\n"
+        "用法: /model gemini/gemini-2.5-pro"
+    ),
+    "xai": (
+        "1. 打开 console.x.ai → 注册/登录\n"
+        "2. 创建 API Key (xai-...)\n\n"
+        "解锁: Grok-3 · Grok-3-Fast · Grok-3-Mini (推理)\n"
+        "优势: 实时访问 Twitter/X 数据，最新新闻事件感知\n"
+        "用法: /model xai/grok-3\n"
+        "价格: Grok-3 $3/M tokens，Fast $5/M tokens"
+    ),
+    "grok": (
+        "同 xai provider，填入 xAI Console 的 API Key\n\n"
+        "推荐模型:\n"
+        "  grok-3           — 旗舰推理\n"
+        "  grok-3-fast      — 高速版\n"
+        "  grok-3-mini      — 轻量思考模型\n\n"
+        "用法: /model grok/grok-3-fast"
+    ),
+    "mistral": (
+        "1. 打开 console.mistral.ai → 注册\n"
+        "2. 「API Keys」→ 「Create new key」\n"
+        "3. 复制密钥\n\n"
+        "解锁: Mistral Large 2 · Mistral Small · Codestral (代码)\n"
+        "用法: /model mistral/mistral-large-latest\n"
+        "优势: 欧洲 GDPR 合规，Codestral 为代码生成最强之一\n"
+        "免费额度: 新用户有试用额度"
+    ),
+    "cohere": (
+        "1. 打开 dashboard.cohere.com → 注册\n"
+        "2. 「API Keys」→ 复制 Trial key\n\n"
+        "解锁: Command R+ · Command R · Embed · Rerank\n"
+        "用法: /model cohere/command-r-plus\n"
+        "优势: RAG 检索增强最强，企业文档处理首选\n"
+        "Trial Key: 免费可用，速率限制较低"
+    ),
+    "perplexity": (
+        "1. 打开 perplexity.ai/settings/api → 注册\n"
+        "2. 「Generate」→ 复制 pplx-... 密钥\n\n"
+        "解锁: sonar · sonar-pro · sonar-reasoning (联网推理)\n"
+        "用法: /model perplexity/sonar-pro\n"
+        "优势: 实时联网，自动引用来源，研究报告首选\n"
+        "价格: sonar $1/M tokens，sonar-pro $3/M tokens"
+    ),
+    # ── 新增国内 Provider ──────────────────────────────────────────────
+    "baidu": (
+        "1. 打开 qianfan.cloud.baidu.com → 用百度账号登录\n"
+        "2. 「用户中心」→「Access Token」→ 记录 Key 和 Secret\n\n"
+        "解锁: ERNIE 4.5 Turbo · ERNIE Speed · ERNIE-Lite\n"
+        "用法: /model baidu/ernie-4.5-turbo-128k\n"
+        "优势: 国内最强中文理解，百度搜索知识整合\n"
+        "免费额度: ERNIE Speed/Lite 大量免费 Token"
+    ),
+    "ernie": (
+        "同 baidu provider，填入百度千帆平台的 Access Key\n\n"
+        "推荐模型:\n"
+        "  ernie-4.5-turbo-128k  — 旗舰，128K 上下文\n"
+        "  ernie-speed-128k      — 高速，大量免费\n"
+        "  ernie-lite-8k         — 轻量，免费额度最大\n\n"
+        "用法: /model ernie/ernie-4.5-turbo-128k"
+    ),
+    "bytedance": (
+        "1. 打开 ark.volcengine.com → 注册字节跳动账号\n"
+        "2. 「API Key 管理」→ 创建 API Key\n"
+        "3. 同时需要创建「推理接入点」获取 endpoint-id\n\n"
+        "解锁: Doubao-1.5-Pro · Doubao-1.5-Lite · Doubao Vision\n"
+        "用法: /model bytedance/<endpoint-id>\n"
+        "优势: 字节跳动首选，多模态，免费额度很大\n"
+        "新用户: 500万免费 Token"
+    ),
+    "doubao": (
+        "同 bytedance provider，填入火山方舟 API Key\n\n"
+        "推荐模型 (需先在控制台创建接入点):\n"
+        "  doubao-1.5-pro-32k     — 旗舰\n"
+        "  doubao-1.5-lite-32k    — 轻量快速\n"
+        "  doubao-pro-vision-32k  — 多模态\n\n"
+        "用法: /model doubao/<你的endpoint-id>"
+    ),
+    "minimax": (
+        "1. 打开 platform.minimaxi.com → 注册\n"
+        "2. 「接口密钥」→ 生成 API Key\n\n"
+        "解锁: MiniMax-Text-01 (百万 Token 上下文!)\n"
+        "用法: /model minimax/MiniMax-Text-01\n"
+        "优势: 100万 Token 超长上下文，超长文档/代码库分析首选\n"
+        "价格: 约 ¥1/百万 Token"
+    ),
+    "stepfun": (
+        "1. 打开 platform.stepfun.com → 注册\n"
+        "2. 「接口密钥」→ 创建 API Key\n\n"
+        "解锁: step-2-16k · step-2-mini · step-1v-32k (视觉)\n"
+        "用法: /model stepfun/step-2-16k\n"
+        "优势: 阶跃星辰，数理逻辑和推理能力突出\n"
+        "新用户: 有免费额度"
+    ),
+    "01ai": (
+        "1. 打开 platform.lingyiwanwu.com → 注册\n"
+        "2. 「API Keys」→ 创建密钥\n\n"
+        "解锁: yi-large · yi-medium · yi-vision\n"
+        "用法: /model 01ai/yi-large\n"
+        "优势: 零一万物，中英双语均衡，视觉理解能力强"
+    ),
+    "yi": (
+        "同 01ai provider，填入零一万物平台的 API Key\n\n"
+        "推荐模型:\n"
+        "  yi-large         — 旗舰推理\n"
+        "  yi-medium        — 速度/质量均衡\n"
+        "  yi-vision        — 图像理解\n\n"
+        "用法: /model yi/yi-large"
+    ),
 }
 
 
@@ -571,7 +763,11 @@ def _test_api_key(provider: str, key: str) -> tuple:
         # ── Standard OpenAI-compat LLM providers ─────────────────────────────
         if provider in _PROVIDER_BASE_URLS:
             base = _PROVIDER_BASE_URLS[provider].rstrip("/")
-            url = base + "/v1/models"
+            # Avoid double /v1 when base already ends with /v1 or /v2 etc.
+            if base.endswith(("/v1", "/v2", "/v3", "/v4", "/openai")):
+                url = base + "/models"
+            else:
+                url = base + "/v1/models"
             req = _ur.Request(url, headers={"Authorization": f"Bearer {key}"})
             try:
                 with _ur.urlopen(req, timeout=8) as r:
@@ -815,6 +1011,7 @@ DEFAULT_CONFIG = {
     "input_theme": "auto",     # auto | dark | light
     "local_mode": False,        # True = skip AWS, always use Ollama
     "conversation_history": [],
+    "ui_lang": "",              # "" = auto-detect from OS locale on first run; "zh" | "en"
 }
 
 # Module-level write/command policies — updated whenever config is loaded/changed.
@@ -822,6 +1019,7 @@ DEFAULT_CONFIG = {
 _ACTIVE_WRITE_POLICY = ["desktop_only"]  # list so closures can mutate it
 _ACTIVE_COMMAND_POLICY = ["safe"]
 _ACTIVE_PERMISSION_MODE = ["workspace-write"]
+_PERMISSION_CYCLE = ["read-only", "workspace-write", "full-access"]
 _ACTIVE_NETWORK_ENABLED = [True]
 
 
@@ -871,22 +1069,35 @@ def load_config() -> dict:
             with open(CONFIG_FILE) as f:
                 saved = json.load(f)
             merged = {**DEFAULT_CONFIG, **saved}
-            # Auto-fix: if saved model is not in MODELS and not a valid Ollama ID pattern,
-            # fall back to the default model to prevent HTTP 404 on startup
             saved_model = merged.get("model", "")
-            valid_ids = {m["id"] for m in MODELS.values()}
-            if saved_model and saved_model not in valid_ids:
-                merged["model"] = DEFAULT_CONFIG["model"]
-            # Warn once if saved model looks like a non-existent aria-* model name
-            # (these were old hardcoded names; they no longer exist in Ollama)
+            # Only reset stale aria-* model names that no longer exist in Ollama.
+            # Community models (llama3.2:3b, mistral:7b, etc.) are kept as-is.
             _stale_prefixes = ("aria-opus", "aria-prelude", "aria-sonata:3", "aria-sonata:4")
             if any(saved_model.startswith(p) for p in _stale_prefixes):
                 merged["model"] = DEFAULT_CONFIG["model"]
+            # Detect system language on first run (ui_lang not yet written to config)
+            if not merged.get("ui_lang"):
+                try:
+                    from apps.cli.i18n import detect_system_lang as _dsl
+                    merged["ui_lang"] = _dsl()
+                except Exception:
+                    merged["ui_lang"] = "en"
             _sync_write_policy(merged)
             return merged
         except Exception:
             pass
+    # ── First run: no config file yet ────────────────────────────────────────
     cfg = dict(DEFAULT_CONFIG)
+    # Auto-detect system language
+    try:
+        from apps.cli.i18n import detect_system_lang as _dsl, auto_select_model as _asm
+        cfg["ui_lang"] = _dsl()
+        # Auto-select best installed Ollama model
+        ollama_url = cfg.get("ollama_url", "http://localhost:11434")
+        best = _asm(ollama_url, fallback=DEFAULT_CONFIG["model"])
+        cfg["model"] = best
+    except Exception:
+        cfg["ui_lang"] = "en"
     _sync_write_policy(cfg)
     return cfg
 
@@ -934,72 +1145,274 @@ ARIA_TOOLS = [
 # ============================================================================
 
 MODELS = {
-    # ── 生产级本地模型（7B，无幻觉）──────────────────────────────────────
+    # ════════════════════════════════════════════════════════════════════
+    # ── Qwen 家族（阿里巴巴）────────────────────────────────────────────
+    # ════════════════════════════════════════════════════════════════════
     "qwen7b": {
         "id": "qwen2.5:7b",
         "name": "Qwen 2.5",
         "version": "7B",
-        "tag": "Sonata",
+        "tag": "Default",
         "speed": "★★★★",
         "intelligence": "★★★★★",
-        "description": "主力模型：Qwen2.5-7B，工具调用稳定，无幻觉，金融知识扎实",
+        "description": "主力推荐：中英双语最强 7B，工具调用稳定，金融/代码俱佳",
         "capabilities": ["chat", "tool calls", "financial analysis", "coding", "Chinese"],
-        "thinking": False,
-        "tools": True,
-        "max_tokens": 4096,
-        "num_ctx": 32768,
-        "temperature": 0.3,
+        "thinking": False, "tools": True,
+        "max_tokens": 4096, "num_ctx": 32768, "temperature": 0.3,
         "badge": "Default",
     },
     "qwen-coder": {
         "id": "qwen2.5-coder:7b",
         "name": "Qwen Coder",
         "version": "7B",
-        "tag": "Coder",
+        "tag": "Code",
         "speed": "★★★★",
         "intelligence": "★★★★★",
-        "description": "代码专精：量化策略生成、回测代码、Python 金融工具",
+        "description": "代码专精：量化策略生成、回测脚本、Python 金融工具",
         "capabilities": ["strategy code", "backtest", "Python", "quant development"],
-        "thinking": False,
-        "tools": True,
-        "max_tokens": 4096,
-        "num_ctx": 32768,
-        "temperature": 0.2,
+        "thinking": False, "tools": True,
+        "max_tokens": 4096, "num_ctx": 32768, "temperature": 0.2,
         "badge": "Code",
+    },
+    "qwen14b": {
+        "id": "qwen2.5:14b",
+        "name": "Qwen 2.5",
+        "version": "14B",
+        "tag": "Pro",
+        "speed": "★★★",
+        "intelligence": "★★★★★",
+        "description": "高质量推理：需 ~10GB VRAM，复杂分析/长文档首选",
+        "capabilities": ["complex analysis", "long context", "Chinese"],
+        "thinking": False, "tools": True,
+        "max_tokens": 8192, "num_ctx": 32768, "temperature": 0.3,
+        "badge": "Pro",
+    },
+    "qwen32b": {
+        "id": "qwen2.5:32b",
+        "name": "Qwen 2.5",
+        "version": "32B",
+        "tag": "Max",
+        "speed": "★★",
+        "intelligence": "★★★★★",
+        "description": "旗舰本地：需 ~20GB VRAM，媲美 GPT-4o 水平",
+        "capabilities": ["flagship reasoning", "long context", "deep analysis"],
+        "thinking": False, "tools": True,
+        "max_tokens": 8192, "num_ctx": 32768, "temperature": 0.3,
+        "badge": "Max",
+    },
+    "qwen3-8b": {
+        "id": "qwen3:8b",
+        "name": "Qwen 3",
+        "version": "8B",
+        "tag": "Latest",
+        "speed": "★★★★",
+        "intelligence": "★★★★★",
+        "description": "Qwen3 最新一代：混合推理模式，/think 开启深度思考",
+        "capabilities": ["hybrid reasoning", "thinking mode", "chat", "code"],
+        "thinking": True, "tools": True,
+        "max_tokens": 8192, "num_ctx": 32768, "temperature": 0.6,
+        "badge": "Latest",
+    },
+    "qwen3-30b": {
+        "id": "qwen3:30b-a3b",
+        "name": "Qwen 3 MoE",
+        "version": "30B-A3B",
+        "tag": "MoE",
+        "speed": "★★★★",
+        "intelligence": "★★★★★",
+        "description": "混合专家 MoE：30B参数激活3B，速度与质量双赢",
+        "capabilities": ["MoE", "fast reasoning", "tool calls"],
+        "thinking": True, "tools": True,
+        "max_tokens": 8192, "num_ctx": 32768, "temperature": 0.6,
+        "badge": "MoE",
     },
     "qwen-fast": {
         "id": "qwen2.5-coder:1.5b",
         "name": "Qwen Fast",
         "version": "1.5B",
-        "tag": "Prelude",
+        "tag": "Fast",
         "speed": "★★★★★",
         "intelligence": "★★★",
-        "description": "超快响应：简单问答、实时报价、快速指令",
+        "description": "超快响应：简单问答、实时报价、快速指令，~1GB RAM",
         "capabilities": ["fast chat", "simple queries", "ultra-low latency"],
-        "thinking": False,
-        "tools": False,
-        "max_tokens": 2048,
-        "num_ctx": 8192,
-        "temperature": 0.3,
+        "thinking": False, "tools": False,
+        "max_tokens": 2048, "num_ctx": 8192, "temperature": 0.3,
         "badge": "Fast",
     },
+    # ════════════════════════════════════════════════════════════════════
+    # ── DeepSeek 家族──────────────────────────────────────────────────
+    # ════════════════════════════════════════════════════════════════════
     "deepseek-r1": {
         "id": "deepseek-r1:7b",
         "name": "DeepSeek R1",
         "version": "7B",
-        "tag": "Reasoning",
+        "tag": "Think",
         "speed": "★★★",
         "intelligence": "★★★★★",
         "description": "深度推理：复杂投资决策、多步骤分析、Chain-of-Thought",
-        "capabilities": ["deep reasoning", "chain-of-thought", "complex quant", "investment thesis"],
-        "thinking": True,
-        "tools": False,
-        "max_tokens": 4096,
-        "num_ctx": 32768,
-        "temperature": 0.3,
+        "capabilities": ["deep reasoning", "chain-of-thought", "complex quant"],
+        "thinking": True, "tools": False,
+        "max_tokens": 4096, "num_ctx": 32768, "temperature": 0.3,
         "badge": "Think",
     },
-    # ── 云端大模型（Ollama Cloud 路由）────────────────────────────────────
+    "deepseek-r1-1.5b": {
+        "id": "deepseek-r1:1.5b",
+        "name": "DeepSeek R1",
+        "version": "1.5B",
+        "tag": "Tiny",
+        "speed": "★★★★★",
+        "intelligence": "★★★",
+        "description": "最小推理模型：~1GB，边缘设备/低内存机器首选",
+        "capabilities": ["lightweight reasoning", "simple CoT"],
+        "thinking": True, "tools": False,
+        "max_tokens": 2048, "num_ctx": 8192, "temperature": 0.3,
+        "badge": "Fast",
+    },
+    "deepseek-r1-14b": {
+        "id": "deepseek-r1:14b",
+        "name": "DeepSeek R1",
+        "version": "14B",
+        "tag": "Pro",
+        "speed": "★★★",
+        "intelligence": "★★★★★",
+        "description": "强化推理 14B：数学/代码/金融逻辑最强本地选择",
+        "capabilities": ["strong reasoning", "math", "code analysis"],
+        "thinking": True, "tools": False,
+        "max_tokens": 8192, "num_ctx": 32768, "temperature": 0.3,
+        "badge": "Think",
+    },
+    # ════════════════════════════════════════════════════════════════════
+    # ── Meta Llama 家族 ───────────────────────────────────────────────
+    # ════════════════════════════════════════════════════════════════════
+    "llama3.2-3b": {
+        "id": "llama3.2:3b",
+        "name": "Llama 3.2",
+        "version": "3B",
+        "tag": "Light",
+        "speed": "★★★★★",
+        "intelligence": "★★★",
+        "description": "Meta 轻量级：~2GB，快速对话，英文性能出色",
+        "capabilities": ["fast chat", "English", "summarization"],
+        "thinking": False, "tools": True,
+        "max_tokens": 4096, "num_ctx": 8192, "temperature": 0.3,
+        "badge": "Fast",
+    },
+    "llama3.1-8b": {
+        "id": "llama3.1:8b",
+        "name": "Llama 3.1",
+        "version": "8B",
+        "tag": "Standard",
+        "speed": "★★★★",
+        "intelligence": "★★★★",
+        "description": "Meta 主力 8B：英文任务顶级，工具调用完整支持",
+        "capabilities": ["chat", "tool calls", "English", "reasoning"],
+        "thinking": False, "tools": True,
+        "max_tokens": 4096, "num_ctx": 131072, "temperature": 0.3,
+        "badge": "Default",
+    },
+    "llama3.3-70b": {
+        "id": "llama3.3:70b",
+        "name": "Llama 3.3",
+        "version": "70B",
+        "tag": "Large",
+        "speed": "★★",
+        "intelligence": "★★★★★",
+        "description": "Meta 最强开源：70B 需 ~40GB VRAM，媲美 GPT-4o",
+        "capabilities": ["flagship English", "complex reasoning", "long context"],
+        "thinking": False, "tools": True,
+        "max_tokens": 8192, "num_ctx": 131072, "temperature": 0.3,
+        "badge": "Pro",
+    },
+    # ════════════════════════════════════════════════════════════════════
+    # ── Mistral / Mixtral 家族 ────────────────────────────────────────
+    # ════════════════════════════════════════════════════════════════════
+    "mistral-7b": {
+        "id": "mistral:7b",
+        "name": "Mistral",
+        "version": "7B",
+        "tag": "EU",
+        "speed": "★★★★",
+        "intelligence": "★★★★",
+        "description": "欧洲顶级开源：结构化输出强，JSON 工具调用稳定",
+        "capabilities": ["structured output", "tool calls", "JSON", "English"],
+        "thinking": False, "tools": True,
+        "max_tokens": 4096, "num_ctx": 32768, "temperature": 0.3,
+        "badge": "Default",
+    },
+    "mistral-nemo": {
+        "id": "mistral-nemo:12b",
+        "name": "Mistral Nemo",
+        "version": "12B",
+        "tag": "Balanced",
+        "speed": "★★★★",
+        "intelligence": "★★★★★",
+        "description": "Mistral × Nvidia：128K上下文，多语言支持佳",
+        "capabilities": ["long context", "multilingual", "tool calls"],
+        "thinking": False, "tools": True,
+        "max_tokens": 8192, "num_ctx": 131072, "temperature": 0.3,
+        "badge": "Pro",
+    },
+    # ════════════════════════════════════════════════════════════════════
+    # ── Microsoft Phi 家族 ────────────────────────────────────────────
+    # ════════════════════════════════════════════════════════════════════
+    "phi4": {
+        "id": "phi4:14b",
+        "name": "Phi-4",
+        "version": "14B",
+        "tag": "STEM",
+        "speed": "★★★",
+        "intelligence": "★★★★★",
+        "description": "微软 STEM 旗舰：数学/代码/科学推理超越同级，14B 需 ~8GB",
+        "capabilities": ["math", "STEM", "code", "science reasoning"],
+        "thinking": False, "tools": True,
+        "max_tokens": 8192, "num_ctx": 16384, "temperature": 0.3,
+        "badge": "STEM",
+    },
+    "phi4-mini": {
+        "id": "phi4-mini:3.8b",
+        "name": "Phi-4 Mini",
+        "version": "3.8B",
+        "tag": "Compact",
+        "speed": "★★★★★",
+        "intelligence": "★★★★",
+        "description": "微软精简版：3.8B 打败多数 7B，数学/代码能力突出",
+        "capabilities": ["math", "code", "compact", "fast"],
+        "thinking": False, "tools": True,
+        "max_tokens": 4096, "num_ctx": 16384, "temperature": 0.3,
+        "badge": "Fast",
+    },
+    # ════════════════════════════════════════════════════════════════════
+    # ── Google Gemma 3 家族 ───────────────────────────────────────────
+    # ════════════════════════════════════════════════════════════════════
+    "gemma3-4b": {
+        "id": "gemma3:4b",
+        "name": "Gemma 3",
+        "version": "4B",
+        "tag": "Google",
+        "speed": "★★★★★",
+        "intelligence": "★★★★",
+        "description": "Google 轻量：4B 支持图像理解，多模态能力出色",
+        "capabilities": ["multimodal", "vision", "fast chat", "Google"],
+        "vision": True, "thinking": False, "tools": True,
+        "max_tokens": 4096, "num_ctx": 8192, "temperature": 0.3,
+        "badge": "Fast",
+    },
+    "gemma3-12b": {
+        "id": "gemma3:12b",
+        "name": "Gemma 3",
+        "version": "12B",
+        "tag": "Vision",
+        "speed": "★★★★",
+        "intelligence": "★★★★★",
+        "description": "Google 中型：12B 视觉+文本综合能力强，~8GB VRAM",
+        "capabilities": ["multimodal", "vision", "reasoning", "multilingual"],
+        "vision": True, "thinking": False, "tools": True,
+        "max_tokens": 8192, "num_ctx": 16384, "temperature": 0.3,
+        "badge": "Vision",
+    },
+    # ════════════════════════════════════════════════════════════════════
+    # ── Cloud 路由（需订阅或 API Key）────────────────────────────────
+    # ════════════════════════════════════════════════════════════════════
     "gpt-oss-120b": {
         "id": "gpt-oss:120b-cloud",
         "name": "GPT-OSS",
@@ -1007,75 +1420,123 @@ MODELS = {
         "tag": "Cloud·120B",
         "speed": "★★★",
         "intelligence": "★★★★★",
-        "description": "云端 120B 模型：机构级分析，复杂金融报告",
+        "description": "云端 120B 中继：机构级分析，复杂金融报告",
         "capabilities": ["institutional analysis", "long-form reports", "complex reasoning"],
-        "thinking": False,
-        "tools": True,
-        "max_tokens": 8192,
-        "num_ctx": 131072,
-        "temperature": 0.3,
+        "thinking": False, "tools": True,
+        "max_tokens": 8192, "num_ctx": 131072, "temperature": 0.3,
         "badge": "Cloud",
     },
-    "deepseek-v3": {
+    "deepseek-v3-cloud": {
         "id": "deepseek-v3.1:671b-cloud",
         "name": "DeepSeek V3",
         "version": "671B",
         "tag": "Cloud·671B",
         "speed": "★★★",
         "intelligence": "★★★★★",
-        "description": "云端 671B 旗舰：最强推理能力，研报级分析",
+        "description": "云端 671B 旗舰：最强推理，研报级分析，需订阅",
         "capabilities": ["flagship reasoning", "research report", "quant strategy"],
-        "thinking": False,
-        "tools": True,
-        "max_tokens": 8192,
-        "num_ctx": 131072,
-        "temperature": 0.3,
+        "thinking": False, "tools": True,
+        "max_tokens": 8192, "num_ctx": 131072, "temperature": 0.3,
         "badge": "Cloud",
     },
 }
 
-# Model aliases: short names → model key
+# Model aliases: short names / Ollama IDs → MODELS key
 MODEL_ALIASES = {
-    # 新模型
+    # ── Qwen 2.5 ──────────────────────────────────────────────────────
     "qwen7b": "qwen7b",   "q7": "qwen7b",   "sonata": "qwen7b",   "s": "qwen7b",
+    "qwen14b": "qwen14b", "q14": "qwen14b",
+    "qwen32b": "qwen32b", "q32": "qwen32b",
     "qwen-coder": "qwen-coder", "coder": "qwen-coder", "c": "qwen-coder",
     "qwen-fast": "qwen-fast",   "fast": "qwen-fast",   "prelude": "qwen-fast", "p": "qwen-fast",
-    "deepseek-r1": "deepseek-r1", "r1": "deepseek-r1",
-    "gpt-oss": "gpt-oss-120b",    "120b": "gpt-oss-120b",
-    "deepseek-v3": "deepseek-v3", "v3": "deepseek-v3",  "671b": "deepseek-v3",
-    # 旧名向后兼容
+    # ── Qwen 3 ────────────────────────────────────────────────────────
+    "qwen3": "qwen3-8b",     "q3": "qwen3-8b",    "qwen3-8b": "qwen3-8b",
+    "qwen3-30b": "qwen3-30b", "q3-moe": "qwen3-30b", "moe": "qwen3-30b",
+    # ── DeepSeek ──────────────────────────────────────────────────────
+    "deepseek-r1": "deepseek-r1", "r1": "deepseek-r1", "r1-7b": "deepseek-r1",
+    "r1-1.5b": "deepseek-r1-1.5b", "r1-tiny": "deepseek-r1-1.5b",
+    "r1-14b": "deepseek-r1-14b",  "r1-pro": "deepseek-r1-14b",
+    # ── Llama ─────────────────────────────────────────────────────────
+    "llama3.2": "llama3.2-3b",    "llama3": "llama3.2-3b",    "l3": "llama3.2-3b",
+    "llama3.1": "llama3.1-8b",    "llama3.1-8b": "llama3.1-8b", "l31": "llama3.1-8b",
+    "llama3.3": "llama3.3-70b",   "llama70b": "llama3.3-70b", "l33": "llama3.3-70b",
+    # ── Mistral ───────────────────────────────────────────────────────
+    "mistral": "mistral-7b",   "m7": "mistral-7b",
+    "nemo": "mistral-nemo",    "mistral12b": "mistral-nemo",
+    # ── Phi (Microsoft) ───────────────────────────────────────────────
+    "phi4": "phi4",       "phi": "phi4",
+    "phi4-mini": "phi4-mini", "phi-mini": "phi4-mini",
+    # ── Gemma (Google) ────────────────────────────────────────────────
+    "gemma": "gemma3-4b",    "gemma3": "gemma3-4b",   "g4": "gemma3-4b",
+    "gemma12b": "gemma3-12b", "gemma3-12b": "gemma3-12b",
+    # ── Cloud relay ───────────────────────────────────────────────────
+    "gpt-oss": "gpt-oss-120b", "120b": "gpt-oss-120b",
+    "deepseek-v3": "deepseek-v3-cloud", "v3": "deepseek-v3-cloud", "671b": "deepseek-v3-cloud",
+    # ── 旧名向后兼容 ──────────────────────────────────────────────────
     "sonata-thinking": "deepseek-r1", "st": "deepseek-r1",
     "sonata-verbose":  "qwen7b",      "sv": "qwen7b",
-    # direct model IDs → map to new registry keys
-    "qwen2.5:7b":             "qwen7b",
-    "qwen2.5:3b":             "qwen-fast",
-    "qwen2.5-coder:7b":       "qwen-coder",
-    "qwen2.5-coder:1.5b":     "qwen-fast",
-    "deepseek-r1:7b":         "deepseek-r1",
-    "gpt-oss:120b-cloud":     "gpt-oss-120b",
-    "deepseek-v3.1:671b-cloud": "deepseek-v3",
-    # 旧 aria 模型 ID → 向后兼容
-    "aria-sonata:4.5":         "qwen7b",
-    "aria-sonata:4.5-thinking":"deepseek-r1",
-    "aria-sonata:4.5-verbose": "qwen7b",
-    "aria-sonata:4.6":         "qwen7b",
-    "aria-sonata:4.6-thinking":"deepseek-r1",
-    "aria-prelude:4.3":        "qwen-fast",
-    "aria-prelude:1.5b":       "qwen-fast",
+    # ── Ollama model ID → registry key ────────────────────────────────
+    "qwen2.5:7b":                "qwen7b",
+    "qwen2.5:14b":               "qwen14b",
+    "qwen2.5:32b":               "qwen32b",
+    "qwen2.5:3b":                "qwen-fast",
+    "qwen2.5-coder:7b":          "qwen-coder",
+    "qwen2.5-coder:14b":         "qwen-coder",
+    "qwen2.5-coder:1.5b":        "qwen-fast",
+    "qwen3:8b":                  "qwen3-8b",
+    "qwen3:30b-a3b":             "qwen3-30b",
+    "deepseek-r1:7b":            "deepseek-r1",
+    "deepseek-r1:1.5b":          "deepseek-r1-1.5b",
+    "deepseek-r1:14b":           "deepseek-r1-14b",
+    "llama3.2:3b":               "llama3.2-3b",
+    "llama3.1:8b":               "llama3.1-8b",
+    "llama3.3:70b":              "llama3.3-70b",
+    "mistral:7b":                "mistral-7b",
+    "mistral-nemo:12b":          "mistral-nemo",
+    "phi4:14b":                  "phi4",
+    "phi4-mini:3.8b":            "phi4-mini",
+    "gemma3:4b":                 "gemma3-4b",
+    "gemma3:12b":                "gemma3-12b",
+    "gpt-oss:120b-cloud":        "gpt-oss-120b",
+    "deepseek-v3.1:671b-cloud":  "deepseek-v3-cloud",
+    # ── 旧 aria 模型 ID ───────────────────────────────────────────────
+    "aria-sonata:4.5":           "qwen7b",
+    "aria-sonata:4.5-thinking":  "deepseek-r1",
+    "aria-sonata:4.5-verbose":   "qwen7b",
+    "aria-sonata:4.6":           "qwen7b",
+    "aria-sonata:4.6-thinking":  "deepseek-r1",
+    "aria-prelude:4.3":          "qwen-fast",
+    "aria-prelude:1.5b":         "qwen-fast",
 }
 
 # ── 模型降级优先级（单一事实源：预检 / 运行时 fallback 共用）────────────────
-# NOTE: 不用字母排序 — "deepseek-v3.1:671b-cloud" 字母排最前但需要付费
-# Ollama 订阅且时常超时；"gpt-oss:120b-cloud" 中继更可靠。
+# 按能力/稳定性排序：先选大容量本地模型，再退化到轻量模型
 _MODEL_FALLBACK_PREFIXES = [
-    "gpt-oss",           # cloud relay, reliable (~1 s)
-    "qwen2.5-coder:7b",  # local, coding capable
-    "qwen2.5:7b",        # local, general capable
-    "qwen2.5-coder:3b",  # local, small coding
-    "qwen2.5:3b",        # local, small general
-    "llama3.2:3b",       # local fallback
-    "mistral",           # local fallback
-    "deepseek-v3.1",     # last resort (requires subscription)
+    # 首选：7B+ 本地全能模型
+    "qwen3:8b",            # Qwen3 最新，混合推理
+    "qwen3:30b-a3b",       # Qwen3 MoE，快速
+    "qwen2.5:14b",         # Qwen2.5 高质量
+    "qwen2.5:7b",          # Qwen2.5 主力
+    "qwen2.5-coder:7b",    # 代码专精
+    # 次选：其他家族本地模型
+    "llama3.3:70b",        # Meta 旗舰（需大 VRAM）
+    "llama3.1:8b",         # Meta 8B 稳定
+    "mistral-nemo:12b",    # Mistral 12B
+    "mistral:7b",          # Mistral 7B
+    "phi4:14b",            # Microsoft Phi-4
+    "phi4-mini:3.8b",      # Microsoft Phi-4 Mini
+    "gemma3:12b",          # Google Gemma 12B
+    "gemma3:4b",           # Google Gemma 4B
+    "deepseek-r1:14b",     # DeepSeek R1 推理
+    "deepseek-r1:7b",      # DeepSeek R1 7B
+    # 轻量回落
+    "qwen2.5-coder:3b",    # 小模型
+    "qwen2.5:3b",          # 小模型
+    "llama3.2:3b",         # Meta 轻量
+    "deepseek-r1:1.5b",    # 极小推理
+    # Cloud relay（需订阅）
+    "gpt-oss",
+    "deepseek-v3.1",
 ]
 
 
@@ -1613,371 +2074,33 @@ def _tool_read_file(params: dict) -> dict:
 
 
 def _strip_markdown_fences(content: str) -> str:
-    """Strip markdown code fences that LLMs sometimes wrap around file content."""
-    stripped = content.strip()
-    # Check for opening fence: ```python, ```py, ```javascript, ```json, etc.
-    if stripped.startswith("```"):
-        first_nl = stripped.find("\n")
-        if first_nl >= 0:
-            stripped = stripped[first_nl + 1:]
-        else:
-            return content  # Just ``` with no content
-    # Check for closing fence
-    if stripped.rstrip().endswith("```"):
-        stripped = stripped.rstrip()[:-3].rstrip()
-    # Only return stripped version if we actually removed fences
-    if stripped != content.strip():
-        return stripped + "\n"  # Ensure trailing newline
-    return content
+    """Thin shim — implementation in apps/cli/tools/write_tools.py."""
+    from apps.cli.tools.write_tools import _strip_markdown_fences as _f
+    return _f(content)
 
 
 def _auto_fix_python(content: str, path: str) -> str:
-    """Auto-fix common Python issues before writing. Harness-level intelligence."""
-    if not path.endswith(".py"):
-        return content
-    lines = content.split("\n")
-    imports_present = set()
-    first_non_comment = 0
-    for i, line in enumerate(lines):
-        stripped = line.strip()
-        if stripped and not stripped.startswith("#") and not stripped.startswith('"""') and not stripped.startswith("'''"):
-            first_non_comment = i
-            break
-    # Scan existing imports
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith("import ") or stripped.startswith("from "):
-            # Extract module name
-            if stripped.startswith("import "):
-                _parts = stripped.split()
-                if len(_parts) >= 2:
-                    mod = _parts[1].split(".")[0].split(",")[0]
-                    imports_present.add(mod)
-            elif stripped.startswith("from "):
-                _parts = stripped.split()
-                if len(_parts) >= 2:
-                    mod = _parts[1].split(".")[0]
-                    imports_present.add(mod)
-    # Detect needed imports by scanning code usage
-    code_text = content
-    needed = []
-    if "os.path" in code_text or "os.expanduser" in code_text or "os.getcwd" in code_text or "os.makedirs" in code_text:
-        if "os" not in imports_present:
-            needed.append("import os")
-    if "sys." in code_text or "sys.exit" in code_text:
-        if "sys" not in imports_present:
-            needed.append("import sys")
-    if "np." in code_text and "numpy" not in imports_present and "np" not in imports_present:
-        needed.append("import numpy as np")
-    if "pd." in code_text and "pandas" not in imports_present and "pd" not in imports_present:
-        needed.append("import pandas as pd")
-    if "yf." in code_text and "yfinance" not in imports_present and "yf" not in imports_present:
-        needed.append("import yfinance as yf")
-    # matplotlib.use('Agg') must come before matplotlib.pyplot
-    has_plt = "plt." in code_text
-    has_matplotlib_use = "matplotlib.use" in code_text
-    if has_plt and "matplotlib" not in imports_present:
-        needed.append("import matplotlib; matplotlib.use('Agg')")
-        needed.append("import matplotlib.pyplot as plt")
-    elif has_plt and not has_matplotlib_use:
-        # matplotlib imported but use('Agg') missing — inject before pyplot import
-        for i, line in enumerate(lines):
-            if "import matplotlib.pyplot" in line and "matplotlib.use" not in "\n".join(lines[:i]):
-                lines.insert(i, "import matplotlib; matplotlib.use('Agg')")
-                content = "\n".join(lines)
-                break
-    if "mpf." in code_text and "mplfinance" not in imports_present and "mpf" not in imports_present:
-        needed.append("import mplfinance as mpf")
-    if "re." in code_text and "re" not in imports_present:
-        needed.append("import re")
-    if "json." in code_text and "json" not in imports_present:
-        needed.append("import json")
-    if "datetime" in code_text and "datetime" not in imports_present:
-        needed.append("from datetime import datetime, timedelta")
-    if (re_module.search(r'\bta\.(?:sma|ema|rsi|macd|bbands|stoch|atr|adx|obv|vwap)\b', code_text) or "pandas_ta" in code_text) and "ta" not in imports_present and "pandas_ta" not in imports_present:
-        needed.append("import pandas_ta as ta")
-    if (re_module.search(r'\bgo\.(?:Figure|Candlestick|Scatter|Bar|Heatmap|Layout|Table)', code_text) or "px." in code_text or "plotly" in code_text) and "plotly" not in imports_present:
-        if "go.Figure" in code_text or "go.Candlestick" in code_text:
-            needed.append("import plotly.graph_objects as go")
-        if "px." in code_text:
-            needed.append("import plotly.express as px")
-        if "make_subplots" in code_text:
-            needed.append("from plotly.subplots import make_subplots")
-    if "scipy" in code_text and "scipy" not in imports_present:
-        needed.append("import scipy")
-    # Auto-inject warnings suppression for finance scripts (yfinance/pandas emit many warnings)
-    has_warnings_in_needed = any("warnings" in n for n in needed)
-    if ("yf." in code_text or "pd." in code_text) and "warnings" not in imports_present and not has_warnings_in_needed:
-        needed.insert(0, "import warnings; warnings.filterwarnings('ignore')")
-    elif "warnings" in code_text and "warnings" not in imports_present and not has_warnings_in_needed:
-        needed.append("import warnings")
-    if needed:
-        # Insert missing imports after first non-comment line (or at top)
-        insert_point = first_non_comment
-        for imp in reversed(needed):
-            lines.insert(insert_point, imp)
-        content = "\n".join(lines)
-    # Syntax validation
-    try:
-        import ast
-        ast.parse(content)
-    except SyntaxError as e:
-        # Try common auto-fixes
-        fixed = content
-        # Fix: trailing comma in last function arg
-        # Fix: unclosed parenthesis — can't auto-fix, just report
-        if HAS_RICH:
-            console.print(f"  [dim]Warning: syntax issue at line {e.lineno}: {e.msg}[/dim]")
-    return content
+    """Thin shim — implementation in apps/cli/tools/write_tools.py."""
+    from apps.cli.tools.write_tools import _auto_fix_python as _f
+    return _f(content, path)
 
 
 def _write_policy_confirm(p: pathlib.Path, content: str, existed: bool) -> tuple:
-    """Prompt user to confirm a write operation. Returns (approved: bool, final_path: Path).
-
-    Shows:
-    - For overwrites: diff summary (lines added/removed)
-    - For new files: path + line count
-    Allows user to approve (y), deny (n), or redirect to a different path (r).
-    """
-    import difflib
-    lines_new = content.count("\n") + 1
-    desktop = pathlib.Path.home() / "Desktop"
-    is_desktop = str(p).startswith(str(desktop))
-
-    if HAS_RICH:
-        console.print()
-        if existed:
-            old_content = p.read_text(errors="replace")
-            diff = list(difflib.unified_diff(
-                old_content.splitlines(keepends=True),
-                content.splitlines(keepends=True),
-                fromfile=f"current/{p.name}",
-                tofile=f"new/{p.name}",
-                n=2,
-            ))
-            added   = sum(1 for l in diff if l.startswith("+") and not l.startswith("+++"))
-            removed = sum(1 for l in diff if l.startswith("-") and not l.startswith("---"))
-            console.print(f"  [yellow]⚠ Overwrite[/yellow]  [bold]{p}[/bold]")
-            console.print(f"  [dim]  +{added} lines  -{removed} lines  ({lines_new} total)[/dim]")
-            # Show first 8 diff lines as preview
-            for line in diff[:8]:
-                if line.startswith("+") and not line.startswith("+++"):
-                    console.print(f"  [green]{line.rstrip()}[/green]")
-                elif line.startswith("-") and not line.startswith("---"):
-                    console.print(f"  [red]{line.rstrip()}[/red]")
-        else:
-            loc = "[dim cyan](Desktop)[/dim cyan]" if is_desktop else "[yellow](outside Desktop)[/yellow]"
-            console.print(f"  [cyan]New file[/cyan] {loc}  [bold]{p}[/bold]  ({lines_new} lines)")
-        console.print()
-        choice = console.input("  [bold]Write this file?[/bold] [dim]\\[y/n/r=redirect path][/dim] ").strip().lower()
-    else:
-        print()
-        print(f"  {'Overwrite' if existed else 'New file'}: {p}  ({lines_new} lines)")
-        choice = input("  Write this file? [y/n/r=redirect path] ").strip().lower()
-
-    if choice == "r":
-        if HAS_RICH:
-            new_path_str = console.input("  [dim]Enter new path: [/dim]").strip()
-        else:
-            new_path_str = input("  Enter new path: ").strip()
-        if new_path_str:
-            new_p = pathlib.Path(new_path_str).expanduser().resolve()
-            if _is_safe_path(new_p):
-                return True, new_p
-            if HAS_RICH:
-                console.print(f"  [red]Path not allowed: {new_p}[/red]")
-            else:
-                print(f"  Path not allowed: {new_p}")
-        return False, p
-
-    return choice in ("y", "yes", ""), p
+    """Thin shim — implementation in apps/cli/tools/write_tools.py."""
+    from apps.cli.tools.write_tools import _write_policy_confirm as _f
+    return _f(p, content, existed)
 
 
 def _tool_write_file(params: dict) -> dict:
-    """Write content to a file (create or overwrite)."""
-    path = params.get("path", "")
-    content = params.get("content", "")
-    skip_confirm = params.get("_skip_confirm", False)  # internal flag for scaffold
-    stage_only = bool(params.get("stage_only", False))
-    if not path:
-        return {"success": False, "error": "Missing 'path' parameter"}
-    if not content:
-        return {"success": False, "error": "Missing 'content' parameter"}
-    # Auto-strip markdown code fences from content
-    content = _strip_markdown_fences(content)
-    # Reject placeholder / obviously invalid content
-    stripped_check = content.strip()
-    if len(stripped_check) < 20:
-        return {"success": False,
-                "error": f"Content too short ({len(stripped_check)} chars). "
-                "You must write the COMPLETE script code, not a placeholder. "
-                "Write the full Python code with all imports, logic, and output."}
-    # Detect XML/HTML-like placeholder tags — only flag SHORT single-tag content.
-    # A real HTML file starting with <!DOCTYPE html> is valid even if it has no newlines.
-    if (stripped_check.startswith("<") and stripped_check.endswith(">")
-            and "\n" not in stripped_check and len(stripped_check) < 200
-            and not stripped_check.lower().startswith("<!doctype")
-            and not stripped_check.lower().startswith("<html")):
-        return {"success": False,
-                "error": f"Content appears to be a placeholder tag: '{stripped_check[:120]}'. "
-                "You must write the ACTUAL code, not a tag or placeholder. "
-                "Write the complete script with imports, data fetching, computation, and output."}
-    # Auto-fix Python: inject missing imports, validate syntax
-    content = _auto_fix_python(content, path)
-    try:
-        p = pathlib.Path(path).expanduser().resolve()
-        if not _is_safe_path(p):
-            return {"success": False, "error": f"Access denied: path '{p}' is outside allowed directories"}
-
-        existed = p.exists()
-        desktop = pathlib.Path.home() / "Desktop"
-        is_desktop = str(p).startswith(str(desktop))
-        # Paths that never need confirmation (tmpdir, Desktop, session dirs)
-        import tempfile as _tf
-        _auto_trusted_prefixes = (
-            str(desktop),
-            str(pathlib.Path(_tf.gettempdir()).resolve()),
-            "/tmp", "/private/tmp", "/private/var/folders",
-            str(CONFIG_DIR), str(SESSIONS_DIR),
-        )
-        is_auto_trusted = any(str(p).startswith(pfx) for pfx in _auto_trusted_prefixes)
-        policy = _ACTIVE_WRITE_POLICY[0]
-
-        # Determine if confirmation is required:
-        # - auto-trusted paths (Desktop, tmpdir, config dirs): never confirm
-        # - always_confirm: confirm everything else
-        # - confirm_outside: confirm new/overwrite outside Desktop
-        # - desktop_only: confirm new files outside Desktop; also confirm overwrites outside trusted
-        needs_confirm = (
-            not skip_confirm
-            and not is_auto_trusted
-            and (
-                policy == "always_confirm"
-                or policy in ("desktop_only", "confirm_outside")
-                or existed  # overwrite outside auto-trusted paths
-            )
-        )
-
-        if needs_confirm:
-            approved, p = _write_policy_confirm(p, content, existed)
-            if not approved:
-                return {"success": False, "error": "Write cancelled by user.",
-                        "data": {"cancelled": True}}
-
-        change = GLOBAL_CHANGE_STORE.stage(p, content, source="write_file")
-        lines = content.count("\n") + 1
-        action = "Updated" if existed else "Created"
-        if stage_only:
-            action_label = "Staged update" if existed else "Staged create"
-            if HAS_RICH:
-                console.print(f"  [dim]{action_label} {p} ({lines} lines, change {change.change_id})[/dim]")
-            else:
-                print(f"  {action_label} {p} ({lines} lines, change {change.change_id})")
-            return {"success": True, "data": {
-                "path": str(p), "action": "staged",
-                "lines": lines, "change_id": change.change_id,
-                "before_hash": change.before_hash,
-                "after_hash": change.after_hash,
-                "diff": change.diff,
-                "staged": True,
-                "applied": False,
-            }}
-        try:
-            applied = GLOBAL_CHANGE_STORE.apply(change.change_id)
-        except ChangeConflictError as exc:
-            return {"success": False, "error": str(exc), "data": {"change_id": change.change_id}}
-        if HAS_RICH:
-            console.print(f"  [dim]{action} {p} ({lines} lines)[/dim]")
-        else:
-            print(f"  {action} {p} ({lines} lines)")
-        try:
-            _size_bytes = p.stat().st_size
-        except Exception:
-            _size_bytes = len(content.encode("utf-8"))
-        return {"success": True, "data": {
-            "path": str(p), "action": action.lower(),
-            "lines": lines, "size_bytes": _size_bytes,
-            "change_id": applied.change_id,
-            "before_hash": applied.before_hash,
-            "after_hash": applied.after_hash,
-            "diff": applied.diff,
-            "staged": True,
-            "applied": True,
-        }}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+    """Thin shim — implementation in apps/cli/tools/write_tools.py."""
+    from apps.cli.tools.write_tools import tool_write_file as _f
+    return _f(params)
 
 
 def _tool_edit_file(params: dict) -> dict:
-    """Edit file by replacing old_string with new_string."""
-    path = params.get("path", "")
-    old_str = params.get("old_string", params.get("old_str", ""))
-    new_str = params.get("new_string", params.get("new_str", ""))
-    stage_only = bool(params.get("stage_only", False))
-    if not path:
-        return {"success": False, "error": "Missing 'path' parameter"}
-    if not old_str:
-        return {"success": False, "error": "Missing 'old_string' parameter"}
-    try:
-        p = pathlib.Path(path).expanduser().resolve()
-        if not p.exists():
-            return {"success": False, "error": f"File not found: {p}"}
-        if not _is_safe_path(p):
-            return {"success": False, "error": f"Access denied: path '{p}' is outside allowed directories"}
-        content = p.read_text(errors="replace")
-        count = content.count(old_str)
-        if count == 0:
-            # Show first few lines of actual file content to help model fix the old_string
-            preview = "\n".join(content.splitlines()[:10])
-            return {"success": False,
-                    "error": f"old_string not found in file. "
-                    f"The file starts with:\n{preview}\n\n"
-                    f"HINT: Use read_file to see the actual content, then retry edit_file with the correct old_string. "
-                    f"Or use write_file to overwrite the entire file."}
-        new_content = content.replace(old_str, new_str, 1)
-        change = GLOBAL_CHANGE_STORE.stage(p, new_content, source="edit_file")
-        added = len(new_str.splitlines())
-        removed = len(old_str.splitlines())
-        if stage_only:
-            if HAS_RICH:
-                console.print(f"  [dim]Staged edit {p} (change {change.change_id})[/dim]")
-            else:
-                print(f"  Staged edit {p} (change {change.change_id})")
-            return {"success": True, "data": {
-                "path": str(p), "replacements": 1,
-                "lines": new_content.count("\n") + 1,
-                "change_id": change.change_id,
-                "before_hash": change.before_hash,
-                "after_hash": change.after_hash,
-                "diff": change.diff,
-                "staged": True,
-                "applied": False,
-            }}
-        try:
-            applied = GLOBAL_CHANGE_STORE.apply(change.change_id)
-        except ChangeConflictError as exc:
-            return {"success": False, "error": str(exc), "data": {"change_id": change.change_id}}
-        if HAS_RICH:
-            summary = []
-            if added > 0:
-                summary.append(f"[green]+{added}[/green]")
-            if removed > 0:
-                summary.append(f"[red]-{removed}[/red]")
-            console.print(f"  [dim]Applied ({', '.join(summary)} lines)[/dim]")
-        else:
-            print(f"  Applied (+{added}, -{removed} lines)")
-        return {"success": True, "data": {
-            "path": str(p), "replacements": 1,
-            "lines": new_content.count("\n") + 1,
-            "change_id": applied.change_id,
-            "before_hash": applied.before_hash,
-            "after_hash": applied.after_hash,
-            "diff": applied.diff,
-            "staged": True,
-            "applied": True,
-        }}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+    """Thin shim — implementation in apps/cli/tools/write_tools.py."""
+    from apps.cli.tools.write_tools import tool_edit_file as _f
+    return _f(params)
 
 
 def _tool_list_files(params: dict) -> dict:
@@ -2426,6 +2549,19 @@ _CONFIRM_TOOLS = {"write_file", "edit_file", "run_command"}
 _ARIA_BOT_MODE: bool = bool(os.environ.get("ARIA_BOT_MODE"))
 _auto_approve_session: bool = _ARIA_BOT_MODE  # Set True when user chooses "Yes, allow all"
 
+# Per-tool session allow list — populated by "Always allow [tool] this session" choice.
+# More granular than _auto_approve_session: allows write_file without approving run_command.
+_session_always_allow: set = set()
+
+# Load JSON hooks once at startup; reloaded on demand via /hooks reload
+try:
+    from apps.cli.hooks import load_hooks as _load_hooks, fire as _fire_json_hook
+    _JSON_HOOKS: dict = _load_hooks()
+    _HAS_JSON_HOOKS = True
+except Exception:
+    _JSON_HOOKS = {}
+    _HAS_JSON_HOOKS = False
+
 def _show_edit_preview(params: dict):
     """Show a diff preview for edit_file (Claude Code style, Panel-boxed)."""
     if _ARIA_BOT_MODE:
@@ -2551,9 +2687,13 @@ def _show_write_preview(params: dict):
 
 def _apply_tool_approval(params: dict, decision: ApprovalDecision) -> dict:
     """Apply approval state to CLI globals and execution params."""
-    global _auto_approve_session
+    global _auto_approve_session, _session_always_allow
     if decision.auto_approve_session:
         _auto_approve_session = True
+    # Per-tool always_allow: stored in decision's extra metadata field
+    _tool_always = getattr(decision, "_tool_always_allow", None)
+    if _tool_always:
+        _session_always_allow.add(_tool_always)
     return apply_approval_decision(params, decision)
 
 
@@ -2574,8 +2714,21 @@ def _confirm_tool_execution_decision(tool_name: str, params: dict,
         if tool_name == "run_command":
             return ApprovalDecision.allow(policy=config_policy, user_approved=True)
         return ApprovalDecision.allow()
+    # Per-tool session allow — user previously chose "Always allow [tool] this session"
+    if tool_name in _session_always_allow:
+        if tool_name == "run_command":
+            return ApprovalDecision.allow(policy=config_policy, user_approved=True)
+        return ApprovalDecision.allow()
     if tool_name not in _CONFIRM_TOOLS:
         return ApprovalDecision.allow()
+
+    # ── JSON PreToolUse hook — can block execution ────────────────────────────
+    if _HAS_JSON_HOOKS and _JSON_HOOKS.get("PreToolUse"):
+        _allowed = _fire_json_hook(
+            "PreToolUse", tool=tool_name, params=params, hooks=_JSON_HOOKS,
+        )
+        if not _allowed:
+            return ApprovalDecision.deny(f"Blocked by PreToolUse hook")
 
     # ── Pre-flight for run_command ────────────────────────────────────────────
     if tool_name == "run_command":
@@ -2637,10 +2790,12 @@ def _confirm_tool_execution_decision(tool_name: str, params: dict,
         # Header already printed by on_tool_call — just pass through policy
         pass
 
+    _tool_label = {"write_file": "写文件", "edit_file": "编辑文件", "run_command": "运行命令"}.get(tool_name, tool_name)
     options = [
-        ("Yes",          ""),
-        ("Yes, allow all", "本会话内自动允许"),
-        ("No",           ""),
+        ("Yes",                              ""),
+        (f"Always allow {_tool_label}",      f"本会话内自动允许所有 {_tool_label}"),
+        ("Yes, allow all tools",             "本会话内所有工具自动允许"),
+        ("No",                               ""),
     ]
     choice = _arrow_select(options, selected=0, title="")
 
@@ -2649,6 +2804,14 @@ def _confirm_tool_execution_decision(tool_name: str, params: dict,
             return ApprovalDecision.allow(policy=config_policy, user_approved=True)
         return ApprovalDecision.allow()
     if choice == 1:
+        # Per-tool always_allow for this session
+        d = ApprovalDecision.allow(
+            policy=config_policy if tool_name == "run_command" else None,
+            user_approved=True,
+        )
+        d._tool_always_allow = tool_name  # type: ignore[attr-defined]
+        return d
+    if choice == 2:
         if tool_name == "run_command":
             return ApprovalDecision.allow(
                 policy=config_policy,
@@ -2716,6 +2879,20 @@ def _run_hook(hook_type: str, tool_name: str, params: dict, result: dict = None)
         _sp.run(cmd, shell=True, timeout=5, capture_output=True)
     except Exception:
         pass  # Hooks must never crash the main flow
+
+    # Also fire JSON hooks (PostToolUse / PreToolUse)
+    if _HAS_JSON_HOOKS:
+        try:
+            _event = "PostToolUse" if hook_type == "post_tool" else (
+                "PreToolUse" if hook_type == "pre_tool" else None
+            )
+            if _event:
+                _fire_json_hook(
+                    _event, tool=tool_name, params=params, result=result,
+                    hooks=_JSON_HOOKS,
+                )
+        except Exception:
+            pass
 
 
 # TTL cache for read-only tool responses
@@ -2797,256 +2974,31 @@ from apps.cli.prompts.coding import CODING_SYSTEM_PROMPT  # noqa: F401 — extra
 
 
 def _detect_lang(text: str) -> str:
-    """Return 'zh' for predominantly Chinese input, 'en' otherwise."""
-    if not text:
-        return "zh"
-    zh_chars = sum(1 for c in text if '一' <= c <= '鿿')
-    return "zh" if zh_chars / max(len(text), 1) > 0.15 else "en"
+    """Thin shim — implementation in apps/cli/prompts/system_prompts.py."""
+    from apps.cli.prompts.system_prompts import detect_lang as _f
+    return _f(text)
 
 
-_LANG_RULE = {
-    "zh": (
-        "## 语言规则\n"
-        "用户用中文提问，必须用中文回答。术语可保留英文（如 RSI、MACD、P/E）。\n\n"
-    ),
-    "en": (
-        "## Language Rule\n"
-        "The user wrote in English. Respond entirely in English. "
-        "Technical terms (RSI, MACD, P/E) stay as-is.\n\n"
-    ),
-}
+from apps.cli.prompts.system_prompts import LANG_RULE as _LANG_RULE
 
 
 def _build_coding_prompt_lite(user_message: str) -> str:
-    """
-    Condensed coding system prompt for small models (≤3B parameters).
-
-    Detects whether the task needs a chart or pure analysis/strategy code,
-    and serves the appropriate minimal template. No code fences in the system
-    prompt — they confuse small models into copying the template literally.
-    """
-    from datetime import datetime as _dt
-    today = _dt.now().strftime("%Y年%m月%d日")
-
-    low = user_message.lower()
-    is_chart = any(k in low for k in ("k线", "kline", "candlestick", "蜡烛", "图表", "chart", "plot", "图"))
-
-    # Detect A-share context (Chinese stock codes, A股 keywords)
-    is_ashare = any(k in low for k in (
-        "a股", "a-股", "沪深", "上交所", "深交所", "akshare",
-        "tushare", "600", "000", "300", "港股", "上证",
-    ))
-
-    if is_chart:
-        if is_ashare:
-            rules = (
-                "A股图表规则（必须遵守）:\n"
-                "- import akshare as ak  # A股数据用 akshare\n"
-                "- import mplfinance as mpf\n"
-                "- import matplotlib; matplotlib.use('Agg')\n"
-                "- 获取日线数据: df = ak.stock_zh_a_hist(symbol='600519', period='daily', "
-                "start_date='20230101', end_date='20241231', adjust='qfq')\n"
-                "- 列名重命名: df.rename(columns={'开盘':'Open','收盘':'Close','最高':'High',"
-                "'最低':'Low','成交量':'Volume'}, inplace=True)\n"
-                "- df.index = pd.to_datetime(df['日期'])\n"
-                "- 计算 RSI/MACD 后再传给 addplot\n"
-                "- 保存到 os.path.expanduser('~/Desktop/<name>.png')\n"
-            )
-        else:
-            rules = (
-                "Chart script rules:\n"
-                "- import mplfinance as mpf (required for candlestick charts)\n"
-                "- import matplotlib; matplotlib.use('Agg') before importing pyplot\n"
-                "- Compute RSI/MACD BEFORE passing to addplot\n"
-                "- savefig to os.path.expanduser('~/Desktop/<name>.png')\n"
-                "- Download: df = yf.download(ticker, start=start, progress=False, auto_adjust=True)\n"
-                "- Flatten MultiIndex: if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.droplevel(1)\n"
-            )
-    else:
-        if is_ashare:
-            rules = (
-                "A股策略/分析脚本规则（必须遵守）:\n"
-                "- import akshare as ak  # A股数据必须用 akshare，禁止用 pandas_datareader\n"
-                "- 获取日线: df = ak.stock_zh_a_hist(symbol='600519', period='daily', "
-                "start_date='20200101', end_date='20241231', adjust='qfq')\n"
-                "- 列名: 日期,开盘,收盘,最高,最低,成交量,成交额,振幅,涨跌幅,涨跌额,换手率\n"
-                "- 选个股（如600519贵州茅台），不要用指数——指数不可交易\n"
-                "- 回测必须扣交易成本: 换仓时 收益 -= abs(仓位变化) * 0.002  # 佣金+印花税+滑点\n"
-                "- 必须输出: 总收益/年化/夏普/最大回撤/交易次数/胜率 + 同期买入持有对比\n"
-                "- 策略与买入持有从同一天起算（指标预热期之后）\n"
-                "- 用 pandas 计算均线/因子\n"
-                "- print() 输出清晰的结果\n"
-                "- 不要用 yfinance、pandas_datareader 或任何境外数据源\n"
-            )
-        else:
-            rules = (
-                "Rules for strategy/analysis scripts:\n"
-                "- Download data: df = yf.download(ticker, start=start, progress=False, auto_adjust=True)\n"
-                "- Flatten MultiIndex columns if needed\n"
-                "- Print clear results with print()\n"
-                "- Use pandas for calculations\n"
-                "- No matplotlib unless user asks for a chart\n"
-                "- DO NOT use pandas_datareader (deprecated); use yfinance instead\n"
-            )
-
-    return (
-        f"You are Aria, a quantitative finance Python coding assistant. Today is {today}.\n"
-        "Your ONLY job is to write a complete, SYNTACTICALLY CORRECT, runnable Python script.\n\n"
-        "Output format:\n"
-        "- Output ONLY the Python code inside a single ```python ... ``` code block.\n"
-        "- Do NOT explain or add text before/after the code block.\n"
-        "- The code must be complete and self-contained — every variable must be defined.\n"
-        "- Every import must be used; every function call must have correct arguments.\n"
-        "- NEVER leave placeholder variable names like 'closePrices', 'smaValues' undefined.\n"
-        "- Use the ticker, date range, and filename specified by the user.\n\n"
-        + rules
-    )
+    """Thin shim — implementation in apps/cli/prompts/system_prompts.py."""
+    from apps.cli.prompts.system_prompts import build_coding_prompt_lite as _f
+    return _f(user_message)
 
 
 def _build_analysis_prompt_lite(user_message: str) -> str:
-    """
-    Condensed analysis prompt for small models (≤3B).
-
-    The full ANALYSIS_SYSTEM_PROMPT has Python f-string-style placeholders like
-    {real price from data} that small models copy literally instead of filling in.
-    This lite version has ZERO template placeholders — only plain rules.
-    """
-    from datetime import datetime as _dt
-    today = _dt.now().strftime("%Y年%m月%d日")
-    _lang = _detect_lang(user_message)
-    _lr = _LANG_RULE[_lang]
-    if _lang == "en":
-        _intro = f"You are Aria, a professional quantitative finance AI. Today is {_dt.now().strftime('%Y-%m-%d')}.\n\n"
-        _rules_hdr = "## Rules for stock/index analysis\n"
-    else:
-        _intro = f"你是 Aria，专业量化金融 AI。今天是 {today}。\n\n"
-        _rules_hdr = "## 分析股票/指数时的规则\n"
-    return (
-        _intro
-        + _lr
-        + _rules_hdr
-        + "1. 如果上方系统提示中已注入了「📊 实时行情」或「📈 技术指标」数据块，\n"
-        "   必须直接使用这些数字作答，绝不修改或替换任何数值。\n"
-        "2. ⚠️ 如果没有注入任何行情数据：\n"
-        "   - 直接说：'暂无实时行情数据，请用 /quote <代码> 命令获取最新价格后再分析。'\n"
-        "   - 绝对不要编造任何价格、RSI、MACD 数值，不要输出含 N/A 或占位符的模板。\n"
-        "   - 🚫 同样禁止编造财务数据：收入、净利润、增速、市值、利润率等具体数字\n"
-        "     一律不准凭训练记忆给出——你的训练数据已过时，编造的数字会误导投资决策。\n"
-        "   - 🚫 禁止凭记忆写股票代码——容易张冠李戴（如把寒武纪688256写成603019）。\n"
-        "   - 不要输出'当前价/N/A'或任何类似格式。\n"
-        "3. 根据注入的技术指标给出明确判断：看多/看空/震荡，并说明依据（RSI区间、MACD方向）。\n"
-        "4. 支撑位/阻力位必须使用注入数据中的具体价格数字，不要用'大约'或'X.XX'占位符。\n"
-        "5. 不要使用数学公式，不要写 LaTeX，不要写 Python 代码。\n"
-        "6. 回答格式（仅在有注入数据时）：① 当前价位总结 → ② 技术指标解读 → ③ 关键支撑/阻力 → ④ 短期建议。\n"
-        "7. 回答长度控制在 300 字以内，直接给出结论，不要说'好的，我来分析'。\n"
-        "8. 不要复述系统提示内容或项目文档。\n"
-        "9. 🚫 绝不输出任何元注释，如'(注释：...)'、'(提示：...)'、'请使用实际数据'等模板残留文字。\n\n"
-        "## 常见中文股票/指数名称\n"
-        "- NVDA → 英伟达 | AAPL → 苹果 | MSFT → 微软 | TSLA → 特斯拉\n"
-        "- QQQ → 纳斯达克100 ETF | SPY → 标普500 ETF | DIA → 道琼斯ETF\n"
-        "- AMZN → 亚马逊 | GOOGL → 谷歌 | META → Meta | AMD → AMD\n"
-        "- SPCX → SpaceX（太空探索技术公司）\n\n"
-        "## ⚡ 训练截止后重大 IPO — 必须知道\n"
-        "- **SpaceX → SPCX**：2026年6月12日在纳斯达克上市，股票代码 SPCX。\n"
-        "  ⛔ 不要说「SpaceX 是私营公司/未上市」—— 这是错误信息，SpaceX 已于 2026-06-12 完成 IPO。\n"
-        "  ✅ 应说：「SpaceX（SPCX）已于2026年6月在纳斯达克上市」并建议用 /quote SPCX 查询实时价格。\n\n"
-        "直接开始分析，不要说'好的，我来...'。\n"
-    )
+    """Thin shim — implementation in apps/cli/prompts/system_prompts.py."""
+    from apps.cli.prompts.system_prompts import build_analysis_prompt_lite as _f
+    return _f(user_message)
 
 
 # NOTE: FINANCE_CHAT_PROMPT is a function now — it injects the current date dynamically.
 def _build_finance_prompt(user_message: str = "") -> str:
-    """Build FINANCE_CHAT_PROMPT with today's date and language rule injected."""
-    from datetime import datetime as _dt
-    try:
-        from finance_formulas import FORMULA_PROMPT_BLOCK_CORE as _formula_prompt_block
-    except Exception:
-        _formula_prompt_block = ""
-    today = _dt.now().strftime("%Y年%m月%d日")
-    weekday = ["周一","周二","周三","周四","周五","周六","周日"][_dt.now().weekday()]
-    _lang = _detect_lang(user_message)
-    _lr = _LANG_RULE[_lang]
-    if _lang == "en":
-        _intro = (
-            f"You are Aria, Arthera's professional quantitative finance AI assistant. "
-            f"Today is {_dt.now().strftime('%Y-%m-%d')} ({['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][_dt.now().weekday()]}).\n\n"
-        )
-        _conduct = (
-            "## Conduct\n"
-            "- Answer directly. Use lists for multiple facts, prose for explanations.\n"
-            "- Be concise. **Never repeat** the same content. Stop after answering — no 'Is there anything else?'\n"
-            "- For conversational messages (hi/thanks), reply in one sentence, no Markdown.\n\n"
-        )
-    else:
-        _intro = (
-            f"你是 Aria，Arthera 的专业量化金融 AI 助手。\n"
-            f"今天是 {today}（{weekday}）。\n\n"
-        )
-        _conduct = (
-            "## 行为准则\n"
-            "- 直接回答问题，不要绕圈子。多条信息用列表，解释性问题用散文。\n"
-            "- 简洁为主，**绝不重复相同内容**。回答结束后立即停止，不要加'请问还有什么我可以帮您的'。\n"
-            "- 对话性问题（你好/谢谢）直接一句话回答，不要用 Markdown 格式。\n\n"
-        )
-    return (
-        _intro
-        + _lr
-        + _conduct
-        + "## ⚠️ 实时数据规则（最重要！）\n"
-        "- 你**不知道任何股票的当前价格、涨跌幅、市值**。绝对不编造具体数字。\n"
-        "- 如用户问当前股价/市值：回答'我没有实时数据，请用 `/quote AAPL` 命令获取当前价格。'\n"
-        "- 美元用 $，人民币用 ¥/元，不要混用。\n\n"
-
-        "## 🔍 主动搜索规则\n"
-        "当用户问到以下内容时，**必须主动调用 `web_search` 工具**，不要用训练记忆回答：\n"
-        "- 近期财报、季报、业绩发布（如 'SPCX Q1财报'）\n"
-        "- 新上市/IPO 股票（如 SpaceX SPCX、任何 2025 年后上市的公司）\n"
-        "- 分析师评级调整、目标价变化\n"
-        "- 并购、重组、管理层变动等公司事件\n"
-        "- 宏观政策（利率决议、财政政策、地缘政治）\n"
-        "- 任何你不确定是否过时的信息\n"
-        "搜索后可再调用 `web_fetch` 读取具体文章内容，最终基于搜索结果回答，不要凭记忆猜测。\n\n"
-
-        "## 投资建议规则\n"
-        "当用户问'投资哪个公司'、'买哪只股票'时：\n"
-        "- 给出 2-3 个**具体的公司名称和股票代码**，基于你的训练知识做简短分析。\n"
-        "- 明确说明这是基于历史知识，不是基于当前实时数据。\n"
-        "- 提示用户用 `/analyze AAPL` 获取当前数据再做决策。\n"
-        "- 不要只讲投资原则，用户要的是具体建议，不是教科书。\n\n"
-
-        "## 公式和专业术语规则\n"
-        "- 公式必须使用 $$...$$ 格式（双美元符）；终端渲染引擎会自动将其转为 Unicode 文本。\n"
-        "  示例 (P/E):  $$P/E = \\frac{\\text{Stock Price}}{\\text{EPS}}$$\n"
-        "  示例 (ROE):  $$ROE = \\frac{\\text{Net Income}}{\\text{Shareholders' Equity}} \\times 100\\%$$\n"
-        "  示例 (DCF):  $$V = \\sum_{t=1}^{n} \\frac{FCF_t}{(1+WACC)^t} + \\frac{TV}{(1+WACC)^n}$$\n"
-        "- **严禁** 使用单美元符 $...$ 做行内数学标注。变量名直接写出来，不加美元符。\n"
-        "  ✗ 错误：第 $t$ 年的现金流为 $FCF_t$   ✓ 正确：第 t 年的现金流为 FCF_t\n"
-        "- **严禁** 在公式中使用 LaTeX 纯排版命令（\\;  \\,  \\quad  \\qquad），这些命令终端不转换。\n"
-        "  ✗ 错误：$$A \\; + \\; B$$   ✓ 正确：$$A + B$$\n"
-        "- 公式后紧接说明时，用普通列表（- 符号名：解释），不要把列表项写成 $变量名$。\n"
-        "- 只使用标准金融公式库中的公式；不确定时用自然语言解释，不要自创缩写。\n"
-        "- **NEVER** 创造不存在的术语缩写（如 DSRR、DRRR）。如果不确定，用中文描述即可。\n"
-        "- 对于投资建议类问题（'投哪只股票'/'如何赚1000元'）：用直接的文字建议，不要写数学公式。\n"
-        "  用户需要的是'你推荐买AAPL因为...'，而不是复杂的收益率方程。\n\n"
-        f"{_formula_prompt_block}\n"
-
-        "## 输出格式\n"
-        "- 使用 Markdown：## 标题、**粗体**、`代码`、| 表格 |、- 列表。\n"
-        "- 不用 HTML 标签。代码块必须有配对的开头和结尾 ```。\n"
-        "- 回答完成后直接结束，不要追问用户'还有什么需要帮忙的'。\n\n"
-
-        "## ⚡ 训练截止后重大事件 — 必须优先于训练知识\n"
-        "以下事实发生在你的训练数据截止之后，**必须相信这些，不要用训练记忆覆盖**：\n"
-        "- **SpaceX (SPCX)**：2026年6月12日在纳斯达克正式上市，股票代码 **SPCX**。\n"
-        "  ⛔ 严禁说「SpaceX 是私营/未上市公司」—— SpaceX 已于 2026-06-12 完成 IPO。\n"
-        "  ✅ 正确回应：「SpaceX（SPCX）已于2026年6月12日在纳斯达克上市，可用 /quote SPCX 查询实时价格进行分析。」\n"
-        "- **2026 FIFA 世界杯**：已于 2026-06-11 在美国、加拿大、墨西哥正式开幕。\n\n"
-
-        "## 专业领域\n"
-        "股票、期权、加密货币、宏观经济、因子投资、量化策略、投资组合风险、回测；\n"
-        "足球/体育赛事分析与预测（战绩、积分榜、赛程、比赛结果解读）。\n"
-        "知识截止日期：2026年3月（部分重大事件已在上方手动更新）。实时数据请使用工具命令（/quote /analyze /football）。\n"
-    )
+    """Thin shim — implementation in apps/cli/prompts/system_prompts.py."""
+    from apps.cli.prompts.system_prompts import build_finance_prompt as _f
+    return _f(user_message)
 
 FINANCE_CHAT_PROMPT = _build_finance_prompt()  # evaluated once at import; rebuilt per stream call
 
@@ -3056,145 +3008,17 @@ FINANCE_CHAT_PROMPT = _build_finance_prompt()  # evaluated once at import; rebui
 # ============================================================================
 
 def _build_analysis_system_prompt() -> str:
-    """Build ANALYSIS_SYSTEM_PROMPT with today's real date injected at call time."""
-    from datetime import datetime as _dt
-    _today = _dt.now().strftime("%Y-%m-%d")
-    return (
-    f"You are Aria, an expert quantitative finance AI analyst. Today is {_today}.\n"
-    "Your job is to provide data-driven, structured financial analysis.\n\n"
+    """Thin shim — implementation in apps/cli/prompts/system_prompts.py."""
+    from apps.cli.prompts.system_prompts import build_analysis_system_prompt as _f
+    return _f()
 
-    "## ABSOLUTE RULES\n"
-    "1. ALWAYS call get_market_data (or get_crypto_data / get_forex_data) FIRST to fetch live prices.\n"
-    "2. Call analyze_news to get recent news BEFORE forming your conclusion.\n"
-    "3. For NEW or RECENT events (IPOs, earnings just released, M&A announcements, analyst reports): "
-    "call web_search FIRST to get current information. Your training data is outdated — NEVER assume you know recent facts.\n"
-    "4. NEVER invent prices, P/E ratios, earnings, or any numeric data. Only use what tools return.\n"
-    "5. If a tool returns no data, say so explicitly — do NOT substitute made-up numbers.\n\n"
-
-    "## Tool Call Format\n"
-    "<tool_call>{\"name\": \"tool_name\", \"arguments\": {\"key\": \"value\"}}</tool_call>\n\n"
-
-    "## Available Tools\n"
-    "- web_search: {query, max_results?} — 🔍 SEARCH THE WEB for current news, events, filings, price targets.\n"
-    "  USE for: recent earnings, new IPOs, M&A, regulatory news, analyst upgrades, anything after training cutoff.\n"
-    "  EXAMPLE: web_search({\"query\": \"SPCX SpaceX Q1 2026 earnings revenue\"})\n"
-    "- web_fetch: {url, max_chars?} — fetch a webpage or article URL found from web_search results.\n"
-    "  When fetching multiple URLs, issue ALL web_fetch calls in ONE parallel tool_calls array — do NOT call them sequentially one at a time.\n"
-    "- get_market_data: {symbol, period} — fetch stock OHLCV, price, volume, technicals\n"
-    "- get_crypto_data: {symbol} — crypto price and market data\n"
-    "- get_forex_data: {pair} — forex rate e.g. USDCNY=X\n"
-    "- analyze_news: {symbol, query?, limit?} — recent news headlines and sentiment via Finnhub/yfinance\n"
-    "- calculate_factors: {symbol, period} — compute factor scores (momentum, value, quality)\n"
-    "- peer_comparison: {symbol, peers?} — compare stock against sector peers on PE/PB/ROE\n"
-    "- piotroski_fscore: {symbol} — financial health score 0-9\n"
-    "- altman_zscore: {symbol} — bankruptcy risk assessment\n"
-    "- get_options_chain: {symbol, expiry?, option_type?} — options data with IV, Greeks\n"
-    "- get_fear_greed_index: {} — CNN Fear & Greed market sentiment index\n"
-    "- broker_query: {query, broker_id?} — query connected broker account\n"
-    "  * query='account'   → cash balance, total assets, today's P&L\n"
-    "  * query='positions' → current holdings with cost/price/unrealized P&L\n"
-    "  * query='orders'    → order list (pass status='open'/'filled'/'all')\n"
-    "  Call this whenever the user asks about THEIR portfolio, holdings, balance, or orders.\n"
-    "  NEVER make up positions — always call broker_query first.\n"
-    "- broker_order: {symbol, side, quantity, price?, order_type?, confirmed?} — propose a trade\n"
-    "  ⚠️ ALWAYS call without confirmed=true first to show user a preview.\n"
-    "  Only set confirmed=true when the user explicitly says '确认下单' or 'confirm order'.\n"
-    "  NEVER set confirmed=true on your own initiative.\n\n"
-
-    "## Analysis Workflow\n"
-    "Step 0: Is this about a RECENT EVENT or NEW IPO? → call web_search FIRST.\n"
-    "Step 1: If user asks about their own portfolio/holdings → call broker_query FIRST.\n"
-    "Step 1b: If user wants to place an order → call broker_order with confirmed=false first.\n"
-    "Step 2: Fetch price/market data with get_market_data (or get_crypto_data).\n"
-    "Step 3: Fetch recent news with analyze_news (then web_search if analyze_news has no results).\n"
-    "Step 4: Optionally calculate_factors / peer_comparison / piotroski_fscore for deeper analysis.\n"
-    "Step 5: Write your structured analysis in Markdown ONLY (no tool call in the final step).\n\n"
-
-    "## Report Structure\n"
-    "Use REAL values from the data block above. If a value is missing, write `—` and briefly state the data source did not provide it.\n"
-    "NEVER write placeholder text like '$X.XX', 'X.XM', 'XX', or '[value]'.\n\n"
-    "### {Company Name} ({SYMBOL}) — Analysis\n"
-    "**Date**: {actual date today}  |  **Price**: {real price from data}\n\n"
-    "#### Price & Technicals\n"
-    "| Metric | Value |\n"
-    "| --- | --- |\n"
-    "| Current Price | {real price, e.g. $192.50} |\n"
-    "| Day Range | {real low} – {real high} |\n"
-    "| 52-Week Range | {52w low} – {52w high} |\n"
-    "| Volume | {real volume} |\n"
-    "| Trend | Bullish / Bearish / Neutral based on data |\n\n"
-    "#### Fundamental Snapshot\n"
-    "- **P/E Ratio**: {value from data, or — if unavailable}\n"
-    "- **Market Cap**: {value from data, or — if unavailable}\n"
-    "- **52W Performance**: {calculate from 52w range if available}\n\n"
-    "#### Recent News\n"
-    "List 2-3 real recent headlines about this stock. If no news data is available, write: 'No news data available.'\n\n"
-    "#### Analyst View\n"
-    "2-3 sentences of data-driven interpretation. No speculation. Base it only on the numbers above.\n\n"
-    "#### Risk Factors\n"
-    "2-3 concrete, specific risk factors relevant to this company.\n\n"
-
-    "## Output Format Rules\n"
-    "- NEVER use raw HTML tags (<br>, <div>, <span>, <table>, etc.).\n"
-    "- Use Markdown tables with header + separator row only.\n"
-    "- No duplicate sections. No repeated separators.\n"
-    "- Keep the entire response under 600 words.\n"
-    "- Do NOT say 'I will analyze' or 'Let me check' — just DO it (call the tool immediately).\n"
-    "- This is a CLI, not a chat app. Prioritize: metrics → table → signal → next actions.\n"
-    "- Skip preamble like 'Here is the analysis…'. Jump straight to data.\n"
-    "- End every analysis with a 'Next' section: 2-3 specific follow-up commands the user can run.\n"
-    "- DO NOT explain what AI/LLM is doing. Say 'loading data', 'running model', 'computing risk'.\n"
-    )
-
-# Backwards-compatible alias — callers that reference ANALYSIS_SYSTEM_PROMPT directly
-# get a freshly-dated string each time (avoids stale dates from module-load time).
-ANALYSIS_SYSTEM_PROMPT = property(lambda self: _build_analysis_system_prompt()) if False else _build_analysis_system_prompt()
+ANALYSIS_SYSTEM_PROMPT = _build_analysis_system_prompt()
 
 
 def _build_prefetched_analysis_prompt(nano: bool = False) -> str:
-    """System prompt for when real market data has already been injected.
-
-    nano=True → ultra-minimal prompt for 1-3B models (no template placeholders,
-    no complex structure — those cause small models to output literal braces).
-    nano=False → structured prompt for 7B+ models.
-    """
-    from datetime import datetime as _dt
-    today = _dt.now().strftime("%Y年%m月%d日")
-
-    if nano:
-        return (
-            f"你是 Aria，量化金融 AI。今天是 {today}。\n"
-            "用户消息前半部分已经包含真实行情数据；可能还包含技术指标数据。\n"
-            "只做最终分析，不解释数据获取过程。\n"
-            "输出五行以内：当前价/涨跌幅、RSI、MACD、支撑/阻力、短期建议。\n"
-            "如果某项没有数据，写 `—` 并说明数据缺失；不要写示例、占位符、Python、JSON 或工具调用。\n"
-            "RSI 规则：>70 为超买风险，<30 为超卖反弹可能，30-70 为中性。\n"
-            "MACD 规则：hist>0 偏多，hist<0 偏空。\n"
-        )
-
-    return (
-        f"你是 Aria，专业量化金融 AI 分析师。今天是 {today}。\n\n"
-
-        "## ⚠️ 重要：数据已经预取完毕，禁止调用工具\n"
-        "用户消息中包含真实行情和技术指标数据。\n"
-        "你的任务是解读这些数据并给出专业分析，不要试图调用任何工具或 API。\n\n"
-
-        "## 分析规则\n"
-        "1. 价格/指标数字：只能使用用户消息中的数值，逐字引用，不得修改。\n"
-        "2. 支撑位/阻力位：从消息「关键价位」部分提取，给出具体价格（例如 USD 721.50）。\n"
-        "3. RSI 解读：<30 超卖、>70 超买、30-70 中性——基于消息中的实际值判断。\n"
-        "4. MACD 解读：hist > 0 多头金叉，hist < 0 空头死叉——基于消息中的实际值。\n"
-        "5. 短期建议：给出买入/观望/做空之一，并说明依据（引用具体数值）。\n"
-        "6. 如果消息中没有某个数值，写 `—` 并说明数据缺失，不要猜测。\n\n"
-
-        "## 输出格式\n"
-        "以 Markdown 输出：\n"
-        "  - 第一行：标的名称 + 当前价 + 涨跌幅（从消息中提取真实数字）\n"
-        "  - 技术指标表：RSI、MACD hist（含信号判断）\n"
-        "  - 关键价位：支撑位列表、阻力位列表（具体价格）\n"
-        "  - 短期建议：操作 + 依据 + 风险\n"
-        "直接开始输出，不要说'好的'或'让我分析'。\n"
-    )
+    """Thin shim — implementation in apps/cli/prompts/system_prompts.py."""
+    from apps.cli.prompts.system_prompts import build_prefetched_analysis_prompt as _f
+    return _f(nano=nano)
 
 
 # ── LaTeX → plain-text converter ────────────────────────────────────────────
@@ -3289,124 +3113,23 @@ def _strip_latex(text: str) -> str:
     return text
 
 
-# Detect if a message is primarily a coding/scripting request
-_CODING_KEYWORDS = (
-    "write", "generate", "create", "script", "code", "plot", "backtest",
-    "策略", "代码", "回测", "编写", "生成", "k线", "k-line", "kline",
-    "analyze and save", "analysis script", "python", "dashboard",
-    "写一个", "生成代码", "写代码", "编写代码",
+# Intent classification — thin shims over apps/cli/intent.py
+from apps.cli.intent import (
+    CODING_KEYWORDS as _CODING_KEYWORDS,
+    ANALYSIS_KEYWORDS as _ANALYSIS_KEYWORDS,
+    ANALYSIS_NON_STOCK_TOPICS as _ANALYSIS_NON_STOCK_TOPICS,
+    GENERAL_KNOWLEDGE_KEYWORDS as _GENERAL_KNOWLEDGE_KEYWORDS,
+    FINANCE_CONCEPT_TERMS as _FINANCE_CONCEPT_TERMS,
+    SPORTS_KEYWORDS as _SPORTS_KEYWORDS,
+    is_coding_request as _is_coding_request,
+    is_analysis_request as _is_analysis_request,
+    is_general_knowledge as _is_general_knowledge,
+    is_sports_query as _is_sports_query,
 )
-
-# Keywords that indicate a stock/market analysis request (needs ANALYSIS prompt)
-_ANALYSIS_KEYWORDS = (
-    "analyze", "analysis", "分析", "研究", "评估", "研判",
-    "技术面", "基本面", "走势", "趋势", "行情",
-    "技术分析", "技术指标", "支撑", "阻力", "支撑位", "阻力位",
-    "rsi", "macd", "bollinger", "布林", "均线", "kdj", "kdj指标",
-    "stock analysis", "technical analysis", "fundamental",
-    "valuation", "estimate", "outlook", "投资建议", "买入", "卖出",
-    "看多", "看空", "多头", "空头", "金叉", "死叉",
-)
-
-# Topics that look like analysis but are NOT stock technical analysis —
-# they should fall through to "finance" or "general" intent instead of
-# triggering the stock-analysis lite prompt (which only works when market
-# data has been injected and produces garbage otherwise).
-_ANALYSIS_NON_STOCK_TOPICS = (
-    # Real-estate
-    "房价", "楼市", "房产", "房地产", "租金", "二手房", "新房", "商铺", "折旧",
-    # Macro / policy — generic words like "分析" shouldn't force stock prompt
-    "宏观", "宏观经济", "宏观政策", "宏观角度", "经济政策", "货币政策",
-    "财政政策", "gdp", "通胀", "通货膨胀", "cpi", "ppi", "利率政策",
-    # Non-stock assets that don't have chart data injected
-    "黄金", "原油", "大宗商品", "汇率", "外汇", "美元指数",
-)
-
-# Keywords that indicate a pure general-knowledge question — NO tools needed
-_GENERAL_KNOWLEDGE_KEYWORDS = (
-    "什么是", "what is", "what are", "how does", "explain", "define",
-    "解释", "定义", "概念", "原理", "介绍", "步骤", "流程", "怎么",
-    "如何理解", "是什么", "为什么", "区别", "difference between",
-    "tell me about", "describe", "how to", "注册", "成立", "公司",
-    "基本概念", "简介", "举例", "example", "例子",
-    # Sports / football
-    "足球", "篮球", "网球", "棒球", "橄榄球", "排球", "乒乓球", "羽毛球",
-    "世界杯", "欧冠", "英超", "德甲", "西甲", "意甲", "法甲", "bundesliga",
-    "比赛", "赛事", "比分", "进球", "射门", "门将", "球队", "球员", "教练",
-    "联赛", "积分榜", "赛程", "晋级", "淘汰赛", "决赛", "半决赛",
-    "football", "soccer", "match", "goal", "league", "champion",
-    "nba", "nfl", "mlb", "f1", "赛车", "奥运", "olympic",
-)
-
-# Finance/quant concepts — must NOT be classified as "general knowledge" even
-# if they match patterns like "是什么". They need the full FINANCE_CHAT_PROMPT.
-_FINANCE_CONCEPT_TERMS = (
-    "dcf", "pe", "pb", "ps", "ev", "ebitda", "ebit", "wacc", "capm",
-    "beta", "alpha", "sharpe", "sortino", "var", "cvar", "drawdown",
-    "black-scholes", "bs模型", "期权", "期货", "衍生品", "套利",
-    "量化", "quant", "回测", "factor", "因子", "ic值", "ir值",
-    "市盈率", "市净率", "净利润", "营业收入", "自由现金流", "贴现",
-    "折现", "估值", "valuation", "ipo", "etf", "reits", "债券",
-    "利率", "收益率", "久期", "凸性", "信用利差", "风险溢价",
-    "动量", "均值回归", "布林带", "macd", "rsi", "kdj", "技术指标",
-    "北向资金", "融资融券", "股指期货", "沪深300", "中证500",
-)
-
-def _is_general_knowledge(message: str) -> bool:
-    """Return True for pure knowledge/explanation questions that don't need tools.
-
-    Finance/quant terms are explicitly excluded so they keep the full
-    FINANCE_CHAT_PROMPT even when phrased as "X是什么" explanatory questions.
-
-    Pure macro/conceptual analysis questions ("宏观角度分析", "值得投资吗") are
-    treated as general knowledge: they are discussion questions, not live-quote
-    lookups.  Routing them to the finance prompt (with tools) causes the model
-    to fetch live prices and output the stock-analysis template instead of
-    giving a thoughtful macro commentary.
-    """
-    if _is_coding_request(message) or _is_analysis_request(message):
-        return False
-    low = message.lower().strip()
-    # Any finance concept → use finance prompt, not the minimal general prompt
-    if any(term in low for term in _FINANCE_CONCEPT_TERMS):
-        return False
-    # Macro / conceptual analysis phrases → treat as general (no tools needed)
-    _macro_conceptual = (
-        "宏观", "宏观经济", "宏观政策", "宏观角度", "宏观分析",
-        "货币政策", "财政政策", "值得投资吗", "应该投资吗", "是否值得",
-        "投资逻辑", "长期展望", "未来前景",
-    )
-    if (any(k in low for k in _macro_conceptual)
-            and not any(c.isdigit() for c in low)):
-        # Only promote to "general" if there's no ticker/price signal (no digits)
-        # so "/quote BTC" still goes to realtime, not general.
-        return True
-    # Very short messages or greetings → always general (low cost, fast)
-    if len(low) < 30 and not any(c.isdigit() for c in low):
-        return True
-    return any(k in low for k in _GENERAL_KNOWLEDGE_KEYWORDS)
-
-
-_SPORTS_KEYWORDS = (
-    "足球", "世界杯", "欧冠", "英超", "德甲", "西甲", "意甲", "法甲",
-    "篮球", "nba", "网球", "f1", "赛车", "奥运", "olympic",
-    "比赛", "赛事", "比分", "进球", "球队", "球员", "联赛",
-    "football", "soccer", "world cup", "champions league",
-    "match", "score", "league", "premier league", "bundesliga",
-)
-
-
-def _is_sports_query(message: str) -> bool:
-    """Return True if the message is about sports/football."""
-    low = message.lower()
-    return any(k in low for k in _SPORTS_KEYWORDS)
 
 
 def _try_prefetch_sports_data(message: str) -> str:
-    """
-    Attempt to fetch live sports data relevant to the query.
-    Returns a formatted context string (may be empty if API unavailable).
-    """
+    """Attempt to fetch live sports data relevant to the query."""
     try:
         from football_data_client import get_sports_context_for_query
         ctx = get_sports_context_for_query(message)
@@ -3415,47 +3138,59 @@ def _try_prefetch_sports_data(message: str) -> str:
         return ""
 
 
-def _is_coding_request(message: str) -> bool:
-    """Return True if message looks like a coding/file-generation task."""
-    low = message.lower()
-    if any(k in low for k in _CODING_KEYWORDS):
-        return True
-    # Also treat /code, /gen-* skills as coding
-    if low.startswith("/code") or low.startswith("/gen-"):
-        return True
-    return False
-
-
-def _is_analysis_request(message: str) -> bool:
-    """Return True if message is a stock/crypto technical analysis request (not coding).
-
-    Excludes real-estate, pure macro, and sports questions: those match keywords
-    like '分析'/'走势' but should NOT use the stock technical-analysis template
-    (which requires injected market data to be useful).
-    """
-    if _is_coding_request(message):
-        return False
-    low = message.lower()
-    # Real-estate / macro-only topics → NOT a stock analysis request
-    if any(k in low for k in _ANALYSIS_NON_STOCK_TOPICS):
-        return False
-    # Sports / tournament queries → route to general (handled by sports injection)
-    if _is_sports_query(message):
-        return False
-    return any(k in low for k in _ANALYSIS_KEYWORDS)
-
-
 def _load_project_context() -> str:
-    """Load ARIA.md / CLAUDE.md from cwd if present (max 8KB)."""
-    for name in ("ARIA.md", ".aria.md", "CLAUDE.md"):
-        p = pathlib.Path.cwd() / name
-        if p.is_file():
-            try:
-                content = p.read_text(encoding="utf-8")[:8192]
-                return f"\n\n## Project Context ({name})\n{content}"
-            except Exception:
-                pass
-    return ""
+    """Load ARIA.md / CLAUDE.md by walking up from cwd (Claude Code style).
+
+    Search order per directory: ARIA.md → .aria.md → CLAUDE.md
+    Walks up at most 5 levels, stops at home dir.
+    Multiple files are concatenated (child file takes precedence at top).
+    Total cap: 12KB.
+    """
+    _MAX_BYTES = 12288
+    _MAX_LEVELS = 5
+    _NAMES = ("ARIA.md", ".aria.md", "CLAUDE.md")
+
+    home = pathlib.Path.home()
+    cwd  = pathlib.Path.cwd().resolve()
+
+    found: list[tuple[pathlib.Path, str]] = []  # (file_path, content)
+    current = cwd
+    for _ in range(_MAX_LEVELS):
+        for name in _NAMES:
+            p = current / name
+            if p.is_file():
+                try:
+                    content = p.read_text(encoding="utf-8")
+                    found.append((p, content))
+                except Exception:
+                    pass
+                break  # only one file per directory level
+        if current == home or current.parent == current:
+            break
+        current = current.parent
+
+    if not found:
+        return ""
+
+    # Child directories first (most specific context wins), then parents
+    blocks: list[str] = []
+    total = 0
+    for fpath, content in found:
+        rel = fpath.relative_to(home) if fpath.is_relative_to(home) else fpath
+        snippet = content[:(_MAX_BYTES - total)]
+        blocks.append(f"### {rel}\n{snippet}")
+        total += len(snippet)
+        if total >= _MAX_BYTES:
+            break
+
+    return "\n\n## Project Context\n" + "\n\n".join(blocks)
+
+
+def _refresh_project_context() -> str:
+    """Re-scan for ARIA.md (call at session start or /reload)."""
+    global _PROJECT_CONTEXT
+    _PROJECT_CONTEXT = _load_project_context()
+    return _PROJECT_CONTEXT
 
 
 # Cache project context at module level (refreshed per session)
@@ -3476,247 +3211,29 @@ def _fix_json_string(raw: str) -> str:
 
 
 def _parse_text_tool_calls(text: str) -> list:
-    """Parse tool calls from AI response text.
-
-    Supports formats:
-    1. <tool_call>{"name": "...", "arguments": {...}}</tool_call>
-    2. ```json\n{"name": "...", "arguments": {...}}\n```
-    3. Bare JSON: {"name": "...", "arguments": {...}}
-    """
-    calls = []
-
-    def _try_parse(raw: str) -> dict:
-        """Try to parse JSON, with auto-fix for common LLM output issues."""
-        try:
-            return json.loads(raw)
-        except json.JSONDecodeError:
-            pass
-        # Try fixing triple quotes and other issues
-        try:
-            return json.loads(_fix_json_string(raw))
-        except json.JSONDecodeError:
-            pass
-        return None
-
-    # Format 1: <tool_call>...</tool_call> tags
-    tag_pattern = re.compile(r'<tool_call>\s*([\s\S]*?)\s*</tool_call>', re.DOTALL)
-    for m in tag_pattern.finditer(text):
-        obj = _try_parse(m.group(1))
-        if obj:
-            name = obj.get("name", "")
-            args = obj.get("arguments", {})
-            if name and name in LOCAL_TOOLS:
-                if isinstance(args, str):
-                    try:
-                        args = json.loads(args)
-                    except json.JSONDecodeError:
-                        args = json.loads(_fix_json_string(args))
-                calls.append({"tool": name, "params": args})
-
-    if calls:
-        return calls
-
-    # Format 2: code-fenced JSON (```json ... ```)
-    fence_pattern = re.compile(r'```(?:json)?\s*\n([\s\S]*?)\n\s*```', re.DOTALL)
-    for m in fence_pattern.finditer(text):
-        obj = _try_parse(m.group(1))
-        if obj:
-            name = obj.get("name", "")
-            args = obj.get("arguments", {})
-            if name and name in LOCAL_TOOLS:
-                if isinstance(args, str):
-                    args = _try_parse(args) or {}
-                calls.append({"tool": name, "params": args})
-
-    if calls:
-        return calls
-
-    # Format 3: bare JSON — try to extract and parse JSON objects containing "name" + "arguments"
-    # Handle multi-line pretty-printed JSON by finding balanced braces
-    brace_depth = 0
-    json_start = -1
-    for i, ch in enumerate(text):
-        if ch == '{':
-            if brace_depth == 0:
-                json_start = i
-            brace_depth += 1
-        elif ch == '}':
-            brace_depth -= 1
-            if brace_depth == 0 and json_start >= 0:
-                candidate = text[json_start:i + 1]
-                obj = _try_parse(candidate)
-                if obj:
-                    name = obj.get("name", "")
-                    args = obj.get("arguments", {})
-                    if name and name in LOCAL_TOOLS:
-                        if isinstance(args, str):
-                            args = _try_parse(args) or {}
-                        calls.append({"tool": name, "params": args})
-                json_start = -1
-
-    return calls
+    """Thin shim — implementation in apps/cli/message_processing.py."""
+    from apps.cli.message_processing import parse_text_tool_calls as _f
+    return _f(text)
 
 
 def _strip_tool_call_tags(text: str) -> str:
-    """Remove tool calls from display text (tags, fences, bare JSON, surrounding headers)."""
-    # Remove tagged tool calls
-    text = re.sub(r'<tool_call>[\s\S]*?</tool_call>', '', text, flags=re.DOTALL)
-    # Remove code-fenced JSON tool calls
-    def _remove_fence(m):
-        try:
-            obj = json.loads(m.group(1))
-            if obj.get("name") in LOCAL_TOOLS and "arguments" in obj:
-                return ''
-        except (json.JSONDecodeError, TypeError):
-            pass
-        return m.group(0)
-    text = re.sub(r'```(?:json)?\s*\n([\s\S]*?)\n\s*```', _remove_fence, text, flags=re.DOTALL)
-    # Remove bare JSON tool calls ({"name": "write_file", ...})
-    def _remove_bare(m):
-        try:
-            obj = json.loads(m.group(0))
-            if obj.get("name") in LOCAL_TOOLS and "arguments" in obj:
-                return ''
-        except (json.JSONDecodeError, TypeError):
-            pass
-        return m.group(0)
-    text = re.sub(r'\{[^{}]*"name"\s*:\s*"[^"]*"[^{}]*"arguments"\s*:\s*\{[\s\S]*?\}\s*\}', _remove_bare, text)
-    # Remove markdown headers that introduce tool calls (### Step N: ...)
-    text = re.sub(r'###\s+Step\s+\d+.*\n?', '', text)
-    # Remove "### 工具调用示例" and similar
-    text = re.sub(r'###\s+.*工具调用.*\n?', '', text)
-    # Clean up excessive blank lines
-    text = re.sub(r'\n{3,}', '\n\n', text)
-    return text.strip()
+    """Thin shim — implementation in apps/cli/message_processing.py."""
+    from apps.cli.message_processing import strip_tool_call_tags as _f
+    return _f(text)
 
 
 def _compact_messages(messages: list, max_chars: int = 0, model_key: str = "qwen7b") -> list:
-    """Smart synchronous compaction for the agentic tool loop.
-
-    Strategy (in order of priority):
-    1. Always keep: system prompt + last 8 messages (recent context).
-    2. For middle tool results: extract status line + error details (if any),
-       drop verbose success payloads.
-    3. For middle assistant turns: keep first paragraph + last sentence so
-       the model retains decisions made but not intermediate reasoning.
-    4. Error markers are never discarded — they are critical for self-correction.
-
-    For deep AI-driven summarisation use _smart_compact_async() instead.
-    """
-    if max_chars <= 0:
-        _ctx = get_model_cfg(model_key).get("num_ctx", 16384)
-        max_chars = int(_ctx * 3 * 0.80)
-    total = sum(len(m.get("content", "")) for m in messages)
-    if total <= max_chars:
-        return messages
-
-    if len(messages) <= 8:
-        return messages
-
-    system = messages[0]
-    keep_tail = 8
-    middle = messages[1:-keep_tail]
-    tail = messages[-keep_tail:]
-
-    compacted = [system]
-    for msg in middle:
-        content = msg.get("content", "")
-        role = msg.get("role", "")
-
-        if role == "tool" and len(content) > 200:
-            lines = content.splitlines()
-            kept: list = []
-            has_error = False
-            for ln in lines[:30]:
-                stripped = ln.strip()
-                if not stripped:
-                    continue
-                low = stripped.lower()
-                if any(kw in low for kw in ("error", "traceback", "exception", "错误", "失败")):
-                    kept.append(stripped)
-                    has_error = True
-                elif len(kept) < 4 and len(stripped) > 8:
-                    kept.append(stripped)
-            summary = " | ".join(kept[:4]) if kept else content[:150]
-            flag = " [⚠ error]" if has_error else " [compacted]"
-            compacted.append({"role": role, "content": f"{summary}{flag}"})
-
-        elif role == "assistant" and len(content) > 500:
-            paras = [p.strip() for p in content.split("\n\n") if p.strip()]
-            if len(paras) >= 2:
-                head = paras[0][:280]
-                tail_para = paras[-1][-180:]
-                compacted.append({"role": role,
-                                   "content": f"{head}\n…\n{tail_para} [compacted]"})
-            else:
-                compacted.append({"role": role,
-                                   "content": content[:350] + "… [compacted]"})
-        else:
-            compacted.append(msg)
-
-    compacted.extend(tail)
-    return compacted
+    """Thin shim — implementation in apps/cli/message_processing.py."""
+    from apps.cli.message_processing import compact_messages as _f
+    return _f(messages, max_chars=max_chars, model_key=model_key)
 
 
 
 
 def _build_broker_context_block() -> str:
-    """
-    Return a compact broker context block for injection into the system prompt.
-    Called once per message when a broker is connected, so the LLM knows the
-    user's live financial position without needing a tool call for every question.
-
-    Returns "" if no broker is connected or data fetch fails.
-    """
-    if not _HAS_BROKERS:
-        return ""
-    try:
-        reg = _get_broker_registry()
-        if not reg:
-            return ""
-        broker = reg.active()
-        if not broker or not broker.is_connected:
-            return ""
-
-        parts = [f"## 券商账户实时快照 [{broker.label}]"]
-
-        # Account
-        try:
-            acct = broker.account_info()
-            parts.append(
-                f"- 账户: {acct.masked_account}  货币: {acct.currency}\n"
-                f"- 总资产: {acct.total_assets:,.2f}  可用现金: {acct.cash:,.2f}"
-                f"  持仓市值: {acct.market_value:,.2f}"
-            )
-            if acct.pnl_today:
-                parts.append(f"- 当日盈亏: {acct.pnl_today:+,.2f}")
-        except Exception:
-            pass
-
-        # Positions (compact, top 10 by market value)
-        try:
-            positions = broker.positions()
-            if positions:
-                positions_sorted = sorted(positions, key=lambda p: -abs(p.market_value))[:10]
-                parts.append("\n持仓明细（市值降序，最多10条）：")
-                for p in positions_sorted:
-                    pnl_str = f"  盈亏 {p.pnl:+,.2f} ({p.pnl_pct:+.2f}%)" if p.pnl else ""
-                    parts.append(
-                        f"  {p.symbol} {p.name[:8] if p.name else ''}  "
-                        f"持仓 {p.quantity:.0f}  成本 {p.cost_price:.3f}  "
-                        f"现价 {p.current_price:.3f}  市值 {p.market_value:,.2f}{pnl_str}"
-                    )
-        except Exception:
-            pass
-
-        if len(parts) <= 1:
-            return ""
-
-        parts.append("\n(以上为实时账户数据，无需再调用 broker_query 获取基本账户/持仓信息，可直接引用。)")
-        return "\n".join(parts)
-
-    except Exception:
-        return ""
+    """Thin shim — implementation in apps/cli/message_processing.py."""
+    from apps.cli.message_processing import build_broker_context_block as _f
+    return _f()
 
 
 
@@ -4088,162 +3605,18 @@ async def stream_chat(base_url: str, message: str, history: list,
                       on_token=None, on_thinking=None, on_tool_call=None,
                       on_tool_result=None, on_status=None,
                       cancel_event: asyncio.Event = None) -> dict:
-    """Stream AI chat via SSE with cancel support and user context."""
-    import aiohttp
-    url = f"{base_url}/api/v2/ai/chat/stream"
+    """Thin shim — implementation lives in apps/cli/providers/llm/sse_stream.py."""
+    from apps.cli.providers.llm.sse_stream import stream_chat as _stream_chat
+    return await _stream_chat(
+        base_url, message, history,
+        model=model, thinking_mode=thinking_mode,
+        user_context=user_context, auth_token=auth_token,
+        on_token=on_token, on_thinking=on_thinking,
+        on_tool_call=on_tool_call, on_tool_result=on_tool_result,
+        on_status=on_status, cancel_event=cancel_event,
+        project_context=_PROJECT_CONTEXT,
+    )
 
-    payload = {
-        "message": message,
-        "conversation_history": history[-20:],
-        "model": model,
-        "thinking_mode": thinking_mode,
-        "stream": True,
-    }
-    if user_context:
-        if _PROJECT_CONTEXT:
-            user_context = {**user_context, "project_context": _PROJECT_CONTEXT}
-        payload["user_context"] = user_context
-
-    headers = {}
-    if auth_token:
-        headers["Authorization"] = f"Bearer {auth_token}"
-
-    full_response = ""
-    thinking_content = ""
-    tools_used = []
-    sources = []
-    tool_calls_pending = []
-    usage = {"prompt_tokens": 0, "completion_tokens": 0, "thinking_tokens": 0}
-
-    # Retry on transient connection errors (not HTTP errors, not cancellation)
-    _max_connect_retries = 2
-    _last_connect_error = None
-    for _attempt in range(_max_connect_retries + 1):
-        if cancel_event and cancel_event.is_set():
-            return {"success": True, "response": "", "cancelled": True,
-                    "tools_used": [], "sources": [], "usage": usage}
-        # Reset per-attempt accumulators
-        full_response = ""
-        thinking_content = ""
-        tools_used = []
-        sources = []
-        tool_calls_pending = []
-        usage = {"prompt_tokens": 0, "completion_tokens": 0, "thinking_tokens": 0}
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, json=payload, headers=headers,
-                                        timeout=aiohttp.ClientTimeout(total=120)) as resp:
-                    if resp.status != 200:
-                        error_text = await resp.text()
-                        return {"success": False, "error": f"HTTP {resp.status}: {error_text[:200]}"}
-
-                    buffer = ""
-                    event_type = "delta"
-                    async for chunk in resp.content:
-                        if cancel_event and cancel_event.is_set():
-                            try:
-                                await session.post(f"{base_url}/api/v2/ai/chat/cancel",
-                                                   headers=headers,
-                                                   timeout=aiohttp.ClientTimeout(total=3))
-                            except Exception:
-                                pass
-                            return {"success": True, "response": full_response,
-                                    "cancelled": True, "tools_used": tools_used, "sources": sources,
-                                    "usage": usage}
-
-                        text = chunk.decode("utf-8", errors="ignore")
-                        buffer += text
-
-                        while "\n" in buffer:
-                            line, buffer = buffer.split("\n", 1)
-                            line = line.strip()
-
-                            if not line or line.startswith(":"):
-                                continue
-                            if line.startswith("event:"):
-                                event_type = line[6:].strip()
-                                continue
-                            if line.startswith("data:"):
-                                data_str = line[5:].strip()
-                                if data_str == "[DONE]":
-                                    break
-                                try:
-                                    data = json.loads(data_str)
-                                except json.JSONDecodeError:
-                                    continue
-
-                                # Detect backend error response: {"success": false, "error": "..."}
-                                # These don't have a "type" field and would otherwise be
-                                # silently parsed as empty "delta" events.
-                                if data.get("success") is False:
-                                    err_msg = data.get("error", "Backend error")
-                                    return {"success": False, "error": f"Backend: {err_msg}"}
-
-                                evt = data.get("type", event_type)
-
-                                if evt == "delta":
-                                    token = data.get("text", data.get("content", ""))
-                                    if token:
-                                        full_response += token
-                                        usage["completion_tokens"] += 1
-                                        if on_token:
-                                            on_token(token)
-                                elif evt == "thinking_content":
-                                    tc = data.get("content", "")
-                                    if tc:
-                                        thinking_content += tc
-                                        usage["thinking_tokens"] += 1
-                                        if on_thinking:
-                                            on_thinking(tc)
-                                elif evt == "tool_call":
-                                    tool = data.get("tool", data.get("name", ""))
-                                    params = data.get("params", {})
-                                    tools_used.append(tool)
-                                    tool_calls_pending.append({"tool": tool, "params": params})
-                                    if on_tool_call:
-                                        on_tool_call(tool, params)
-                                elif evt == "tool_result":
-                                    if on_tool_result:
-                                        on_tool_result(data.get("tool", ""), data.get("summary", ""))
-                                elif evt == "status":
-                                    if on_status:
-                                        on_status(data.get("state", ""), data.get("message", ""))
-                                elif evt == "final":
-                                    full_response = data.get("answer", full_response)
-                                    sources = data.get("sources", [])
-                                    # Capture usage stats if provided
-                                    if data.get("usage"):
-                                        u = data["usage"]
-                                        usage["prompt_tokens"] = u.get("prompt_tokens", usage["prompt_tokens"])
-                                        usage["completion_tokens"] = u.get("completion_tokens", usage["completion_tokens"])
-                                elif evt == "error":
-                                    return {"success": False, "error": data.get("message", "Unknown error")}
-
-            # Successful stream — return result
-            return {
-                "success": True, "response": full_response, "thinking": thinking_content,
-                "tools_used": tools_used, "sources": sources,
-                "tool_calls_pending": tool_calls_pending, "usage": usage,
-            }
-
-        except asyncio.TimeoutError:
-            return {"success": False, "error": "Request timed out (120s)"}
-        except asyncio.CancelledError:
-            return {"success": True, "response": full_response, "cancelled": True,
-                    "tools_used": tools_used, "sources": sources, "usage": usage}
-        except aiohttp.ClientConnectorError as e:
-            _last_connect_error = str(e)
-            if _attempt < _max_connect_retries:
-                wait = 1.5 * (_attempt + 1)
-                await asyncio.sleep(wait)
-                if on_status:
-                    on_status("retry", f"Connection failed, retrying ({_attempt + 2}/{_max_connect_retries + 1})...")
-                continue  # retry
-            break
-        except Exception as e:
-            return {"success": False, "error": str(e)}
-
-    return {"success": False, "error": f"Connection failed after {_max_connect_retries + 1} attempts: {_last_connect_error}"}
 
 
 def _extract_code_block(text: str) -> Optional[str]:
@@ -5223,6 +4596,8 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
             "/trace":     (self.cmd_trace,     "Show runtime tool trace"),
             "/health":    (self.cmd_health,    "Check backend health"),
             "/clear":     (self.cmd_clear,     "Clear conversation"),
+            "/btw":       (self.cmd_btw,       "Side question (no history): /btw what was that function?"),
+            "/recap":     (self.cmd_recap,     "Session recap: summarise what we've done so far"),
             "/history":   (self.cmd_history,   "Show conversation history"),
             "/compact":   (self.cmd_compact,   "Smart compact: /compact [--hard]"),
             "/regen":     (self.cmd_regen,     "Regenerate last AI response"),
@@ -5446,6 +4821,8 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
         "/load":      ("Usage: /load <session_id>", ["/load abc123"]),
         "/sessions":  ("Usage: /sessions", ["/sessions"]),
         "/clear":     ("Usage: /clear", ["/clear"]),
+        "/btw":       ("Usage: /btw <question>  (ephemeral — not added to history)", ["/btw what was the variable name?", "/btw which file has the config?"]),
+        "/recap":     ("Usage: /recap  (session summary)", ["/recap"]),
         "/code":      ("Usage: /code <description> [--save file.py]", ["/code AAPL momentum backtest --save bt.py"]),
         "/write":     ("Usage: /write [--stage] <file_path>", ["/write report.py", "/write --stage strategy.py"]),
         # ── Financial analysis ──────────────────────────────────────────────
@@ -6812,6 +6189,86 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
         os.system("clear" if os.name == "posix" else "cls")
         console.print("[dim]Conversation cleared[/dim]" if HAS_RICH else "Cleared")
 
+    def cmd_btw(self, args: str):
+        """/btw <question> — Quick side question shown in overlay, does NOT enter conversation history."""
+        q = args.strip()
+        if not q:
+            console.print("[dim]/btw <question>  — quick question without polluting history[/dim]" if HAS_RICH else "/btw <question>")
+            return
+        conv = self.terminal.conversation
+        if not conv:
+            console.print("[dim](no conversation context yet)[/dim]" if HAS_RICH else "(no context)")
+            return
+        # Build a condensed context summary from recent history (read-only, no append)
+        _ctx_slice = conv[-6:] if len(conv) >= 6 else conv
+        _ctx = "\n".join(
+            f"{m['role'].upper()}: {str(m.get('content', ''))[:300]}"
+            for m in _ctx_slice
+        )
+        _btw_prompt = (
+            f"[Side question — answer briefly, do not reference this note]\n"
+            f"Context from conversation:\n{_ctx}\n\nQuestion: {q}"
+        )
+        # Run synchronously using the sync stream helper
+        if HAS_RICH:
+            from rich.panel import Panel as _Panel
+            from rich import box as _rbox
+            console.print(_Panel(f"[dim]{q}[/dim]", title="[dim]/btw[/dim]", box=_rbox.ROUNDED, border_style="dim"))
+        import asyncio as _aio
+        async def _ask_btw():
+            _answer_parts: list[str] = []
+            try:
+                async for chunk in stream_chat(
+                    self.terminal.config.get("ollama_url", "http://localhost:11434"),
+                    _btw_prompt,
+                    [],   # empty history — side question only
+                    model=self.terminal.config.get("model", ""),
+                    config=self.terminal.config,
+                    tools=[],
+                ):
+                    if chunk.get("type") == "content":
+                        _answer_parts.append(chunk.get("content", ""))
+            except Exception as _e:
+                _answer_parts = [f"(error: {_e})"]
+            return "".join(_answer_parts)
+        try:
+            loop = _aio.get_event_loop()
+            answer = loop.run_until_complete(_ask_btw()) if not loop.is_running() else "(run /btw from interactive prompt)"
+        except Exception:
+            answer = "(could not get answer)"
+        if HAS_RICH:
+            from rich.panel import Panel as _Panel
+            from rich import box as _rbox
+            console.print(_Panel(answer.strip(), title="[dim]↩ btw[/dim]", box=_rbox.ROUNDED, border_style="dim #C08050"))
+        else:
+            print(f"\n  [btw] {answer.strip()}\n")
+        # NOT added to self.terminal.conversation — ephemeral by design
+
+    def cmd_recap(self, args: str):
+        """/recap — Summarise the current session in one paragraph."""
+        conv = self.terminal.conversation
+        if not conv:
+            console.print("[dim]No conversation yet[/dim]" if HAS_RICH else "No conversation")
+            return
+        turns = len([m for m in conv if m.get("role") == "user"])
+        topics: list[str] = []
+        for m in conv:
+            if m.get("role") == "user":
+                snippet = str(m.get("content", ""))[:60].strip()
+                if snippet:
+                    topics.append(snippet)
+        if HAS_RICH:
+            from rich.panel import Panel as _Panel
+            from rich import box as _rbox
+            body = f"[dim]{turns} 轮对话[/dim]\n"
+            for i, t in enumerate(topics[-6:], 1):
+                body += f"  [dim]{i}.[/dim] {t}…\n"
+            console.print(_Panel(body.rstrip(), title="[bold]会话摘要[/bold]", box=_rbox.ROUNDED, border_style="dim"))
+        else:
+            print(f"Session: {turns} turns")
+            for i, t in enumerate(topics[-6:], 1):
+                print(f"  {i}. {t}…")
+
     def cmd_history(self, args: str):
         if not self.terminal.conversation:
             console.print("[dim]No conversation history[/dim]" if HAS_RICH else "No history")
@@ -7439,14 +6896,19 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
     def cmd_hooks(self, args: str):
         """Manage Aria event hooks — scripts run on specific events.
 
-        Hooks live in ~/.arthera/hooks/ or .aria/hooks/ (project-local).
-        Events: prompt_submit, response_done, tool_use, compact
+        Two hook systems:
+          1. JSON config: ~/.arthera/hooks.json  (recommended)
+             Events: PreToolUse  PostToolUse  ResponseDone  SessionStart  SessionEnd
+          2. Shell scripts: ~/.arthera/hooks/<event>.sh  (legacy)
 
         Usage:
-            /hooks list         — show all configured hooks
-            /hooks edit <event> — open hook script in $EDITOR
-            /hooks run <event>  — manually trigger a hook
+            /hooks list           — show all hooks (JSON + shell)
+            /hooks edit           — open ~/.arthera/hooks.json in $EDITOR
+            /hooks edit <event>   — open shell hook script in $EDITOR (legacy)
+            /hooks reload         — reload hooks.json without restarting
+            /hooks run <event>    — manually trigger a hook
         """
+        global _JSON_HOOKS  # modified by reload and edit subcommands
         hooks_dirs = [
             CONFIG_DIR / "hooks",
             pathlib.Path.cwd() / ".aria" / "hooks",
@@ -7455,7 +6917,46 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
         sub  = parts[0].lower() if parts else "list"
         rest = parts[1].strip() if len(parts) > 1 else ""
 
+        if sub == "reload":
+            if _HAS_JSON_HOOKS:
+                try:
+                    _JSON_HOOKS = _load_hooks()
+                    n = sum(len(v) for v in _JSON_HOOKS.values())
+                    if HAS_RICH:
+                        console.print(f"  [green]✓[/green] [dim]hooks.json reloaded ({n} entries)[/dim]")
+                    else:
+                        print(f"  hooks.json reloaded ({n} entries)")
+                except Exception as exc:
+                    if HAS_RICH:
+                        console.print(f"  [red]✗ reload failed: {exc}[/red]")
+                    else:
+                        print(f"  reload failed: {exc}")
+            return
+
         if sub == "list":
+            # ── JSON hooks ────────────────────────────────────────────────────
+            if _HAS_JSON_HOOKS:
+                try:
+                    from apps.cli.hooks import list_hooks as _list_json_hooks
+                    _json_rows = _list_json_hooks()
+                    if _json_rows:
+                        if HAS_RICH:
+                            console.print()
+                            console.print("  [bold]JSON Hooks[/bold]  [dim](~/.arthera/hooks.json)[/dim]")
+                            for r in _json_rows:
+                                _block = " [red][blocking][/red]" if r["blocking"] else ""
+                                _tool  = f"[{r['tool']}]" if r["tool"] != "*" else ""
+                                console.print(
+                                    f"  [cyan]{r['event']:<16}[/cyan]{_tool:<14}  "
+                                    f"[dim]{r['command']}[/dim]{_block}"
+                                )
+                        else:
+                            for r in _json_rows:
+                                print(f"  {r['event']:<16} {r['tool']:<12} {r['command']}")
+                except Exception:
+                    pass
+
+            # ── Shell script hooks ────────────────────────────────────────────
             found: List[tuple] = []
             for hdir in hooks_dirs:
                 if hdir.exists():
@@ -7482,15 +6983,34 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
                     print(f"  {name}  {path}")
 
         elif sub == "edit":
-            event = rest or "prompt_submit"
+            if not rest:
+                # No arg → open hooks.json (the JSON system)
+                if _HAS_JSON_HOOKS:
+                    from apps.cli.hooks import hooks_file_path, create_example_hooks
+                    _hpath = hooks_file_path("global")
+                    create_example_hooks(_hpath)
+                    editor = os.getenv("EDITOR", "nano")
+                    try:
+                        import subprocess as _sp
+                        _sp.run([editor, str(_hpath)])
+                        # Auto-reload after edit
+                        _JSON_HOOKS = _load_hooks()
+                    except Exception as exc:
+                        if HAS_RICH:
+                            console.print(f"[red]Could not open editor: {exc}[/red]")
+                        else:
+                            print(f"Could not open editor: {exc}")
+                return
+            # Legacy: /hooks edit <event> → open shell script
+            event = rest
             hdir = CONFIG_DIR / "hooks"
             hdir.mkdir(parents=True, exist_ok=True)
             script = hdir / f"{event}.sh"
             if not script.exists():
                 script.write_text(
                     f"#!/bin/bash\n# Aria hook: {event}\n# "
-                    f"Env vars: ARIA_EVENT, ARIA_MESSAGE, ARIA_PROVIDER\n\n"
-                    f'echo "Hook {event}: $ARIA_MESSAGE"\n',
+                    f"Env vars: ARIA_EVENT ARIA_TOOL ARIA_TOOL_PARAMS ARIA_RESPONSE ARIA_SESSION\n\n"
+                    f'echo "Hook {event} fired"\n',
                     encoding="utf-8"
                 )
                 script.chmod(0o755)
@@ -7498,17 +7018,24 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
             try:
                 import subprocess as _sp
                 _sp.run([editor, str(script)])
-            except Exception as e:
-                console.print(f"[red]Could not open editor: {e}[/red]" if HAS_RICH else str(e))
+            except Exception as exc:
+                console.print(f"[red]Could not open editor: {exc}[/red]" if HAS_RICH else str(exc))
 
         elif sub == "run":
-            event = rest or "prompt_submit"
-            _run_event_hook(event, {"ARIA_EVENT": event, "ARIA_MESSAGE": "", "ARIA_PROVIDER": self.terminal._last_provider})
-            console.print(f"  [dim]Hook '{event}' triggered[/dim]" if HAS_RICH else f"Hook '{event}' triggered")
+            event = rest or "ResponseDone"
+            if _HAS_JSON_HOOKS:
+                _fire_json_hook(event, session_id=getattr(self.terminal, "session_id", ""), hooks=_JSON_HOOKS)
+            _run_event_hook(event, {"ARIA_EVENT": event, "ARIA_SESSION": getattr(self.terminal, "session_id", "")})
+            if HAS_RICH:
+                console.print(f"  [dim]Hook '{event}' triggered[/dim]")
+            else:
+                print(f"Hook '{event}' triggered")
 
         else:
-            console.print("[dim]Usage: /hooks list|edit <event>|run <event>[/dim]" if HAS_RICH
-                          else "Usage: /hooks list|edit|run")
+            if HAS_RICH:
+                console.print("[dim]Usage: /hooks list|edit [event]|reload|run [event][/dim]")
+            else:
+                print("Usage: /hooks list|edit [event]|reload|run [event]")
 
     # ---- Regen / Undo commands ----
 
@@ -10607,6 +10134,22 @@ class ArtheraTerminal:
         self.running = True
         self.session_id = config.get("last_session_id") or str(uuid.uuid4())[:8]
         self.session_mgr = SessionManager()
+        # JSONL session store: crash-safe, append-per-turn
+        try:
+            from apps.cli.session_jsonl import JsonlSessionStore
+            self._jsonl_store: Optional[Any] = JsonlSessionStore()
+            self._jsonl_store.init_session(self.session_id)
+        except Exception:
+            self._jsonl_store = None
+        # Fire SessionStart hook
+        if _HAS_JSON_HOOKS:
+            try:
+                _fire_json_hook("SessionStart", session_id=self.session_id, hooks=_JSON_HOOKS)
+            except Exception:
+                pass
+        _run_event_hook("session_start", {"ARIA_SESSION": self.session_id})
+        # Refresh project context at session start (pick up ARIA.md changes)
+        _refresh_project_context()
         self.pending_plan: List[str] = []
         self.last_plan_results: List[dict] = []
         self.runtime_trace = RuntimeTrace()
@@ -10677,6 +10220,15 @@ class ArtheraTerminal:
         HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
 
         _interactive = sys.stdin.isatty()
+        # Task list state — toggled by Ctrl+T
+        self._task_list_visible = False
+        self._task_list: list[dict] = []
+        # Transcript / tool-call log — toggled by Ctrl+O
+        self._transcript_log: list[str] = []
+        self._transcript_visible = False
+        # Session recap: timestamp of last completed AI turn
+        self._last_turn_ts: float = 0.0
+
         if HAS_PT and _interactive:
             self._pt_completer = AriaPTCompleter(
                 self.commands.commands, SKILLS, config.get("watchlist", []),
@@ -10685,14 +10237,16 @@ class ArtheraTerminal:
             _placeholder = (
                 [("class:placeholder", "Ask Aria, edit files, run commands, or /help")]
                 if config.get("input_style", "panel") == "box"
-                else HTML('<style fg="#888888">Ask Aria, edit files, run commands, or /help</style>')
+                else HTML('<style fg="#888888">Ask Aria · @ file  !cmd  /help</style>')
             )
+            _kb = self._build_keybindings()
             self._pt_session = PromptSession(
                 history=self._pt_history,
                 completer=self._pt_completer,
                 complete_while_typing=True,
                 style=ARIA_PT_STYLE,
                 placeholder=_placeholder,
+                key_bindings=_kb,
             )
         elif _interactive:
             try:
@@ -10769,6 +10323,7 @@ class ArtheraTerminal:
         if HAS_RICH:
             console.print()
 
+            _ui_lang = self.config.get("ui_lang", "en") or "en"
             if _banner_mode == "compact":
                 _model_label = f"{m['name']} {m['version']}" if current_key else current_id
                 from ui.banner import render_compact_banner as _rcb
@@ -10781,15 +10336,23 @@ class ArtheraTerminal:
                     tool_count=tool_count,
                     console=console,
                     has_rich=HAS_RICH,
+                    lang=_ui_lang,
                 )
             else:
                 _model_label = f"{m['name']} {m['version']}" if current_key else current_id
+                try:
+                    from apps.cli.i18n import t as _i18n_t
+                    _lite_word  = _i18n_t("lite", lang=_ui_lang)
+                    _cloud_word = _i18n_t("cloud", lang=_ui_lang)
+                    _local_word = _i18n_t("local", lang=_ui_lang)
+                except Exception:
+                    _lite_word, _cloud_word, _local_word = "lite", "cloud", "local"
                 if _badge == "Fast":
-                    _rt_label = f"{_model_label}  [dim]lite[/dim]"
+                    _rt_label = f"{_model_label}  [dim]{_lite_word}[/dim]"
                 elif _badge == "Cloud":
-                    _rt_label = f"{_model_label}  [dim]cloud[/dim]"
+                    _rt_label = f"{_model_label}  [dim]{_cloud_word}[/dim]"
                 else:
-                    _rt_label = f"{_model_label}  [dim]local[/dim]"
+                    _rt_label = f"{_model_label}  [dim]{_local_word}[/dim]"
 
                 _best_id = (MODELS.get("qwen7b") or {}).get("id", "qwen2.5:7b")
                 from ui.banner import render_full_banner as _rfb, render_try_hints as _rth
@@ -10809,8 +10372,9 @@ class ArtheraTerminal:
                     console=console,
                     has_rich=HAS_RICH,
                     rich_box=rich_box,
+                    lang=_ui_lang,
                 )
-                _rth(console, HAS_RICH)
+                _rth(console, HAS_RICH, lang=_ui_lang)
                 if not self.config.get("first_run_seen"):
                     self.config["first_run_seen"] = True
                     save_config(self.config)
@@ -10832,19 +10396,23 @@ class ArtheraTerminal:
 
     def _privacy_status_label(self, rich: bool = False) -> str:
         from ui.banner import privacy_status_label as _psl
-        return _psl(self.config, rich=rich)
+        _lang = self.config.get("ui_lang", "en") or "en"
+        return _psl(self.config, rich=rich, lang=_lang)
 
     def _control_status_label(self, rich: bool = False) -> str:
         from ui.banner import control_status_label as _csl
-        return _csl(self.config, rich=rich)
+        _lang = self.config.get("ui_lang", "en") or "en"
+        return _csl(self.config, rich=rich, lang=_lang)
 
     def _ollama_status_label(self, rich: bool = False) -> str:
         from ui.banner import ollama_status_label as _osl
+        _lang = self.config.get("ui_lang", "en") or "en"
         return _osl(
             getattr(self, "_ollama_alive", False),
             getattr(self, "_installed_models", set()) or set(),
             self.config,
             rich=rich,
+            lang=_lang,
         )
 
     def _status_line(self) -> str:
@@ -11366,7 +10934,26 @@ class ArtheraTerminal:
                 _print_tool_call(tool, params if isinstance(params, dict) else {})
 
             def on_tool_result(tool, summary):
-                pass  # Tool results are displayed by _print_tool_result
+                # Track tool calls in transcript log (Ctrl+O viewer)
+                import time as _t
+                _ts = _t.strftime("%H:%M:%S")
+                _entry = f"[{_ts}] {tool}: {str(summary)[:100]}"
+                self._transcript_log.append(_entry)
+                if len(self._transcript_log) > 100:
+                    self._transcript_log = self._transcript_log[-100:]
+                # Parse TaskCreate/TaskUpdate results into task list (Ctrl+T)
+                if tool in ("TaskCreate", "TaskUpdate") and isinstance(summary, dict):
+                    _tid = summary.get("id") or summary.get("task_id")
+                    _title = summary.get("title", "")
+                    _status = summary.get("status", "pending")
+                    if _tid:
+                        _existing = next((t for t in self._task_list if t.get("id") == _tid), None)
+                        if _existing:
+                            _existing["status"] = _status
+                            if _title:
+                                _existing["title"] = _title
+                        else:
+                            self._task_list.append({"id": _tid, "title": _title, "status": _status})
 
             _prev_provider = self._last_provider or "local"
 
@@ -11812,6 +11399,8 @@ class ArtheraTerminal:
                 console.print(Markdown(_strip_latex(final_text)))
 
             self.conversation.append({"role": "assistant", "content": final_text})
+            import time as _time_ts
+            self._last_turn_ts = _time_ts.time()
 
             # Metadata line — detailed stats
             metadata = turn_result.metadata
@@ -11844,13 +11433,23 @@ class ArtheraTerminal:
             self._session_turns += 1
             self._last_response = final_text   # for /copy
 
-            # Fire response_done lifecycle hook
+            # Fire response_done lifecycle hooks (shell + JSON)
             _run_event_hook("response_done", {
                 "ARIA_RESPONSE":  (final_text or "")[:500],
                 "ARIA_PROVIDER":  turn_result.provider,
                 "ARIA_TOKENS":    str((prompt_t or 0) + (completion_t or 0)),
                 "ARIA_SESSION":   self.session_id,
             })
+            if _HAS_JSON_HOOKS:
+                try:
+                    _fire_json_hook(
+                        "ResponseDone",
+                        response=(final_text or "")[:500],
+                        session_id=self.session_id,
+                        hooks=_JSON_HOOKS,
+                    )
+                except Exception:
+                    pass
 
             # Auto-capture user preferences / facts expressed in this turn
             try:
@@ -11885,12 +11484,20 @@ class ArtheraTerminal:
                     f"({_est:,}/{_max:,} tokens) — /compact to free space[/{_color}]"
                 )
 
-            # Auto-save session
+            # Auto-save session (JSON + JSONL dual write)
             if self.config.get("auto_save_sessions"):
                 try:
                     self.session_mgr.save_session(self.session_id, self.conversation)
                 except Exception:
                     pass
+                # JSONL: append only the two new messages (user + assistant) for crash safety
+                if self._jsonl_store is not None:
+                    try:
+                        self._jsonl_store.append_message(self.session_id, "user", message)
+                        if final_text:
+                            self._jsonl_store.append_message(self.session_id, "assistant", final_text)
+                    except Exception:
+                        pass
 
             # Auto-extract preference signals into global memory
             if self.memory_mgr and final_text:
@@ -11902,15 +11509,111 @@ class ArtheraTerminal:
                 except Exception:
                     pass
 
+    def _build_keybindings(self):
+        """Build prompt_toolkit KeyBindings for REPL shortcuts."""
+        kb = _PTKeyBindings()
+
+        @kb.add("s-tab")
+        def _cycle_permission(event):
+            """Shift+Tab → cycle permission mode."""
+            cur = _ACTIVE_PERMISSION_MODE[0]
+            try:
+                idx = _PERMISSION_CYCLE.index(cur)
+            except ValueError:
+                idx = 0
+            nxt = _PERMISSION_CYCLE[(idx + 1) % len(_PERMISSION_CYCLE)]
+            _ACTIVE_PERMISSION_MODE[0] = nxt
+            self.config["permission_mode"] = nxt
+            label = {"read-only": "🔒 read-only", "workspace-write": "✏️  workspace-write", "full-access": "⚡ full-access"}.get(nxt, nxt)
+            event.app.current_buffer.text = ""
+            # Print inline so user sees the change immediately
+            import sys as _sys
+            _sys.stderr.write(f"\r  Mode → {label}                \n")
+            _sys.stderr.flush()
+
+        @kb.add("escape", "t")
+        def _toggle_thinking(event):
+            """Alt+T → toggle thinking mode."""
+            cur = self.config.get("thinking", False)
+            self.config["thinking"] = not cur
+            state = "ON" if not cur else "OFF"
+            import sys as _sys
+            _sys.stderr.write(f"\r  Thinking → {state}             \n")
+            _sys.stderr.flush()
+
+        @kb.add("escape", "p")
+        def _switch_model(event):
+            """Alt+P → insert /model into prompt buffer."""
+            buf = event.app.current_buffer
+            if not buf.text:
+                buf.text = "/model "
+                buf.cursor_position = len(buf.text)
+
+        @kb.add("c-l")
+        def _redraw(event):
+            """Ctrl+L → clear and redraw screen."""
+            event.app.renderer.clear()
+
+        @kb.add("c-o")
+        def _toggle_transcript(event):
+            """Ctrl+O → show/hide recent tool call log."""
+            self._transcript_visible = not self._transcript_visible
+            if self._transcript_visible and self._transcript_log:
+                import sys as _sys
+                _sys.stderr.write("\n")
+                for line in self._transcript_log[-20:]:
+                    _sys.stderr.write(f"  {line}\n")
+                _sys.stderr.write("  [Ctrl+O to close]\n\n")
+                _sys.stderr.flush()
+            else:
+                self._transcript_visible = False
+
+        @kb.add("c-t")
+        def _toggle_tasklist(event):
+            """Ctrl+T → show/hide task list."""
+            self._task_list_visible = not self._task_list_visible
+            if self._task_list_visible and self._task_list:
+                import sys as _sys
+                _sys.stderr.write("\n  📋 Tasks:\n")
+                icons = {"pending": "○", "in_progress": "◉", "completed": "✓", "failed": "✗"}
+                for t in self._task_list:
+                    icon = icons.get(t.get("status", "pending"), "○")
+                    _sys.stderr.write(f"    {icon} {t.get('title', '')}\n")
+                _sys.stderr.write("\n")
+                _sys.stderr.flush()
+
+        return kb
+
     def _bottom_toolbar(self):
         """Bottom toolbar content for prompt_toolkit."""
         model_label, cwd, privacy, est_tokens, max_ctx = self._bottom_toolbar_parts()
         ctx_color = "#606060" if est_tokens / max_ctx < 0.6 else (
             "#aa8800" if est_tokens / max_ctx < 0.85 else "#cc4444"
         )
+        perm = _ACTIVE_PERMISSION_MODE[0]
+        perm_color = {"read-only": "#888800", "workspace-write": "#606060", "full-access": "#cc4444"}.get(perm, "#606060")
+        perm_short = {"read-only": "ro", "workspace-write": "rw", "full-access": "full"}.get(perm, perm)
+        # PR / git branch info
+        _branch = ""
+        try:
+            import subprocess as _sp
+            _b = _sp.check_output(["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                                  stderr=_sp.DEVNULL, timeout=1).decode().strip()
+            if _b and _b != "HEAD":
+                _branch = f" ⎇ {_b}"
+        except Exception:
+            pass
+        # Task list indicator
+        _tasks = ""
+        if self._task_list:
+            _done = sum(1 for t in self._task_list if t.get("status") == "completed")
+            _total = len(self._task_list)
+            _tasks = f" · ✓{_done}/{_total}"
         return HTML(
             f'<style fg="#C08050">{model_label}</style>'
-            f'<style fg="#8a8a8a"> · {cwd} · {privacy} · /help · esc · </style>'
+            f'<style fg="#8a8a8a"> · {cwd}{_branch}{_tasks} · </style>'
+            f'<style fg="{perm_color}">{perm_short}</style>'
+            f'<style fg="#8a8a8a"> · {privacy} · /help · </style>'
             f'<style fg="{ctx_color}">{est_tokens:,}/{max_ctx:,}</style>'
         )
 
@@ -12098,6 +11801,60 @@ class ArtheraTerminal:
                 if not user_input:
                     continue
 
+                # ── Session recap: show summary if away for 3+ minutes ─────────
+                import time as _time
+                _now = _time.time()
+                if self._last_turn_ts and (_now - self._last_turn_ts) > 180 and self.conversation:
+                    _recap_turns = len(self.conversation)
+                    if _recap_turns >= 6:
+                        _last_ai = next(
+                            (m["content"][:120] for m in reversed(self.conversation)
+                             if m.get("role") == "assistant" and m.get("content")), None
+                        )
+                        if _last_ai:
+                            _gap = int((_now - self._last_turn_ts) / 60)
+                            if HAS_RICH:
+                                console.print(
+                                    f"  [dim]↩ 回到会话（{_gap}分钟前）— "
+                                    f"{_last_ai[:80]}…[/dim]"
+                                )
+                self._last_turn_ts = _now
+
+                # ── ! prefix: Shell mode ─────────────────────────────────────
+                # Run shell command directly, add output to conversation context
+                if user_input.startswith("!"):
+                    shell_cmd = user_input[1:].strip()
+                    if shell_cmd:
+                        import subprocess as _subp
+                        if HAS_RICH:
+                            console.print(f"  [dim]$ {shell_cmd}[/dim]")
+                        try:
+                            _result = _subp.run(
+                                shell_cmd, shell=True, capture_output=True,
+                                text=True, timeout=30,
+                            )
+                            _out = (_result.stdout + _result.stderr).strip()
+                            if _out:
+                                if HAS_RICH:
+                                    console.print(f"[dim]{_out}[/dim]")
+                                else:
+                                    print(_out)
+                                # Inject into conversation context as user observation
+                                self.conversation.append({
+                                    "role": "user",
+                                    "content": f"[shell $ {shell_cmd}]\n{_out}",
+                                })
+                            # Update shell autocomplete history
+                            if self._pt_completer and hasattr(self._pt_completer, "add_shell_history"):
+                                self._pt_completer.add_shell_history(shell_cmd)
+                        except _subp.TimeoutExpired:
+                            if HAS_RICH:
+                                console.print("[yellow]  Command timed out (30s)[/yellow]")
+                        except Exception as _se:
+                            if HAS_RICH:
+                                console.print(f"[red]  Error: {_se}[/red]")
+                    continue
+
                 # Multi-line input: start with """ to enter multi-line mode
                 if user_input == '"""' or user_input.startswith('"""'):
                     lines = []
@@ -12123,6 +11880,18 @@ class ArtheraTerminal:
                     if self.conversation and self.config.get("auto_save_sessions"):
                         self.session_mgr.save_session(self.session_id, self.conversation)
                         self.config["last_session_id"] = self.session_id
+                        if self._jsonl_store is not None:
+                            try:
+                                self._jsonl_store.flush_meta(self.session_id)
+                            except Exception:
+                                pass
+                    # Fire SessionEnd hooks
+                    if _HAS_JSON_HOOKS:
+                        try:
+                            _fire_json_hook("SessionEnd", session_id=self.session_id, hooks=_JSON_HOOKS)
+                        except Exception:
+                            pass
+                    _run_event_hook("session_end", {"ARIA_SESSION": self.session_id})
                     if HAS_RICH:
                         console.print("[dim]Goodbye[/dim]")
                     else:
@@ -12366,6 +12135,16 @@ Examples:
     parser.add_argument("--banner", choices=["full", "compact", "off"], help="Banner mode: full|compact|off")
     parser.add_argument("--resume", action="store_true", help="Resume last session")
     parser.add_argument("--session", help="Load specific session ID")
+    parser.add_argument(
+        "--dangerously-skip-permissions",
+        action="store_true",
+        help="Skip ALL tool confirmation prompts this session (use in trusted scripts)",
+    )
+    parser.add_argument(
+        "--allow-tools",
+        metavar="TOOLS",
+        help="Comma-separated tools to auto-allow this session, e.g. write_file,edit_file",
+    )
     parser.add_argument("command", nargs="?", help="Direct command (quote, backtest, etc.)")
     parser.add_argument("args", nargs="*", help="Command arguments")
 
@@ -12391,6 +12170,24 @@ Examples:
         config["thinking_mode"] = "thinking"
     if args.url:
         config["api_url"] = args.url
+
+    # --dangerously-skip-permissions: bypass all confirmation prompts this session
+    if getattr(args, "dangerously_skip_permissions", False):
+        global _auto_approve_session
+        _auto_approve_session = True
+        if HAS_RICH:
+            console.print("[yellow dim]⚠ 所有工具确认已跳过 (--dangerously-skip-permissions)[/yellow dim]")
+        else:
+            print("⚠ All tool confirmations skipped")
+
+    # --allow-tools: pre-populate per-tool session allow list
+    if getattr(args, "allow_tools", None):
+        for _t in args.allow_tools.split(","):
+            _t = _t.strip()
+            if _t:
+                _session_always_allow.add(_t)
+        if HAS_RICH:
+            console.print(f"[dim]Auto-allowed tools: {', '.join(sorted(_session_always_allow))}[/dim]")
 
     terminal = ArtheraTerminal(config)
 

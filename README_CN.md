@@ -6,139 +6,109 @@
 </p>
 
 <p align="center">
-  <a href="./README.md"><img src="https://img.shields.io/badge/English-README-blue?style=flat-square" alt="English"/></a>
-  <img src="https://img.shields.io/badge/中文-当前-6366f1?style=flat-square" alt="中文"/>
+  <img src="https://img.shields.io/badge/中文文档-当前-red?style=flat-square" alt="中文"/>
+  <a href="./README.md"><img src="https://img.shields.io/badge/English-README.md-6366f1?style=flat-square" alt="English"/></a>
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Aria_Code-v3.0-6366f1?style=for-the-badge&logo=terminal&logoColor=white" alt="version"/>
+  <img src="https://img.shields.io/badge/Aria_Code-v4.0-6366f1?style=for-the-badge&logo=terminal&logoColor=white" alt="版本"/>
   <img src="https://img.shields.io/badge/Python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="python"/>
-  <img src="https://img.shields.io/badge/Ollama-Local_LLM-black?style=for-the-badge&logo=llama&logoColor=white" alt="ollama"/>
-  <img src="https://img.shields.io/badge/License-MIT-22c55e?style=for-the-badge" alt="license"/>
+  <img src="https://img.shields.io/badge/Ollama-本地大模型-black?style=for-the-badge&logo=llama&logoColor=white" alt="ollama"/>
+  <img src="https://img.shields.io/badge/云端-19+供应商-f59e0b?style=for-the-badge" alt="providers"/>
+  <img src="https://img.shields.io/badge/协议-MIT-22c55e?style=for-the-badge" alt="license"/>
   <img src="https://img.shields.io/github/stars/Cinsoul/Aria-Code?style=for-the-badge&color=f59e0b" alt="stars"/>
 </p>
 
 <h1 align="center">Aria Code</h1>
 
 <p align="center">
-  <b>AI-powered financial terminal for the command line</b><br>
-  <sub>Runs fully offline · Connects to Feishu & Telegram · Built for investors & quant researchers</sub>
+  <b>命令行驱动的 AI 金融终端</b><br>
+  <sub>完全离线可用 · 19+ 云端供应商 · 系统语言自动识别 · 专为投资者和量化研究者设计</sub>
 </p>
 
 <p align="center">
-  <a href="#-quick-start">Quick Start</a> ·
-  <a href="#-feishu-飞书-integration">Feishu</a> ·
-  <a href="#-telegram-integration">Telegram</a> ·
-  <a href="#-commands">Commands</a> ·
-  <a href="#-architecture">Architecture</a> ·
-  <a href="./CONTRIBUTING.md">Contributing</a>
+  <a href="#-快速开始">快速开始</a> ·
+  <a href="#-键盘快捷键">快捷键</a> ·
+  <a href="#-模型支持">模型</a> ·
+  <a href="#-命令参考">命令</a> ·
+  <a href="#-飞书集成">飞书</a> ·
+  <a href="#-telegram-集成">Telegram</a> ·
+  <a href="#-架构">架构</a>
 </p>
 
 ---
 
-## What is Aria Code?
+## 什么是 Aria Code？
 
-Aria Code is a terminal-first AI financial agent. Ask it anything about stocks, quantitative research, portfolios, or code — it responds with data, formulas, and charts right in your terminal.
+Aria Code 是一款**终端优先的 AI 金融智能体** — 想象成 Claude Code，但内置了深度金融领域知识，且支持完全离线运行。你可以在终端里直接问它股票、投资组合优化、量化策略或代码问题，它会用真实数据、公式和分析实时回答。
 
 ```
-$ aria-code -p "帮我分析茅台 600519 的基本面"
+$ aria-code
 
-  贵州茅台 (600519.SS)  ── 基本面速览
-  ─────────────────────────────────────────
-  市盈率 (TTM)    28.4x   ↓ vs 行业均值 35x
-  市净率           9.2x
-  ROE              31.8%   连续 10 年 > 25%
-  净利率           52.3%   白酒行业最高
-  自由现金流       ¥380 亿  同比 +18%
-  护城河评分       ★★★★★  品牌+渠道双重壁垒
+  ▣ Aria Code  v4.0  本地优先智能体
+  模型      qwen2.5-coder:7b  本地
+  工作区    ~/my-portfolio
+  模式      工作区写入 · 联网开启 · 仅本地
+  状态      Ollama 在线 · 3 个模型
 
-  DCF 估值区间:  ¥1,680 — ¥1,920 / 股
-  当前价格:       ¥1,743  (处于合理区间)
+  试试  分析 AAPL  ·  /project load ./myapp  ·  /help
 
-  2.1s · 东方财富实时数据 · qwen2.5-coder:7b
-```
+> 分析贵州茅台的动量 — 给我 RSI、MACD 和简短的投资论点
 
----
+  贵州茅台 (600519)  ── 技术快照
+  ──────────────────────────────────────────────
+  现价     ¥1,680.00    今日 +1.8%          (实时行情)
+  RSI(14)  62.3         中性偏强，未超买
+  MACD     +3.1         3天前金叉，趋势向上
+  布林带   0.14         波动率较低，稳定上涨
 
-## 🧠 Thinking Framework
+  信号：↑ 看多  (动量完好，关注 RSI 是否突破 70)
+  支撑：¥1,620 / ¥1,580     压力：¥1,720 / ¥1,800
 
-Aria Code follows a **4-layer reasoning pipeline** for every financial query:
+  论点：白酒消费复苏 + 茅台直销渠道扩大，机构资金持续流入…
 
-```mermaid
-mindmap
-  root((Aria Code))
-    数据层 Data
-      实时行情
-        A股 东方财富
-        美股 yfinance
-        港股 yfinance HK
-        加密货币 ccxt
-      基本面
-        财务报表 akshare
-        SEC EDGAR 美股
-        Tushare A股
-      宏观经济
-        FRED 美联储数据
-        GDP 通胀 利率
-    分析层 Analysis
-      量化研究
-        技术信号 RSI MACD Ichimoku
-        因子分析 PE PB ROE 动量
-        回测引擎 多策略对比
-        Kelly 仓位模型
-        Black-Scholes 期权定价
-      基本面
-        DCF 折现现金流
-        Piotroski F-Score
-        Altman Z-Score
-        杜邦分析
-      风险
-        最大回撤 MDD
-        夏普比率 Sharpe
-        VaR 风险价值
-        相关矩阵
-    智能层 Intelligence
-      多模型路由
-        本地 Ollama 离线优先
-        Claude 复杂推理
-        DeepSeek 高性价比
-        GPT-4o 通用任务
-      多智能体
-        基本面 Agent
-        技术分析 Agent
-        宏观 Agent
-        风险 Agent
-        合成 Agent
-    连接层 Channels
-      终端 CLI 本机
-      飞书 Feishu 企业
-      Telegram 个人
-      iOS 推送通知 APNs
-      Webhook 外部触发
+  2.1s · qwen2.5-coder:7b (本地)
 ```
 
 ---
 
-## ✨ Features
+## ✨ v4.0 新特性
 
-| 能力 | 说明 |
+| 功能 | 说明 |
 |------|------|
-| 🦙 **100% 本地离线** | Ollama 驱动，无需 API Key，数据不出本机 |
-| 📊 **金融智能体** | DCF / WACC / PE / 夏普比率 / Kelly / Black-Scholes 等 30+ 内置公式 |
-| 📈 **实时行情** | A股(东方财富) · 美股(yfinance) · 港股 · 加密货币(ccxt) |
-| 🔍 **量化研究** | `/backtest` `/signal` `/kelly` `/factor` `/portfolio` `/screen` |
-| 🤖 **多模型自动路由** | Ollama → Claude → OpenAI → DeepSeek → Gemini → DashScope |
-| 🔌 **MCP 协议** | 接入任何 [Model Context Protocol](https://modelcontextprotocol.io) 服务 |
-| 💬 **飞书 / Telegram** | 随时随地在聊天软件里问 Aria |
-| 📱 **iOS 推送** | APNs 实时推送价格预警 |
-| 🌍 **中英双语** | 中文提问→中文回答，英文提问→英文回答 |
-| 🏠 **不动产分析** | 70城房价 / REIT / 租金 / 物业估值 / 区位评分 |
+| ⌨️ **键盘快捷键** | `Shift+Tab` 切换权限 · `Alt+T` 思考模式 · `Alt+P` 模型切换 · `Ctrl+O` 对话记录 · `Ctrl+T` 任务列表 |
+| `!` **Shell 模式** | 输入 `! git status` 直接执行系统命令，输出自动加入 AI 上下文 |
+| `@` **文件自动补全** | 在任意位置输入 `@src/` 即可补全文件路径 |
+| `/btw` **旁白提问** | 快速提问而不污染对话历史 |
+| `/recap` **会话摘要** | 离开 3 分钟以上自动触发回顾提示 |
+| 🌍 **系统语言自动识别** | 首次运行自动读取 OS 语言，界面和提示语中英文随系统切换 |
+| 🤖 **19+ 云端供应商** | Google Gemini · xAI Grok · Mistral · Cohere · Perplexity · 百度文心 · 豆包 · MiniMax · 阶跃星辰 · 零一万物 + 全部原有供应商 |
+| 📊 **Finnhub 作为主数据源** | 美股行情优先走 Finnhub，`dp` 字段提供更准确的涨跌幅 |
+| 🔢 **全系 Ollama 模型** | Qwen3 · DeepSeek-R1 · Llama 3.x · Phi-4 · Gemma3 · Mistral 全家桶 |
 
 ---
 
-## 🚀 Quick Start
+## ✨ 核心功能
 
-### Option 1: One-line install (macOS / Linux)
+| 功能 | 详情 |
+|------|------|
+| 🦙 **100% 离线模式** | 基于 Ollama — 无需 API Key，数据不离本机 |
+| 📊 **金融智能** | DCF / WACC / PE / 夏普 / Kelly / Black-Scholes 等 30+ 内置公式 |
+| 📈 **实时行情** | A 股（东财）· 美股（Finnhub）· 港股 · 加密货币（ccxt） |
+| 🔍 **量化研究** | `/backtest` `/signal` `/kelly` `/factor` `/portfolio` `/screen` `/corr` `/ptbt` |
+| 🤖 **19+ 云端供应商** | 国际主流 + 国内主流 LLM API 全覆盖 |
+| 🔌 **MCP 协议** | 对接任意 [Model Context Protocol](https://modelcontextprotocol.io) 服务器 |
+| ⌨️ **丰富键盘体验** | Vim 模式 · `!` Shell · `@` 文件 · `Shift+Tab` 权限 · 对话记录查看 |
+| 💬 **飞书 / Telegram** | 从任意聊天 App 随时问 Aria |
+| 📱 **iOS 推送提醒** | 通过 APNs 实时推送价格告警 |
+| 🌍 **自动双语** | 首次运行自动检测 OS 语言；AI 回复语言跟随用户输入 |
+| 🏠 **房产分析** | 物业估值、REITs 筛选、租金回报率、全国 70 城房价 |
+
+---
+
+## 🚀 快速开始
+
+### 方式一：一键安装（macOS / Linux）
 
 ```bash
 git clone https://github.com/Cinsoul/Aria-Code.git
@@ -146,13 +116,13 @@ cd aria-code
 ./install.sh
 ```
 
-安装后把 `~/.local/bin` 加到 PATH：
+添加到 PATH：
 
 ```bash
 echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc
 ```
 
-### Option 2: Run directly
+### 方式二：直接运行
 
 ```bash
 git clone https://github.com/Cinsoul/Aria-Code.git
@@ -162,431 +132,423 @@ pip install -r requirements.txt
 python3 aria_cli.py
 ```
 
-### Step 1: Install Ollama (local LLM — offline, free)
+### 第一步：安装 Ollama（本地大模型 — 免费，完全离线）
 
 ```bash
 # macOS / Linux
 curl -fsSL https://ollama.ai/install.sh | sh
 
-# Pull a model (choose one)
-ollama pull qwen2.5-coder:7b    # 推荐 — 速度快，中文好 (~4.7GB)
+# 拉取模型（选一个 — 首次运行自动发现已安装模型）
+ollama pull qwen2.5-coder:7b    # 推荐 — 速度快，中文支持优秀（~4.7GB）
+ollama pull qwen3:8b            # 最新千问，推理能力更强
 ollama pull deepseek-r1:7b      # 强推理，适合复杂量化任务
-ollama pull llama3.2:3b         # 最轻量 (~2GB)
+ollama pull llama3.2:3b         # 最小最快（~2GB）
+ollama pull phi4-mini           # 微软 Phi-4 mini，代码出色
 ```
 
-运行 `aria-code` 即可，自动检测 Ollama。
+首次运行 Aria 时会自动发现并选择最佳已安装模型，无需任何配置。
 
-### Step 2: Cloud API (optional)
+### 第二步：配置云端 API Key（均可选）
 
 ```bash
+# 交互式配置向导（支持全部 19 家供应商，中英双语）
+python3 setup_wizard.py
+
+# 或手动复制并编辑
 cp .env.example .env
-# 编辑 .env，填入任意云端 Key（全部可选）:
-# ANTHROPIC_API_KEY=sk-ant-...
-# OPENAI_API_KEY=sk-...
-# DEEPSEEK_API_KEY=sk-...
+```
+
+向导现已支持全部 19 家云端供应商，包括 Google Gemini、xAI Grok、Mistral、百度文心、豆包、MiniMax 等。
+
+---
+
+## ⌨️ 键盘快捷键
+
+Aria Code 基于 `prompt_toolkit` 构建了完整的键盘快捷键系统：
+
+### 通用快捷键
+
+| 快捷键 | 功能 |
+|--------|------|
+| `Shift+Tab` | 循环切换权限模式：`只读` → `工作区写入` → `完全访问` |
+| `Alt+T` | 开/关思考模式（扩展推理） |
+| `Alt+P` | 打开模型切换器（自动填入 `/model`） |
+| `Ctrl+O` | 切换对话记录查看器 — 显示所有工具调用和时间戳 |
+| `Ctrl+T` | 切换任务列表 — 实时显示待办/进行中/已完成 |
+| `Ctrl+L` | 重绘终端界面（修复显示错乱） |
+| `Ctrl+C` | 取消当前响应 / 清空输入 |
+| `Ctrl+D` | 退出 Aria |
+| `Esc` | 中断流式响应 |
+
+### 输入模式
+
+| 前缀 | 模式 | 示例 |
+|------|------|------|
+| `/` | 斜杠命令（模糊自动补全） | `/backtest momentum SPY` |
+| `!` | Shell 模式 — 运行命令，输出加入上下文 | `! git diff HEAD~1` |
+| `@` | 文件路径自动补全 | `@src/components/` |
+| `"""` | 多行输入模式（以 `"""` 结束） | 粘贴大段代码 |
+
+### 底部工具栏（始终显示）
+
+```
+qwen2.5-coder:7b · ~/my-project ⎇ main ✓3/5 · rw · 仅本地 · /help · 1,240/16,384
+│                    │           │      │       │    │
+│                    │           │      │       │    └── 上下文用量
+│                    │           │      │       └── 隐私状态
+│                    │           │      └── 权限：ro/rw/full（颜色区分）
+│                    │           └── 任务进度
+│                    └── git 分支
+└── 当前模型
 ```
 
 ---
 
-## 💬 Feishu 飞书 Integration
+## 🤖 模型支持
 
-把 Aria 接入飞书，在任意群/私聊里问金融问题。
+### 本地模型（通过 Ollama — 离线，免费）
 
-### 架构总览
+| 模型 | 命令 | 大小 | 适用场景 |
+|------|------|------|----------|
+| **qwen2.5-coder:7b** ⭐ | `ollama pull qwen2.5-coder:7b` | 4.7GB | 代码 + 中文（推荐） |
+| qwen3:8b | `ollama pull qwen3:8b` | 5.2GB | 最新千问，推理更强 |
+| qwen3:30b-a3b | `ollama pull qwen3:30b-a3b` | 17GB | 高性能版本 |
+| deepseek-r1:7b | `ollama pull deepseek-r1:7b` | 4.7GB | 数学/推理强 |
+| deepseek-r1:1.5b | `ollama pull deepseek-r1:1.5b` | 1.1GB | 超轻量推理 |
+| llama3.2:3b | `ollama pull llama3.2:3b` | 2GB | 通用，最快 |
+| llama3.1:8b | `ollama pull llama3.1:8b` | 4.7GB | 通用目的 |
+| mistral:7b | `ollama pull mistral:7b` | 4.1GB | 欧洲品质 |
+| phi4-mini | `ollama pull phi4-mini` | 2.5GB | 代码出色，体积小 |
+| gemma3:4b | `ollama pull gemma3:4b` | 3.3GB | Google，高效 |
+
+随时切换模型：
+
+```bash
+/model                    # 交互式选择（显示安装状态）
+/model qwen3:8b           # 直接切换
+/model openai/gpt-4.5     # 切换到云端模型
+Alt+P                     # 键盘快捷键
+```
+
+### 云端供应商（19+ 家支持）
+
+#### 国际供应商
+
+| 供应商 | 模型 | 环境变量 |
+|--------|------|----------|
+| **Anthropic** | Claude Sonnet 4、Opus 4 | `ANTHROPIC_API_KEY` |
+| **OpenAI** | GPT-4.5、o3、o4-mini | `OPENAI_API_KEY` |
+| **DeepSeek** | deepseek-chat、deepseek-reasoner | `DEEPSEEK_API_KEY` |
+| **Google Gemini** | gemini-2.0-flash、2.5-pro | `GOOGLE_API_KEY` |
+| **xAI Grok** | grok-3、grok-3-fast | `XAI_API_KEY` |
+| **Groq** | llama-3.3-70b（高速推理） | `GROQ_API_KEY` |
+| **Mistral** | mistral-large、codestral | `MISTRAL_API_KEY` |
+| **Cohere** | command-r-plus | `COHERE_API_KEY` |
+| **Perplexity** | sonar-pro（含网络搜索） | `PERPLEXITY_API_KEY` |
+| **Together AI** | 100+ 开源模型 | `TOGETHER_API_KEY` |
+
+#### 国内供应商
+
+| 供应商 | 模型 | 环境变量 |
+|--------|------|----------|
+| **硅基流动 SiliconFlow** | Qwen/DeepSeek 托管版 | `SILICONFLOW_API_KEY` |
+| **阿里百炼 DashScope** | qwen-max、qwen-turbo | `DASHSCOPE_API_KEY` |
+| **月之暗面 Kimi** | moonshot-v1-128k | `MOONSHOT_API_KEY` |
+| **智谱 GLM** | glm-4-plus | `ZHIPU_API_KEY` |
+| **百度千帆 ERNIE** | ernie-4.5-turbo | `QIANFAN_ACCESS_KEY` |
+| **字节跳动 豆包** | （基于 endpoint-id） | `ARK_API_KEY` |
+| **MiniMax** | MiniMax-Text-01 | `MINIMAX_API_KEY` |
+| **阶跃星辰 StepFun** | step-2-16k | `STEPFUN_API_KEY` |
+| **零一万物 Yi** | yi-large | `ONEAI_API_KEY` |
+
+使用任意供应商：
+
+```bash
+/model anthropic/claude-sonnet-4-6
+/model google/gemini-2.0-flash-exp
+/model baidu/ernie-4.5-turbo-128k
+/model moonshot/moonshot-v1-128k
+/apikey       # 19 家供应商交互式配置向导
+```
+
+---
+
+## ⚡ 命令参考
+
+### 行情与市场
+
+```bash
+/quote AAPL MSFT TSLA              # 美股实时多标的行情（Finnhub）
+/quote 000001 600519 300750        # A股行情（东方财富）
+/quote BTC/USDT ETH/USDT           # 加密货币价格
+/news AAPL                         # 最新财经新闻
+/regime                            # 市场情绪（牛/熊/中性）
+/alert add AAPL gt 200             # 设置价格告警
+/alert list                        # 查看所有告警
+```
+
+### 量化研究
+
+```bash
+/signal TSLA                       # 技术信号（RSI / MACD / 布林带）
+/backtest momentum SPY 2023-01-01 2024-12-31
+/backtest ml 600519 300750 NVDA    # ML 信号回测（3 策略对比）
+/wf SPY momentum                   # 滚动窗口回测
+/kelly AAPL 0.6 2.0                # Kelly 公式 — 仓位建议
+/factor PE PB ROE                  # 多因子分析
+/screen PE<15 ROE>20               # 因子筛选器
+/portfolio AAPL MSFT GOOGL         # 投资组合优化
+/ptbt AAPL MSFT GOOG 0.4 0.3 0.3  # 组合回测（指定权重）
+/corr AAPL MSFT TSLA SPY           # 相关性矩阵
+/ichimoku AAPL                     # 一目均衡表
+/options AAPL calls 2025-01        # 期权链
+/quality AAPL                      # Piotroski + Altman Z 值
+```
+
+### 分析
+
+```bash
+/analyze AAPL                      # AI 综合分析
+/peer AAPL MSFT GOOGL META         # 竞争对手对比
+/macro                             # 宏观面板（GDP / CPI / 利率）
+/macro cn                          # 中国宏观数据
+/sector tech                       # 行业分析
+/realty Shanghai Pudong            # 房地产分析
+/feargreed                         # 加密恐贪指数
+/funding BTC ETH                   # 永续合约资金费率
+```
+
+### 会话与界面
+
+```bash
+/btw 那个函数叫什么来着？          # 旁白提问 — 不污染对话历史
+/recap                             # 会话摘要（轮次 + 话题）
+/clear                             # 清空对话
+/compact                           # 智能上下文压缩
+/history                           # 查看最近对话
+/sessions                          # 列出已保存会话
+/export md report.md               # 导出对话
+/rename "NVDA 研究"                # 给当前会话命名
+```
+
+### 系统
+
+```bash
+/model                             # 查看/切换模型（交互式）
+/apikey                            # 19 家供应商 API Key 配置向导
+/config set ui_lang=zh             # 强制中文界面
+/config set ui_lang=en             # 强制英文界面
+/thinking on                       # 开启扩展思考模式
+/privacy status                    # 隐私设置
+/tools                             # 列出所有启用工具
+/skills                            # 列出技能
+/mcp list                          # MCP 服务器状态
+/doctor                            # 诊断安装问题
+/providers                         # 所有供应商状态
+```
+
+---
+
+## 🌍 语言自动识别
+
+首次运行时，Aria 自动读取系统 locale 并设置界面语言：
+
+```bash
+# 中文系统 → 中文界面 + 中文提示
+LANG=zh_CN.UTF-8  →  本地优先智能体 · Ollama 在线 · 试试 分析 AAPL
+
+# 英文系统 → 英文界面 + 英文提示
+LANG=en_US.UTF-8  →  local-first agent · Ollama online · try analyze AAPL
+```
+
+AI **输出语言**始终跟随你的输入 — 用中文问，得中文答；用英文问，得英文答。
+
+随时手动切换：
+
+```bash
+/config set ui_lang=zh    # 强制中文
+/config set ui_lang=en    # 强制英文
+/config set ui_lang=auto  # 恢复系统自动检测
+```
+
+---
+
+## 💬 飞书集成
+
+将 Aria 接入飞书（Lark），在任意群聊或私信中随时提问。
+
+### 工作原理
 
 ```
 你的飞书消息
-     │
-     ▼
-飞书服务器
-     │
-  ┌──┴─────────────────────────────┐
-  │  方案A: 中继模式(推荐，5分钟)   │  方案B: 自建应用(20分钟)
-  │  Aria Relay Server              │  飞书开放平台 App
-  │  wss://relay.aria.ai            │  需要公网IP/内网穿透
-  └──┬─────────────────────────────┘
-     │
-     ▼
-aria_relay_client.py (本机)
-     │
-     ▼
-aria_cli.py → LLM → 返回结果
+       │
+       ▼
+  飞书服务器
+       │
+  ┌────┴─────────────────────────────────────┐
+  │  模式 A：中继（推荐，5 分钟）             │  模式 B：自建应用（20 分钟）
+  │  Aria 中继服务器                          │  飞书开放平台自建应用
+  │  wss://relay.aria.ai                      │  需要公网 IP 或内网穿透
+  └────┬─────────────────────────────────────┘
+       │
+       ▼
+ aria_relay_client.py（你的电脑）
+       │
+       ▼
+ aria_cli.py → LLM → 回复发送回去
 ```
 
----
-
-### 方案 A：中继模式（推荐，无需公网 IP）
-
-> 最简单的方式。Aria 官方中继服务器负责转发飞书消息，你只需在本机运行客户端。
-
-**第 1 步：生成你的客户端 ID**
+### 模式 A：中继（推荐）
 
 ```bash
 python3 setup_wizard.py
-# 选择「飞书中继模式」，会输出:
-# ✅ 你的 Client ID: ARIA-xxxxxxxx-xxxx
+# 选择「飞书中继模式」
+# 输出：✅ 你的 Client ID：ARIA-xxxxxxxx-xxxx
 ```
 
-**第 2 步：在飞书中绑定**
-
-向飞书 **Aria Bot** 发送（群聊或私聊均可）：
+在飞书中发送消息给 **Aria Bot**：
 
 ```
 /bind ARIA-xxxxxxxx-xxxx
 ```
 
-Bot 回复「绑定成功」后，你的本机与飞书建立了专属通道。
-
-**第 3 步：配置本机环境**
-
-```bash
-cp .env.daemon.template ~/.aria/.env
-# 编辑 ~/.aria/.env，填入:
-```
+配置 `~/.aria/.env`：
 
 ```env
 ARIA_RELAY_URL=wss://relay.aria.ai
-ARIA_RELAY_CLIENT_ID=ARIA-xxxxxxxx-xxxx   # 第1步生成的ID
+ARIA_RELAY_CLIENT_ID=ARIA-xxxxxxxx-xxxx
 ARIA_RELAY_MODE=relay
-ARIA_CODE_DIR=~/aria-code                  # 本机 aria-code 路径
-ARIA_API_BASE=http://localhost:8000
+ARIA_CODE_DIR=~/aria-code
 ```
 
-**第 4 步：启动**
+启动：
 
 ```bash
-# 前台运行（调试用）
-python3 aria_relay_client.py
-
-# 后台常驻（推荐）
 python3 aria_daemon.py start
 ```
 
-现在在飞书任意群@你的 Bot，或私聊发送问题即可：
+### 模式 B：自建飞书应用
 
-```
-@Aria 帮我看看 NVDA 今天怎么样？
-@Aria /screen PE<15 ROE>20 市值>500亿
-```
-
----
-
-### 方案 B：自建飞书应用（双向交互，完整功能）
-
-> 适合企业/团队部署，支持斜杠命令、主动推送、按钮交互。
-
-**第 1 步：创建飞书自建应用**
-
-1. 打开 [飞书开放平台](https://open.feishu.cn/app) → 「创建自建应用」
-2. 进入「凭证与基本信息」→ 复制 **App ID** 和 **App Secret**
-3. 进入「事件订阅」→ 设置请求地址：`https://你的域名/api/v1/feishu/webhook`
-4. 订阅事件：`im.message.receive_v1`（接收消息）
-5. 进入「权限管理」→ 开启：`im:message`（读写消息）
-6. 发布应用
-
-**第 2 步：内网穿透（无公网IP时）**
-
-```bash
-# 使用 ngrok（免费）
-ngrok http 8000
-# 将 https://xxx.ngrok.io 填入飞书事件订阅地址
-```
-
-**第 3 步：配置**
-
-```bash
-cp .env.daemon.template ~/.aria/.env
-```
+1. 打开[飞书开放平台](https://open.feishu.cn/app) → 创建自定义应用
+2. 设置事件 URL：`https://yourdomain.com/api/v1/feishu/webhook`
+3. 订阅 `im.message.receive_v1`
 
 ```env
-# 飞书应用凭证
 FEISHU_APP_ID=cli_xxxxxxxxxxxxxxxxx
 FEISHU_APP_SECRET=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-FEISHU_ENCRYPT_KEY=              # 可选，生产环境建议开启
-FEISHU_DEFAULT_CHAT_ID=oc_xxx    # 默认推送群的 Chat ID
-
-# 运行模式
 ARIA_RELAY_MODE=own_app
-ARIA_CODE_DIR=~/aria-code
-ARIA_API_BASE=http://localhost:8000
-```
-
-**第 4 步：启动**
-
-```bash
-python3 aria_daemon.py start
-# 或直接启动飞书 Bot
-python3 aria_feishu_bot.py
-```
-
-**飞书 Bot 支持的命令**
-
-```
-/price 600519          → 茅台实时行情
-/brief AAPL            → AI 基本面简报
-/screen PE<20 ROE>15   → 选股筛选
-/backtest momentum SPY → 策略回测
-/portfolio 茅台 宁德 腾讯 → 组合分析
-/help                  → 显示所有命令
 ```
 
 ---
 
-## 📱 Telegram Integration
+## 📱 Telegram 集成
 
-在 Telegram 里随时随地问 Aria，支持私聊和群组。
+### 配置
 
-### 架构图
+1. 给 **@BotFather** 发送 `/newbot` → 复制 **Bot Token**
+2. 给 **@userinfobot** 发送消息 → 复制 **Chat ID**
 
-```
-Telegram App
-     │  你的消息
-     ▼
-Telegram Bot API (api.telegram.org)
-     │  轮询 / Webhook
-     ▼
-aria_telegram_bot.py (本机)
-     │
-     ▼
-aria_cli.py → LLM → 返回结果
-     │
-     ▼
-Telegram Bot API → 你的手机
-```
-
----
-
-### Step 1：创建 Telegram Bot
-
-1. 在 Telegram 搜索 **@BotFather**，发送 `/newbot`
-2. 为 Bot 起名（如 `Aria Financial Bot`）
-3. 设置用户名（必须以 `bot` 结尾，如 `aria_finance_bot`）
-4. BotFather 返回你的 **Bot Token**：`1234567890:ABCDEFGxxxxxxxxxxxxxx`
-
-### Step 2：获取你的 Chat ID
-
-方法一（推荐）：向 **@userinfobot** 发消息，它会直接返回你的 Chat ID。
-
-方法二：向你的 Bot 发任意消息，然后访问：
-```
-https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates
-```
-在返回 JSON 里找 `"chat":{"id": 123456789}` 即为你的 Chat ID。
-
-### Step 3：配置
-
-```bash
-cp .env.daemon.template ~/.aria/.env
-# 编辑 ~/.aria/.env：
-```
+配置环境变量：
 
 ```env
-# Telegram Bot 配置
 TELEGRAM_BOT_TOKEN=1234567890:ABCDEFGxxxxxxxxxxxxxx
-TELEGRAM_ALLOWED_IDS=123456789          # 你的 Chat ID（逗号分隔多个）
-
-# 如果要允许群组，把群组 ID 也加进来（群组 ID 是负数）
-# TELEGRAM_ALLOWED_IDS=123456789,-987654321
-
+TELEGRAM_ALLOWED_IDS=123456789
 ARIA_CODE_DIR=~/aria-code
-ARIA_API_BASE=http://localhost:8000
 ```
 
-> ⚠️ **安全提示**：`TELEGRAM_ALLOWED_IDS` 只允许指定 ID 的用户使用 Bot。不填则任何人都可以使用，**强烈建议填写**。
-
-### Step 4：启动
+启动：
 
 ```bash
-# 前台运行（调试）
-python3 aria_telegram_bot.py
-
-# 后台常驻（推荐）
 python3 aria_daemon.py start
-
-# 开机自启（macOS）
-python3 aria_daemon.py install   # 注册 launchd 服务
 ```
 
-### Step 5：开始使用
-
-在 Telegram 私聊你的 Bot：
+在 Telegram 中使用：
 
 ```
-/start                     → 欢迎 + 帮助
-/price AAPL                → 苹果实时报价
-/price 600519              → 茅台 A股报价
-
-直接发送自然语言:
-"帮我分析 NVDA 的技术面"
-"什么是夏普比率？给我公式"
-"茅台最新财报关键数据"
-"帮我做一个 AAPL MSFT GOOGL 的组合回测"
+/price AAPL                → 苹果实时行情
+/price 600519              → 茅台 A 股
+/price BTC/USDT            → 比特币
+分析 NVDA 的动量            → AI 综合分析
 ```
 
 ---
 
-### 连接状态速查
-
-```bash
-# 检查所有服务状态
-python3 aria_daemon.py status
-
-# 输出示例:
-# ✅ Telegram Bot    在线  (最后消息: 3分钟前)
-# ✅ Feishu Relay    在线  (已绑定 2 个群)
-# ✅ Ollama          在线  qwen2.5-coder:7b
-# ✅ Market Data     在线  东方财富 / yfinance
-# ⚠️ APNs            未配置  (iOS推送不可用)
-```
-
----
-
-## ⚡ Commands Reference
-
-### Market & Quotes
-
-```bash
-/quote AAPL MSFT TSLA          # 实时报价（多标的）
-/quote 000001 600519 300750    # A股报价
-/quote BTC/USDT ETH/USDT       # 加密货币
-/news AAPL                     # 最新新闻
-/regime                        # 市场状态（牛/熊/震荡）
-```
-
-### Quantitative Research
-
-```bash
-/signal TSLA                   # 技术信号（RSI / MACD / 布林带）
-/backtest momentum SPY 2023-01-01 2024-12-31
-/backtest ml 600519 300750 NVDA     # ML 信号回测（三策略对比）
-/kelly AAPL 0.6 2.0            # Kelly 公式 — 仓位建议
-/factor PE PB ROE              # 多因子分析
-/screen PE<15 ROE>20 市值>500亿  # 选股筛选
-/portfolio AAPL MSFT GOOGL     # 投资组合优化
-/dcf                           # DCF 估值模板
-```
-
-### Analysis
-
-```bash
-/brief AAPL                    # AI 一分钟基本面简报
-/compare BABA JD               # 公司对比（财务 + 估值）
-/macro                         # 宏观经济仪表盘
-/sector tech                   # 板块分析
-/realty 上海 浦东               # 不动产分析
-```
-
-### System
-
-```bash
-/model                         # 查看 / 切换 LLM
-/provider                      # LLM 提供商状态
-/status                        # 系统健康检查
-/tools                         # 已启用工具列表
-/export                        # 导出对话
-/clear                         # 清除历史
-```
-
----
-
-## 🏗️ Architecture
-
-### System Overview
+## 🏗️ 架构
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                        Aria Code                            │
-│                                                             │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐  │
-│  │  终端CLI  │  │  飞书Bot  │  │ Telegram │  │  Webhook │  │
-│  └────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬─────┘  │
-│       └──────────────┴──────────────┴──────────────┘        │
-│                              │                               │
-│                    ┌─────────▼──────────┐                   │
-│                    │   aria_daemon.py    │                   │
-│                    │  (消息路由 + 调度)   │                   │
-│                    └─────────┬──────────┘                   │
-│                              │                               │
-│              ┌───────────────┼───────────────┐              │
-│              │               │               │              │
-│    ┌─────────▼──┐  ┌─────────▼──┐  ┌────────▼──┐          │
-│    │   LLM路由   │  │  工具执行   │  │  数据层   │          │
-│    │ Ollama/API │  │  bash/file  │  │ 行情/财报 │          │
-│    └────────────┘  └────────────┘  └───────────┘          │
-└─────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                         Aria Code v4.0                           │
+│                                                                  │
+│  ┌──────────┐  ┌────────────┐  ┌──────────┐  ┌─────────────┐  │
+│  │ 终端 CLI │  │ 飞书机器人 │  │Telegram  │  │  Webhook    │  │
+│  │          │  │（中继/自建）│  │  机器人  │  │  外部接口   │  │
+│  └────┬─────┘  └─────┬──────┘  └────┬─────┘  └──────┬──────┘  │
+│       └───────────────┴──────────────┴────────────────┘         │
+│                               │                                  │
+│                     ┌─────────▼──────────┐                      │
+│                     │   aria_daemon.py   │                      │
+│                     │     消息路由器      │                      │
+│                     └─────────┬──────────┘                      │
+│                               │                                  │
+│              ┌────────────────┼────────────────┐                │
+│              │                │                │                │
+│   ┌──────────▼───┐  ┌─────────▼───┐  ┌────────▼──────┐        │
+│   │  LLM 路由器  │  │  工具执行   │  │   数据层      │        │
+│   │19+ 供应商    │  │  bash/文件  │  │Finnhub/东财   │        │
+│   └──────────────┘  └─────────────┘  └───────────────┘        │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
-### File Structure
+### 文件结构
 
 ```
 aria-code/
-├── aria_cli.py               # 主 CLI + REPL 入口
-├── aria_daemon.py            # 后台守护进程 + 调度
-├── aria_feishu_bot.py        # 飞书 Bot（自建应用模式）
-├── aria_relay_client.py      # 飞书中继客户端
-├── aria_relay_server.py      # 飞书中继服务器（可自建）
-├── aria_telegram_bot.py      # Telegram Bot
-├── market_data_client.py     # 统一行情接口
-├── local_finance_tools.py    # 内置金融计算器
-├── financial_agents.py       # 多智能体编排
+├── aria_cli.py               # 主 CLI + REPL（键盘快捷键、! Shell、@文件）
+├── aria_daemon.py            # 后台守护进程 + 定时任务
+├── market_data_client.py     # 统一行情数据层（美股优先走 Finnhub）
+├── setup_wizard.py           # 双语配置向导（19 家供应商）
 │
-├── providers/llm/            # LLM 适配层
-│   ├── anthropic.py          # Claude
-│   ├── ollama.py             # Ollama（本地）
-│   ├── openai_compat.py      # OpenAI + 兼容 API
-│   └── registry.py           # 自动检测与路由
+├── apps/cli/
+│   ├── i18n.py               # 语言自动检测 + 界面字符串翻译
+│   ├── commands/
+│   │   └── model_cmds.py     # /model /apikey /providers（19 家云端供应商）
+│   ├── prompts/
+│   │   └── coding.py         # 代码生成提示（end_date 修复、akshare 降级）
+│   └── tools/
+│       └── market_tools.py   # 行情工具（Finnhub dp 字段）
 │
-├── agents/
-│   ├── financial/            # 基本面/技术/宏观/风险/合成 Agent
-│   └── realty/               # 不动产 9 个专项 Agent
+├── ui/
+│   ├── banner.py             # 双语横幅（i18n 感知）
+│   └── completer.py          # 模糊自动补全：/ 命令 · @ 文件 · ! 历史
 │
-├── brokers/                  # 券商接入
-│   ├── cn/                   # 富途/长桥/老虎/东方财富/中信
-│   └── intl/                 # IBKR/Alpaca/Webull
-│
-├── datasources/sources/      # 数据源适配器
-│   ├── yfinance_source.py
-│   ├── akshare_source.py
-│   ├── fred_source.py        # 美联储宏观数据
-│   └── edgar_source.py       # SEC EDGAR
-│
-├── apps/cli/commands/        # 斜杠命令模块（已拆分）
-│   ├── backtest_cmds.py
-│   ├── market_cmds.py
-│   ├── portfolio_cmds.py
-│   └── broker_cmds.py
-│
-└── config/                   # 配置模板
-    ├── providers.example.yaml
-    ├── mcp_servers.example.json
-    └── datasources.example.yaml
+├── providers/llm/            # LLM 适配器（19+ 云端 endpoint）
+├── agents/financial/         # 基本面 / 技术面 / 宏观 / 风险 / 综合智能体
+├── brokers/                  # 国内（富途/长桥/老虎）+ 国际（IBKR/Alpaca）
+└── datasources/sources/      # yfinance · akshare · FRED · EDGAR · Finnhub
 ```
 
 ---
 
-## 📡 Market Data Sources
+## 📡 市场数据来源
 
-| 数据源 | 覆盖范围 | 是否需要 Key |
-|--------|----------|-------------|
-| **东方财富 Eastmoney** | A股实时报价、北向资金、涨跌停 | 无（免费） |
-| **akshare** | A股历史、财务报表、行业数据 | 无（免费） |
-| **yfinance** | 美股、港股、ETF、外汇 | 无（免费） |
-| **ccxt** | 100+ 加密货币交易所 | 无（免费档） |
-| **FRED** | 美联储宏观数据、GDP、CPI | 可选（免费注册） |
-| **SEC EDGAR** | 美股 10-K/10-Q 财报 | 无（免费） |
-| Tushare | A股历史 + 财务（更完整） | 可选（免费 token） |
-| Finnhub | 美股实时 + 盈利数据 | 可选（免费档） |
-| Alpha Vantage | 美股历史 + 基本面 | 可选（免费档） |
+| 数据源 | 覆盖范围 | API Key |
+|--------|----------|---------|
+| **Finnhub** ⭐ | 美股实时行情（主要）+ 财报 | 可选（免费档位） |
+| **东方财富** | A 股实时、北向资金、涨跌停 | 无（免费） |
+| **akshare** | A 股历史、财务、行业数据 | 无（免费） |
+| **yfinance** | 美/港/全球股票、ETF、外汇、历史 | 无（免费） |
+| **ccxt** | 100+ 加密交易所 | 无（免费档位） |
+| **FRED** | 美联储宏观数据 — GDP、CPI、利率 | 可选（免费注册） |
+| **SEC EDGAR** | 美股 10-K / 10-Q 报告 | 无（免费） |
+| Alpha Vantage | 美股历史 + 基本面 | 可选（免费档位） |
+| Polygon | 美股专业数据 | 可选（免费档位） |
+| Tushare | A 股完整数据 | 可选（免费 Token） |
 
 ---
 
-## 🔌 MCP Integration
+## 🔌 MCP 集成
 
-接入任何 [Model Context Protocol](https://modelcontextprotocol.io) 服务器：
-
-```bash
-cp config/mcp_servers.example.json config/mcp_servers.json
-```
+对接任意 [Model Context Protocol](https://modelcontextprotocol.io) 服务器：
 
 ```json
 {
@@ -606,53 +568,50 @@ cp config/mcp_servers.example.json config/mcp_servers.json
 }
 ```
 
-在 Aria 内使用：
-
 ```bash
-/mcp list          # 查看已连接的 MCP 服务
-/mcp status        # 服务状态
+/mcp list      # 列出已连接的 MCP 服务器
+/mcp status    # 服务器健康状态
+/mcp tools     # 所有可用 MCP 工具
 ```
 
 ---
 
-## ⚙️ Configuration
+## ⚙️ 配置
 
-Aria Code 的配置存放在 `~/.arthera/config.json`。也可以在项目根目录放 `.ariarc` 文件实现项目级配置：
+设置存储在 `~/.arthera/config.json`。在项目目录添加 `.ariarc` 可覆盖项目级配置：
 
 ```json
 {
-  "model": "ollama/qwen2.5-coder:7b",
+  "model": "qwen2.5-coder:7b",
+  "ui_lang": "auto",
   "market": "cn",
-  "default_symbols": ["600519", "300750", "0700.HK", "NVDA"],
-  "tools": ["read_file", "write_file", "bash", "web_search"],
-  "commands": {
-    "/morning": "生成今日 A股早盘简报，重点关注 {default_symbols}"
-  }
+  "permission_mode": "workspace-write",
+  "default_symbols": ["000001", "600519", "300750", "NVDA"],
+  "thinking": false
 }
 ```
 
-### LLM Provider Priority
+### LLM 供应商优先级
 
-Aria 按优先级自动选择可用的 LLM：
+Aria 自动选择第一个可用供应商：
 
 ```
-本地 Ollama  →  Anthropic Claude  →  OpenAI  →  DeepSeek  →  Gemini  →  DashScope
-（离线优先）      （最强推理）         （通用）     （高性价比）   （多模态）  （中文优化）
+本地 Ollama  →  Anthropic  →  OpenAI  →  DeepSeek  →  Google  →  xAI  →  Groq  →  …
+（离线优先）    （推理强）    （通用）    （性价比）    （多模态）  （联网）  （高速）
 ```
 
-强制使用本地模式：`ARIA_MODEL=ollama/qwen2.5-coder:7b`
+强制本地模式：`ARIA_MODEL=ollama/qwen2.5-coder:7b`
 
 ---
 
-## 🛠️ Requirements
+## 🛠️ 环境要求
 
 - Python **3.10+**
-- [Ollama](https://ollama.ai)（本地模式，强烈推荐）
-- RAM: 4GB+（7B 模型推荐 8GB+）
-- 系统: macOS · Linux · Windows (WSL2)
+- [Ollama](https://ollama.ai)（强烈推荐，用于离线模式）
+- 内存：4GB+（7B 模型建议 8GB+）
+- macOS · Linux · Windows（WSL2）
 
 ```bash
-# 安装所有依赖
 pip install -r requirements.txt
 ```
 
@@ -660,7 +619,7 @@ pip install -r requirements.txt
 
 ---
 
-## 🤝 Contributing
+## 🤝 参与贡献
 
 欢迎贡献！请查看 [CONTRIBUTING.md](./CONTRIBUTING.md)。
 
@@ -672,27 +631,25 @@ pip install -r requirements.txt
 pytest tests/ -v
 ```
 
-Issues、PR、中文讨论均欢迎。
+---
+
+## 与 Arthera 的关系
+
+Aria Code 是 [Arthera](https://arthera.finance) 的开源命令行组件 — Arthera 是一款 AI 驱动的量化投资平台，完整版包括 Web 仪表盘、桌面终端、iOS App 和机构级量化引擎。
+
+Aria Code 设计为**独立工具** — 无需 Arthera 后端即可运行。所有金融计算在本地完成。云端功能均可选。
 
 ---
 
-## 🔗 Links
+## 许可证
 
-- 🌐 Website: [arthera.finance](https://arthera.finance)
-- 📦 Full platform: [github.com/Cinsoul/Arthera](https://github.com/Cinsoul/Arthera)
-- 🐛 Issues: [github.com/Cinsoul/Aria-Code/issues](https://github.com/Cinsoul/Aria-Code/issues)
-- 💬 Discussions: [github.com/Cinsoul/Aria-Code/discussions](https://github.com/Cinsoul/Aria-Code/discussions)
-
----
-
-## Relation to Arthera
-
-Aria Code 是 [Arthera](https://arthera.finance) 量化投资平台的开源 CLI 组件。完整 Arthera 平台包含 Web 仪表盘、桌面终端、iOS App 和机构量化引擎。
-
-Aria Code **可完全独立使用** — 不依赖 Arthera 后端。所有金融计算均在本机完成。云端功能（实时 A 股数据、ML 预测）可选，连接自建后端或 Arthera 云服务。
+MIT © 2025 Arthera Team — 详见 [LICENSE](./LICENSE)
 
 ---
 
 <p align="center">
-  MIT © 2025 Arthera Team — <a href="./LICENSE">License</a>
+  <a href="https://arthera.finance">官网</a> ·
+  <a href="https://github.com/Cinsoul/Arthera">完整平台</a> ·
+  <a href="https://github.com/Cinsoul/Aria-Code/issues">问题反馈</a> ·
+  <a href="https://github.com/Cinsoul/Aria-Code/discussions">讨论社区</a>
 </p>

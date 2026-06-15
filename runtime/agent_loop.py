@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import dataclass, field
-from typing import Awaitable, Callable, Dict, Iterable, List, Sequence, Tuple
+from typing import AsyncGenerator, Awaitable, Callable, Dict, FrozenSet, Iterable, List, Optional, Sequence, Tuple, Union
 
 from .tool_executor import ToolExecutor
 
@@ -620,3 +620,265 @@ def build_next_turn_messages(total_response: str, tool_results: Sequence[dict]) 
 
     user_message = {"role": "user", "content": user_content}
     return assistant_message, user_message, followup
+
+
+# ── AgentEvent typed union ────────────────────────────────────────────────────
+
+@dataclass(frozen=True)
+class AgentEventToken:
+    """A text token streamed from the model."""
+    text: str
+
+
+@dataclass(frozen=True)
+class AgentEventThinking:
+    """A thinking/reasoning token from extended-thinking models."""
+    content: str
+
+
+@dataclass(frozen=True)
+class AgentEventToolCall:
+    """Model requested a tool call (before execution)."""
+    tool: str
+    params: dict
+
+
+@dataclass(frozen=True)
+class AgentEventToolResult:
+    """One tool has finished executing."""
+    tool: str
+    result: dict
+    elapsed: float
+
+
+@dataclass(frozen=True)
+class AgentEventStatus:
+    """Informational status change (e.g. provider fallback)."""
+    state: str
+    message: str
+
+
+@dataclass(frozen=True)
+class AgentEventComplete:
+    """Agent loop finished normally. Carries the full turn result."""
+    result: "AgentTurnResult"
+
+
+@dataclass(frozen=True)
+class AgentEventCancelled:
+    """Agent loop was cancelled by the user."""
+    partial_text: str
+
+
+@dataclass(frozen=True)
+class AgentEventError:
+    """Agent loop encountered an unrecoverable error."""
+    error: str
+
+
+AgentEvent = Union[
+    AgentEventToken,
+    AgentEventThinking,
+    AgentEventToolCall,
+    AgentEventToolResult,
+    AgentEventStatus,
+    AgentEventComplete,
+    AgentEventCancelled,
+    AgentEventError,
+]
+
+
+# ── AgentOptions ──────────────────────────────────────────────────────────────
+
+@dataclass
+class AgentOptions:
+    """Tunable parameters for one run_agent() invocation."""
+
+    max_rounds: int = 10
+    serial_tools: FrozenSet[str] = field(
+        default_factory=lambda: frozenset(DEFAULT_SERIAL_TOOLS)
+    )
+    tool_schemas: List[dict] = field(default_factory=list)
+
+
+# ── run_agent() ───────────────────────────────────────────────────────────────
+
+async def run_agent(
+    prompt: str,
+    history: list,
+    *,
+    provider_fn: Callable,
+    tool_executor: ToolExecutor,
+    options: Optional["AgentOptions"] = None,
+    remote_runner: Optional[RemoteToolRunner] = None,
+    on_token: Optional[Callable[[str], None]] = None,
+    on_thinking: Optional[Callable[[str], None]] = None,
+    on_tool_call: Optional[Callable[[str, dict], None]] = None,
+    on_tool_result: Optional[Callable[[str, dict], None]] = None,
+    on_status: Optional[Callable[[str, str], None]] = None,
+    hook: Optional[Hook] = None,
+    cancel_event: Optional[asyncio.Event] = None,
+    tool_result_formatter: Optional[SummaryFormatter] = None,
+) -> AsyncGenerator["AgentEvent", None]:
+    """Provider-agnostic multi-round agent loop.
+
+    Yields ``AgentEvent`` objects so every caller (REPL, bot, API) can
+    handle UI in its own way without duplicating round-management logic.
+
+    Parameters
+    ----------
+    prompt:
+        The user's message for this turn.
+    history:
+        Conversation history **before** the current prompt.
+    provider_fn:
+        Async callable ``(message, history, on_token, on_thinking,
+        on_tool_call, cancel_event) -> dict``.  Must return the same
+        result dict that ``stream_ollama`` / ``stream_chat`` return.
+    tool_executor:
+        Local tool registry.
+    options:
+        Tunable loop parameters (max_rounds, serial_tools, …).
+    remote_runner:
+        Optional async callable for tools not in ``tool_executor``.
+    on_token / on_thinking / on_tool_call / on_tool_result / on_status:
+        Pass-through callbacks forwarded to ``provider_fn`` so callers
+        that already set up streaming callbacks don't need to change.
+    hook:
+        Pre/post-tool hook fired around each tool execution.
+    cancel_event:
+        asyncio.Event; when set the loop exits at the next safe point.
+    tool_result_formatter:
+        Formats a tool result dict into a summary string.  Defaults to
+        ``str(result.get('output', result))``.
+    """
+    opts = options or AgentOptions()
+    _formatter: SummaryFormatter = tool_result_formatter or (
+        lambda _tool, res: str(res.get("output", res))
+    )
+    _serial = set(opts.serial_tools)
+
+    turn_state = AgentTurnState(provider="unknown")
+    start_time = time.time()
+    current_message = prompt
+    token_count = 0
+    thinking_tokens = 0
+    result: dict = {}
+
+    for round_num in range(opts.max_rounds):
+        # ── Provider call ────────────────────────────────────────────────────
+        response_text = ""
+        _round_tokens = 0
+
+        def _wrap_on_token(tok: str) -> None:
+            nonlocal response_text, token_count, _round_tokens
+            response_text += tok
+            _round_tokens += 1
+            token_count += 1
+            if on_token is not None:
+                on_token(tok)
+
+        def _wrap_on_thinking(content: str) -> None:
+            nonlocal thinking_tokens
+            thinking_tokens += 1
+            if on_thinking is not None:
+                on_thinking(content)
+
+        def _wrap_on_tool_call(tool: str, params: dict) -> None:
+            if on_tool_call is not None:
+                on_tool_call(tool, params)
+
+        try:
+            result = await provider_fn(
+                current_message,
+                history if round_num == 0 else [],
+                on_token=_wrap_on_token,
+                on_thinking=_wrap_on_thinking,
+                on_tool_call=_wrap_on_tool_call,
+                on_tool_result=on_tool_result,
+                on_status=on_status,
+                cancel_event=cancel_event,
+            )
+        except Exception as exc:
+            yield AgentEventError(error=str(exc))
+            return
+
+        if result.get("cancelled"):
+            turn_state.append_response(response_text)
+            yield AgentEventCancelled(partial_text=turn_state.total_response)
+            return
+
+        if not result.get("success"):
+            yield AgentEventError(error=result.get("error", "Unknown error"))
+            return
+
+        turn_state.apply_model_result(result, response_text)
+
+        pending = result.get("tool_calls_pending", [])
+        if not pending:
+            break
+
+        # Warn caller on final round
+        if round_num == opts.max_rounds - 1:
+            yield AgentEventStatus(
+                state="max_rounds",
+                message=f"Max rounds ({opts.max_rounds}) reached",
+            )
+            break
+
+        # ── Tool execution ───────────────────────────────────────────────────
+        _parallel_done = await run_parallel_tools(
+            pending,
+            tool_executor,
+            remote_runner=remote_runner,
+            hook=hook,
+            serial_tools=_serial,
+        )
+        tool_turn = ToolTurnPlan(pending=pending, parallel_done=_parallel_done)
+        tool_batch = tool_turn.batch
+
+        for task in tool_turn.tasks():
+            if cancel_event and cancel_event.is_set():
+                tool_batch.cancel()
+                break
+
+            tool_name = task.tool_name
+            tool_params = task.params
+
+            if task.has_parallel_result:
+                tr = task.parallel_result
+                tool_batch.add_result(tool_name, tr, _formatter)
+                yield AgentEventToolResult(tool=tool_name, result=tr, elapsed=0.0)
+                continue
+
+            tr, tool_elapsed = await run_serial_tool(
+                tool_name,
+                tool_params,
+                tool_executor,
+                remote_runner=remote_runner,
+                hook=hook,
+            )
+            tool_batch.add_result(tool_name, tr, _formatter, elapsed=tool_elapsed)
+            yield AgentEventToolResult(tool=tool_name, result=tr, elapsed=tool_elapsed)
+
+        turn_state.add_tool_time(tool_batch.elapsed_total)
+        if tool_batch.cancelled:
+            yield AgentEventCancelled(partial_text=turn_state.total_response)
+            return
+
+        assistant_msg, user_msg, followup = tool_batch.build_next_turn(
+            turn_state.total_response
+        )
+        history = list(history) + [assistant_msg, user_msg]
+        current_message = followup
+        turn_state.reset_response()
+
+    # ── Build final result ───────────────────────────────────────────────────
+    elapsed = time.time() - start_time
+    turn_result = turn_state.build_result(
+        elapsed=elapsed,
+        fallback_response=result.get("response", ""),
+        token_count=token_count,
+        thinking_tokens=thinking_tokens,
+    )
+    yield AgentEventComplete(result=turn_result)

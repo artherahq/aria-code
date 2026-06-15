@@ -45,6 +45,57 @@ _ARIA_DIR = Path.home() / ".aria"
 _ENV_FILE = _ARIA_DIR / ".env"
 _CFG_FILE = _ARIA_DIR / "config.json"
 
+# ── System language detection ─────────────────────────────────────────────────
+
+try:
+    from apps.cli.i18n import detect_system_lang as _detect_lang
+    _SYS_LANG = _detect_lang()
+except Exception:
+    _SYS_LANG = "en"
+
+# Bilingual wizard strings — keyed by (_SYS_LANG, key)
+_WZ: dict[str, dict[str, str]] = {
+    "setup_model_title":     {"zh": "本地模型配置", "en": "Local Model Setup"},
+    "ollama_not_found":      {"zh": "未检测到 Ollama", "en": "Ollama not found"},
+    "install_ollama_q":      {"zh": "是否自动安装 Ollama？", "en": "Auto-install Ollama?"},
+    "install_ollama_ing":    {"zh": "正在安装 Ollama...", "en": "Installing Ollama..."},
+    "install_ollama_fail":   {"zh": "Ollama 安装失败，请手动安装: https://ollama.com",
+                              "en": "Ollama install failed. Visit https://ollama.com"},
+    "install_ollama_ok":     {"zh": "Ollama 安装完成", "en": "Ollama installed"},
+    "skip_ollama":           {"zh": "跳过 Ollama 安装。你也可以配置 API 模型（下方步骤）。",
+                              "en": "Skipping Ollama. You can configure a cloud API model below."},
+    "win_ollama_hint":       {"zh": "请访问 https://ollama.com/download 下载 Windows 版本后重新运行向导。",
+                              "en": "Download the Windows installer from https://ollama.com/download and re-run."},
+    "download_model":        {"zh": "正在下载模型 {name}，可能需要几分钟...",
+                              "en": "Downloading {name}, this may take a few minutes..."},
+    "select_model_prompt":   {"zh": "选择模型（输入序号/名称，直接回车使用 {default}）",
+                              "en": "Select model (number/name, Enter to use {default})"},
+    "select_model_no_local": {"zh": "选择模型（输入序号 1-6 或完整名称）",
+                              "en": "Select model (enter number 1-6 or full name)"},
+    "model_set":             {"zh": "已选择模型: {name}", "en": "Model set: {name}"},
+    "pull_model_q":          {"zh": "是否立即下载？", "en": "Download now?"},
+    "pull_skip":             {"zh": "跳过下载，请稍后运行: ollama pull {name}",
+                              "en": "Skipping download. Run later: ollama pull {name}"},
+    "lang_detected":         {"zh": "检测到系统语言：中文（可用 /config set ui_lang=en 切换）",
+                              "en": "Detected system language: English (use /config set ui_lang=zh to switch)"},
+    "api_keys_section":      {"zh": "API 密钥配置（可选）", "en": "API Keys (Optional)"},
+    "api_keys_info":         {"zh": "配置后可使用云端模型（Claude / GPT-4 / DeepSeek 等）",
+                              "en": "Configure to use cloud models (Claude / GPT-4 / DeepSeek etc.)"},
+    "api_key_prompt":        {"zh": "配置 {name} API Key{suffix}？",
+                              "en": "Configure {name} API Key{suffix}?"},
+    "api_key_saved":         {"zh": "{name} API Key 已保存", "en": "{name} API Key saved"},
+    "api_keys_done":         {"zh": "共配置 {count} 个 API Key",
+                              "en": "{count} API key(s) configured"},
+}
+
+
+def _wz(key: str, **kwargs) -> str:
+    """Look up wizard string in detected system language."""
+    entry = _WZ.get(key, {})
+    tmpl = entry.get(_SYS_LANG) or entry.get("en") or key
+    return tmpl.format(**kwargs) if kwargs else tmpl
+
+
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def _ask(prompt: str, default: str = "", password: bool = False) -> str:
@@ -113,31 +164,30 @@ def _ollama_models() -> list[str]:
 
 
 def _install_ollama() -> bool:
-    _info("正在安装 Ollama...")
+    _info(_wz("install_ollama_ing"))
     system = platform.system()
     if system == "Darwin":
         if subprocess.run(["which", "brew"], capture_output=True).returncode == 0:
             ret = subprocess.run(["brew", "install", "ollama"]).returncode
             return ret == 0
-        # Direct download
         cmd = 'curl -fsSL https://ollama.com/install.sh | sh'
     elif system == "Linux":
         cmd = 'curl -fsSL https://ollama.com/install.sh | sh'
     elif system == "Windows":
-        _warn("请访问 https://ollama.com/download 下载 Windows 版本后重新运行向导。")
+        _warn(_wz("win_ollama_hint"))
         return False
     else:
-        _warn(f"未知系统 {system}，请手动安装 Ollama: https://ollama.com")
+        _warn(f"Unknown system {system}. Install manually: https://ollama.com")
         return False
     return subprocess.run(cmd, shell=True).returncode == 0
 
 
 def _pull_model(name: str) -> bool:
-    _info(f"正在下载模型 {name}，可能需要几分钟...")
+    _info(_wz("download_model", name=name))
     return subprocess.run(["ollama", "pull", name]).returncode == 0
 
 
-_RECOMMENDED_MODELS = [
+_RECOMMENDED_MODELS_ZH = [
     ("qwen2.5:7b",           "阿里通义千问 7B  ·  中文最强 · ~4GB  · 推荐"),
     ("deepseek-r1:7b",       "DeepSeek R1 7B   ·  推理强   · ~4GB"),
     ("llama3.2:3b",          "Meta Llama 3.2 3B ·  速度快   · ~2GB"),
@@ -145,50 +195,60 @@ _RECOMMENDED_MODELS = [
     ("qwen2.5:14b",          "通义千问 14B      ·  质量高   · ~8GB  · 需 16GB RAM"),
     ("deepseek-r1:14b",      "DeepSeek R1 14B   ·  推理最强 · ~8GB  · 需 16GB RAM"),
 ]
+_RECOMMENDED_MODELS_EN = [
+    ("qwen2.5:7b",           "Qwen2.5 7B  ·  Best Chinese+English · ~4GB  · Recommended"),
+    ("deepseek-r1:7b",       "DeepSeek R1 7B   ·  Strong reasoning · ~4GB"),
+    ("llama3.2:3b",          "Meta Llama 3.2 3B ·  Fast, lightweight · ~2GB"),
+    ("mistral:7b",           "Mistral 7B        ·  Balanced · ~4GB"),
+    ("qwen2.5:14b",          "Qwen2.5 14B       ·  High quality · ~8GB  · Needs 16GB RAM"),
+    ("deepseek-r1:14b",      "DeepSeek R1 14B   ·  Best reasoning · ~8GB · Needs 16GB RAM"),
+]
+_RECOMMENDED_MODELS = _RECOMMENDED_MODELS_ZH if _SYS_LANG == "zh" else _RECOMMENDED_MODELS_EN
 
 
 def setup_model(env: dict[str, str]) -> None:
-    _section("本地模型配置")
+    _section(_wz("setup_model_title"))
 
     if not _ollama_installed():
-        _warn("未检测到 Ollama")
-        if _confirm("是否自动安装 Ollama？"):
+        _warn(_wz("ollama_not_found"))
+        if _confirm(_wz("install_ollama_q")):
             if not _install_ollama():
-                _err("Ollama 安装失败，请手动安装: https://ollama.com")
+                _err(_wz("install_ollama_fail"))
                 return
-            _ok("Ollama 安装完成")
+            _ok(_wz("install_ollama_ok"))
         else:
-            _info("跳过 Ollama 安装。你也可以配置 API 模型（下方步骤）。")
+            _info(_wz("skip_ollama"))
             return
 
     existing = _ollama_models()
+    _installed_label = "✓ installed" if _SYS_LANG != "zh" else "✓ 已安装"
+    _other_label = "Other installed model" if _SYS_LANG != "zh" else "已安装的其他模型"
 
     if _rich:
+        _col_model  = "Model" if _SYS_LANG != "zh" else "模型"
+        _col_desc   = "Description" if _SYS_LANG != "zh" else "说明"
         t = Table(box=rbox.SIMPLE, show_header=True)
         t.add_column("#", style="dim", width=3)
-        t.add_column("模型", style="cyan")
-        t.add_column("说明", style="dim")
+        t.add_column(_col_model, style="cyan")
+        t.add_column(_col_desc, style="dim")
         for i, (name, desc) in enumerate(_RECOMMENDED_MODELS, 1):
-            marker = " [green]✓ 已安装[/green]" if name in existing else ""
+            marker = f" [green]{_installed_label}[/green]" if name in existing else ""
             t.add_row(str(i), name + marker, desc)
         if existing:
             for m in existing:
                 if not any(m == n for n, _ in _RECOMMENDED_MODELS):
-                    t.add_row("*", m, "已安装的其他模型")
+                    t.add_row("*", m, _other_label)
         console.print(t)
     else:
         for i, (name, desc) in enumerate(_RECOMMENDED_MODELS, 1):
-            installed = " [已安装]" if name in existing else ""
+            installed = f" [{_installed_label}]" if name in existing else ""
             print(f"  {i}. {name}{installed} — {desc}")
 
     if existing:
         default_model = existing[0]
-        choice = _ask(
-            f"选择模型（输入序号/名称，直接回车使用 {default_model}）",
-            default=default_model,
-        )
+        choice = _ask(_wz("select_model_prompt", default=default_model), default=default_model)
     else:
-        choice = _ask("选择模型（输入序号 1-6 或完整名称）", default="1")
+        choice = _ask(_wz("select_model_no_local"), default="1")
 
     # Resolve number → model name
     try:
@@ -201,36 +261,68 @@ def setup_model(env: dict[str, str]) -> None:
         model_name = choice
 
     if model_name not in existing:
-        if _confirm(f"模型 {model_name} 未安装，是否立即下载？"):
+        _pull_q = (f"模型 {model_name} 未安装，是否立即下载？" if _SYS_LANG == "zh"
+                   else f"Model {model_name} not installed. Download now?")
+        if _confirm(_pull_q):
             if _pull_model(model_name):
-                _ok(f"模型 {model_name} 下载完成")
+                _ok(f"模型 {model_name} 下载完成" if _SYS_LANG == "zh"
+                    else f"Model {model_name} downloaded")
             else:
-                _err(f"模型下载失败，请手动运行: ollama pull {model_name}")
+                _err(_wz("pull_skip", name=model_name))
         else:
-            _warn(f"跳过下载。记得手动运行: ollama pull {model_name}")
+            _warn(_wz("pull_skip", name=model_name))
 
     env["ARIA_DEFAULT_MODEL"] = model_name
     env["OLLAMA_BASE_URL"] = "http://localhost:11434"
-    _ok(f"默认模型设置为: {model_name}")
+    _ok(_wz("model_set", name=model_name))
 
 
 # ── Step 2: API keys (optional) ──────────────────────────────────────────────
 
 def setup_api_keys(env: dict[str, str]) -> None:
-    _section("API 密钥（可选）")
-    _info("配置后可使用 Claude / GPT-4 等云端模型，以及图片理解功能")
+    _section(_wz("api_keys_section"))
+    _info(_wz("api_keys_info"))
 
-    if _confirm("配置 Anthropic API Key (Claude)？", default=False):
-        key = _ask("ANTHROPIC_API_KEY", password=True)
-        if key:
-            env["ANTHROPIC_API_KEY"] = key
-            _ok("Anthropic API Key 已保存")
+    # (display_name, env_var, hint)
+    _LLM_PROVIDERS = [
+        # ── 国际
+        ("Anthropic (Claude)",         "ANTHROPIC_API_KEY",     "claude.ai/settings/keys"),
+        ("OpenAI (GPT-4o / Whisper)",  "OPENAI_API_KEY",        "platform.openai.com/api-keys"),
+        ("DeepSeek",                   "DEEPSEEK_API_KEY",       "platform.deepseek.com"),
+        ("Google Gemini",              "GOOGLE_API_KEY",         "aistudio.google.com/apikey"),
+        ("xAI Grok",                   "XAI_API_KEY",            "console.x.ai"),
+        ("Groq (fast inference)",      "GROQ_API_KEY",           "console.groq.com/keys"),
+        ("Mistral AI",                 "MISTRAL_API_KEY",        "console.mistral.ai/api-keys"),
+        ("Cohere",                     "COHERE_API_KEY",         "dashboard.cohere.com/api-keys"),
+        ("Perplexity",                 "PERPLEXITY_API_KEY",     "perplexity.ai/settings/api"),
+        ("Together AI",                "TOGETHER_API_KEY",       "api.together.xyz/settings/api-keys"),
+        # ── 国内
+        ("SiliconFlow 硅基流动",        "SILICONFLOW_API_KEY",   "cloud.siliconflow.cn"),
+        ("DashScope 阿里云百炼",         "DASHSCOPE_API_KEY",     "dashscope.aliyuncs.com"),
+        ("Moonshot Kimi 月之暗面",       "MOONSHOT_API_KEY",      "platform.moonshot.cn/api-keys"),
+        ("Zhipu GLM 智谱",              "ZHIPU_API_KEY",          "open.bigmodel.cn"),
+        ("Baidu ERNIE 百度千帆",         "QIANFAN_ACCESS_KEY",    "console.bce.baidu.com/iam/#/iam/accesslist"),
+        ("ByteDance Doubao 字节豆包",    "ARK_API_KEY",            "console.volcengine.com/ark"),
+        ("MiniMax",                    "MINIMAX_API_KEY",        "platform.minimaxi.com"),
+        ("StepFun 阶跃星辰",            "STEPFUN_API_KEY",        "platform.stepfun.com"),
+        ("01.AI Yi 零一万物",            "ONEAI_API_KEY",          "platform.lingyiwanwu.com"),
+    ]
 
-    if _confirm("配置 OpenAI API Key (GPT-4 / Whisper)？", default=False):
-        key = _ask("OPENAI_API_KEY", password=True)
-        if key:
-            env["OPENAI_API_KEY"] = key
-            _ok("OpenAI API Key 已保存")
+    _configured = []
+    for name, env_var, hint in _LLM_PROVIDERS:
+        already = bool(env.get(env_var) or __import__("os").getenv(env_var))
+        suffix = f" [已配置]" if already else ""
+        prompt = _wz("api_key_prompt", name=name, suffix=suffix)
+        if _confirm(prompt, default=False):
+            _info(f"  → {hint}")
+            key = _ask(env_var, password=True)
+            if key:
+                env[env_var] = key
+                _configured.append(name)
+                _ok(_wz("api_key_saved", name=name))
+
+    if _configured:
+        _ok(_wz("api_keys_done", count=len(_configured)))
 
 
 # ── Step 3: Feishu connection ─────────────────────────────────────────────────
@@ -346,6 +438,10 @@ def _write_aria_config(env: dict[str, str]) -> None:
     model = env.get("ARIA_DEFAULT_MODEL", "")
     if model:
         cfg["default_model"] = model
+        cfg["model"] = model  # also write as "model" for aria_cli.py
+
+    # Persist detected system language so UI renders correctly from first launch
+    cfg["ui_lang"] = _SYS_LANG
 
     _ARIA_DIR.mkdir(parents=True, exist_ok=True)
     _CFG_FILE.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
@@ -392,24 +488,40 @@ def _print_summary(env: dict[str, str]) -> None:
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Aria Code 配置向导")
-    parser.add_argument("--model",  action="store_true", help="仅配置模型")
-    parser.add_argument("--feishu", action="store_true", help="仅配置飞书")
-    parser.add_argument("--keys",   action="store_true", help="仅配置 API Key")
+    parser = argparse.ArgumentParser(description="Aria Code Setup Wizard / 配置向导")
+    parser.add_argument("--model",  action="store_true", help="Model setup only / 仅配置模型")
+    parser.add_argument("--feishu", action="store_true", help="Feishu only / 仅配置飞书")
+    parser.add_argument("--keys",   action="store_true", help="API keys only / 仅配置 API Key")
     args = parser.parse_args()
 
-    if _rich:
-        console.print(Panel(
+    # Show detected language
+    _info(_wz("lang_detected"))
+
+    if _SYS_LANG == "zh":
+        _intro = (
             "[bold cyan]Aria Code[/bold cyan] [dim]— AI 金融终端[/dim]\n\n"
             "本向导将帮助你完成首次配置：\n"
             "  • 本地 AI 模型（Ollama）\n"
             "  • API 密钥（Claude / GPT-4，可选）\n"
-            "  • 飞书机器人连接",
-            title="🔧 首次配置向导",
-            border_style="cyan",
-        ))
+            "  • 飞书机器人连接"
+        )
+        _title = "🔧 首次配置向导"
+        _plain_intro = "\n=== Aria Code 配置向导 ===\n"
     else:
-        print("\n=== Aria Code 配置向导 ===\n")
+        _intro = (
+            "[bold cyan]Aria Code[/bold cyan] [dim]— AI Finance Terminal[/dim]\n\n"
+            "This wizard will help you set up:\n"
+            "  • Local AI model (Ollama)\n"
+            "  • API keys (Claude / GPT-4 — optional)\n"
+            "  • Feishu / Lark bot connection"
+        )
+        _title = "🔧 First-Run Setup"
+        _plain_intro = "\n=== Aria Code Setup Wizard ===\n"
+
+    if _rich:
+        console.print(Panel(_intro, title=_title, border_style="cyan"))
+    else:
+        print(_plain_intro)
 
     env = _load_env()
     run_all = not (args.model or args.feishu or args.keys)

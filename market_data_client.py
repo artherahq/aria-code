@@ -214,7 +214,7 @@ class MarketDataClient:
             if price <= 0:
                 return {"success": False, "error": "price=0 from finnhub", "symbol": symbol}
             prev = float(d.get("pc") or price)
-            chg_p = round((price - prev) / prev * 100, 2) if prev else 0
+            chg_p = round(float(d.get("dp") or 0), 2)
             name = symbol
             mktcap = None
             currency = "USD"
@@ -302,6 +302,11 @@ class MarketDataClient:
             result = self._quote_ashare(symbol)
         elif _is_crypto(symbol):
             result = self._quote_crypto(symbol)
+        elif self._fh_key:
+            # Finnhub is primary for US/global stocks — faster, no rate limits
+            result = self._quote_finnhub(symbol)
+            if not result.get("success"):
+                result = self._quote_yfinance(symbol)
         else:
             result = self._quote_yfinance(symbol)
 
