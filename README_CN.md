@@ -8,7 +8,7 @@
   <img src="https://img.shields.io/badge/Python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="python"/>
   <img src="https://img.shields.io/badge/Ollama-Local_LLM-black?style=for-the-badge&logo=llama&logoColor=white" alt="ollama"/>
   <img src="https://img.shields.io/badge/License-MIT-22c55e?style=for-the-badge" alt="license"/>
-  <img src="https://img.shields.io/github/stars/Cinsoul/aria-code?style=for-the-badge&color=f59e0b" alt="stars"/>
+  <img src="https://img.shields.io/github/stars/Cinsoul/Aria-Code?style=for-the-badge&color=f59e0b" alt="stars"/>
 </p>
 
 <h1 align="center">🤖 Aria Code</h1>
@@ -134,7 +134,7 @@ mindmap
 ### Option 1: One-line install (macOS / Linux)
 
 ```bash
-git clone https://github.com/Cinsoul/aria-code.git
+git clone https://github.com/Cinsoul/Aria-Code.git
 cd aria-code
 ./install.sh
 ```
@@ -148,7 +148,7 @@ echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc
 ### Option 2: Run directly
 
 ```bash
-git clone https://github.com/Cinsoul/aria-code.git
+git clone https://github.com/Cinsoul/Aria-Code.git
 cd aria-code
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
@@ -658,7 +658,7 @@ pip install -r requirements.txt
 欢迎贡献！请查看 [CONTRIBUTING.md](./CONTRIBUTING.md)。
 
 ```bash
-git clone https://github.com/Cinsoul/aria-code.git
+git clone https://github.com/Cinsoul/Aria-Code.git
 cd aria-code
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
@@ -673,8 +673,8 @@ Issues、PR、中文讨论均欢迎。
 
 - 🌐 Website: [arthera.finance](https://arthera.finance)
 - 📦 Full platform: [github.com/Cinsoul/Arthera](https://github.com/Cinsoul/Arthera)
-- 🐛 Issues: [github.com/Cinsoul/aria-code/issues](https://github.com/Cinsoul/aria-code/issues)
-- 💬 Discussions: [github.com/Cinsoul/aria-code/discussions](https://github.com/Cinsoul/aria-code/discussions)
+- 🐛 Issues: [github.com/Cinsoul/Aria-Code/issues](https://github.com/Cinsoul/Aria-Code/issues)
+- 💬 Discussions: [github.com/Cinsoul/Aria-Code/discussions](https://github.com/Cinsoul/Aria-Code/discussions)
 
 ---
 

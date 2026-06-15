@@ -9,7 +9,7 @@
   <img src="https://img.shields.io/badge/Python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="python"/>
   <img src="https://img.shields.io/badge/Ollama-Local_LLM-black?style=for-the-badge&logo=llama&logoColor=white" alt="ollama"/>
   <img src="https://img.shields.io/badge/License-MIT-22c55e?style=for-the-badge" alt="license"/>
-  <img src="https://img.shields.io/github/stars/Cinsoul/aria-code?style=for-the-badge&color=f59e0b" alt="stars"/>
+  <img src="https://img.shields.io/github/stars/Cinsoul/Aria-Code?style=for-the-badge&color=f59e0b" alt="stars"/>
 </p>
 
 <h1 align="center">🤖 Aria Code</h1>
@@ -137,7 +137,7 @@ mindmap
 ### Option 1: One-line install (macOS / Linux)
 
 ```bash
-git clone https://github.com/Cinsoul/aria-code.git
+git clone https://github.com/Cinsoul/Aria-Code.git
 cd aria-code
 ./install.sh
 ```
@@ -151,7 +151,7 @@ echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc
 ### Option 2: Run directly
 
 ```bash
-git clone https://github.com/Cinsoul/aria-code.git
+git clone https://github.com/Cinsoul/Aria-Code.git
 cd aria-code
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
@@ -666,7 +666,7 @@ Core dependencies: `rich` · `prompt_toolkit` · `yfinance` · `akshare` · `ccx
 Contributions welcome! See [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ```bash
-git clone https://github.com/Cinsoul/aria-code.git
+git clone https://github.com/Cinsoul/Aria-Code.git
 cd aria-code
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
@@ -694,6 +694,6 @@ MIT © 2025 Arthera Team — see [LICENSE](./LICENSE)
 <p align="center">
   <a href="https://arthera.finance">Website</a> ·
   <a href="https://github.com/Cinsoul/Arthera">Full Platform</a> ·
-  <a href="https://github.com/Cinsoul/aria-code/issues">Issues</a> ·
-  <a href="https://github.com/Cinsoul/aria-code/discussions">Discussions</a>
+  <a href="https://github.com/Cinsoul/Aria-Code/issues">Issues</a> ·
+  <a href="https://github.com/Cinsoul/Aria-Code/discussions">Discussions</a>
 </p>
