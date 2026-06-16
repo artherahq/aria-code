@@ -3874,6 +3874,24 @@ _TOOL_ACTION_LABELS: dict = {
 }
 
 
+def _render_answer_block(text: str) -> None:
+    """Render the AI's final answer with a ⏺ bullet + hanging indent.
+
+    Mirrors the tool-call rhythm (⏺ for every turn segment) so the answer
+    aligns visually with the tool tree. Bullet sits at the margin, the
+    Markdown body is indented past it — Claude Code's hanging-indent look.
+    """
+    if _ARIA_BOT_MODE:
+        console.print(Markdown(_strip_latex(text)))
+        return
+    if not HAS_RICH:
+        print(f"\n  ⏺  {text}")
+        return
+    from rich.padding import Padding
+    console.print(f"\n  [#C08050]⏺[/#C08050]")
+    console.print(Padding(Markdown(_strip_latex(text)), (0, 0, 0, 4)))
+
+
 def _print_tool_call(tool_name: str, params: dict):
     """Print tool call header — Claude Code-style ⏺ bullet tree."""
     if _ARIA_BOT_MODE:
@@ -11404,11 +11422,10 @@ class ArtheraTerminal:
                 #   • All LaTeX spacing commands (\; \, \quad etc.)
                 #   • Markdown headings, bold, tables
                 _stop_spinner()
-                console.print(Markdown(_strip_latex(final_text)))
+                _render_answer_block(final_text)
             elif token_count == 0 and final_text and HAS_RICH:
                 # Non-streamed response (e.g. complete() API path): render markdown.
-                console.print()
-                console.print(Markdown(_strip_latex(final_text)))
+                _render_answer_block(final_text)
 
             self.conversation.append({"role": "assistant", "content": final_text})
             import time as _time_ts

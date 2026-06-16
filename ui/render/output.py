@@ -179,21 +179,36 @@ def print_tool_result(
         elif tool_name == "edit_file":
             old = params.get("old_string", "")
             new = params.get("new_string", "")
+            path = params.get("path", "")
             if old and new and has_rich:
+                import re as _re_diff
                 diff = list(difflib.unified_diff(
-                    old.splitlines(keepends=True),
-                    new.splitlines(keepends=True),
+                    old.splitlines(),
+                    new.splitlines(),
                     lineterm="",
                 ))
                 if diff:
-                    console.print(f"  [dim]⎿[/dim]{ts}")
+                    _hdr = f"  [#C08050]{path}[/#C08050]" if path else "  [dim]⎿[/dim]"
+                    console.print(f"{_hdr}{ts}")
+                    o_ln = n_ln = 0
                     for line in diff[2:]:
+                        # Hunk header: @@ -old_start,n +new_start,n @@
+                        m = _re_diff.match(r"@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@", line)
+                        if m:
+                            o_ln, n_ln = int(m.group(1)), int(m.group(2))
+                            console.print(f"    [dim]…[/dim]")
+                            continue
+                        body = line[1:].rstrip()
                         if line.startswith("+"):
-                            console.print(f"    [green]{line.rstrip()}[/green]")
+                            console.print(f"    [dim]{n_ln:>4}[/dim] [green]+ {body}[/green]")
+                            n_ln += 1
                         elif line.startswith("-"):
-                            console.print(f"    [red]{line.rstrip()}[/red]")
+                            console.print(f"    [dim]{o_ln:>4}[/dim] [red]- {body}[/red]")
+                            o_ln += 1
                         else:
-                            console.print(f"    [dim]{line.rstrip()}[/dim]")
+                            console.print(f"    [dim]{n_ln:>4}[/dim] [dim]  {body}[/dim]")
+                            o_ln += 1
+                            n_ln += 1
                 else:
                     console.print(f"  [dim]⎿  no change[/dim]{ts}")
             elif has_rich:
