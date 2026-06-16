@@ -403,7 +403,11 @@ class MarketCommandsMixin:
         if not getattr(pred, "analysis", "") and getattr(self, "terminal", None):
             try:
                 import asyncio as _aio
-                from aria_cli import stream_chat as _stream_chat
+                # Use Ollama directly — the configured model (e.g. gpt-oss:120b-cloud)
+                # lives there. The api_url backend returns canned placeholders for
+                # this prompt shape, so going through stream_chat would store a
+                # welcome message as the "analysis".
+                from aria_cli import stream_ollama as _stream_ollama
                 _kf = "; ".join(getattr(pred, "key_factors", []) or [])
                 _llm_prompt = (
                     f"你是专业足球分析师。用中文简洁分析这场比赛（不超过180字，给出明确倾向和理由，"
@@ -416,19 +420,20 @@ class MarketCommandsMixin:
                 )
                 console.print("  [dim]✻ 思考中…[/dim]")
                 _term = self.terminal
-                _base = (getattr(_term, "api_url", None)
-                         or _term.config.get("ollama_url", "http://localhost:11434"))
-                _result = await _aio.wait_for(
-                    _stream_chat(
-                        _base, _llm_prompt, [],
+                _parts: list = []
+                await _aio.wait_for(
+                    _stream_ollama(
+                        _term.config.get("ollama_url", "http://localhost:11434"),
+                        _llm_prompt, [],
                         model=_term.config.get("model", ""),
-                        auth_token=getattr(_term, "auth_token", None),
+                        on_token=lambda _t: _parts.append(_t),
+                        enable_tools=False,
                     ),
                     timeout=45,
                 )
-                _txt = _result.get("response", "") if isinstance(_result, dict) else ""
-                if _txt and len(_txt.strip()) > 10:
-                    pred.analysis = _txt.strip()
+                _txt = "".join(_parts).strip()
+                if _txt and len(_txt) > 10:
+                    pred.analysis = _txt
             except Exception:
                 pass
 
