@@ -10244,6 +10244,7 @@ class ArtheraTerminal:
         # Transcript / tool-call log — toggled by Ctrl+O
         self._transcript_log: list[str] = []
         self._transcript_visible = False
+        self._last_thinking: str = ""   # full thinking text of last turn (Ctrl+O)
         # Session recap: timestamp of last completed AI turn
         self._last_turn_ts: float = 0.0
 
@@ -10683,6 +10684,7 @@ class ArtheraTerminal:
             thinking_start = None
             thinking_finished = False
             thinking_preview_buf: list = []  # accumulate preview chars
+            thinking_full_buf: list = []     # full thinking text for Ctrl+O
             streamed_any = False
 
             if round_num == 0:
@@ -10811,15 +10813,18 @@ class ArtheraTerminal:
                     thinking_finished = True
                     _stop_spinner()
                     elapsed_t = time.time() - thinking_start if thinking_start else 0
+                    # Stash the full thinking text for the Ctrl+O viewer
+                    self._last_thinking = "".join(thinking_full_buf).strip()
                     t_info = f"Thought for {elapsed_t:.1f}s"
                     if thinking_tokens > 0:
                         t_info += f" · {thinking_tokens:,} tokens"
+                    _ctrlo = "  [dim]· Ctrl+O 展开[/dim]" if self._last_thinking else ""
                     if HAS_RICH:
                         # \r clears the live thinking counter line before printing
                         import sys as _sys
                         _sys.stdout.write("\r\033[K")  # CR + erase-to-end-of-line
                         _sys.stdout.flush()
-                        console.print(f"  [dim]{t_info}[/dim]")
+                        console.print(f"  [dim]✻[/dim] [dim]{t_info}[/dim]{_ctrlo}")
                         # Optional thinking preview (config: "thinking_preview": true)
                         if self.config.get("thinking_preview") and thinking_preview_buf:
                             preview_text = "".join(thinking_preview_buf)[:280].strip()
@@ -10932,13 +10937,16 @@ class ArtheraTerminal:
                     elapsed = time.time() - thinking_start
                     import sys as _sys
                     _sys.stdout.write(
-                        f"\r  \033[2mthinking...  {elapsed:.1f}s  "
+                        f"\r  \033[2m✻\033[0m \033[2m思考中  {elapsed:.1f}s  "
                         f"({thinking_tokens} tokens)\033[0m    "
                     )
                     _sys.stdout.flush()
                 # Accumulate up to 300 chars for optional preview
                 if len("".join(thinking_preview_buf)) < 300:
                     thinking_preview_buf.append(content)
+                # Accumulate full thinking text (capped) for the Ctrl+O viewer
+                if len("".join(thinking_full_buf)) < 8000:
+                    thinking_full_buf.append(content)
 
             def on_tool_call(tool, params):
                 nonlocal thinking_shown, thinking_start, thinking_finished, thinking_tokens
@@ -10946,21 +10954,23 @@ class ArtheraTerminal:
                 if thinking_shown and not thinking_finished:
                     thinking_finished = True
                     elapsed_t = time.time() - thinking_start if thinking_start else 0
+                    self._last_thinking = "".join(thinking_full_buf).strip()
                     t_info = f"Thought for {elapsed_t:.1f}s"
                     if thinking_tokens > 0:
                         t_info += f" · {thinking_tokens:,} tokens"
+                    _ctrlo = "  [dim]· Ctrl+O 展开[/dim]" if self._last_thinking else ""
                     if HAS_RICH:
                         import sys as _sys
                         _sys.stdout.write("\r\033[K")  # CR + erase-to-end-of-line
                         _sys.stdout.flush()
-                        console.print(f"  [dim]{t_info}[/dim]")
+                        console.print(f"  [dim]✻[/dim] [dim]{t_info}[/dim]{_ctrlo}")
                         if self.config.get("thinking_preview") and thinking_preview_buf:
                             preview_text = "".join(thinking_preview_buf)[:280].strip()
                             if len("".join(thinking_preview_buf)) > 280:
                                 preview_text += "…"
                             console.print(f"  [dim italic]{preview_text}[/dim italic]")
                     else:
-                        print(f"\r  {t_info}")
+                        print(f"\r  ✻ {t_info}")
                 _print_tool_call(tool, params if isinstance(params, dict) else {})
 
             def on_tool_result(tool, summary):
@@ -11585,13 +11595,21 @@ class ArtheraTerminal:
 
         @kb.add("c-o")
         def _toggle_transcript(event):
-            """Ctrl+O → show/hide recent tool call log."""
+            """Ctrl+O → show/hide recent tool calls + full thinking of last turn."""
             self._transcript_visible = not self._transcript_visible
-            if self._transcript_visible and self._transcript_log:
+            if self._transcript_visible and (self._transcript_log or self._last_thinking):
                 import sys as _sys
                 _sys.stderr.write("\n")
-                for line in self._transcript_log[-20:]:
-                    _sys.stderr.write(f"  {line}\n")
+                if self._last_thinking:
+                    _sys.stderr.write("  ✻ Thinking\n")
+                    for tline in self._last_thinking.splitlines() or [self._last_thinking]:
+                        # wrap-soft: indent each line, cap very long lines
+                        _sys.stderr.write(f"    {tline[:200]}\n")
+                    _sys.stderr.write("\n")
+                if self._transcript_log:
+                    _sys.stderr.write("  ⏺ Tool calls\n")
+                    for line in self._transcript_log[-20:]:
+                        _sys.stderr.write(f"    {line}\n")
                 _sys.stderr.write("  [Ctrl+O to close]\n\n")
                 _sys.stderr.flush()
             else:
