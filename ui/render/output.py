@@ -149,7 +149,7 @@ def print_tool_result(
     print_finance_fn,   # callable(tool_name, result) for finance tools
     bot_mode: bool = False,
 ) -> None:
-    """Render a tool result summary — Codex-style └ tree connector."""
+    """Render a tool result summary — Codex-style ⎿ tree connector."""
     if bot_mode:
         return
 
@@ -160,7 +160,7 @@ def print_tool_result(
     if tool_name in FINANCE_TOOL_NAMES:
         print_finance_fn(tool_name, result)
         if ts and has_rich:
-            console.print(f"  [dim]└[/dim]{ts}")
+            console.print(f"  [dim]⎿[/dim]{ts}")
         return
 
     if result.get("success"):
@@ -172,9 +172,9 @@ def print_tool_result(
             size      = data.get("size_bytes") or len((params.get("content", "") or "").encode())
             size_str  = f"{size}B" if size < 1024 else f"{size // 1024}KB"
             if has_rich:
-                console.print(f"  [dim]└[/dim]  [green]✓[/green]  [dim]{path}  {lines} lines  {size_str}[/dim]{ts}")
+                console.print(f"  [dim]⎿[/dim]  [green]✓[/green]  [dim]{path}  {lines} lines  {size_str}[/dim]{ts}")
             else:
-                print(f"  └  ✓ {path}  {lines} lines  {size_str}{ts_plain}")
+                print(f"  ⎿  ✓ {path}  {lines} lines  {size_str}{ts_plain}")
 
         elif tool_name == "edit_file":
             old = params.get("old_string", "")
@@ -186,7 +186,7 @@ def print_tool_result(
                     lineterm="",
                 ))
                 if diff:
-                    console.print(f"  [dim]└[/dim]{ts}")
+                    console.print(f"  [dim]⎿[/dim]{ts}")
                     for line in diff[2:]:
                         if line.startswith("+"):
                             console.print(f"    [green]{line.rstrip()}[/green]")
@@ -195,11 +195,11 @@ def print_tool_result(
                         else:
                             console.print(f"    [dim]{line.rstrip()}[/dim]")
                 else:
-                    console.print(f"  [dim]└  no change[/dim]{ts}")
+                    console.print(f"  [dim]⎿  no change[/dim]{ts}")
             elif has_rich:
-                console.print(f"  [dim]└  edited[/dim]{ts}")
+                console.print(f"  [dim]⎿  edited[/dim]{ts}")
             else:
-                print(f"  └  edited{ts_plain}")
+                print(f"  ⎿  edited{ts_plain}")
 
         elif tool_name == "run_command":
             stdout     = data.get("stdout", "").strip()
@@ -208,7 +208,7 @@ def print_tool_result(
                 from rich.panel import Panel
                 rc_color = "green" if returncode == 0 else "red"
                 rc_icon  = "✓" if returncode == 0 else "✗"
-                console.print(f"  [dim]└[/dim]  [{rc_color}]{rc_icon} exit {returncode}[/{rc_color}]{ts}")
+                console.print(f"  [dim]⎿[/dim]  [{rc_color}]{rc_icon} exit {returncode}[/{rc_color}]{ts}")
                 if stdout:
                     out_lines = stdout.splitlines()
                     if len(out_lines) > 3:
@@ -225,7 +225,7 @@ def print_tool_result(
                         for ol in out_lines:
                             console.print(f"    [dim]{ol[:120]}[/dim]")
             else:
-                print(f"  └  exit {returncode}{ts_plain}")
+                print(f"  ⎿  exit {returncode}{ts_plain}")
                 for ol in stdout.splitlines()[:4]:
                     print(f"    {ol[:100]}")
 
@@ -233,25 +233,25 @@ def print_tool_result(
             lines = data.get("lines", 0)
             path  = params.get("path", "")
             if has_rich:
-                console.print(f"  [dim]└  {path}  {lines} lines[/dim]{ts}")
+                console.print(f"  [dim]⎿  {path}  {lines} lines[/dim]{ts}")
             else:
-                print(f"  └  {path}  {lines} lines{ts_plain}")
+                print(f"  ⎿  {path}  {lines} lines{ts_plain}")
 
         elif tool_name == "list_files":
             count = data.get("count", 0)
             if has_rich:
                 color = "yellow" if count == 0 else "dim"
                 msg   = "0 items — no matches" if count == 0 else f"{count} items"
-                console.print(f"  [{color}]└  {msg}[/{color}]{ts}")
+                console.print(f"  [{color}]⎿  {msg}[/{color}]{ts}")
             else:
-                print(f"  └  {count} items{ts_plain}")
+                print(f"  ⎿  {count} items{ts_plain}")
 
         elif tool_name == "search_code":
             matches = len(data.get("matches", []))
             if has_rich:
-                console.print(f"  [dim]└  {matches} matches[/dim]{ts}")
+                console.print(f"  [dim]⎿  {matches} matches[/dim]{ts}")
             else:
-                print(f"  └  {matches} matches{ts_plain}")
+                print(f"  ⎿  {matches} matches{ts_plain}")
 
         elif tool_name == "web_fetch":
             url    = data.get("url", params.get("url", ""))
@@ -261,35 +261,35 @@ def print_tool_result(
             len_str = f"  {length:,} chars" if length else ""
             trunc_str = "  [yellow]truncated[/yellow]" if trunc else ""
             if has_rich:
-                console.print(f"  [dim]└  {short_url}{len_str}[/dim]{trunc_str}{ts}")
+                console.print(f"  [dim]⎿  {short_url}{len_str}[/dim]{trunc_str}{ts}")
             else:
-                print(f"  └  {short_url}{ts_plain}")
+                print(f"  ⎿  {short_url}{ts_plain}")
 
         elif tool_name in ("web_search", "search_web"):
             results = data.get("results", [])
             count   = len(results)
             if has_rich:
-                console.print(f"  [dim]└  {count} results[/dim]{ts}")
+                console.print(f"  [dim]⎿  {count} results[/dim]{ts}")
             else:
-                print(f"  └  {count} results{ts_plain}")
+                print(f"  ⎿  {count} results{ts_plain}")
 
         else:
             summary = json.dumps(data, ensure_ascii=False)
             short   = (summary[:100] + "…") if len(summary) > 100 else summary
             if has_rich:
-                console.print(f"  [dim]└  {short}[/dim]{ts}")
+                console.print(f"  [dim]⎿  {short}[/dim]{ts}")
             else:
-                print(f"  └  done{ts_plain}")
+                print(f"  ⎿  done{ts_plain}")
 
     else:
         error = clean_tool_error_message(result.get("error", "failed"))
         hint  = error_hint(str(error), context="tool")
         if has_rich:
-            console.print(f"  [dim]└[/dim]  [red]✗ {error[:120]}[/red]")
+            console.print(f"  [dim]⎿[/dim]  [red]✗ {error[:120]}[/red]")
             if hint:
                 console.print(f"    [dim]{hint}[/dim]")
         else:
-            print(f"  └  ✗ {error[:80]}")
+            print(f"  ⎿  ✗ {error[:80]}")
 
 
 # ── Activity group (OpenClaw-style batch summary) ──────────────────────────────
@@ -525,10 +525,10 @@ def print_tool_blocked(
     """Show a styled 'Blocked' line when tool execution is denied or cancelled."""
     if has_rich:
         console.print(
-            f"  [dim]└[/dim]  [yellow]⊘  {tool_name}[/yellow]  [dim]{reason}[/dim]"
+            f"  [dim]⎿[/dim]  [yellow]⊘  {tool_name}[/yellow]  [dim]{reason}[/dim]"
         )
     else:
-        print(f"  └  ⊘ {tool_name}  {reason}")
+        print(f"  ⎿  ⊘ {tool_name}  {reason}")
 
 
 # ── Robot thinking / response header ──────────────────────────────────────────

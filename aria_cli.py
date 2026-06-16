@@ -3875,19 +3875,19 @@ _TOOL_ACTION_LABELS: dict = {
 
 
 def _print_tool_call(tool_name: str, params: dict):
-    """Print tool call header — Codex-style ● bullet tree."""
+    """Print tool call header — Claude Code-style ⏺ bullet tree."""
     if _ARIA_BOT_MODE:
         return
     hint = _format_tool_params(tool_name, params)
     action = _TOOL_ACTION_LABELS.get(tool_name, tool_name.replace("_", " "))
     if HAS_RICH:
         if hint:
-            console.print(f"\n  [cyan]●[/cyan]  {action}  [dim]{hint}[/dim]")
+            console.print(f"\n  [cyan]⏺[/cyan]  [bold]{action}[/bold]  [dim]{hint}[/dim]")
         else:
-            console.print(f"\n  [cyan]●[/cyan]  {action}")
+            console.print(f"\n  [cyan]⏺[/cyan]  [bold]{action}[/bold]")
     else:
         label = f"{action}  {hint}" if hint else action
-        print(f"\n  ● {label}", end="", flush=True)
+        print(f"\n  ⏺ {label}", end="", flush=True)
 
 
 def _fuzzy_match(query: str, candidates: list, max_results: int = 3) -> list:

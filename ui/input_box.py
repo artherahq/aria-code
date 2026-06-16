@@ -1,9 +1,10 @@
-"""Prompt-toolkit input panel — Codex-style minimal layout.
+"""Prompt-toolkit input panel — Claude Code-style rounded box layout.
 
-Three-row layout:
-  ──────────────────────────────────────────────  ← dim divider
-  CHAT › cursor_                                  ← input (intentional bg fill)
-  model  ·  ~/workspace                          ← dim status bar
+Four-row layout:
+  ╭──────────────────────────────────────────────╮  ← rounded box top
+  │ › cursor_                                      │  ← input row (bordered)
+  ╰──────────────────────────────────────────────╯  ← rounded box bottom
+  model  ·  ~/workspace                              ← dim status bar
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ from typing import Callable, Optional
 from prompt_toolkit.application import Application
 from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.key_binding import KeyBindings
-from prompt_toolkit.layout import Float, FloatContainer, HSplit, Layout, Window
+from prompt_toolkit.layout import Float, FloatContainer, HSplit, Layout, VSplit, Window
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.layout.menus import CompletionsMenu
 from prompt_toolkit.layout.processors import Processor, Transformation
@@ -55,7 +56,7 @@ def detect_terminal_theme() -> str:
 @dataclass
 class PanelInputConfig:
     prompt: str = "› "
-    placeholder: str = "问 Aria、编辑文件、运行命令… 或 / 快速命令"
+    placeholder: str = "问 Aria、编辑文件、运行命令…  /命令  @文件  !shell"
     theme: str = "auto"
 
     est_tokens: int = 0
@@ -85,6 +86,7 @@ class PanelInputConfig:
     sep: str = ""
     input_bg: str = ""   # intentional input-area background
     ph_color: str = ""   # very dim placeholder
+    box: str = ""        # rounded border color
 
     def resolved(self) -> "PanelInputConfig":
         theme = self.theme if self.theme != "auto" else detect_terminal_theme()
@@ -93,15 +95,17 @@ class PanelInputConfig:
                 fg="#c9d1d9",
                 accent="#3fb950", accent_y="#d29922", accent_b="#79c0ff",
                 muted="#6e7781", dim="#484f58", sep="#2d333b",
-                input_bg="#1a1a1a",   # slightly lighter than terminal black (Codex approach)
-                ph_color="#3a3a3a",   # very dim placeholder
+                input_bg="default",   # transparent — box border defines the zone
+                ph_color="#484f58",   # dim placeholder, readable
+                box="#C08050",        # copper — Aria's brand accent on the frame
             )
         return replace(self, theme="light",
             fg="#24292f",
             accent="#1a7f37", accent_y="#9a6700", accent_b="#0969da",
             muted="#57606a", dim="#8c959f", sep="#d0d7de",
-            input_bg="#f2f2f2",
-            ph_color="#c8c8c8",
+            input_bg="default",
+            ph_color="#a8a8a8",
+            box="#bc6a2e",
         )
 
 
@@ -138,10 +142,12 @@ PlaceholderProcessor = PromptAndPlaceholderProcessor
 
 def _build_style(cfg: PanelInputConfig) -> Style:
     return Style.from_dict({
-        # Input row: intentional slightly-lighter background (defines input zone, Codex style)
-        "input-bg":  f"{cfg.fg} bg:{cfg.input_bg}",
+        # Input row: transparent bg — the rounded box border defines the zone
+        "input-bg":  cfg.fg if cfg.input_bg == "default" else f"{cfg.fg} bg:{cfg.input_bg}",
         "ph":        cfg.ph_color,
-        # Mode badge
+        # Rounded box border (Claude Code style)
+        "box":       cfg.box,
+        # Mode prompt glyph — color shifts per mode (chat/cmd/file)
         "mode-chat": f"bold {cfg.accent}",
         "mode-cmd":  f"bold {cfg.accent_y}",
         "mode-file": f"bold {cfg.accent_b}",
@@ -175,13 +181,24 @@ def _divider(cfg: PanelInputConfig) -> list:
     return [("class:divider", "─" * w)]
 
 
+def _box_top(cfg: PanelInputConfig) -> list:
+    w = shutil.get_terminal_size((80, 24)).columns
+    return [("class:box", "╭" + "─" * (w - 2) + "╮")]
+
+
+def _box_bottom(cfg: PanelInputConfig) -> list:
+    w = shutil.get_terminal_size((80, 24)).columns
+    return [("class:box", "╰" + "─" * (w - 2) + "╯")]
+
+
 def _mode_prefix(cfg: PanelInputConfig, text_getter: Callable[[], str]) -> list:
+    """Claude Code-style ›  glyph — color shifts by detected input mode."""
     txt = text_getter().lstrip()
     if txt.startswith("/"):
-        return [("class:mode-cmd",  "CMD "), ("class:prompt", cfg.prompt)]
+        return [("class:mode-cmd",  "› ")]
     if txt.startswith("@") or txt.startswith("!"):
-        return [("class:mode-file", "FILE"), ("class:prompt", cfg.prompt)]
-    return     [("class:mode-chat", "CHAT"), ("class:prompt", cfg.prompt)]
+        return [("class:mode-file", "› ")]
+    return     [("class:mode-chat", "› ")]
 
 
 def _status_bar(cfg: PanelInputConfig) -> list:
@@ -271,11 +288,20 @@ def run_panel_input(
 
     root = FloatContainer(
         content=HSplit([
-            # Divider: transparent bg, dim ─── line
+            # Rounded box top: ╭──────╮
             Window(height=1,
-                   content=FormattedTextControl(lambda: _divider(cfg), focusable=False)),
-            # Input: intentional #1a1a1a bg (Codex-style zone definition)
-            text_area,
+                   content=FormattedTextControl(lambda: _box_top(cfg), focusable=False)),
+            # Input row, bordered left + right by │
+            VSplit([
+                Window(width=2, content=FormattedTextControl(
+                    lambda: [("class:box", "│ ")], focusable=False)),
+                text_area,
+                Window(width=2, content=FormattedTextControl(
+                    lambda: [("class:box", " │")], focusable=False)),
+            ]),
+            # Rounded box bottom: ╰──────╯
+            Window(height=1,
+                   content=FormattedTextControl(lambda: _box_bottom(cfg), focusable=False)),
             # Status bar: transparent bg, dim model · cwd
             Window(height=1,
                    content=FormattedTextControl(lambda: _status_bar(cfg), focusable=False)),
