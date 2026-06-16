@@ -11067,8 +11067,24 @@ class ArtheraTerminal:
                         "Welcome to Aria",
                         "请提供更具体的问题",
                         "I'm here to help with financial",
+                        "股票数据查询",
+                        "请提供您想查询的股票",
+                        "请输入您的具体问题",
+                        "支持的查询方式",
                     )
-                    return any(p in resp for p in _placeholders)
+                    if any(p in resp for p in _placeholders):
+                        return True
+                    # Structural: generic help/welcome scaffolding from the stub
+                    # backend — several boilerplate markers together.
+                    _markers = ("请提供", "请输入", "示例问题", "支持的查询", "股票代码：")
+                    if sum(1 for m in _markers if m in resp) >= 2:
+                        return True
+                    # Signal mismatch: the real model emitted ~no tokens yet the
+                    # "response" is long → it's a canned backend reply, not a
+                    # generation. (Observed: out:1 token, 200+ char welcome text.)
+                    if token_count <= 2 and len(resp) > 80:
+                        return True
+                    return False
 
                 # If backend failed OR returned placeholder, fallback chain:
                 # Ollama (if running) → DeepSeek cloud → OpenAI → error
