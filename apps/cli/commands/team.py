@@ -159,7 +159,7 @@ async def run_team_analysis(
     except Exception as exc:
         logger.debug("team data bundle fetch failed: %s", exc)
 
-    noisy_loggers = ["agents.base", "datasources.router", "data_cleaner"]
+    noisy_loggers = ["agents.base", "agents.team", "datasources.router", "data_cleaner"]
     saved_levels = {name: logging.getLogger(name).level for name in noisy_loggers}
     for name in noisy_loggers:
         logging.getLogger(name).setLevel(logging.ERROR)

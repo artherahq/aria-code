@@ -41,10 +41,18 @@ class FundamentalAgent(BaseAgent):
         quote = data.get("quote", {})
         fund  = data.get("fundamentals", {})
         price = _num_or_none(quote.get("price"))
-        pe    = _num_or_none(fund.get("pe_ttm") or quote.get("pe_ttm"))
-        pb    = _num_or_none(fund.get("pb")     or quote.get("pb"))
+        # Accept both schemas: the agent's own fetch_data (pe_ttm/pb) AND the
+        # shared team data bundle (pe_ratio/pb_ratio from finnhub/yahoo).
+        pe    = _num_or_none(
+            fund.get("pe_ttm") or fund.get("pe_ratio") or fund.get("pe")
+            or quote.get("pe_ttm") or quote.get("pe_ratio")
+        )
+        pb    = _num_or_none(
+            fund.get("pb") or fund.get("pb_ratio")
+            or quote.get("pb") or quote.get("pb_ratio")
+        )
         roe   = _num_or_none(fund.get("roe"))
-        rev_g = _num_or_none(fund.get("revenue_growth"))
+        rev_g = _num_or_none(fund.get("revenue_growth") or fund.get("rev_growth"))
         div_y = _num_or_none(fund.get("dividend_yield"))
 
         fund_str = (
@@ -134,8 +142,14 @@ def _extract_key_points(text: str) -> List[str]:
 
 def _template_fundamental(symbol: str, pe: Optional[float], pb: Optional[float],
                            roe: Optional[float], rev_g: Optional[float]) -> str:
-    valuation = "低估" if pe and pe < 15 else ("高估" if pe and pe > 40 else "数据不足")
-    conclusion = "UNDERVALUED" if pe and pe < 15 else ("OVERVALUED" if pe and pe > 40 else "DATA_LIMITED")
+    if not pe or pe <= 0:
+        valuation, conclusion = "数据不足", "DATA_LIMITED"
+    elif pe < 15:
+        valuation, conclusion = "低估", "UNDERVALUED"
+    elif pe > 40:
+        valuation, conclusion = "高估", "OVERVALUED"
+    else:
+        valuation, conclusion = "合理", "FAIRLY_VALUED"
     return (
         f"{symbol} 基本面分析（模板）:\n"
         f"• 估值：PE={_fmt_num(pe, 1, 'x')}  PB={_fmt_num(pb, 2, 'x')}  → {valuation}\n"

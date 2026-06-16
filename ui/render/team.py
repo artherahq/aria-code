@@ -61,7 +61,11 @@ def render_agent_node(console, name: str, signal: str | None,
     """Print one completed-agent leaf: ⎿ ⏺ 基本面  BUY  ROE 24%·PE 32 偏高"""
     label = agent_label(name)
     if not success or error:
-        console.print(f"  [dim]⎿ ⏺ {label}  {error or '失败'}[/dim]")
+        _err_label = {
+            "timeout": "超时", "rate_limited": "数据源限流",
+            "no_data": "无数据", "": "失败",
+        }.get((error or "").lower(), error or "失败")
+        console.print(f"  [dim]⎿ ⏺ {label}  {_err_label}[/dim]")
         return
     sig   = (signal or "").upper()
     color = SIGNAL_COLORS.get(sig, "dim")

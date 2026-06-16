@@ -85,10 +85,17 @@ class AgentTeam:
             return result
         except asyncio.TimeoutError:
             logger.warning(f"[{agent.name}] 超时 ({self.timeout}s)")
-            return AgentResult(
+            _timeout_result = AgentResult(
                 agent=agent.name, symbol=symbol,
                 analysis="", confidence=0.0, error="timeout",
             )
+            # Still emit the leaf so the streaming tree shows ⎿ ⏺ <agent> 超时
+            if self.on_agent_done:
+                try:
+                    self.on_agent_done(agent.name, _timeout_result)
+                except Exception:
+                    pass
+            return _timeout_result
 
     async def run(
         self,
