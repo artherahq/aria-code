@@ -335,6 +335,10 @@ class MarketDataClient:
 
         if result.get("success"):
             _cache.set(ckey, result, ttl=300)  # 5min cache for history
+        elif "rate" in str(result.get("error", "")).lower():
+            # Brief negative cache: stops every agent in a /team run from
+            # re-hammering the same rate-limited symbol with its own backoff.
+            _cache.set(ckey, result, ttl=20)
         return result
 
     def indices(self) -> Dict[str, Any]:
@@ -650,15 +654,28 @@ class MarketDataClient:
                 })
             return records
 
-        # Primary: Ticker.history()
-        try:
-            df = yf.Ticker(symbol).history(period=period, interval=iv, auto_adjust=True)
-            if not df.empty:
-                records = _df_to_records(df)
-                return {"success": True, "symbol": symbol, "data": records,
-                        "provider": "yfinance", "count": len(records)}
-        except Exception as _e:
-            logger.debug("yfinance history primary failed for %s: %s — trying download fallback", symbol, _e)
+        # Primary: Ticker.history() with bounded exponential backoff on rate
+        # limits (1s, 2s) — gives the provider time to recover before falling
+        # through to the download/finnhub fallbacks. Total ≤3s so it stays
+        # well within per-agent timeouts.
+        for _attempt in range(3):
+            try:
+                df = yf.Ticker(symbol).history(period=period, interval=iv, auto_adjust=True)
+                if not df.empty:
+                    records = _df_to_records(df)
+                    return {"success": True, "symbol": symbol, "data": records,
+                            "provider": "yfinance", "count": len(records)}
+                break  # empty (not a rate limit) → go straight to fallback
+            except Exception as _e:
+                _err = str(_e).lower()
+                _is_rl = any(t in _err for t in ("too many", "rate", "429"))
+                if _is_rl and _attempt < 2:
+                    logger.debug("yfinance history rate-limited for %s, backoff %ss",
+                                 symbol, 2 ** _attempt)
+                    time.sleep(1.0 * (2 ** _attempt))   # 1s, then 2s
+                    continue
+                logger.debug("yfinance history primary failed for %s: %s — trying download fallback", symbol, _e)
+                break
 
         # Fallback: yf.download() uses a different API endpoint, more resilient to rate limits
         try:

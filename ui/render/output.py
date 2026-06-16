@@ -416,13 +416,31 @@ def print_tool_activity_group(
         tbl.add_column(no_wrap=True, min_width=2)                  # status icon
         tbl.add_column()                                            # detail
 
+        from collections import OrderedDict
+        _mcp_groups: "OrderedDict[str, list]" = OrderedDict()
         for tool_name, result, elapsed, params in results:
             if tool_name in finance_rows:
                 icon = "[green]✓[/green]" if result.get("success") else "[red]✗[/red]"
                 tbl.add_row(tool_name, icon, "")
+            elif tool_name.startswith("mcp__"):
+                # Defer MCP calls — collapse per server below
+                _server = tool_name.split("__")[1] if len(tool_name.split("__")) >= 2 else "mcp"
+                _mcp_groups.setdefault(_server, []).append((tool_name, result))
             else:
                 icon, detail = _one_line_tool_summary(tool_name, result, elapsed, params)
                 tbl.add_row(f"[dim]{tool_name}[/dim]", icon, detail)
+
+        # Collapsed MCP rows: "server · tool" for one, "called N times" for many
+        for _server, _calls in _mcp_groups.items():
+            _all_ok = all(r.get("success") for _, r in _calls)
+            _icon = "[green]✓[/green]" if _all_ok else "[red]✗[/red]"
+            if len(_calls) == 1:
+                _tn = _calls[0][0].split("__")
+                _label = _tn[2].replace("_", " ") if len(_tn) >= 3 else _server
+                tbl.add_row(f"[dim]{_server}[/dim]", _icon, f"[dim]{_label}  · MCP[/dim]")
+            else:
+                tbl.add_row(f"[dim]{_server}[/dim]", _icon,
+                            f"[dim]called {len(_calls)} times · MCP[/dim]")
 
         from rich.padding import Padding
         console.print(Padding(tbl, (0, 0, 0, 4)))

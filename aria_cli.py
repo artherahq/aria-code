@@ -3897,12 +3897,23 @@ def _print_tool_call(tool_name: str, params: dict):
     if _ARIA_BOT_MODE:
         return
     hint = _format_tool_params(tool_name, params)
-    action = _TOOL_ACTION_LABELS.get(tool_name, tool_name.replace("_", " "))
+    # MCP tools are named mcp__<server>__<tool> — render as "server · tool"
+    # with a dim MCP tag so the user knows it came from an external server.
+    _mcp_tag = ""
+    if tool_name.startswith("mcp__"):
+        _parts = tool_name.split("__")
+        if len(_parts) >= 3:
+            action = f"{_parts[1]} · {_parts[2].replace('_', ' ')}"
+            _mcp_tag = "  [dim]MCP[/dim]"
+        else:
+            action = tool_name.replace("_", " ")
+    else:
+        action = _TOOL_ACTION_LABELS.get(tool_name, tool_name.replace("_", " "))
     if HAS_RICH:
         if hint:
-            console.print(f"\n  [#C08050]⏺[/#C08050]  [bold]{action}[/bold]  [dim]{hint}[/dim]")
+            console.print(f"\n  [#C08050]⏺[/#C08050]  [bold]{action}[/bold]{_mcp_tag}  [dim]{hint}[/dim]")
         else:
-            console.print(f"\n  [#C08050]⏺[/#C08050]  [bold]{action}[/bold]")
+            console.print(f"\n  [#C08050]⏺[/#C08050]  [bold]{action}[/bold]{_mcp_tag}")
     else:
         label = f"{action}  {hint}" if hint else action
         print(f"\n  ⏺ {label}", end="", flush=True)

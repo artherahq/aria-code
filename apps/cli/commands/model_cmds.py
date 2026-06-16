@@ -339,6 +339,14 @@ class ModelCommandsMixin:
         parts = args.strip().upper().split() if args.strip() else []
         cmd = skill["command"]
 
+        # Skill invocation header — matches the ⏺ tool-call rhythm
+        _skill_name = skill.get("name") or cmd.lstrip("/")
+        _arg_hint = f"  [dim]{args.strip()}[/dim]" if args.strip() else ""
+        if HAS_RICH:
+            console.print(f"\n  [#C08050]⏺[/#C08050]  [bold]技能 · {_skill_name}[/bold]{_arg_hint}")
+        else:
+            print(f"\n  ⏺ 技能 · {_skill_name}  {args.strip()}")
+
         # Build the prompt from template
         template = skill["prompt"]
 
