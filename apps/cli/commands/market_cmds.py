@@ -396,6 +396,42 @@ class MarketCommandsMixin:
                 console.print(f"[red]预测失败: {exc}[/red]")
                 return
 
+        # ── LLM reasoning ─────────────────────────────────────────────────────
+        # The WC path builds pred from the Elo/Poisson engine with analysis="".
+        # Run the LLM here so World Cup matches also get a reasoned read, not
+        # just numbers. (Non-WC path may already have set pred.analysis.)
+        if not getattr(pred, "analysis", "") and getattr(self, "terminal", None):
+            try:
+                import asyncio as _aio
+                from aria_cli import stream_chat as _stream_chat
+                _kf = "; ".join(getattr(pred, "key_factors", []) or [])
+                _llm_prompt = (
+                    f"你是专业足球分析师。用中文简洁分析这场比赛（不超过180字，给出明确倾向和理由，"
+                    f"结合双方强弱、预期进球与最可能比分）:\n"
+                    f"{home} vs {away}\n"
+                    f"主队胜: {pred.home_win:.0%}  平: {pred.draw:.0%}  客队胜: {pred.away_win:.0%}\n"
+                    f"预期进球: {pred.lambda_home:.1f} - {pred.lambda_away:.1f}  "
+                    f"最可能比分: {pred.most_likely}\n"
+                    f"关键因素: {_kf}"
+                )
+                console.print("  [dim]✻ 思考中…[/dim]")
+                _term = self.terminal
+                _base = (getattr(_term, "api_url", None)
+                         or _term.config.get("ollama_url", "http://localhost:11434"))
+                _result = await _aio.wait_for(
+                    _stream_chat(
+                        _base, _llm_prompt, [],
+                        model=_term.config.get("model", ""),
+                        auth_token=getattr(_term, "auth_token", None),
+                    ),
+                    timeout=45,
+                )
+                _txt = _result.get("response", "") if isinstance(_result, dict) else ""
+                if _txt and len(_txt.strip()) > 10:
+                    pred.analysis = _txt.strip()
+            except Exception:
+                pass
+
         # ── display ──────────────────────────────────────────────────────────
         from rich.columns import Columns
         from rich.text import Text

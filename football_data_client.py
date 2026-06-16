@@ -174,21 +174,44 @@ def _resolve_team_id(team_name: str) -> Optional[int]:
     return None
 
 
+def _wc_matches_for_team(team_name: str, limit: int = 6) -> List[Dict]:
+    """Recent finished WC matches for a team, scanned from the competition feed.
+
+    National-team IDs via /teams/{id} are unreliable, but the WC competition
+    feed has every finished match — so derive form/H2H from there. This is why
+    '埃及 近期状态: 暂无数据' happened despite the Egypt match being in the API.
+    """
+    data = _get("/competitions/WC/matches", {"status": "FINISHED"})
+    if not data:
+        return []
+    tl = (team_name or "").lower().strip()
+    out = []
+    for m in data.get("matches", []):
+        h = ((m.get("homeTeam") or {}).get("name") or "").lower()
+        a = ((m.get("awayTeam") or {}).get("name") or "").lower()
+        if tl and (tl in h or tl in a or h in tl or a in tl):
+            out.append(m)
+    return out[-limit:]
+
+
 def _fetch_team_form(team_name: str, limit: int = 6) -> List[Dict]:
     """Fetch recent finished matches for a team (requires API key)."""
     if not _load_football_key():
         return []
     try:
         team_id = _resolve_team_id(team_name)
-        if not team_id:
-            return []
-        matches_data = _get(f"/teams/{team_id}/matches", {
-            "status": "FINISHED",
-            "limit": str(limit),
-        })
-        if not matches_data:
-            return []
-        return matches_data.get("matches", [])
+        matches: List[Dict] = []
+        if team_id:
+            matches_data = _get(f"/teams/{team_id}/matches", {
+                "status": "FINISHED",
+                "limit": str(limit),
+            })
+            if matches_data:
+                matches = matches_data.get("matches", [])
+        # Fallback to the WC competition feed (national-team IDs unreliable)
+        if not matches:
+            matches = _wc_matches_for_team(team_name, limit)
+        return matches
     except Exception as exc:
         logger.debug("_fetch_team_form(%s) failed: %s", team_name, exc)
         return []
@@ -200,21 +223,23 @@ def _fetch_h2h(team1: str, team2: str, limit: int = 10) -> List[Dict]:
         return []
     try:
         team_id = _resolve_team_id(team1)
-        if not team_id:
-            return []
-        h2h_data = _get(f"/teams/{team_id}/matches", {
-            "competitions": "WC,CL,PL,BL1,SA,FL1,PD,EC",
-            "status": "FINISHED",
-            "limit": "50",
-        })
-        if not h2h_data:
-            return []
+        matches: List[Dict] = []
+        if team_id:
+            h2h_data = _get(f"/teams/{team_id}/matches", {
+                "competitions": "WC,CL,PL,BL1,SA,FL1,PD,EC",
+                "status": "FINISHED",
+                "limit": "50",
+            })
+            if h2h_data:
+                matches = h2h_data.get("matches", [])
+        # Fallback: scan WC competition feed for team1's matches
+        if not matches:
+            matches = _wc_matches_for_team(team1, limit=50)
         t2_low = team2.lower()
-        matches = h2h_data.get("matches", [])
         filtered = [
             m for m in matches
-            if t2_low in (m.get("homeTeam") or {}).get("name", "").lower()
-            or t2_low in (m.get("awayTeam") or {}).get("name", "").lower()
+            if t2_low in ((m.get("homeTeam") or {}).get("name") or "").lower()
+            or t2_low in ((m.get("awayTeam") or {}).get("name") or "").lower()
         ]
         return filtered[:limit]
     except Exception as exc:
@@ -877,6 +902,11 @@ def predict_wc_match(
                     "home_elo":    result.get("home_elo"),
                     "away_elo":    result.get("away_elo"),
                     "league_avg":  result.get("league_avg_goals"),
+                    # raw (pre-temperature) probs — train the confidence
+                    # calibrator on these so it never double-shrinks
+                    "raw_home_win": result.get("raw_home_win"),
+                    "raw_draw":     result.get("raw_draw"),
+                    "raw_away_win": result.get("raw_away_win"),
                 },
             )
         except Exception:

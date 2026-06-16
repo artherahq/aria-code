@@ -226,6 +226,17 @@ class MarketDataClient:
                 currency = pr.get("currency") or "USD"
             except Exception:
                 pass
+            # Finnhub /quote has no volume field — enrich from yfinance fast_info
+            # so 成交量 isn't always 0 for US stocks (finnhub is primary here).
+            _vol = int(d.get("v") or 0)
+            if _vol == 0:
+                try:
+                    import yfinance as _yf
+                    _fi = _yf.Ticker(symbol).fast_info
+                    _vol = int(getattr(_fi, "last_volume", 0)
+                               or getattr(_fi, "ten_day_average_volume", 0) or 0)
+                except Exception:
+                    _vol = 0
             return {
                 "success":    True,
                 "symbol":     symbol.upper(),
@@ -233,7 +244,7 @@ class MarketDataClient:
                 "price":      price,
                 "change":     round(price - prev, 4),
                 "change_pct": chg_p,
-                "volume":     int(d.get("v") or 0),
+                "volume":     _vol,
                 "market_cap": mktcap,
                 "high":       round(float(d.get("h") or 0), 2),
                 "low":        round(float(d.get("l") or 0), 2),
@@ -482,6 +493,12 @@ class MarketDataClient:
                 "pb_ratio":    info.get("priceToBook"),
                 "ps_ratio":    info.get("priceToSalesTrailing12Months"),
                 "ev_ebitda":   info.get("enterpriseToEbitda"),
+                # ROE / revenue growth — yfinance returns ratios (0.12), the
+                # agent expects percent (12), so ×100. Fixes 基本面 数据不足.
+                "roe":         (info["returnOnEquity"] * 100
+                                if info.get("returnOnEquity") is not None else None),
+                "revenue_growth": (info["revenueGrowth"] * 100
+                                   if info.get("revenueGrowth") is not None else None),
                 "revenue":     info.get("totalRevenue"),
                 "net_income":  info.get("netIncomeToCommon"),
                 "eps":         info.get("trailingEps"),
@@ -522,6 +539,12 @@ class MarketDataClient:
                             "pb_ratio":       m.get("pbAnnual") or m.get("pbQuarterly"),
                             "ev_ebitda":      m.get("currentEv/freeCashFlowAnnual"),
                             "dividend_yield": m.get("dividendYieldIndicatedAnnual"),
+                            # ROE + revenue growth (finnhub metric=all has these) —
+                            # fixes 基本面 ROE/营收增速 showing 数据不足.
+                            "roe":            m.get("roeTTM") or m.get("roeRfy") or m.get("roeAnnual"),
+                            "revenue_growth": (m.get("revenueGrowthTTMYoy")
+                                               or m.get("revenueGrowthQuarterlyYoy")
+                                               or m.get("revenueGrowth5Y")),
                             "52w_high":       m.get("52WeekHigh"),
                             "52w_low":        m.get("52WeekLow"),
                             "beta":           m.get("beta"),
