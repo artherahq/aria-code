@@ -4660,6 +4660,7 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
             "/undo":      (self.cmd_undo,      "Undo last message pair"),
             "/fork":      (self.cmd_fork,      "Fork conversation at current point: /fork [name]"),
             "/copy":      (self.cmd_copy,      "Copy last response to clipboard"),
+            "/bug":       (self.cmd_bug,       "Report an issue: /bug <description> (local-first)"),
             "/cost":      (self.cmd_cost,      "Show session token usage and estimated cost"),
             "/todo":      (self.cmd_todo,      "Task tracking: /todo add|done|list|clear"),
             "/doctor":    (self.cmd_doctor,    "Diagnose installation, models, API keys"),
@@ -4937,6 +4938,7 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
         "/note":      ("Usage: /note [list|add|delete N]", ["/note add 重要观察点", "/note list", "/note delete 1"]),
         "/todo":      ("Usage: /todo [add|done|list|clear] [text]", ["/todo add 分析NVDA", "/todo list", "/todo done 1"]),
         "/copy":      ("Usage: /copy [N]", ["/copy", "/copy 3"]),
+        "/bug":       ("Usage: /bug <description>", ["/bug 行情数据没刷新", "/bug 期权定价报错"]),
         "/read":      ("Usage: /read <file_path>", ["/read strategy.py", "/read data/prices.csv"]),
         "/edit":      ("Usage: /edit <file_path>", ["/edit strategy.py"]),
         "/run":       ("Usage: /run <command>", ["/run python strategy.py", "/run pytest -q"]),
@@ -6561,6 +6563,9 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
             except Exception:
                 pass
         if copied:
+            # Copying a response is an implicit positive signal (user found it
+            # useful) — capture it like Claude Code's acceptance signal.
+            self.terminal._record_feedback("copy", text)
             preview = text[:60].replace("\n", " ")
             console.print(
                 f"  [dim]✓ Copied to clipboard: \"{preview}{'…' if len(text) > 60 else ''}\"[/dim]"
@@ -6572,6 +6577,35 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
                 "Here is the response:[/yellow]\n" + text
                 if HAS_RICH else "Clipboard unavailable. Response:\n" + text
             )
+
+    def cmd_bug(self, args: str):
+        """Report an issue — Claude Code-style /bug.
+
+        Usage: /bug <描述问题>
+        Saves the report + recent conversation context + env locally. Uploaded
+        only if you opted in via /privacy; otherwise file at the GitHub issues
+        link shown. Honors ARIA_NO_TELEMETRY.
+        """
+        desc = args.strip()
+        if not desc:
+            console.print("[dim]用法: /bug <描述你遇到的问题>[/dim]" if HAS_RICH
+                          else "Usage: /bug <description>")
+            return
+        ctx_parts = []
+        for m in self.terminal.conversation[-6:]:
+            _c = (m.get("content", "") or "")[:300]
+            ctx_parts.append(f"{m.get('role','')}: {_c}")
+        ctx = "\n".join(ctx_parts)
+        import platform as _pf
+        env = (f"v{__version__} · {_pf.system()} · py{_pf.python_version()} · "
+               f"model={self.terminal.config.get('model','')}")
+        self.terminal._record_feedback("bug", ctx, comment=f"{desc}\n\n[env] {env}")
+        gh = "https://github.com/Cinsoul/Aria-Code/issues"
+        if HAS_RICH:
+            console.print("  [#C08050]✓ 已记录问题（本地）[/#C08050]")
+            console.print(f"  [dim]上传需 /privacy opt-in · 或直接提 issue: {gh}[/dim]")
+        else:
+            print(f"  ✓ Bug recorded locally. Upload via /privacy opt-in, or file: {gh}")
 
     # ── Cost / usage display ─────────────────────────────────────────────────
 
@@ -10445,6 +10479,15 @@ class ArtheraTerminal:
                 if not self.config.get("first_run_seen"):
                     self.config["first_run_seen"] = True
                     save_config(self.config)
+                    # One-time transparency note. Unlike Claude Code (which does
+                    # NOT train on feedback), Aria may use opted-in feedback to
+                    # improve its finance model — so disclose it up front.
+                    import os as _os
+                    if not _os.environ.get("ARIA_NO_TELEMETRY"):
+                        console.print(
+                            "  [dim]隐私：反馈默认[bold]仅存本地[/bold]，不上传。"
+                            "opt-in 后可用于改进金融模型 · /privacy 查看与开关 · /bug 报告问题[/dim]"
+                        )
         else:
             if _banner_mode != "off":
                 from ui.banner import render_full_banner as _rfb
@@ -11330,6 +11373,13 @@ class ArtheraTerminal:
                             config_policy=_cfg_policy,
                         )
                         _apply_tool_approval(tool_params, approval)
+                        # Implicit feedback signal (Claude Code "acceptance or
+                        # rejections") — the user accepting/rejecting the AI's
+                        # proposed action is the training signal, no 👍/👎 needed.
+                        self._record_feedback(
+                            "tool_accept" if approval.approved else "tool_reject",
+                            tool_name,
+                        )
                         if not approval.approved:
                             tool_batch.cancel()
                             from ui.render.output import print_tool_blocked as _ptb
@@ -11675,6 +11725,32 @@ class ArtheraTerminal:
                 _sys.stderr.flush()
 
         return kb
+
+    def _record_feedback(self, rating: str, message: str, comment: str = "") -> None:
+        """Record an implicit/explicit feedback signal — Claude Code-style.
+
+        Captures the signals the user already produces by acting (tool
+        accept/reject, /copy) plus /bug reports. Local-first: written to
+        ~/.arthera/feedback/feedback.jsonl and NEVER uploaded unless the user
+        opted in via /privacy. Honors the ARIA_NO_TELEMETRY kill switch and
+        never raises into the main flow.
+        """
+        import os as _os
+        if _os.environ.get("ARIA_NO_TELEMETRY"):
+            return
+        try:
+            _settings = PrivacySettings.from_config(self.config)
+            _rec = FeedbackRecord.create(
+                rating=rating,
+                message=(message or "")[:500],
+                comment=(comment or "")[:1000],
+                model=self.config.get("model", ""),
+                session_id=getattr(self, "session_id", ""),
+                shared=_settings.data_sharing and _settings.feedback_upload,
+            )
+            FeedbackStore(CONFIG_DIR).append(_rec)
+        except Exception:
+            pass  # feedback must never break the chat flow
 
     def _bottom_toolbar(self):
         """Bottom toolbar content for prompt_toolkit."""

@@ -33,7 +33,8 @@ _CATS: List[Tuple[Tuple[str, ...], str]] = [
       "/review", "/vision", "/browser", "/web"),                        "工具"),
     (("/config", "/model", "/apikey", "/setup", "/local", "/mcp",
       "/memory", "/cost", "/version"),                                   "设置"),
-    (("/help", "/clear", "/btw", "/recap", "/exit", "/quit", "/history", "/session"), "系统"),
+    (("/help", "/clear", "/btw", "/recap", "/exit", "/quit", "/history", "/session",
+      "/bug", "/feedback", "/privacy"), "系统"),
 ]
 
 _CAT_BADGE: dict[str, str] = {
