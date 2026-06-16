@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime
 import io
 import logging
+import sys
 from pathlib import Path
 from typing import Any, Callable
 
@@ -146,6 +147,7 @@ async def run_team_analysis(
     config: dict[str, Any],
     sanitize_result: Callable[[Any, Any], list[str]] | None = None,
     lang: str = "zh",
+    on_agent_done: Callable[[str, Any], None] | None = None,
 ) -> TeamAnalysisResult:
     from agents.team import run_team
     from datasources.router import get_router
@@ -164,6 +166,20 @@ async def run_team_analysis(
 
     captured_stdout = io.StringIO()
     captured_stderr = io.StringIO()
+    # The team runs inside a stdout redirect (to swallow noisy agent logs).
+    # Restore the real stdout just for the on_agent_done callback so its
+    # streaming tree output is actually visible to the user.
+    _real_stdout = sys.stdout
+
+    def _agent_done_proxy(name: str, result: Any) -> None:
+        if on_agent_done is None:
+            return
+        try:
+            with contextlib.redirect_stdout(_real_stdout):
+                on_agent_done(name, result)
+        except Exception as exc:
+            logger.debug("on_agent_done render failed: %s", exc)
+
     try:
         with contextlib.redirect_stdout(captured_stdout), contextlib.redirect_stderr(captured_stderr):
             team_result = await run_team(
@@ -172,7 +188,7 @@ async def run_team_analysis(
                 llm_provider=llm_provider,
                 data_router=get_router(),
                 on_token=None,
-                on_agent_done=None,
+                on_agent_done=_agent_done_proxy if on_agent_done else None,
                 on_synthesis_start=None,
                 lang=lang,
             )

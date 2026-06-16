@@ -703,46 +703,59 @@ class PortfolioCommandsMixin:
         _lang = "zh" if _zh / max(len(args), 1) > 0.15 else "en"
 
         for sym in symbols:
+            _agent_count = len(agent_names)
+
+            # ── Streaming nested agent tree (Claude Code-style) ──────────────
+            from ui.render.team import (
+                render_agent_tree_root, render_agent_node,
+                render_agent_synthesis_leaf,
+            )
+
+            def _on_agent_done(name, result):
+                # Fires as each analyst finishes — render its leaf live.
+                _kp = ""
+                _kps = getattr(result, "key_points", None)
+                if _kps:
+                    _kp = _kps[0] if isinstance(_kps, (list, tuple)) else str(_kps)
+                if HAS_RICH:
+                    render_agent_node(
+                        console, name,
+                        getattr(result, "signal", None), _kp,
+                        success=bool(getattr(result, "success", True)),
+                        error=getattr(result, "error", None),
+                    )
+                else:
+                    print(f"  ⎿ {name}  {getattr(result, 'signal', '')}  {_kp[:50]}")
+
             if HAS_RICH:
-                console.print()
-                console.print(f"  [bold cyan]━━━ /team {sym} ━━━[/bold cyan]")
-                console.print()
+                render_agent_tree_root(console, sym, _agent_count, lang=_lang)
             else:
-                print(f"\n  ━━━ /team {sym} ━━━\n")
+                print(f"\n  ⏺ 多代理分析 {sym}  {_agent_count} 个分析师并行")
 
             try:
                 # ── 新 Agent 系统（无 Ollama 依赖）────────────────────────
-                _agent_count = len(agent_names)
-                _spinner_status = None
-                if HAS_RICH:
-                    _spinner_status = console.status(
-                        f"[dim]{_agent_count} agents 并行分析 {sym}…[/dim]",
-                        spinner="dots",
-                    )
-                    _spinner_status.start()
-
-                try:
-                    _analysis = await run_team_analysis(
-                        symbol=sym,
-                        args=team_args,
-                        config=self.terminal.config,
-                        sanitize_result=_sanitize_team_result_with_market_data,
-                        lang=_lang,
-                    )
-                finally:
-                    if _spinner_status:
-                        try:
-                            _spinner_status.stop()
-                        except Exception:
-                            pass
-                        _spinner_status = None
+                _analysis = await run_team_analysis(
+                    symbol=sym,
+                    args=team_args,
+                    config=self.terminal.config,
+                    sanitize_result=_sanitize_team_result_with_market_data,
+                    lang=_lang,
+                    on_agent_done=_on_agent_done,
+                )
 
                 team_result = _analysis.team_result
                 _data_bundle = _analysis.data_bundle
                 _quality_notes = _analysis.quality_notes or []
 
                 if HAS_RICH:
-                    _print_agent_table(sym, team_result.results, team_args.use_full_team)
+                    # Synthesis leaf closes the tree, then the detailed Panel
+                    render_agent_synthesis_leaf(
+                        console,
+                        team_result.final_signal,
+                        team_result.confidence,
+                        team_result.elapsed_sec,
+                        lang=_lang,
+                    )
                     if _quality_notes:
                         console.print(
                             "  [yellow]数据质量警告:[/yellow] "
@@ -756,7 +769,7 @@ class PortfolioCommandsMixin:
                     )
                     if _has_debate:
                         console.print(
-                            "\n  [orange1]🔥 信号分歧已触发 DebateAgent 调解[/orange1]"
+                            "  [#C08050]🔥 信号分歧已触发 DebateAgent 调解[/#C08050]"
                         )
 
                     # Synthesis in a Panel for visual separation
@@ -775,11 +788,11 @@ class PortfolioCommandsMixin:
                         f"{_syn}\n\n{_footer}",
                         title="[bold]综合结论[/bold]",
                         box=_rbox_team.ROUNDED,
-                        border_style="cyan",
+                        border_style="#C08050",
                         padding=(0, 1),
                     ))
                 else:
-                    _print_agent_table(sym, team_result.results, team_args.use_full_team)
+                    # agents already streamed via _on_agent_done (plain print)
                     if _quality_notes:
                         print("  数据质量警告: " + "; ".join(_quality_notes[:3]))
                     print("\n  ── 综合结论 ──")

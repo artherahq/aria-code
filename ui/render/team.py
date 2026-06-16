@@ -33,6 +33,62 @@ VERDICT_STYLE: dict[str, tuple[str, str]] = {
 }
 
 
+# ── Streaming agent tree (Claude Code-style nested ⏺ rendering) ────────────────
+
+AGENT_LABELS: dict[str, str] = {
+    "fundamental": "基本面", "technical": "技术面", "macro": "宏观",
+    "risk": "风险", "news": "新闻", "catalyst": "催化剂",
+    "sector": "行业", "sentiment": "情绪", "debate": "分歧调解",
+    "valuation": "估值", "quant": "量化", "synthesis": "综合",
+}
+
+
+def agent_label(name: str) -> str:
+    return AGENT_LABELS.get((name or "").lower(), name or "?")
+
+
+def render_agent_tree_root(console, sym: str, n_agents: int, lang: str = "zh") -> None:
+    """Print the root of the agent tree: ⏺ 多代理分析 SYM   N 个分析师并行"""
+    head = "多代理分析" if lang == "zh" else "Multi-agent analysis"
+    sub  = (f"{n_agents} 个分析师并行" if lang == "zh"
+            else f"{n_agents} analysts in parallel")
+    console.print(f"\n  [#C08050]⏺[/#C08050]  [bold]{head} {sym}[/bold]  [dim]{sub}[/dim]")
+
+
+def render_agent_node(console, name: str, signal: str | None,
+                      key_point: str | None, success: bool = True,
+                      error: str | None = None) -> None:
+    """Print one completed-agent leaf: ⎿ ⏺ 基本面  BUY  ROE 24%·PE 32 偏高"""
+    label = agent_label(name)
+    if not success or error:
+        console.print(f"  [dim]⎿ ⏺ {label}  {error or '失败'}[/dim]")
+        return
+    sig   = (signal or "").upper()
+    color = SIGNAL_COLORS.get(sig, "dim")
+    sig_disp = f"[{color}]{sig}[/{color}]  " if sig else ""
+    kp = (key_point or "").strip().replace("\n", " ")
+    if len(kp) > 52:
+        kp = kp[:52] + "…"
+    console.print(
+        f"  [dim]⎿[/dim] [#C08050]⏺[/#C08050] [bold]{label}[/bold]  "
+        f"{sig_disp}[dim]{kp}[/dim]"
+    )
+
+
+def render_agent_synthesis_leaf(console, signal: str | None,
+                                confidence: float | None, elapsed: float | None,
+                                lang: str = "zh") -> None:
+    """Print the synthesis leaf: ⎿ 综合: ▲ BUY (置信 68%)  耗时 4.2s"""
+    sig = (signal or "").upper()
+    color, icon = VERDICT_STYLE.get(sig, ("dim", "●"))
+    conf = (f"  [dim]置信 {confidence:.0%}[/dim]" if confidence else "")
+    el   = (f"  [dim]耗时 {elapsed:.1f}s[/dim]" if elapsed else "")
+    lab  = "综合" if lang == "zh" else "Synthesis"
+    console.print(
+        f"  [dim]⎿[/dim] [bold]{lab}[/bold]  [{color}]{icon} {sig}[/{color}]{conf}{el}"
+    )
+
+
 def build_verdict_body(
     verdict: str,
     subtitle: str = "",
