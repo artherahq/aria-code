@@ -3882,9 +3882,9 @@ def _print_tool_call(tool_name: str, params: dict):
     action = _TOOL_ACTION_LABELS.get(tool_name, tool_name.replace("_", " "))
     if HAS_RICH:
         if hint:
-            console.print(f"\n  [cyan]⏺[/cyan]  [bold]{action}[/bold]  [dim]{hint}[/dim]")
+            console.print(f"\n  [#C08050]⏺[/#C08050]  [bold]{action}[/bold]  [dim]{hint}[/dim]")
         else:
-            console.print(f"\n  [cyan]⏺[/cyan]  [bold]{action}[/bold]")
+            console.print(f"\n  [#C08050]⏺[/#C08050]  [bold]{action}[/bold]")
     else:
         label = f"{action}  {hint}" if hint else action
         print(f"\n  ⏺ {label}", end="", flush=True)

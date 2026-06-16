@@ -147,10 +147,11 @@ def _build_style(cfg: PanelInputConfig) -> Style:
         "ph":        cfg.ph_color,
         # Rounded box border (Claude Code style)
         "box":       cfg.box,
-        # Mode prompt glyph — color shifts per mode (chat/cmd/file)
-        "mode-chat": f"bold {cfg.accent}",
-        "mode-cmd":  f"bold {cfg.accent_y}",
-        "mode-file": f"bold {cfg.accent_b}",
+        # Mode prompt glyph — always copper (brand). 5-color discipline:
+        # red/green are reserved for 涨跌 semantics, never for chrome.
+        "mode-chat": f"bold {cfg.box}",
+        "mode-cmd":  f"bold {cfg.box}",
+        "mode-file": f"bold {cfg.box}",
         "prompt":    cfg.muted,
         # Divider (transparent bg — terminal bg shows through)
         "divider":   cfg.sep,

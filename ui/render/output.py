@@ -259,7 +259,7 @@ def print_tool_result(
             trunc  = data.get("truncated", False)
             short_url = url.replace("https://", "").replace("http://", "")[:70]
             len_str = f"  {length:,} chars" if length else ""
-            trunc_str = "  [yellow]truncated[/yellow]" if trunc else ""
+            trunc_str = "  [dim]truncated[/dim]" if trunc else ""
             if has_rich:
                 console.print(f"  [dim]⎿  {short_url}{len_str}[/dim]{trunc_str}{ts}")
             else:
@@ -469,7 +469,7 @@ def print_fallback_toast(
     if not has_rich:
         print(f"\n  ⚡ 模型切换  {from_provider} → {to_provider}{('  ' + reason) if reason else ''}")
         return
-    body = f"[bold yellow]⚡[/bold yellow]  [yellow]{from_provider}[/yellow] [dim]→[/dim] [yellow]{to_provider}[/yellow]"
+    body = f"[bold #C08050]⚡[/bold #C08050]  [#C08050]{from_provider}[/#C08050] [dim]→[/dim] [#C08050]{to_provider}[/#C08050]"
     if reason:
         body += f"\n  [dim]{reason}[/dim]"
     console.print(f"\n  {body}")
@@ -504,8 +504,8 @@ def print_context_warning(
 
     pct = int(ratio * 100)
     if has_rich:
-        color  = "red" if ratio >= 0.95 else "yellow"
-        icon   = "🔴" if ratio >= 0.95 else "⚠"
+        color  = "red" if ratio >= 0.95 else "#C08050"
+        icon   = "●" if ratio >= 0.95 else "⚠"
         msg    = f"  [{color}]{icon} 上下文 {pct}% 已满  ({_k(est_tokens)}/{_k(max_tokens)} tokens)[/{color}]"
         msg   += "  [dim]→ /compact 压缩历史  /clear 重置[/dim]"
         console.print(msg)
@@ -525,7 +525,7 @@ def print_tool_blocked(
     """Show a styled 'Blocked' line when tool execution is denied or cancelled."""
     if has_rich:
         console.print(
-            f"  [dim]⎿[/dim]  [yellow]⊘  {tool_name}[/yellow]  [dim]{reason}[/dim]"
+            f"  [dim]⎿[/dim]  [#C08050]⊘  {tool_name}[/#C08050]  [dim]{reason}[/dim]"
         )
     else:
         print(f"  ⎿  ⊘ {tool_name}  {reason}")
