@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Aria_Code-v4.0-6366f1?style=for-the-badge&logo=terminal&logoColor=white" alt="版本"/>
+  <a href="https://www.npmjs.com/package/aria-code"><img src="https://img.shields.io/npm/v/aria-code?style=for-the-badge&logo=npm&color=cb3837&label=npm" alt="npm"/></a>
   <img src="https://img.shields.io/badge/Python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="python"/>
   <img src="https://img.shields.io/badge/Ollama-本地大模型-black?style=for-the-badge&logo=llama&logoColor=white" alt="ollama"/>
   <img src="https://img.shields.io/badge/云端-19+供应商-f59e0b?style=for-the-badge" alt="providers"/>
@@ -112,7 +112,17 @@ $ aria-code
 
 ## 🚀 快速开始
 
-### 方式一：一键安装（macOS / Linux）
+### 方式一：npm 安装（推荐）
+
+```bash
+npm install -g aria-code
+aria-code
+```
+
+npm 安装器会自动检测 Python 3.10+ 并为你拉取引擎。
+随时用 `npm update -g aria-code` 更新到最新版。
+
+### 方式二：一键安装（macOS / Linux）
 
 ```bash
 git clone https://github.com/Cinsoul/Aria-Code.git
@@ -126,7 +136,7 @@ cd aria-code
 echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc
 ```
 
-### 方式二：直接运行
+### 方式三：直接运行
 
 ```bash
 git clone https://github.com/Cinsoul/Aria-Code.git

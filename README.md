@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Aria_Code-v4.0-6366f1?style=for-the-badge&logo=terminal&logoColor=white" alt="version"/>
+  <a href="https://www.npmjs.com/package/aria-code"><img src="https://img.shields.io/npm/v/aria-code?style=for-the-badge&logo=npm&color=cb3837&label=npm" alt="npm"/></a>
   <img src="https://img.shields.io/badge/Python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="python"/>
   <img src="https://img.shields.io/badge/Ollama-Local_LLM-black?style=for-the-badge&logo=llama&logoColor=white" alt="ollama"/>
   <img src="https://img.shields.io/badge/Providers-19+_Cloud-f59e0b?style=for-the-badge" alt="providers"/>
@@ -166,7 +166,17 @@ mindmap
 
 ## 🚀 Quick Start
 
-### Option 1: One-line install (macOS / Linux)
+### Option 1: npm (recommended)
+
+```bash
+npm install -g aria-code
+aria-code
+```
+
+The npm installer auto-detects Python 3.10+ and pulls the engine for you.
+Update anytime with `npm update -g aria-code`.
+
+### Option 2: One-line install (macOS / Linux)
 
 ```bash
 git clone https://github.com/Cinsoul/Aria-Code.git
@@ -180,7 +190,7 @@ Add to PATH:
 echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc
 ```
 
-### Option 2: Run directly
+### Option 3: Run directly
 
 ```bash
 git clone https://github.com/Cinsoul/Aria-Code.git
