@@ -4661,6 +4661,7 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
             "/fork":      (self.cmd_fork,      "Fork conversation at current point: /fork [name]"),
             "/copy":      (self.cmd_copy,      "Copy last response to clipboard"),
             "/bug":       (self.cmd_bug,       "Report an issue: /bug <description> (local-first)"),
+            "/accuracy":  (self.cmd_accuracy,  "Prediction track record: settle calls vs live prices"),
             "/cost":      (self.cmd_cost,      "Show session token usage and estimated cost"),
             "/todo":      (self.cmd_todo,      "Task tracking: /todo add|done|list|clear"),
             "/doctor":    (self.cmd_doctor,    "Diagnose installation, models, API keys"),
@@ -6606,6 +6607,40 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
             console.print(f"  [dim]上传需 /privacy opt-in · 或直接提 issue: {gh}[/dim]")
         else:
             print(f"  ✓ Bug recorded locally. Upload via /privacy opt-in, or file: {gh}")
+
+    def cmd_accuracy(self, args: str):
+        """Settle pending market calls vs live prices and show the track record.
+
+        Usage: /accuracy
+        Verifies the LLM's directional calls (看多/看空/neutral) against actual
+        moves — the finance ground-truth feedback loop. Correct/wrong calls
+        become chosen/rejected DPO signals (local; uploaded only if opted in).
+        """
+        res = self.terminal._verify_predictions(min_age_hours=24.0)
+        try:
+            from apps.cli.prediction_feedback import PredictionTracker
+            acc = PredictionTracker(CONFIG_DIR).accuracy()
+        except Exception:
+            acc = {}
+        if HAS_RICH:
+            console.print()
+            console.print("  [bold]预测战绩[/bold]  [dim]LLM 方向判断 vs 实际行情[/dim]")
+            if res.get("settled"):
+                console.print(f"  [dim]本次结算 {res['settled']} 笔："
+                              f"命中 [green]{res['correct']}[/green] / "
+                              f"落空 [red]{res['wrong']}[/red][/dim]")
+            _acc = acc.get("accuracy")
+            _acc_str = f"{_acc:.0%}" if _acc is not None else "—"
+            console.print(
+                f"  累计：已结算 [bold]{acc.get('settled',0)}[/bold] · "
+                f"命中率 [#C08050]{_acc_str}[/#C08050] · "
+                f"待结算 [dim]{acc.get('pending',0)}[/dim]"
+            )
+            if not acc.get("total"):
+                console.print("  [dim]暂无记录 — 用 /team 或 /analyze 让 AI 给出方向判断后会自动追踪[/dim]")
+        else:
+            print(f"  预测战绩: 结算{res.get('settled',0)} 命中率"
+                  f"{acc.get('accuracy')} 待结算{acc.get('pending',0)}")
 
     # ── Cost / usage display ─────────────────────────────────────────────────
 
@@ -11751,6 +11786,54 @@ class ArtheraTerminal:
             FeedbackStore(CONFIG_DIR).append(_rec)
         except Exception:
             pass  # feedback must never break the chat flow
+
+    def _record_prediction(self, symbol: str, response_text: str,
+                           entry_price: float = 0.0) -> None:
+        """Record an LLM market call for later outcome verification.
+
+        The market is the objective judge — a correct/wrong call becomes a
+        chosen/rejected DPO training signal once verified. Fetches the entry
+        price itself if not given, so call sites stay one-liners. Local-first,
+        honors ARIA_NO_TELEMETRY, never raises.
+        """
+        try:
+            from apps.cli.prediction_feedback import PredictionTracker
+            if not entry_price or entry_price <= 0:
+                try:
+                    import market_data_client as _mdc
+                    q = _mdc.MarketDataClient().quote(symbol)
+                    entry_price = q.get("price") if q.get("success") else 0.0
+                except Exception:
+                    entry_price = 0.0
+            if not entry_price:
+                return
+            PredictionTracker(CONFIG_DIR).record(
+                symbol=symbol, response_text=response_text, entry_price=entry_price,
+                session_id=getattr(self, "session_id", ""),
+                model=self.config.get("model", ""),
+            )
+        except Exception:
+            pass
+
+    def _verify_predictions(self, min_age_hours: float = 24.0) -> dict:
+        """Settle pending predictions against live prices; emit DPO feedback."""
+        try:
+            from apps.cli.prediction_feedback import PredictionTracker
+
+            def _quote(sym: str):
+                try:
+                    import market_data_client as _mdc
+                    q = _mdc.MarketDataClient().quote(sym)
+                    return q.get("price") if q.get("success") else None
+                except Exception:
+                    return None
+
+            return PredictionTracker(CONFIG_DIR).verify_pending(
+                _quote, min_age_hours=min_age_hours,
+                emit_feedback=self._record_feedback,
+            )
+        except Exception:
+            return {"settled": 0, "correct": 0, "wrong": 0}
 
     def _bottom_toolbar(self):
         """Bottom toolbar content for prompt_toolkit."""

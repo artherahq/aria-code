@@ -804,6 +804,15 @@ class PortfolioCommandsMixin:
                 # 保存报告
                 await self._save_team_report(sym, team_result, _data_bundle, _quality_notes)
 
+                # Record the directional call for outcome verification (DPO loop).
+                # synthesis + final_signal → detect_direction; entry price fetched
+                # by _record_prediction. Best-effort, never blocks.
+                try:
+                    _call_text = f"{team_result.synthesis or ''} {team_result.final_signal or ''}"
+                    self.terminal._record_prediction(sym, _call_text)
+                except Exception:
+                    pass
+
             except ImportError:
                 # ── 旧 Ollama Agent（兜底）────────────────────────────────
                 ollama_url = self.terminal.config.get("ollama_url", "http://localhost:11434")
