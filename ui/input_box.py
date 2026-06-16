@@ -112,7 +112,7 @@ class PanelInputConfig:
                 menu_bg="#161b22", menu_fg="#c9d1d9",
                 menu_sel_bg="#3a2e20", menu_sel_fg="#e8c9a6",
                 menu_meta="#6e7681", menu_meta_cur="#c0a585",
-                scroll_bg="#161b22", scroll_btn="#3a2e20",
+                scroll_bg="#161b22", scroll_btn="#C08050",
                 hi="#C08050",
             )
         return replace(self, theme="light",
@@ -122,11 +122,11 @@ class PanelInputConfig:
             input_bg="default",
             ph_color="#a8a8a8",
             box="#bc6a2e",
-            menu_bg="#f3efe7", menu_fg="#2c2c2a",
-            menu_sel_bg="#ecdcc8", menu_sel_fg="#7a4e2a",
-            menu_meta="#6e7781", menu_meta_cur="#8a6a48",
-            scroll_bg="#e8e4dc", scroll_btn="#cfc4b4",
-            hi="#bc6a2e",
+            menu_bg="#ece6da", menu_fg="#2c2c2a",
+            menu_sel_bg="#e3cda8", menu_sel_fg="#6e4420",
+            menu_meta="#6e7781", menu_meta_cur="#855f38",
+            scroll_bg="#ddd6c8", scroll_btn="#bc6a2e",
+            hi="#b5601f",
         )
 
 

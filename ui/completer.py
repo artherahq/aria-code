@@ -325,19 +325,19 @@ if HAS_PT:
             bg="#161b22", fg="#c9d1d9",
             sel_bg="#3a2e20", sel_fg="#e8c9a6",
             meta="#6e7681", meta_cur="#c0a585",
-            scroll_bg="#161b22", scroll_btn="#3a2e20",
+            scroll_bg="#161b22", scroll_btn="#C08050",   # copper position handle
             hi="#C08050", cat="#6e7681",
             base_bg="#0d1117", prompt="#8b949e", ph="#484f58",
             tb_fg="#8b949e", tb_bg="#161b22",
         ),
         "light": dict(
-            bg="#f3efe7", fg="#2c2c2a",
-            sel_bg="#ecdcc8", sel_fg="#7a4e2a",
-            meta="#6e7781", meta_cur="#8a6a48",
-            scroll_bg="#e8e4dc", scroll_btn="#cfc4b4",
-            hi="#bc6a2e", cat="#9a958c",
+            bg="#ece6da", fg="#2c2c2a",                   # deeper warm — lifts off white
+            sel_bg="#e3cda8", sel_fg="#6e4420",           # stronger copper selection
+            meta="#6e7781", meta_cur="#855f38",
+            scroll_bg="#ddd6c8", scroll_btn="#bc6a2e",    # copper position handle
+            hi="#b5601f", cat="#9a958c",
             base_bg="default", prompt="#57606a", ph="#a8a8a8",
-            tb_fg="#57606a", tb_bg="#e8e4dc",
+            tb_fg="#57606a", tb_bg="#ddd6c8",
         ),
     }
 
