@@ -186,8 +186,9 @@ def _build_style(cfg: PanelInputConfig) -> Style:
         "completion-menu":                    f"bg:{cfg.menu_bg} {cfg.menu_fg}",
         "completion-menu.completion":         f"bg:{cfg.menu_bg} {cfg.menu_fg}",
         "completion-menu.completion.current": f"bg:{cfg.menu_sel_bg} {cfg.menu_sel_fg} bold",
-        "completion-menu.meta":               f"bg:{cfg.menu_bg} {cfg.menu_meta}",
-        "completion-menu.meta.current":       f"bg:{cfg.menu_sel_bg} {cfg.menu_meta_cur}",
+        "completion-menu.meta.completion":         f"bg:{cfg.menu_bg} {cfg.menu_meta}",
+        "completion-menu.meta.completion.current": f"bg:{cfg.menu_sel_bg} {cfg.menu_meta_cur}",
+        "completion-menu.multi-column-meta":       f"bg:{cfg.menu_bg} {cfg.menu_meta}",
         "scrollbar.background":               f"bg:{cfg.scroll_bg}",
         "scrollbar.button":                   f"bg:{cfg.scroll_btn}",
         # Fuzzy-match highlight classes (shared with ui/completer.py) — copper

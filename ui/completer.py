@@ -366,8 +366,9 @@ if HAS_PT:
             "completion-menu":                    f"bg:{c['bg']} {c['fg']}",
             "completion-menu.completion":         f"bg:{c['bg']} {c['fg']}",
             "completion-menu.completion.current": f"bg:{c['sel_bg']} {c['sel_fg']} bold",
-            "completion-menu.meta":               f"bg:{c['bg']} {c['meta']}",
-            "completion-menu.meta.current":       f"bg:{c['sel_bg']} {c['meta_cur']}",
+            "completion-menu.meta.completion":         f"bg:{c['bg']} {c['meta']}",
+            "completion-menu.meta.completion.current": f"bg:{c['sel_bg']} {c['meta_cur']}",
+            "completion-menu.multi-column-meta":       f"bg:{c['bg']} {c['meta']}",
             "scrollbar.background":               f"bg:{c['scroll_bg']}",
             "scrollbar.button":                   f"bg:{c['scroll_btn']}",
 
