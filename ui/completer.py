@@ -308,32 +308,80 @@ if HAS_PT:
                     self._shell_history = self._shell_history[-200:]
 
     # ── Style ────────────────────────────────────────────────────────────────
-    # Matches the GitHub dark palette used in input_box.py.
-    # fz-hi = fuzzy-matched character highlight (amber, visible in all rows)
-    # fz-cat = category badge (dim muted)
-    ARIA_PT_STYLE = PTStyle.from_dict({
-        "":                  "#c9d1d9 bg:#0d1117",
-        "prompt":            "#8b949e",
-        "placeholder":       "#484f58",
-        "input-bg":          "#c9d1d9 bg:#0d1117",
-        "bottom-toolbar":    "noreverse #8b949e bg:#161b22",
-        "bottom-toolbar.text":"noreverse #8b949e bg:#161b22",
+    # Theme-aware completion menu in the 5-color palette.
+    # Selection + fuzzy highlight use copper (brand); the menu surface
+    # matches the terminal theme so it never floats as a dark popup on a
+    # light terminal (or vice-versa).
 
-        # Completion menu — GitHub dark
-        "completion-menu":                     "bg:#161b22 #c9d1d9",
-        "completion-menu.completion":          "bg:#161b22 #c9d1d9",
-        "completion-menu.completion.current":  "bg:#1f2937 #e6edf3 bold",
-        "completion-menu.meta":                "bg:#161b22 #484f58",
-        "completion-menu.meta.current":        "bg:#1f2937 #8b949e",
-        "scrollbar.background":                "bg:#161b22",
-        "scrollbar.button":                    "bg:#30363d",
+    # Copper-palette menu colors per theme.
+    #   bg     = menu surface (sits clearly above terminal bg)
+    #   fg     = row text
+    #   sel_bg = selected row (copper tint)
+    #   sel_fg = selected row text (copper, bold-applied at use site)
+    #   meta   = description column (dim)
+    #   hi     = fuzzy-matched chars (copper)
+    _MENU_THEMES = {
+        "dark": dict(
+            bg="#161b22", fg="#c9d1d9",
+            sel_bg="#3a2e20", sel_fg="#e8c9a6",
+            meta="#6e7681", meta_cur="#c0a585",
+            scroll_bg="#161b22", scroll_btn="#3a2e20",
+            hi="#C08050", cat="#6e7681",
+            base_bg="#0d1117", prompt="#8b949e", ph="#484f58",
+            tb_fg="#8b949e", tb_bg="#161b22",
+        ),
+        "light": dict(
+            bg="#f3efe7", fg="#2c2c2a",
+            sel_bg="#ecdcc8", sel_fg="#7a4e2a",
+            meta="#6e7781", meta_cur="#8a6a48",
+            scroll_bg="#e8e4dc", scroll_btn="#cfc4b4",
+            hi="#bc6a2e", cat="#9a958c",
+            base_bg="default", prompt="#57606a", ph="#a8a8a8",
+            tb_fg="#57606a", tb_bg="#e8e4dc",
+        ),
+    }
 
-        # Fuzzy highlight classes
-        "fz-hi":   "bold #f0883e",   # amber — matched chars, visible in any row
-        "fz-cat":  "#484f58",        # dim — category badge (mkt/ana/qnt…)
-    })
+    def _detect_theme() -> str:
+        try:
+            from ui.input_box import detect_terminal_theme
+            return detect_terminal_theme()
+        except Exception:
+            return "dark"
+
+    def build_aria_pt_style(theme: str = "auto") -> "PTStyle":
+        """Build a theme-aware PromptSession style in the copper palette."""
+        if theme == "auto":
+            theme = _detect_theme()
+        c = _MENU_THEMES.get(theme, _MENU_THEMES["dark"])
+        base = f"{c['fg']} bg:{c['base_bg']}" if c["base_bg"] != "default" else c["fg"]
+        return PTStyle.from_dict({
+            "":                   base,
+            "prompt":             c["prompt"],
+            "placeholder":        c["ph"],
+            "input-bg":           base,
+            "bottom-toolbar":     f"noreverse {c['tb_fg']} bg:{c['tb_bg']}",
+            "bottom-toolbar.text":f"noreverse {c['tb_fg']} bg:{c['tb_bg']}",
+
+            # Completion menu — theme-aware surface, copper selection
+            "completion-menu":                    f"bg:{c['bg']} {c['fg']}",
+            "completion-menu.completion":         f"bg:{c['bg']} {c['fg']}",
+            "completion-menu.completion.current": f"bg:{c['sel_bg']} {c['sel_fg']} bold",
+            "completion-menu.meta":               f"bg:{c['bg']} {c['meta']}",
+            "completion-menu.meta.current":       f"bg:{c['sel_bg']} {c['meta_cur']}",
+            "scrollbar.background":               f"bg:{c['scroll_bg']}",
+            "scrollbar.button":                   f"bg:{c['scroll_btn']}",
+
+            # Fuzzy highlight classes — copper
+            "fz-hi":   f"bold {c['hi']}",
+            "fz-cat":  c["cat"],
+        })
+
+    # Back-compat default (dark). Prefer build_aria_pt_style(theme) at call sites.
+    ARIA_PT_STYLE = build_aria_pt_style("dark")
 
 else:
+    def build_aria_pt_style(theme: str = "auto"):  # type: ignore
+        return None
     class AriaPTCompleter:  # type: ignore
         def __init__(self, *a, **kw): pass
         def get_completions(self, *a, **kw): return iter([])

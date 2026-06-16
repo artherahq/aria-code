@@ -4523,7 +4523,7 @@ class ArtheraCompleter:
             return None
 
 
-from ui.completer import AriaPTCompleter, ARIA_PT_STYLE
+from ui.completer import AriaPTCompleter, ARIA_PT_STYLE, build_aria_pt_style
 
 
 
@@ -10244,7 +10244,7 @@ class ArtheraTerminal:
                 history=self._pt_history,
                 completer=self._pt_completer,
                 complete_while_typing=True,
-                style=ARIA_PT_STYLE,
+                style=build_aria_pt_style(config.get("input_theme", "auto")),
                 placeholder=_placeholder,
                 key_bindings=_kb,
             )

@@ -88,6 +88,17 @@ class PanelInputConfig:
     ph_color: str = ""   # very dim placeholder
     box: str = ""        # rounded border color
 
+    # Completion menu palette (copper, theme-aware)
+    menu_bg: str = ""
+    menu_fg: str = ""
+    menu_sel_bg: str = ""
+    menu_sel_fg: str = ""
+    menu_meta: str = ""
+    menu_meta_cur: str = ""
+    scroll_bg: str = ""
+    scroll_btn: str = ""
+    hi: str = ""         # fuzzy-match highlight (copper)
+
     def resolved(self) -> "PanelInputConfig":
         theme = self.theme if self.theme != "auto" else detect_terminal_theme()
         if theme == "dark":
@@ -98,6 +109,11 @@ class PanelInputConfig:
                 input_bg="default",   # transparent — box border defines the zone
                 ph_color="#484f58",   # dim placeholder, readable
                 box="#C08050",        # copper — Aria's brand accent on the frame
+                menu_bg="#161b22", menu_fg="#c9d1d9",
+                menu_sel_bg="#3a2e20", menu_sel_fg="#e8c9a6",
+                menu_meta="#6e7681", menu_meta_cur="#c0a585",
+                scroll_bg="#161b22", scroll_btn="#3a2e20",
+                hi="#C08050",
             )
         return replace(self, theme="light",
             fg="#24292f",
@@ -106,6 +122,11 @@ class PanelInputConfig:
             input_bg="default",
             ph_color="#a8a8a8",
             box="#bc6a2e",
+            menu_bg="#f3efe7", menu_fg="#2c2c2a",
+            menu_sel_bg="#ecdcc8", menu_sel_fg="#7a4e2a",
+            menu_meta="#6e7781", menu_meta_cur="#8a6a48",
+            scroll_bg="#e8e4dc", scroll_btn="#cfc4b4",
+            hi="#bc6a2e",
         )
 
 
@@ -159,19 +180,19 @@ def _build_style(cfg: PanelInputConfig) -> Style:
         "st-model":  cfg.muted,
         "st-sep":    cfg.dim,
         "st-cwd":    cfg.dim,
-        "tok-warn":  cfg.accent_y,
-        "tok-crit":  "#f85149",
-        # Completion menu — GitHub dark palette, stands out from terminal bg
-        "completion-menu":                    "bg:#161b22 #c9d1d9",
-        "completion-menu.completion":         "bg:#161b22 #c9d1d9",
-        "completion-menu.completion.current": "bg:#1f2937 #e6edf3 bold",
-        "completion-menu.meta":               "bg:#161b22 #484f58",
-        "completion-menu.meta.current":       "bg:#1f2937 #8b949e",
-        "scrollbar.background":               "bg:#161b22",
-        "scrollbar.button":                   "bg:#30363d",
-        # Fuzzy-match highlight classes (shared with ui/completer.py)
-        "fz-hi":                              "bold #f0883e",
-        "fz-cat":                             "#484f58",
+        "tok-warn":  cfg.box,            # copper — context-pressure caution
+        "tok-crit":  "#f85149",          # red — critical only
+        # Completion menu — theme-aware copper palette (matches terminal theme)
+        "completion-menu":                    f"bg:{cfg.menu_bg} {cfg.menu_fg}",
+        "completion-menu.completion":         f"bg:{cfg.menu_bg} {cfg.menu_fg}",
+        "completion-menu.completion.current": f"bg:{cfg.menu_sel_bg} {cfg.menu_sel_fg} bold",
+        "completion-menu.meta":               f"bg:{cfg.menu_bg} {cfg.menu_meta}",
+        "completion-menu.meta.current":       f"bg:{cfg.menu_sel_bg} {cfg.menu_meta_cur}",
+        "scrollbar.background":               f"bg:{cfg.scroll_bg}",
+        "scrollbar.button":                   f"bg:{cfg.scroll_btn}",
+        # Fuzzy-match highlight classes (shared with ui/completer.py) — copper
+        "fz-hi":                              f"bold {cfg.hi}",
+        "fz-cat":                             cfg.dim,
     })
 
 
