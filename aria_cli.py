@@ -3874,6 +3874,33 @@ _TOOL_ACTION_LABELS: dict = {
 }
 
 
+_STUB_PLACEHOLDER_MARKERS = (
+    "欢迎使用 Aria AI 金融助手",
+    "这是一个需要详细解释的概念。请稍后重试",
+    "Welcome to Aria",
+    "请提供更具体的问题",
+    "I'm here to help with financial",
+    "股票数据查询",
+    "请提供您想查询的股票",
+    "请输入您的具体问题",
+    "支持的查询方式",
+)
+
+
+def _response_is_stub_placeholder(resp: str) -> bool:
+    """True if resp is the api_url stub backend's canned help/welcome text.
+
+    Shared by the REPL chat loop and run_prompt so both fall back to Ollama
+    instead of showing boilerplate. (Empty/too-short is handled by callers.)
+    """
+    if not resp:
+        return False
+    if any(p in resp for p in _STUB_PLACEHOLDER_MARKERS):
+        return True
+    _markers = ("请提供", "请输入", "示例问题", "支持的查询", "股票代码：")
+    return sum(1 for m in _markers if m in resp) >= 2
+
+
 def _render_answer_block(text: str) -> None:
     """Render the AI's final answer with a ⏺ bullet + hanging indent.
 
@@ -11041,47 +11068,39 @@ class ArtheraTerminal:
                 provider = "ollama"
                 self._last_provider = "ollama"
             else:
-                # Pass system_override through user_context for cloud path
-                _cloud_uctx = dict(user_context or {})
-                _so = getattr(self, "_system_override", None)
-                if _so:
-                    _cloud_uctx["system_role_override"] = _so
-                    self._system_override = None
-                result = await stream_chat(
-                    self.api_url, current_message, self.conversation,
-                    model=model, thinking_mode=thinking_mode,
-                    user_context=_cloud_uctx or user_context, auth_token=auth_token,
-                    on_token=on_token, on_thinking=on_thinking,
-                    on_tool_call=on_tool_call, on_tool_result=on_tool_result,
-                    on_status=on_status, cancel_event=self.cancel_event,
-                )
+                # Cloud models are provider-prefixed (openai/gpt-4.5, anthropic/…);
+                # Ollama models have no "/" (gpt-oss:120b-cloud, deepseek-r1:14b).
+                # The api_url backend is only for genuine cloud-provider models —
+                # routing Ollama models there hits a stub that returns placeholder
+                # help text. Skip it entirely and go straight to the Ollama path
+                # below (which also auto-picks an installed model / cloud fallback).
+                _is_ollama_model = "/" not in (model or "")
+                if _is_ollama_model:
+                    result = {"success": False, "response": "", "cancelled": False}
+                else:
+                    # Pass system_override through user_context for cloud path
+                    _cloud_uctx = dict(user_context or {})
+                    _so = getattr(self, "_system_override", None)
+                    if _so:
+                        _cloud_uctx["system_role_override"] = _so
+                        self._system_override = None
+                    result = await stream_chat(
+                        self.api_url, current_message, self.conversation,
+                        model=model, thinking_mode=thinking_mode,
+                        user_context=_cloud_uctx or user_context, auth_token=auth_token,
+                        on_token=on_token, on_thinking=on_thinking,
+                        on_tool_call=on_tool_call, on_tool_result=on_tool_result,
+                        on_status=on_status, cancel_event=self.cancel_event,
+                    )
                 # 响应质量检测：success=True 但返回占位符/空响应 → 同样 fallback
                 def _is_placeholder_response(r: dict) -> bool:
                     resp = r.get("response", "")
                     if not resp or len(resp) < 20:
                         return True
-                    # 后端已知占位模板
-                    _placeholders = (
-                        "欢迎使用 Aria AI 金融助手",
-                        "这是一个需要详细解释的概念。请稍后重试",
-                        "Welcome to Aria",
-                        "请提供更具体的问题",
-                        "I'm here to help with financial",
-                        "股票数据查询",
-                        "请提供您想查询的股票",
-                        "请输入您的具体问题",
-                        "支持的查询方式",
-                    )
-                    if any(p in resp for p in _placeholders):
-                        return True
-                    # Structural: generic help/welcome scaffolding from the stub
-                    # backend — several boilerplate markers together.
-                    _markers = ("请提供", "请输入", "示例问题", "支持的查询", "股票代码：")
-                    if sum(1 for m in _markers if m in resp) >= 2:
+                    if _response_is_stub_placeholder(resp):
                         return True
                     # Signal mismatch: the real model emitted ~no tokens yet the
-                    # "response" is long → it's a canned backend reply, not a
-                    # generation. (Observed: out:1 token, 200+ char welcome text.)
+                    # "response" is long → canned backend reply, not a generation.
                     if token_count <= 2 and len(resp) > 80:
                         return True
                     return False
@@ -11089,7 +11108,8 @@ class ArtheraTerminal:
                 # If backend failed OR returned placeholder, fallback chain:
                 # Ollama (if running) → DeepSeek cloud → OpenAI → error
                 _should_fallback = (
-                    (not result.get("success") and not result.get("cancelled"))
+                    _is_ollama_model
+                    or (not result.get("success") and not result.get("cancelled"))
                     or _is_placeholder_response(result)
                 )
                 if _should_fallback:
@@ -12071,19 +12091,25 @@ class ArtheraTerminal:
                 except Exception:
                     _prompt_spinner = None
             try:
-                if local_mode:
+                # Ollama models (no "/" provider prefix) skip the api_url stub
+                # backend entirely — same routing as the interactive REPL.
+                if local_mode or "/" not in (model or ""):
                     result = await stream_ollama(
                         self.config.get("ollama_url", "http://localhost:11434"),
                         prompt, [], model=model,
                     )
                 else:
-                    # Try AWS, fallback to Ollama
+                    # Cloud-provider model: try api_url, fall back to Ollama on
+                    # failure OR a stub placeholder response.
                     result = await stream_chat(
                         self.api_url, prompt, [],
                         model=model, thinking_mode=thinking_mode,
                         user_context=user_context, auth_token=auth_token,
                     )
-                    if not result.get("success"):
+                    _resp = result.get("response", "") or ""
+                    if (not result.get("success")
+                            or len(_resp) < 20
+                            or _response_is_stub_placeholder(_resp)):
                         result = await stream_ollama(
                             self.config.get("ollama_url", "http://localhost:11434"),
                             prompt, [], model=model,
