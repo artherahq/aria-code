@@ -5229,10 +5229,8 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
         try:
             spot = r.get("current_price") or r.get("spot_price")
             if spot and spot > 0:
-                import sys as _sys, pathlib as _pathlib
-                _qe = str(_pathlib.Path(__file__).parents[1] / "Arthera")
-                if _qe not in _sys.path:
-                    _sys.path.insert(0, _qe)
+                # quant_engine is bundled in aria-code's packages/ — no external
+                # Arthera path needed (commodity Black-Scholes math ships with CLI).
                 from packages.quant_engine.stochastic.options_pricing import (
                     OptionSpec, black_scholes,
                 )

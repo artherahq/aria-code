@@ -1437,8 +1437,14 @@ class BacktestCommandsMixin:
         三策略对比: ML-Weighted / Equal-Weight / Buy-and-Hold
         支持 A股(T+1)、港股、美股混合组合。
         """
+        # ML signal backtest is part of the private Arthera engine (alpha IP).
+        # If a local Arthera checkout is present (dev), make it importable;
+        # otherwise the import below fails and we show a Pro-feature notice.
         import sys, os
-        sys.path.insert(0, os.path.expanduser("~/Desktop/Arthera/packages"))
+        _arthera_pkgs = os.environ.get("ARTHERA_ROOT") or os.path.expanduser("~/Desktop/Arthera")
+        _arthera_pkgs = os.path.join(_arthera_pkgs, "packages")
+        if os.path.isdir(_arthera_pkgs) and _arthera_pkgs not in sys.path:
+            sys.path.insert(0, _arthera_pkgs)
 
         if HAS_RICH:
             console.print("\n  [bold cyan]ML 信号组合回测[/bold cyan]  三策略对比\n")
@@ -1478,8 +1484,15 @@ class BacktestCommandsMixin:
                     _print_sparkline("ML 权重", ml_nav,  "cyan")
                     _print_sparkline("等权基准", ew_nav, "yellow")
 
-        except ImportError as e:
-            _print_error(f"quant_engine 未安装: {e}")
+        except ImportError:
+            # Moat feature — the ML/alpha engine ships only with the full
+            # Arthera platform, not the open CLI. Degrade with a clear notice.
+            _msg = ("ML 信号回测属于 Arthera 高级引擎（含 ML 选股/alpha 因子），"
+                    "开源 CLI 未内置。\n  基础回测可用：/backtest momentum <symbol>")
+            if HAS_RICH:
+                console.print(f"  [#C08050]◆ Pro 功能[/#C08050]  [dim]{_msg}[/dim]")
+            else:
+                print(f"  ◆ Pro 功能  {_msg}")
         except Exception as e:
             _print_error(f"ML 回测失败: {e}")
             import traceback
