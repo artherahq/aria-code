@@ -5130,6 +5130,14 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
             ctx = await self._build_analyze_context(symbol, is_cn)
 
         await self.terminal.send_message(build_analyze_prompt(symbol, ctx, is_cn))
+        # Record the LLM's directional call for later outcome verification (DPO loop)
+        try:
+            _resp = next((m["content"] for m in reversed(self.terminal.conversation)
+                          if m.get("role") == "assistant" and m.get("content")), "")
+            if _resp:
+                self.terminal._record_prediction(symbol, _resp)
+        except Exception:
+            pass
 
     async def _build_analyze_context(self, symbol: str, is_cn: bool) -> str:
         """Fetch real market data and return a structured context string for the LLM."""
@@ -8801,7 +8809,40 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
             return False
 
     async def cmd_crypto(self, args: str):
-        """Crypto data: /crypto BTC ETH (with yfinance fallback)"""
+        """Crypto data: /crypto BTC ETH  ·  /crypto account (read-only balance)"""
+        # ── Read-only account view: /crypto account [exchange] ───────────────
+        if args.strip().lower().split()[:1] == ["account"]:
+            _parts = args.strip().split()
+            _exch = _parts[1].lower() if len(_parts) > 1 else "binance"
+            if not _HAS_MDC:
+                console.print("[yellow]market_data_client 不可用[/yellow]" if HAS_RICH else "unavailable")
+                return
+            acct = await self._run_in_executor(
+                lambda: _get_mdc().crypto_account(_exch)
+            )
+            if not acct.get("success"):
+                _err = acct.get("error", "")
+                if _err == "no_api_key":
+                    msg = (f"未配置 {_exch.upper()} 只读 API key。\n"
+                           f"  设置环境变量：{_exch.upper()}_API_KEY 和 {_exch.upper()}_SECRET\n"
+                           f"  [dim]建议用「只读」权限的 key — Aria 永不下单[/dim]")
+                else:
+                    msg = f"读取失败：{_err}"
+                console.print(f"  [yellow]{msg}[/yellow]" if HAS_RICH else msg)
+                return
+            holdings = acct.get("holdings", [])
+            if HAS_RICH:
+                console.print(f"\n  [bold]{_exch.capitalize()} 账户[/bold]  "
+                              f"[dim]只读 · {len(holdings)} 个资产[/dim]")
+                for h in holdings[:15]:
+                    console.print(f"    {h['asset']:<8} [bold]{h['amount']:,.6g}[/bold]"
+                                  f"  [dim]可用 {h['free']:,.6g}[/dim]")
+            else:
+                print(f"{_exch} account ({len(holdings)} assets):")
+                for h in holdings[:15]:
+                    print(f"  {h['asset']:<8} {h['amount']:.6g}")
+            return
+
         symbols = args.upper().split() if args else ["BTC"]
         if HAS_RICH:
             console.print()
@@ -11970,6 +12011,15 @@ class ArtheraTerminal:
         """Run the interactive REPL loop."""
         self.print_header()
         await self._startup_health_check()
+
+        # Background: settle pending market calls (>24h) vs live prices so the
+        # prediction track record + DPO signals accrue with zero user effort.
+        try:
+            import threading as _th
+            _th.Thread(target=self._verify_predictions,
+                       kwargs={"min_age_hours": 24.0}, daemon=True).start()
+        except Exception:
+            pass
 
         # ── Start MCP servers (non-blocking background task) ─────────────
         if _HAS_MCP and not self._mcp_started:

@@ -145,6 +145,20 @@ def _is_ashare(symbol: str) -> bool:
 def _is_crypto(symbol: str) -> bool:
     return "/" in symbol or symbol.upper().endswith(("USDT","BTC","ETH","BNB"))
 
+def _norm_crypto(symbol: str, quote: str = "USDT") -> str:
+    """Normalise a crypto symbol to ccxt 'BASE/QUOTE' form.
+
+    Fixes the rstrip bug: 'DOTUSDT'.rstrip('USDT') → 'DO' (strips chars, not
+    the suffix). Here we strip the quote suffix exactly.
+    """
+    s = symbol.upper().strip()
+    if "/" in s:
+        return s
+    for q in ("USDT", "USDC", "BUSD", "USD", "BTC", "ETH", "BNB"):
+        if s.endswith(q) and len(s) > len(q):
+            return f"{s[:-len(q)]}/{q if q != 'USD' else 'USDT'}"
+    return f"{s}/{quote}"
+
 def _normalise_ashare(symbol: str) -> str:
     s = symbol.strip().upper()
     if s.endswith((".SZ", ".SS", ".SH")):
@@ -1154,9 +1168,7 @@ class MarketDataClient:
     def _quote_crypto(self, symbol: str) -> Dict[str, Any]:
         try:
             import ccxt
-            sym = symbol.upper()
-            if "/" not in sym:
-                sym = sym.rstrip("USDT") + "/USDT"
+            sym = _norm_crypto(symbol)
             ex = ccxt.binance({"enableRateLimit": True,
                                "proxies": {"http": "", "https": ""}})
             ticker = ex.fetch_ticker(sym)
@@ -1187,9 +1199,7 @@ class MarketDataClient:
     def _history_crypto(self, symbol: str, days: int, interval: str) -> Dict[str, Any]:
         try:
             import ccxt
-            sym = symbol.upper()
-            if "/" not in sym:
-                sym = sym.rstrip("USDT") + "/USDT"
+            sym = _norm_crypto(symbol)
             iv_map = {"1d":"1d","1h":"1h","15m":"15m","4h":"4h"}
             tf = iv_map.get(interval, "1d")
             limit = min(days, 1000)
@@ -1205,6 +1215,65 @@ class MarketDataClient:
         except Exception as e:
             yf_sym = symbol.replace("/","").replace("USDT","-USD")
             return self._history_yfinance(yf_sym, days, interval)
+
+    # ── Binance: funding rate + read-only account ──────────────────────────────
+
+    def crypto_funding_rate(self, symbol: str, exchange: str = "binance") -> Dict[str, Any]:
+        """Perpetual funding rate (read-only, no key). Falls back across
+        exchanges so a geo-blocked Binance doesn't kill the lookup."""
+        import ccxt
+        sym = _norm_crypto(symbol) + ":USDT"   # ccxt linear-perp notation
+        _last_err = ""
+        for exch in [exchange] + [e for e in ("okx", "bybit", "gate") if e != exchange]:
+            try:
+                ex = getattr(ccxt, exch)({"enableRateLimit": True,
+                                          "options": {"defaultType": "swap"},
+                                          "proxies": {"http": "", "https": ""}})
+                fr = ex.fetch_funding_rate(sym)
+                return {
+                    "success": True, "symbol": sym, "exchange": exch,
+                    "funding_rate": fr.get("fundingRate"),
+                    "funding_rate_pct": round((fr.get("fundingRate") or 0) * 100, 4),
+                    "next_funding": fr.get("fundingDatetime"),
+                    "mark_price": fr.get("markPrice"),
+                    "provider": f"ccxt/{exch}",
+                }
+            except Exception as e:
+                _last_err = str(e)
+                continue
+        return {"success": False, "error": _last_err, "symbol": symbol}
+
+    def crypto_account(self, exchange: str = "binance") -> Dict[str, Any]:
+        """READ-ONLY account balance via API key (no trading).
+
+        Keys from env: BINANCE_API_KEY / BINANCE_SECRET (or <EXCHANGE>_API_KEY).
+        This only reads balances — Aria never places crypto orders.
+        """
+        import os as _os
+        key = _os.getenv(f"{exchange.upper()}_API_KEY") or _os.getenv("BINANCE_API_KEY")
+        secret = _os.getenv(f"{exchange.upper()}_SECRET") or _os.getenv("BINANCE_SECRET")
+        if not key or not secret:
+            return {"success": False, "error": "no_api_key",
+                    "hint": f"set {exchange.upper()}_API_KEY and {exchange.upper()}_SECRET (read-only key)"}
+        try:
+            import ccxt
+            ex = getattr(ccxt, exchange)({
+                "apiKey": key, "secret": secret,
+                "enableRateLimit": True, "proxies": {"http": "", "https": ""},
+            })
+            bal = ex.fetch_balance()
+            holdings = []
+            for asset, amt in (bal.get("total") or {}).items():
+                if amt and float(amt) > 0:
+                    holdings.append({"asset": asset, "amount": float(amt),
+                                     "free": float((bal.get("free") or {}).get(asset, 0)),
+                                     "used": float((bal.get("used") or {}).get(asset, 0))})
+            holdings.sort(key=lambda h: -h["amount"])
+            return {"success": True, "exchange": exchange,
+                    "holdings": holdings, "asset_count": len(holdings),
+                    "provider": f"ccxt/{exchange}", "read_only": True}
+        except Exception as e:
+            return {"success": False, "error": str(e), "exchange": exchange}
 
     # ── Global indices ────────────────────────────────────────────────────────
 
