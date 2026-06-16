@@ -66,12 +66,21 @@ def error_hint(error: str, context: str = "") -> str:
         return "Hint: Backend unreachable. Try /health or check your network."
     if "timeout" in err_lower or "timed out" in err_lower:
         return "Hint: Request timed out. Try again or check /health."
+    # External web pages that block scraping (paywall / anti-bot) — NOT an Aria
+    # login problem, so /login must not be suggested.
+    _is_web = any(m in err_lower for m in (
+        "http://", "https://", "www.", ".com", ".org", ".net",
+        "web_fetch", "web fetch", "forbidden",
+    ))
     if "401" in err_lower or "unauthorized" in err_lower:
-        # Distinguish market data API keys from Aria auth
         if any(h in err_lower for h in ("finnhub", "alphavantage", "polygon", "api/v1", "api/v2/finance")):
             return "Hint: API key required — /apikey set finnhub <KEY>  (free at finnhub.io)"
+        if _is_web:
+            return "Hint: This site blocks automated access (paywall/anti-bot). Try another source."
         return "Hint: Authentication required. Run /login to sign in."
     if "403" in err_lower or "forbidden" in err_lower:
+        if _is_web:
+            return "Hint: This site blocks automated access (paywall/anti-bot). Try another source."
         return "Hint: Access denied. Check your API key or subscription."
     if "429" in err_lower or "rate" in err_lower:
         return "Hint: Rate limited. Wait a moment and try again."
@@ -96,9 +105,11 @@ def error_hint(error: str, context: str = "") -> str:
             f"Hint: Ollama model not found. Run `ollama list` to see available models.\n"
             f"  Or pull one: ollama pull qwen2.5-coder:7b"
         )
-    # "File not found" is a path error, not a missing tool — keep hint specific
+    # "File not found" is a path error. Tell the model firmly NOT to keep
+    # guessing filenames (it otherwise loops app.py→script.py→main.py…).
     if "file not found" in err_lower or "no such file" in err_lower:
-        return "Hint: File does not exist. Check the path and try again."
+        return ("Hint: This file does not exist. Do NOT guess other filenames — "
+                "list the directory first, or this question may not need a file at all.")
     if "404" in err_lower and context == "tool":
         return "Hint: Tool not available. Check /tools for available tools."
     if "not found" in err_lower and context == "session":

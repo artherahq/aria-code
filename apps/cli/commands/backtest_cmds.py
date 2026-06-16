@@ -177,12 +177,15 @@ class BacktestCommandsMixin:
                 import numpy as _np
                 import statistics as _stats
 
+                _yf_bars = [0]   # records bars found, for a precise error message
+
                 def _run_yf_backtest():
                     _ticker = _yf.Ticker(symbol)
                     _df = _ticker.history(start=start_date, end=end_date, auto_adjust=True)
                     if _df is None or _df.empty:
                         return None
                     _close = _df["Close"].dropna()
+                    _yf_bars[0] = len(_close)
                     if len(_close) < 5:
                         return None
                     _prices = list(_close)
@@ -283,7 +286,14 @@ class BacktestCommandsMixin:
                                 return {"success": True, "data": _rest_data, "_source": "rest"}
             except Exception as _e:
                 logger.debug("backtest REST call failed: %s", _e)
-            return {"success": False, "error": f"回测失败：所有数据源不可用（API未运行，yfinance数据不足）"}
+            # Honest, actionable error: the dominant cause is too little history
+            # (new IPO / halted / wrong ticker), not "all data sources down".
+            if 0 < _yf_bars[0] < 5:
+                return {"success": False, "error": (
+                    f"{symbol} 历史数据仅 {_yf_bars[0]} 个交易日，不足以回测"
+                    f"（可能为新上市，如 SPCX 刚 IPO）。请换历史更长的标的或缩短策略周期。")}
+            return {"success": False, "error": (
+                f"{symbol} 无可用历史数据 — 请检查代码是否正确，或该标的是否已上市/未停牌。")}
 
         if HAS_RICH:
             with console.status(f"[dim]{label}...[/dim]", spinner="dots"):

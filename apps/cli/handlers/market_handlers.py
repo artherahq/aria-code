@@ -1162,7 +1162,9 @@ def _try_handle_market_snapshot_analysis(message: str, history: list = None) -> 
     data_src = " -> ".join(str(p) for p in quote_chain if p)
     if ti_provider and ti_provider not in quote_chain:
         data_src += f" + {ti_provider}"
-    _vol_str = _fmt_int(volume)
+    # volume == 0 means "not reported" here (finnhub /quote has no volume),
+    # not "zero trading" — treat as unknown so we hide the row vs showing "0".
+    _vol_str = _fmt_int(volume) if volume else "N/A"
     _now_str = datetime.now().strftime("%Y-%m-%d")
 
     # ── Language-aware labels ─────────────────────────────────────────────
