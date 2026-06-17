@@ -11875,17 +11875,18 @@ class ArtheraTerminal:
             if HAS_RICH:
                 copy_hint = "  [dim]/copy[/dim]" if self._last_response else ""
                 console.print(f"\n[dim]{' · '.join(metadata.parts)}[/dim]{copy_hint}")
-                # One-time warning if first response and input tokens are very high
-                # (>2000 for a short message suggests a heavy system prompt)
-                _is_first_turn = (self._session_turns == 0)
-                if _is_first_turn and prompt_t > 2000:
-                    _sys_est = metadata.system_prompt_estimate(message)
-                    if _sys_est > 1500:
+                # Context pressure warning — fire when input tokens > 60% of model context
+                _ctx_max = get_model_cfg(self.config.get("model", "qwen2.5:7b")).get("num_ctx", 16384)
+                if prompt_t > 0 and _ctx_max > 0:
+                    _ctx_fill_pct = prompt_t / _ctx_max
+                    if _ctx_fill_pct >= 0.60:
+                        _ctx_color = "#cc4444" if _ctx_fill_pct >= 0.85 else "#aa8800"
                         console.print(
-                            f"[dim]  ℹ 系统提示词约 {_sys_est:,} tokens，"
-                            f"较长的对话会较快占满上下文。"
-                            f"可用 /compact 压缩历史，或用 /clear 重置。[/dim]"
-                )
+                            f"[{_ctx_color}]  ⚠ 当前上下文约 {prompt_t:,} / {_ctx_max:,} tokens"
+                            f" ({int(_ctx_fill_pct*100)}%)，"
+                            f"{'上下文已接近满载！' if _ctx_fill_pct >= 0.85 else '对话历史较长。'}"
+                            f" 可用 /compact 压缩历史，或 /clear 重置。[/{_ctx_color}]"
+                        )
                 console.print(Rule(style="dim"))
             else:
                 print(f"\n{' · '.join(metadata.parts)}\n")

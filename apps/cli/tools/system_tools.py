@@ -61,6 +61,19 @@ def tool_run_command(
         if d in command:
             return {"success": False, "error": f"Blocked dangerous command: {command}"}
 
+    # Prevent executing text/doc files as Python — they are analysis reports, not scripts
+    import re as _re_cmd
+    _py3_file = _re_cmd.search(r'\bpython3?\s+["\']?(\S+\.(?:txt|md|docx|csv|json|log))', command)
+    if _py3_file:
+        _bad_file = _py3_file.group(1)
+        return {
+            "success": False,
+            "error": (
+                f"拒绝执行: '{_bad_file}' 是文本/分析文件，不是 Python 脚本。\n"
+                "如需展示分析结果，请直接输出文字，或将分析结论写入 .py 文件后执行。"
+            ),
+        }
+
     if params.get("dry_run"):
         return {"success": True, "data": {
             "command": command,

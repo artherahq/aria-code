@@ -287,8 +287,11 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
     _max_tokens = _mcfg.get("max_tokens", min(_mcfg.get("num_ctx", 8192) // 4, 8192))
     _mkey = resolve_model_key(model)
 
-    # ── 上下文硬截断：小模型（≤3B）严格限制历史长度，防止溢出 ─────────────
-    _ctx_chars_limit = max((_num_ctx * 3) - len(system_prompt) - len(message) - 512, 1000)
+    # ── 上下文硬截断：保留 80% 上下文给历史，防止溢出 ────────────────────
+    # 用 1.5 chars/token（CJK 混合文本实际比率）而非英文假设的 4 chars/token
+    _chars_per_tok = 1.5
+    _ctx_chars_for_hist = int(_num_ctx * 0.80 * _chars_per_tok) - len(system_prompt) - len(message) - 512
+    _ctx_chars_limit = max(_ctx_chars_for_hist, 1000)
     # 从最新历史往前选，确保总字符数不超限
     _trimmed_history: list = []
     _hist_chars = 0
