@@ -5,6 +5,84 @@ Extracted from aria_cli.py. Methods' __globals__ are rebound to aria_cli's names
 by _rebind_mixin_globals() called at module load time.
 """
 from __future__ import annotations
+from typing import Optional, Tuple
+
+
+def _parse_nl_team_pair(text: str) -> Optional[Tuple[str, str]]:
+    """
+    Extract (home_cn, away_cn) from a natural-language football query.
+
+    Handles patterns like:
+      "葡萄牙和刚果比赛比分预测"
+      "巴西跟阿根廷谁赢"
+      "英格兰对阵法国"
+      "germany vs france prediction"
+    Returns None if two teams cannot be confidently identified.
+    """
+    try:
+        from football_data_client import _CN_TEAM_MAP
+    except Exception:
+        return None
+
+    # Ordered connectors — longer ones first to avoid partial matches
+    _CONNECTORS = (
+        "对阵", "对战", "对决", " vs ", " VS ", " v.s. ",
+        " versus ", "跟", "和", "与", "对", "pk", "PK",
+    )
+    # Words to strip from team-name fragments
+    _STRIP_WORDS = (
+        "预测", "分析", "比赛", "比分", "胜率", "结果", "谁赢", "谁会赢",
+        "今天", "今日", "明天", "的", "了", "吗", "呢",
+        "prediction", "match", "game", "preview", "who wins",
+    )
+
+    def _clean(s: str) -> str:
+        s = s.strip("？！，。、《》（）[]【】:：'\"-— ")
+        for w in _STRIP_WORDS:
+            s = s.replace(w, "").strip()
+        return s.strip()
+
+    # ── Approach 1: split on connector ───────────────────────────────────────
+    for conn in _CONNECTORS:
+        if conn.lower() in text.lower():
+            idx = text.lower().index(conn.lower())
+            left  = _clean(text[:idx])
+            right = _clean(text[idx + len(conn):])
+            if left in _CN_TEAM_MAP and right in _CN_TEAM_MAP:
+                return left, right
+            # Try partial: if left is known, right might have extra suffix
+            if left in _CN_TEAM_MAP and right:
+                for cn in _CN_TEAM_MAP:
+                    if right.startswith(cn):
+                        return left, cn
+                # right as-is might be an English name or abbreviation
+                if len(right) >= 2:
+                    return left, right
+            if right in _CN_TEAM_MAP and left:
+                for cn in _CN_TEAM_MAP:
+                    if left.endswith(cn):
+                        return cn, right
+                if len(left) >= 2:
+                    return left, right
+
+    # ── Approach 2: scan for all known Chinese team names in text order ──────
+    found: list = []
+    for cn in _CN_TEAM_MAP:
+        if cn in text:
+            found.append((text.index(cn), cn))
+    found.sort()
+    # Remove duplicates keeping earlier occurrence
+    seen_en: set = set()
+    unique: list = []
+    for pos, cn in found:
+        en = _CN_TEAM_MAP[cn]
+        if en not in seen_en:
+            seen_en.add(en)
+            unique.append((pos, cn))
+    if len(unique) >= 2:
+        return unique[0][1], unique[1][1]
+
+    return None
 
 
 class MarketCommandsMixin:
@@ -284,13 +362,30 @@ class MarketCommandsMixin:
                 "预测", "分析", "谁赢", "比分", "胜率", "谁先", "开球",
             ))
             if _has_cn or _has_kw:
+                # ── Step 1: Parse two team names from NL text ─────────────────
+                _nl_pair = _parse_nl_team_pair(full_args)
+                if _nl_pair:
+                    _h_cn, _a_cn = _nl_pair
+                    # Determine league: national teams → wc, club → pl default
+                    try:
+                        from football_data_client import _CN_TEAM_MAP, _find_fifa_rating
+                        _h_en = _CN_TEAM_MAP.get(_h_cn, _h_cn)
+                        _a_en = _CN_TEAM_MAP.get(_a_cn, _a_cn)
+                        _is_nat = bool(_find_fifa_rating(_h_en) or _find_fifa_rating(_a_en))
+                    except Exception:
+                        _is_nat = True
+                    _nl_league = "wc" if _is_nat else "pl"
+                    await self._football_predict(_h_cn, _a_cn, _nl_league)
+                    return
+
+                # ── Step 2: Fall back to get_sports_context_for_query ─────────
                 try:
                     from football_data_client import get_sports_context_for_query
                     _sports_ctx = get_sports_context_for_query(full_args)
                 except Exception:
                     _sports_ctx = ""
                 if _sports_ctx:
-                    _has_quant = "泊松模型量化预测" in _sports_ctx
+                    _has_quant = "量化预测" in _sports_ctx
                     _title = "⚽ 赛事预测" if _has_quant else "⚽ 赛事数据"
                     console.print(Panel(
                         _sports_ctx,
@@ -299,8 +394,10 @@ class MarketCommandsMixin:
                     ))
                 else:
                     console.print(
-                        "[yellow]⚽ 未能找到对应队伍数据。[/yellow]\n"
-                        "请使用格式：[cyan]/football predict 加拿大 vs 波黑 wc[/cyan]"
+                        "[yellow]⚽ 未能解析队名。[/yellow]\n"
+                        "支持格式：\n"
+                        "  [cyan]/football predict 葡萄牙 vs 刚果 wc[/cyan]\n"
+                        "  [cyan]/football 葡萄牙和刚果比赛[/cyan]  （自动识别）"
                     )
             else:
                 console.print(f"[red]未知子命令: {sub}[/red]  使用 /football 查看帮助")
