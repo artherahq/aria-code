@@ -2189,6 +2189,10 @@ try:
 except ImportError:
     _CU_SCHEMAS: list = []
 
+# Pre-initialize so finance/plugin registrations can append schemas to it.
+# The bulk static schemas are extended below; this empty list must exist first.
+LOCAL_TOOL_SCHEMAS: list = []
+
 # ── Register local finance fallback tools (yfinance / akshare / ccxt) ──────
 # These fill in for remote Aria tools when local_mode=True or backend offline.
 if _HAS_LOCAL_FINANCE:
@@ -2208,8 +2212,8 @@ if _HAS_PLUGIN:
     except Exception as _exc:
         logger.debug("Plugin tool registration error: %s", _exc)
 
-# Ollama tool schemas (for function calling)
-LOCAL_TOOL_SCHEMAS = [
+# Ollama tool schemas (for function calling) — extend so finance schemas added above are kept
+LOCAL_TOOL_SCHEMAS.extend([
     {
         "type": "function",
         "function": {
@@ -2518,7 +2522,7 @@ LOCAL_TOOL_SCHEMAS = [
             },
         },
     },
-]
+])
 
 # Append computer-use schemas if the module loaded successfully
 if _HAS_COMPUTER_USE:

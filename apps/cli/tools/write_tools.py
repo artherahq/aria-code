@@ -248,6 +248,31 @@ def tool_write_file(params: dict) -> dict:
                 "error": f"Content appears to be a placeholder tag: '{stripped_check[:120]}'. "
                 "Write the complete code with imports, data fetching, computation, and output."}
 
+    # Reject trivial stub Python scripts — only print() with no real logic
+    if path.endswith(".py"):
+        import re as _re
+        _boilerplate = {
+            "#!/usr/bin/env python", "#!/usr/bin/python", "# -*- coding:",
+            'if __name__ == "__main__":', "if __name__ == '__main__':",
+            "def main():", "main()", "",
+        }
+        _work_lines = [
+            ln.strip() for ln in stripped_check.splitlines()
+            if ln.strip() and ln.strip() not in _boilerplate
+            and not ln.strip().startswith("#")
+        ]
+        _all_print = _work_lines and all(
+            _re.match(r'^print\s*\(', ln) for ln in _work_lines
+        )
+        if _all_print and len(_work_lines) <= 3:
+            return {
+                "success": False,
+                "error": (
+                    f"拒绝写入: '{path}' 只包含 print() 语句，是无意义的占位脚本。"
+                    " 请直接用文字输出结果，或者写包含真实逻辑的代码（网络请求、数据处理、计算等）。"
+                ),
+            }
+
     content = _auto_fix_python(content, path)
 
     try:
