@@ -490,8 +490,6 @@ def _try_handle_multi_market_snapshot(message: str, symbols: list[str]) -> dict:
     table.append("Next")
     table.append("- `/ta " + symbols[0] + "` · `/ta " + symbols[1] + "` — full technical chart")
     table.append("- `/report " + symbols[0] + "` · `/report " + symbols[1] + "` — generate research reports")
-    table.append("")
-    table.append("市场快照 · 本内容不构成投资建议")
     return {"success": True, "response": "\n".join(table), "tools_used": ["market_snapshot"]}
 
 

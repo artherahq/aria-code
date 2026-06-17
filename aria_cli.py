@@ -10881,6 +10881,7 @@ class ArtheraTerminal:
             return
 
         deterministic: dict = {"success": False}
+        _det_wants_analysis = False  # set True for snapshot + analysis query → LLM follows
         if not _model_has_tools:
             # Deterministic path: only for models that can't reliably do function calling
             deterministic = _try_handle_broker_query(message)
@@ -10899,29 +10900,40 @@ class ArtheraTerminal:
             final_text = deterministic.get("response", "")
             if not final_text:
                 final_text = f"市场分析未完成：{deterministic.get('error', '未知错误')}"
+            _tools = deterministic.get("tools_used", [])
+            _tool_label = {
+                "market_snapshot": "市场快照",
+                "stock_chart":     "图表分析",
+                "broker_query":    "账户数据",
+                "realty_query":    "房地产数据",
+            }.get(_tools[0], _tools[0]) if _tools else "本地分析"
+            _rate_limited = deterministic.get("rate_limited", False)
+            _rl_note = "  [yellow]⚠ 数据源限流[/yellow]" if _rate_limited else ""
+            # For snapshot + "分析" queries: show data then continue to LLM for deep analysis
+            _det_wants_analysis = (
+                any(k in message for k in ("分析", "analyze", "analysis", "对比", "比较", "compare"))
+                and bool(_tools) and _tools[0] == "market_snapshot"
+            )
             if HAS_RICH:
+                # ⏺/✓ workflow indicator — mirrors LLM tool call display style
+                _t_icon = _tools[0] if _tools else "local"
+                console.print(f"\n  [#C08050]⏺[/#C08050]  [bold]{_t_icon}[/bold]")
+                console.print(f"  [green]✓[/green]  [dim]{_tool_label} 数据已获取[/dim]")
                 console.print()
                 console.print("[bold]Aria[/bold]")
                 console.print()
                 console.print(Markdown(_strip_latex(final_text)))
-                # User-friendly footer: show data source(s) instead of internal routing label
-                _tools = deterministic.get("tools_used", [])
-                _tool_label = {
-                    "market_snapshot": "市场快照",
-                    "stock_chart":     "图表分析",
-                    "broker_query":    "账户数据",
-                    "realty_query":    "房地产数据",
-                }.get(_tools[0], _tools[0]) if _tools else "本地分析"
-                _rate_limited = deterministic.get("rate_limited", False)
-                _rl_note = "  [yellow]⚠ 数据源限流[/yellow]" if _rate_limited else ""
                 console.print(f"\n[dim]{_tool_label} · 本内容不构成投资建议[/dim]{_rl_note}\n")
-                console.print(Rule(style="dim"))
+                if not _det_wants_analysis:
+                    console.print(Rule(style="dim"))
             else:
                 print("\nAria\n")
                 print(final_text)
                 print(f"\n市场快照 · 本内容不构成投资建议\n")
             self.conversation.append({"role": "assistant", "content": final_text})
-            return
+            if not _det_wants_analysis:
+                return
+            # Analysis query: fall through to LLM for deep commentary on the snapshot data
 
         model = self.config.get("model", "qwen2.5:7b")
         thinking_mode = self.config.get("thinking_mode", "auto")
@@ -10987,7 +10999,15 @@ class ArtheraTerminal:
         # Inject plan as a prefix to the first turn's message so the AI
         # follows the decomposed steps rather than free-forming the approach.
         current_message = message
-        if _decomp_plan:
+        if _det_wants_analysis:
+            # Snapshot already shown — ask LLM to provide analysis commentary
+            current_message = (
+                "请基于上方已获取的实时行情数据提供深度分析（约300字）："
+                " 当前价格位置与短期趋势判断、多空力量对比"
+                "（若涉及多标的则对比两者强弱）、关键支撑/阻力位、操作建议（附风险提示）。"
+                " 直接开始分析，不要重复表格数据。"
+            )
+        elif _decomp_plan:
             current_message = (
                 f"[执行计划]\n{_decomp_plan}\n\n"
                 f"[用户请求]\n{message}"

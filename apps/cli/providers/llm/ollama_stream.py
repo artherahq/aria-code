@@ -338,7 +338,8 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
         _t_inj_ms = int((_t_inj.time() - _t_inj_start) * 1000)
         if _market_inject:
             # 过程可见化：⏺/✓ 格式，与工具调用步骤保持一致
-            _inj_m = _re_sym.search(r'## 📊 (\S+) 实时行情（来源：(\S+)）', _market_inject)
+            import re as _re_inj
+            _inj_m = _re_inj.search(r'## 📊 (\S+) 实时行情（来源：(\S+)）', _market_inject)
             if HAS_RICH:
                 _sym_label = _inj_m.group(1) if _inj_m else "market_data"
                 _src_label = _inj_m.group(2) if _inj_m else "local"
