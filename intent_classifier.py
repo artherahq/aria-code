@@ -95,11 +95,63 @@ _MACRO_GENERAL_TOPICS = (
     "货币政策", "财政政策", "gdp", "通胀", "通货膨胀", "cpi", "ppi",
     "值得投资吗", "应该投资吗", "是否值得", "投资逻辑",
     "长期展望", "未来前景", "宏观前景",
+    # Interest rate / bond macro concepts
+    "利率", "加息", "降息", "美联储政策", "央行政策",
+    "债券市场", "利差", "收益率曲线", "国债收益",
+    # Structural/sector macro
+    "产业政策", "行业监管", "政策影响", "监管政策",
 )
 _REALTIME_KW = (
     "今天", "today", "现在", "now", "current", "latest", "最新",
     "市值", "price", "股价", "quote", "行情", "涨跌", "涨幅",
     "market cap", "how much", "what is the price",
+    "是多少", "多少钱", "多少点", "多少美元", "多少港元",
+)
+
+# Question words that, when combined with finance concept terms, mean "explain X"
+# rather than "look up X" — should route to general, not finance.
+_QUESTION_PREFIX = (
+    "什么是", "什么叫", "how does", "what is", "what are",
+    "explain", "define", "解释", "定义", "概念", "原理", "介绍",
+    "是什么", "为什么", "区别", "difference", "如何理解", "怎么理解",
+)
+
+# Finance-metric terms that combined with realtime words → live lookup
+_METRIC_KW = (
+    "pe", "pb", "ps", "市盈率", "市净率", "市销率",
+    "eps", "净利润", "营收", "市值", "股息", "分红",
+    "ebitda", "利润率", "毛利率", "roe", "roa",
+)
+
+# File path extensions — presence means it's a document/code task, not stock analysis
+_FILE_EXT_RE = r'\S+\.(?:docx|pdf|xlsx|pptx|txt|csv|json|py|md|log)\b'
+
+# Specific financial entity signals — must be present for "分析" to route as stock analysis.
+# Keep to SPECIFIC company names and ticker symbols only.
+# Generic market categories ("美股", "债券", "股市") must NOT be here — they appear in
+# macro conceptual questions and would incorrectly block the → general route.
+_FIN_ENTITY_KW = (
+    # Company names (CN)
+    "苹果", "谷歌", "英伟达", "微软", "特斯拉", "亚马逊", "腾讯",
+    "阿里", "百度", "比亚迪", "茅台", "招商银行", "中国平安", "恒生指数",
+    "华为", "小米", "美团", "京东", "字节", "滴滴",
+    # Company names (EN)
+    "apple", "google", "nvidia", "microsoft", "tesla", "amazon",
+    "meta", "netflix", "palantir", "snowflake",
+    # Common tickers (lowercase)
+    "aapl", "nvda", "msft", "tsla", "amzn", "googl", "meta", "baba",
+    "spy", "qqq", "iwm", "dia", "gld", "uso",
+    # Specific crypto coins (named assets, not generic "加密货币")
+    "比特币", "以太坊", "bitcoin", "ethereum", "btc", "eth", "sol", "bnb",
+    # Named indices (specific, not generic "指数")
+    "纳斯达克", "标普500", "道琼斯", "沪深300", "中证500",
+)
+
+# Broader market terms (generic) — used only to check for stock-analysis context,
+# NOT used to block macro-general classification (avoid false negatives on conceptual Qs)
+_MARKET_GENERAL_KW = (
+    "股票", "股市", "股价", "美股", "港股", "a股",
+    "etf", "基金", "指数", "期货", "期权", "加密", "数字货币",
 )
 _GENERAL_KW = (
     "什么是", "what is", "what are", "how does", "explain", "define",
@@ -121,31 +173,73 @@ def classify_intent_sync(message: str) -> str:
     Tier-2 keyword-based classification (synchronous, always available).
     Returns one of the INTENT_* constants.
     """
+    import re as _re
     low = message.lower().strip()
+
+    # Bug ⑥ — file path present → document/code task, never stock analysis template
+    if _re.search(_FILE_EXT_RE, low):
+        if any(k in low for k in _CODING_KW):
+            return INTENT_CODING   # "帮我写一个解析这个 csv 的脚本"
+        return INTENT_FINANCE      # "分析这个文件的可行性 loads/x.docx"
 
     has_coding = any(k in low for k in _CODING_KW)
     has_realtime = any(k in low for k in _REALTIME_KW)
+    has_question = any(q in low for q in _QUESTION_PREFIX)
 
-    if has_coding:
+    # Coding intent — but skip if phrased as a conceptual question ("X的核心是什么")
+    if has_coding and not has_question:
         return INTENT_CODING
+
+    # Bug ⑤ — "metric是多少/how much" → realtime lookup, not finance concept chat
+    if any(m in low for m in _METRIC_KW) and any(k in low for k in _REALTIME_KW):
+        return INTENT_REALTIME
+
     # Live-data terms must win over broad analysis words.  "分析苹果今天的市场"
     # contains both "分析" and "今天"; routing it as generic analysis lets the
     # model answer from memory instead of using market data.
     if has_realtime:
         return INTENT_REALTIME
-    # Stock/market analysis — but NOT if the topic is non-chartable (real-estate,
-    # macro-economy, etc.) where the stock-analysis template produces garbage output.
+
+    # Bug ② — "什么是X" + finance concept → general (explain, not look up)
+    if any(q in low for q in _QUESTION_PREFIX) and any(k in low for k in _FINANCE_CONCEPT_KW):
+        return INTENT_GENERAL
+
+    # Stock/market analysis — but only if a financial entity is present.
     if any(k in low for k in _ANALYSIS_KW):
+        # Bug ③ — macro topics check (also works independently below)
         if any(t in low for t in _MACRO_GENERAL_TOPICS):
-            return INTENT_GENERAL   # pure macro discussion — no tools needed
+            return INTENT_GENERAL
         if any(t in low for t in _NON_STOCK_ANALYSIS_TOPICS):
-            return INTENT_FINANCE   # real-estate etc. — finance chat, no stock template
+            return INTENT_FINANCE
+        # Bug ① — "分析" without a financial entity = general task (project, doc, etc.)
+        if not any(e in low for e in _FIN_ENTITY_KW):
+            # Check for uppercase ticker pattern (e.g. AAPL, BTC)
+            if not _re.search(r'\b[A-Z]{2,5}\b', message):
+                return INTENT_FINANCE
+        # Bug ④ — recommendation phrasing ("应该买入吗") → finance chat, not chart analysis
+        _rec_phrases = ("应该", "是否值得", "要不要", "该不该", "值不值", "建议买", "建议卖")
+        if any(p in low for p in _rec_phrases):
+            return INTENT_FINANCE
         return INTENT_ANALYSIS
+
+    # Bug ③ (standalone) — macro conceptual topics, unless a SPECIFIC entity is named.
+    # Generic market terms like "股市"/"美股" don't block this — "宏观经济对美股的影响"
+    # is still a macro discussion, not a specific stock query.
+    if any(t in low for t in _MACRO_GENERAL_TOPICS):
+        _has_specific = (
+            any(e in low for e in _FIN_ENTITY_KW)
+            or _re.search(r'\b[A-Z]{2,5}\b', message)
+        )
+        if not _has_specific:
+            return INTENT_GENERAL
+
     # Finance concept terms → keep full finance context, not general
     if any(k in low for k in _FINANCE_CONCEPT_KW):
         return INTENT_FINANCE
+
     if any(k in low for k in _GENERAL_KW):
         return INTENT_GENERAL
+
     return INTENT_FINANCE
 
 
