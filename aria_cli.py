@@ -10528,6 +10528,7 @@ class ArtheraTerminal:
         # ── MCP registry placeholder (started async in run_interactive) ──
         self._mcp_registry: Optional[Any] = None
         self._mcp_started = False
+        self._pending_notifications: list = []  # printed before next input cycle to avoid corrupting pt UI
 
         # ── Global user memory ────────────────────────────────────────────
         try:
@@ -12186,12 +12187,9 @@ class ArtheraTerminal:
                     for alrt in triggered:
                         sym = alrt.get("symbol", "")
                         cur = alrt.get("triggered_price", "")
-                        if HAS_RICH:
-                            console.print(
-                                f"\n[bold yellow]⚡ 预警触发[/bold yellow] "
-                                f"[cyan]{sym}[/cyan] → {cur}",
-                                highlight=False,
-                            )
+                        self._pending_notifications.append(
+                            f"\n[bold yellow]⚡ 预警触发[/bold yellow] [cyan]{sym}[/cyan] → {cur}"
+                        )
                         try:
                             from notification_tools import send_alert_notification
                             await loop.run_in_executor(None, send_alert_notification, alrt)
@@ -12226,8 +12224,8 @@ class ArtheraTerminal:
                     if results:
                         n = self._mcp_registry.register_into(LOCAL_TOOLS, LOCAL_TOOL_SCHEMAS)
                         _mcp_registry = self._mcp_registry
-                        if n and HAS_RICH:
-                            console.print(f"  [dim]MCP: {n} tools from {len(results)} server(s)[/dim]")
+                        if n:
+                            self._pending_notifications.append(f"  [dim]MCP: {n} tools from {len(results)} server(s)[/dim]")
                 except Exception as _exc:
                     logger.debug("MCP startup error: %s", _exc)
             asyncio.create_task(_start_mcp())
@@ -12250,6 +12248,10 @@ class ArtheraTerminal:
                 if self._pt_session:
                     if self.config.get("input_style", "panel") == "panel":
                         from ui import PanelInputConfig, run_panel_input
+                        # Drain notifications queued while pt was active (avoids stdout corruption)
+                        while self._pending_notifications:
+                            _note = self._pending_notifications.pop(0)
+                            console.print(_note) if HAS_RICH else print(_note)
                         set_robot_state(RobotState.IDLE)
                         _ml, _cwd, _priv, _etok, _mctx = self._bottom_toolbar_parts()
                         _skills_n = len(SKILLS)

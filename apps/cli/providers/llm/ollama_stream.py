@@ -302,7 +302,11 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
     messages = [{"role": "system", "content": system_prompt}]
     for msg in _trimmed_history:
         messages.append({"role": msg["role"], "content": msg["content"]})
-    messages.append({"role": "user", "content": message})
+    # send_message pre-appends the current user turn to self.conversation before
+    # calling stream_ollama, so history already ends with a user message.
+    # Only add `message` if the last entry is NOT already a user message.
+    if not (_trimmed_history and _trimmed_history[-1].get("role") == "user"):
+        messages.append({"role": "user", "content": message})
 
     # ── 工具注入：通识问答跳过，同时跳过无法可靠调用工具的小模型 ──────────
     # 判断模型是否具备工具调用能力（text_only / format不支持的都跳过）
@@ -328,14 +332,23 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
     #   1. system prompt 替换为"数据已预取"专用 prompt
     #   2. 数据同时注入到用户消息开头（本地模型对最近的 user message 最敏感）
     if _HAS_MDC and not _is_general:
+        import time as _t_inj
+        _t_inj_start = _t_inj.time()
         _market_inject = _try_prefetch_market_data(message, history)
+        _t_inj_ms = int((_t_inj.time() - _t_inj_start) * 1000)
         if _market_inject:
-            # 过程可见化：让用户看到实时数据已注入（类似工具调用展示）
+            # 过程可见化：⏺/✓ 格式，与工具调用步骤保持一致
             _inj_m = _re_sym.search(r'## 📊 (\S+) 实时行情（来源：(\S+)）', _market_inject)
-            if _inj_m and HAS_RICH:
+            if HAS_RICH:
+                _sym_label = _inj_m.group(1) if _inj_m else "market_data"
+                _src_label = _inj_m.group(2) if _inj_m else "local"
                 console.print(
-                    f"  [bold #C08050]market_data[/bold #C08050] "
-                    f"[dim]{_inj_m.group(1)} · 实时行情已注入 · {_inj_m.group(2)}[/dim]"
+                    f"\n  [#C08050]⏺[/#C08050]  [bold]market_data[/bold]"
+                    f"  [dim]{_sym_label} · {_src_label}[/dim]"
+                )
+                console.print(
+                    f"  [green]✓[/green]  [dim]实时行情已注入[/dim]"
+                    f"  [dim]({_t_inj_ms}ms)[/dim]"
                 )
             # Replace system prompt with data-first prompt.
             # Use nano variant for 1-3B models (no template placeholders).
