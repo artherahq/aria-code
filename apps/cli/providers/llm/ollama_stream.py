@@ -793,9 +793,16 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
             break
 
         # Tool calls present — suppress model text (tool UI provides feedback)
-        # Safety: only execute ONE tool call per round (force sequential execution)
+        # Large models may emit multiple write_file calls in one round (project scaffolding).
+        # Destructive / interactive tools (run_command, edit_file) remain sequential.
+        _MUST_SERIALIZE = {"run_command", "edit_file"}
         if len(tool_calls_this_round) > 1:
-            tool_calls_this_round = tool_calls_this_round[:1]
+            _all_safe = all(tc["tool"] not in _MUST_SERIALIZE for tc in tool_calls_this_round)
+            _is_large_mdl = _model_size in ("large",)
+            if _is_large_mdl and _all_safe:
+                tool_calls_this_round = tool_calls_this_round[:5]  # max 5 parallel writes
+            else:
+                tool_calls_this_round = tool_calls_this_round[:1]
 
         # Execute tool calls locally and feed results back
         clean_text = _strip_tool_call_tags(full_response)

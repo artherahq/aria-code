@@ -788,41 +788,228 @@ class BacktestCommandsMixin:
         except Exception as e:
             console.print(f"[red]因子分析失败: {e}[/red]") if HAS_RICH else print(f"Error: {e}")
 
+    def _scaffold_with_llm(self, project_name: str, description: str, base_dir) -> None:
+        """Call the configured LLM to generate a custom project structure and write files."""
+        import json, urllib.request, textwrap, pathlib
+
+        ollama_url = self.terminal.config.get("ollama_url", "http://localhost:11434")
+        model      = self.terminal.config.get("model", "qwen2.5:7b")
+
+        _SCAFFOLD_SYS = (
+            "You are a project scaffolding assistant. Output ONLY valid JSON — no markdown, no explanation.\n"
+            "Schema:\n"
+            '{"description": "one-line summary", "entry": "main.py", '
+            '"files": {"relative/path.py": "file content", ...}}\n'
+            "CRITICAL JSON rules:\n"
+            r'- Inside string values use \n for newlines (backslash-n), NEVER literal newlines.'
+            "\n"
+            r'- Inside string values use \" for double quotes, \\ for backslashes.'
+            "\n"
+            "- 3–8 files total. Content must be complete and runnable.\n"
+            "- Always include: main entry point, requirements.txt, README.md\n"
+            "- requirements.txt: one package per line. README.md: install + usage.\n"
+            "- No markdown code fences. Raw JSON only."
+        )
+        _SCAFFOLD_USER = (
+            f"Project name: {project_name}\n"
+            f"Description:  {description}\n"
+            "Generate the complete file structure."
+        )
+
+        if HAS_RICH:
+            console.print(f"\n  [#C08050]⏺[/#C08050]  [bold]LLM 生成项目结构[/bold]  [dim]{description}[/dim]")
+        else:
+            print(f"\n⏺ 生成项目结构: {description}")
+
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": _SCAFFOLD_SYS},
+                {"role": "user",   "content": _SCAFFOLD_USER},
+            ],
+            "stream": False,
+            "options": {"temperature": 0.2, "num_predict": 4096},
+        }
+        try:
+            req = urllib.request.Request(
+                ollama_url.rstrip("/") + "/api/chat",
+                data=json.dumps(payload).encode(),
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=60) as r:
+                data = json.loads(r.read())
+            raw = data.get("message", {}).get("content", "").strip()
+        except Exception as e:
+            msg = f"LLM 调用失败: {e}"
+            console.print(f"  [red]{msg}[/red]") if HAS_RICH else print(f"  {msg}")
+            return
+
+        # Strip accidental markdown fences
+        import re as _re
+        raw = _re.sub(r'^```[a-z]*\n?', '', raw).rstrip('`').strip()
+
+        def _parse_scaffold_json(text: str):
+            """Try several strategies to extract valid JSON from LLM output."""
+            # Strategy 1: strict parse
+            try:
+                return json.loads(text)
+            except json.JSONDecodeError:
+                pass
+            # Strategy 2: replace literal newlines inside string values
+            try:
+                # Escape literal newlines that appear inside JSON string values
+                fixed = _re.sub(
+                    r'("(?:[^"\\]|\\.)*")',
+                    lambda m: m.group().replace('\n', '\\n').replace('\r', '\\r').replace('\t', '\\t'),
+                    text,
+                )
+                return json.loads(fixed)
+            except Exception:
+                pass
+            # Strategy 3: find outermost {...} block
+            m = _re.search(r'\{.*\}', text, _re.DOTALL)
+            if m:
+                try:
+                    return json.loads(m.group())
+                except Exception:
+                    # Strategy 4: same but with newline escaping
+                    try:
+                        blob = m.group()
+                        fixed = _re.sub(
+                            r'("(?:[^"\\]|\\.)*")',
+                            lambda mx: mx.group().replace('\n', '\\n').replace('\r', '\\r'),
+                            blob,
+                        )
+                        return json.loads(fixed)
+                    except Exception:
+                        pass
+            return None
+
+        structure = _parse_scaffold_json(raw)
+        if not structure or "files" not in structure:
+            msg = "LLM 未返回有效 JSON 结构，请重试或使用 --template"
+            console.print(f"  [red]{msg}[/red]") if HAS_RICH else print(f"  {msg}")
+            return
+
+        files: dict = structure["files"]
+        proj_desc   = structure.get("description", description)
+        entry       = structure.get("entry", "main.py")
+
+        # ── Preview ───────────────────────────────────────────────────────────
+        if HAS_RICH:
+            console.print(f"  [green]✓[/green]  [dim]{proj_desc}[/dim]")
+            console.print(f"\n  [dim]{base_dir.name}/[/dim]")
+            for fname, fcontent in files.items():
+                lines = fcontent.count("\n") + 1 if fcontent else 0
+                console.print(f"  [dim]  ├── {fname:<26s}[/dim] {lines} lines")
+            console.print()
+            choice = console.input(
+                "  [bold]Create these files?[/bold] [dim]\\[y=all / n=cancel / r=review each][/dim] "
+            ).strip().lower()
+        else:
+            print(f"\n  {base_dir.name}/")
+            for fname, fcontent in files.items():
+                lines = fcontent.count("\n") + 1 if fcontent else 0
+                print(f"    ├── {fname:<26s}  {lines} lines")
+            choice = input("  Create these files? [y/all / n=cancel / r=review each] ").strip().lower()
+
+        if choice in ("n", "no"):
+            console.print("[dim]取消。[/dim]") if HAS_RICH else print("Cancelled.")
+            return
+
+        approve_each = choice in ("r", "review")
+        created, skipped = [], []
+
+        for fname, fcontent in files.items():
+            target = pathlib.Path(base_dir) / fname
+            target.parent.mkdir(parents=True, exist_ok=True)
+
+            if approve_each:
+                if HAS_RICH:
+                    console.print(f"\n  [dim]{fname}[/dim]  ({fcontent.count(chr(10))+1} lines)")
+                    sub = console.input("  [dim]写入? [y/n] [/dim]").strip().lower()
+                else:
+                    print(f"\n  {fname}  ({fcontent.count(chr(10))+1} lines)")
+                    sub = input("  写入? [y/n] ").strip().lower()
+                if sub not in ("y", "yes", ""):
+                    skipped.append(fname)
+                    continue
+
+            result = _tool_write_file({"path": str(target), "content": fcontent, "_skip_confirm": True})
+            if result["success"]:
+                created.append(fname)
+            else:
+                err = result.get("error", "?")
+                console.print(f"  [red]Failed {fname}: {err}[/red]") if HAS_RICH else print(f"  Failed {fname}: {err}")
+
+        if HAS_RICH:
+            console.print()
+            if created:
+                console.print(f"  [green]✓[/green] 创建 {len(created)} 个文件 → [bold]{base_dir}[/bold]")
+                for f in created:
+                    console.print(f"    [dim]{f}[/dim]")
+            if skipped:
+                console.print(f"  [dim]跳过: {', '.join(skipped)}[/dim]")
+            console.print(f"\n  [dim]启动: cd \"{base_dir}\" && python3 {entry}[/dim]\n")
+        else:
+            print(f"\n创建 {len(created)} 个文件 → {base_dir}")
+            if skipped:
+                print(f"跳过: {', '.join(skipped)}")
+            print(f"启动: cd \"{base_dir}\" && python3 {entry}")
+
     def cmd_scaffold(self, args: str):
         """Generate a project folder structure with files, with user approval.
 
         Usage:
-          /scaffold <project_name> [template]
-          /scaffold my-quant-bot
+          /scaffold <project_name>                         → blank template
+          /scaffold <project_name> <description...>        → LLM generates custom structure
+          /scaffold <project_name> --template analysis     → fixed finance template
+          /scaffold <project_name> --template strategy
+          /scaffold <project_name> --template pipeline
+
+        Examples:
+          /scaffold my-api FastAPI REST API with JWT auth and PostgreSQL
+          /scaffold price-alert CLI tool that monitors stock prices and sends alerts
           /scaffold aapl-analysis --template analysis
-          /scaffold momentum-strat --template strategy
-          /scaffold data-pipeline --template pipeline
         """
         import textwrap
 
         parts = args.strip().split()
         if not parts:
             if HAS_RICH:
-                console.print("[dim]Usage: /scaffold <project_name> [--template analysis|strategy|pipeline|blank][/dim]")
+                console.print("[dim]Usage: /scaffold <name> [description] | [--template analysis|strategy|pipeline|blank][/dim]")
                 console.print("[dim]Examples:[/dim]")
+                console.print("[dim]  /scaffold my-api  FastAPI REST API with JWT auth[/dim]")
+                console.print("[dim]  /scaffold price-bot  CLI tool that monitors stock prices[/dim]")
                 console.print("[dim]  /scaffold aapl-analysis --template analysis[/dim]")
-                console.print("[dim]  /scaffold momentum-strat --template strategy[/dim]")
-                console.print("[dim]  /scaffold my-quant-bot[/dim]")
             else:
-                print("Usage: /scaffold <project_name> [--template analysis|strategy|pipeline|blank]")
+                print("Usage: /scaffold <name> [description] | [--template analysis|strategy|pipeline|blank]")
             return
 
-        # Parse project name and template
+        # Parse project name, template flag, and optional description
         project_name = parts[0]
-        template = "blank"
+        template = None
+        description = ""
         if "--template" in parts:
             idx = parts.index("--template")
             if idx + 1 < len(parts):
                 template = parts[idx + 1]
+            # remaining words before --template are ignored
+        elif len(parts) > 1:
+            description = " ".join(parts[1:])  # everything after name = LLM description
 
         # Resolve base directory under the per-user Aria Code artifact workspace.
         from artifacts import artifact_dir as _artifact_dir
         base_dir = _artifact_dir("projects", project_name)
+
+        # ── LLM-generated scaffold (when user gives a description) ────────────
+        if description and not template:
+            self._scaffold_with_llm(project_name, description, base_dir)
+            return
+
+        # Fallback to blank when no template and no description
+        if template is None:
+            template = "blank"
 
         # Built-in templates
         TEMPLATES = {
