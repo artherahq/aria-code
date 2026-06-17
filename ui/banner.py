@@ -258,27 +258,29 @@ def render_full_banner(
 
 
 def render_try_hints(console, has_rich: bool, lang: str = "en") -> None:
-    """Print the 'try analyze AAPL · /project load ./myapp · /help' hint line."""
+    """Show natural-language examples that demonstrate LLM-native usage."""
     if not has_rich:
         return
     tcols = shutil.get_terminal_size((80, 24)).columns
+    # Hints are natural language sentences — NOT slash commands.
+    # The point: users should feel free to just type what they want.
     if lang == "zh":
         hints = [
-            ("[#C08050]分析 AAPL[/#C08050]",           6),
-            ("[#C08050]/project load ./myapp[/#C08050]", 22),
-            ("[#C08050]/privacy[/#C08050]",              8),
-            ("[dim]/help[/dim]",                         5),
+            ("[#C08050]宁德时代今天怎么样?[/#C08050]",          10),
+            ("[#C08050]帮我分析一下持仓风险[/#C08050]",          10),
+            ("[#C08050]生成今日A股晨报看板[/#C08050]",           10),
+            ("[dim]/help[/dim]",                                   5),
         ]
     else:
         hints = [
-            ("[#C08050]analyze AAPL[/#C08050]",         12),
-            ("[#C08050]/project load ./myapp[/#C08050]", 22),
-            ("[#C08050]/privacy[/#C08050]",               8),
-            ("[dim]/help[/dim]",                          5),
+            ("[#C08050]How's NVDA this week?[/#C08050]",          18),
+            ("[#C08050]Analyze my portfolio risk[/#C08050]",       24),
+            ("[#C08050]Generate a morning brief HTML[/#C08050]",   30),
+            ("[dim]/help[/dim]",                                    5),
         ]
     sep   = "  [dim]·[/dim]  "
     parts = []
-    used  = 8  # "  try  " prefix width
+    used  = 8
     for hint_rich, hint_len in hints:
         cost = hint_len + (5 if parts else 0)
         if used + cost <= tcols - 4:

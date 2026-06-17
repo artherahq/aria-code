@@ -1,5 +1,11 @@
-# Only ship the three files that matter: package.json + bin + scripts
+# Ship: package.json + bin/ + scripts/
+# Exclude everything else
 *.md
 *.log
+*.txt
 node_modules/
 .DS_Store
+__pycache__/
+*.pyc
+.git/
+.venv/

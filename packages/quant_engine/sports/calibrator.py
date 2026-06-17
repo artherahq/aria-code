@@ -270,6 +270,53 @@ def get_all_team_biases() -> Dict[str, Dict]:
     return _load_json(_TEAM_BIAS_PATH, {})
 
 
+# ── 3b. λ 偏差：基于比分 MAE 的精化校准 ──────────────────────────────────────
+
+def optimize_lambda_bias_from_scores(settled_records: List[Dict]) -> Dict:
+    """
+    用实际比分优化 λ_home / λ_away 全局缩放因子，最小化总进球 MAE。
+
+    与 optimize_lambda_bias 的区别：
+      - 后者用 actual/predicted 比值的均值（易受极端值拉偏）
+      - 本函数网格搜索 bias_h × bias_a，最小化
+          mean(|bias_h * lambda_h - actual_h| + |bias_a * lambda_a - actual_a|)
+    需要 ≥ 8 条含实际进球记录才运行。
+
+    返回 {"home_bias": ..., "away_bias": ..., "goals_mae": ..., "n": ..., "status": ...}
+    """
+    rows = [
+        r for r in settled_records
+        if r.get("actual_home_goals") is not None
+        and r.get("actual_away_goals") is not None
+        and r.get("lambda_home") and r.get("lambda_away")
+    ]
+    if len(rows) < 8:
+        return {"home_bias": 1.0, "away_bias": 1.0, "status": "not_enough_data", "n": len(rows)}
+
+    best_mae = float("inf")
+    best_bh, best_ba = 1.0, 1.0
+
+    for bh in [0.70, 0.75, 0.80, 0.85, 0.90, 0.95, 1.00, 1.05, 1.10, 1.15, 1.20]:
+        for ba in [0.70, 0.75, 0.80, 0.85, 0.90, 0.95, 1.00, 1.05, 1.10, 1.15]:
+            total = 0.0
+            for r in rows:
+                pred_h = float(r["lambda_home"]) * bh
+                pred_a = float(r["lambda_away"]) * ba
+                total += abs(pred_h - float(r["actual_home_goals"]))
+                total += abs(pred_a - float(r["actual_away_goals"]))
+            mae = total / (2 * len(rows))
+            if mae < best_mae:
+                best_mae, best_bh, best_ba = mae, bh, ba
+
+    return {
+        "home_bias":  round(best_bh, 3),
+        "away_bias":  round(best_ba, 3),
+        "goals_mae":  round(best_mae, 4),
+        "n":          len(rows),
+        "status":     "optimized",
+    }
+
+
 # ── 4. 参数读写 ───────────────────────────────────────────────────────────────
 
 def get_calibrated_params() -> Dict:

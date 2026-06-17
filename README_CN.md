@@ -49,7 +49,7 @@ Aria Code 是一款**终端优先的 AI 金融智能体** — 想象成 Claude C
 ```
 $ aria-code
 
-  ▣ Aria Code  v4.0  本地优先智能体
+  ▣ Aria Code  v4.1  本地优先智能体
   模型      qwen2.5-coder:7b  本地
   工作区    ~/my-portfolio
   模式      工作区写入 · 联网开启 · 仅本地
@@ -76,18 +76,29 @@ $ aria-code
 
 ---
 
-## ✨ v4.0 新特性
+## ✨ v4.1 新特性
+
+| 功能 | 说明 |
+|------|------|
+| **Bloomberg UI** | `/ui <描述>` 生成 Bloomberg 终端风格 HTML 看板 — 黑底琥珀色、IBM Plex Mono 数字、零圆角、自动深浅色 |
+| **工具透明度** | 每个工具调用完成后显示 `✓ 动作 (42ms)` · 每 turn 显示费用 · 多步命令加阶段分隔线 |
+| **用户档案** | `~/.arthera/ARIA.md` 每次会话自动注入 · `/memory profile add <内容>` 持久化个人偏好 |
+| **量化引擎** | Citadel/Jane Street 风格 5 模块引擎 · 涨停预测 · 动态股票池 |
+| **MCP 工具** | 新增 5 个量化 MCP 工具 |
+| **83 个命令** | 从 ~150 收敛到 83 个直接动作命令；其余交给 LLM 自然语言处理 |
+| **LLM 路由修复** | 模型现在知道可以调取实时数据工具，不再说"我没有实时数据" |
+
+完整历史见 [CHANGELOG.md](CHANGELOG.md)。
+
+### v4.0 主要特性
 
 | 功能 | 说明 |
 |------|------|
 | ⌨️ **键盘快捷键** | `Shift+Tab` 切换权限 · `Alt+T` 思考模式 · `Alt+P` 模型切换 · `Ctrl+O` 对话记录 · `Ctrl+T` 任务列表 |
 | `!` **Shell 模式** | 输入 `! git status` 直接执行系统命令，输出自动加入 AI 上下文 |
 | `@` **文件自动补全** | 在任意位置输入 `@src/` 即可补全文件路径 |
-| `/btw` **旁白提问** | 快速提问而不污染对话历史 |
-| `/recap` **会话摘要** | 离开 3 分钟以上自动触发回顾提示 |
 | 🌍 **系统语言自动识别** | 首次运行自动读取 OS 语言，界面和提示语中英文随系统切换 |
 | 🤖 **19+ 云端供应商** | Google Gemini · xAI Grok · Mistral · Cohere · Perplexity · 百度文心 · 豆包 · MiniMax · 阶跃星辰 · 零一万物 + 全部原有供应商 |
-| 📊 **Finnhub 作为主数据源** | 美股行情优先走 Finnhub，`dp` 字段提供更准确的涨跌幅 |
 | 🔢 **全系 Ollama 模型** | Qwen3 · DeepSeek-R1 · Llama 3.x · Phi-4 · Gemma3 · Mistral 全家桶 |
 
 ---
@@ -112,35 +123,70 @@ $ aria-code
 
 ## 🚀 快速开始
 
-### 方式一：npm 安装（推荐）
+### 方式一：Bootstrap 一键安装（新 Mac / Linux 推荐）
+
+全新电脑无需任何前置条件，一条命令搞定：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Cinsoul/Aria-Code/main/bootstrap.sh | bash
+```
+
+自动完成以下步骤：
+- ✅ 安装 **Xcode 命令行工具**（macOS）— 提供 git、make、编译器
+- ✅ 安装 **Homebrew**（macOS 包管理器）
+- ✅ 安装 **Python 3.12**（如未安装）
+- ✅ 克隆仓库到 `~/aria-code`
+- ✅ 运行 `install.sh` 创建虚拟环境、安装依赖、注册 `aria-code` 命令
+
+> 已经克隆了仓库？在文件夹内直接运行 `bash bootstrap.sh` 即可。
+
+### 方式二：npm 安装（需 Node.js ≥ 16）
+
+已安装 [Node.js](https://nodejs.org) 的用户，npm 安装器会自动处理 Python、Xcode CLT 和 Homebrew：
 
 ```bash
 npm install -g aria-code
 aria-code
 ```
 
-npm 安装器会自动检测 Python 3.10+ 并为你拉取引擎。
-随时用 `npm update -g aria-code` 更新到最新版。
+自动完成的步骤：
+- ✅ 检测 / 安装 Xcode 命令行工具（macOS）
+- ✅ 检测 / 安装 Homebrew（macOS）
+- ✅ 未找到 Python 时自动安装 Python 3.12
+- ✅ 克隆 Aria Code 到 `~/.aria-code/`
+- ✅ 创建 venv 并安装所有 Python 依赖
 
-### 方式二：一键安装（macOS / Linux）
+更新：`npm update -g aria-code`
+
+修复：`npm explore -g aria-code -- npm run repair`
+
+### 方式三：Git Clone（已安装 Python 3.10+）
 
 ```bash
 git clone https://github.com/Cinsoul/Aria-Code.git
-cd aria-code
-./install.sh
+cd Aria-Code
+bash install.sh
 ```
 
-添加到 PATH：
+添加到 PATH（如有提示）：
 
 ```bash
 echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc
 ```
 
-### 方式三：直接运行
+### 方式三：Windows
+
+```powershell
+git clone https://github.com/Cinsoul/Aria-Code.git
+cd Aria-Code
+.\install.ps1
+```
+
+### 方式四：直接运行（无需安装）
 
 ```bash
 git clone https://github.com/Cinsoul/Aria-Code.git
-cd aria-code
+cd Aria-Code
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 python3 aria_cli.py

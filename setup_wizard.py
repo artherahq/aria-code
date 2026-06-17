@@ -3,9 +3,10 @@
 setup_wizard.py — Aria Code 首次配置向导
 ==========================================
 运行方式:
-  python3 setup_wizard.py          # 完整向导
-  python3 setup_wizard.py --model  # 仅配置模型
-  python3 setup_wizard.py --feishu # 仅配置飞书
+  python3 setup_wizard.py             # 完整向导
+  python3 setup_wizard.py --model     # 仅配置模型
+  python3 setup_wizard.py --feishu    # 仅配置飞书
+  python3 setup_wizard.py --telegram  # 仅配置 Telegram
 
 向导完成后会生成:
   ~/.aria/.env          环境变量配置
@@ -424,7 +425,98 @@ def _setup_feishu_own_app(env: dict[str, str]) -> None:
     _ok("飞书自建应用配置完成")
 
 
-# ── Step 4: Write config & finalize ──────────────────────────────────────────
+# ── Step 4: Telegram Bot ─────────────────────────────────────────────────────
+
+def setup_telegram(env: dict[str, str]) -> None:
+    _section("Telegram Bot 配置")
+
+    if _rich:
+        console.print(Panel(
+            "[bold]三步完成 Telegram Bot 接入：[/bold]\n\n"
+            "[cyan]第一步：创建 Bot，获取 Token[/cyan]\n"
+            "  1. 打开 Telegram，搜索并进入 [bold]@BotFather[/bold]\n"
+            "  2. 发送命令：/newbot\n"
+            "  3. 按提示填写 Bot 名称（如 Aria Alerts）和用户名（需以 bot 结尾）\n"
+            "  4. 复制 BotFather 回复中的 [bold]Token[/bold]\n"
+            "     格式：[dim]1234567890:AAxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[/dim]\n\n"
+            "[cyan]第二步：获取你的 Chat ID[/cyan]\n"
+            "  1. 搜索并进入 [bold]@userinfobot[/bold]\n"
+            "  2. 发送任意消息，复制返回的 [bold]Id[/bold] 数字\n"
+            "  3. 多个用户用英文逗号分隔，如：[dim]123456,789012[/dim]\n\n"
+            "[cyan]第三步：启动 Bot[/cyan]\n"
+            "  • 运行 [bold]python3 aria_daemon.py[/bold]\n"
+            "  • 在 Telegram 向你的 Bot 发送 /start\n"
+            "  • 支持命令：/price AAPL · /brief · /alerts · /help",
+            title="🤖 Telegram Bot 配置指南",
+            border_style="cyan",
+        ))
+    else:
+        print("\n=== Telegram Bot 配置 ===")
+        print("步骤：")
+        print("  1. Telegram → 搜索 @BotFather → /newbot → 复制 Token")
+        print("  2. 搜索 @userinfobot → 发消息 → 复制 Id 数字")
+        print("  3. 填入下方后运行: python3 aria_daemon.py")
+
+    # ── 获取 Token ────────────────────────────────────────────────────────────
+    existing_token = env.get("TELEGRAM_BOT_TOKEN", "")
+    if existing_token and existing_token != "your_bot_token_here":
+        _info(f"当前 Token: {existing_token[:10]}…（留空保留）")
+    token = _ask("TELEGRAM_BOT_TOKEN", default=existing_token)
+
+    if not token or token == "your_bot_token_here":
+        _warn("未填写 Token，Telegram Bot 不会启动")
+        return
+
+    # ── 验证 Token ────────────────────────────────────────────────────────────
+    _info("验证 Token 中…")
+    bot_info = _verify_telegram_token(token)
+    if bot_info:
+        _ok(f"Token 有效！Bot 名称: @{bot_info.get('username', '?')}")
+    else:
+        _warn("Token 验证失败（可能是网络问题），继续保存但请检查 Token 是否正确")
+
+    env["TELEGRAM_BOT_TOKEN"] = token
+
+    # ── 获取 Chat ID ─────────────────────────────────────────────────────────
+    existing_ids = env.get("TELEGRAM_ALLOWED_IDS", "")
+    ids_str = _ask(
+        "TELEGRAM_ALLOWED_IDS (你的 Chat ID，多个用英文逗号分隔)",
+        default=existing_ids if existing_ids != "123456789" else "",
+    )
+    if ids_str:
+        env["TELEGRAM_ALLOWED_IDS"] = ids_str
+        _ok(f"已允许 Chat ID: {ids_str}")
+    else:
+        _warn("未填写 Chat ID，Bot 将拒绝所有消息")
+        _info("获取方法：Telegram 搜索 @userinfobot 发送任意消息即可")
+
+    _ok("Telegram Bot 配置完成")
+    if _rich:
+        console.print(
+            "\n  [dim]启动 daemon 后向你的 Bot 发 /start 即可开始使用[/dim]\n"
+            "  [cyan]python3 aria_daemon.py[/cyan]\n"
+        )
+    else:
+        print("\n  启动: python3 aria_daemon.py")
+
+
+def _verify_telegram_token(token: str) -> dict | None:
+    """Call getMe to verify a Telegram bot token. Returns bot info dict or None."""
+    import urllib.request as _req
+    import urllib.error as _err
+    try:
+        url = f"https://api.telegram.org/bot{token}/getMe"
+        with _req.urlopen(url, timeout=5) as resp:
+            import json as _j
+            data = _j.loads(resp.read())
+            if data.get("ok"):
+                return data.get("result", {})
+    except (_err.URLError, Exception):
+        pass
+    return None
+
+
+# ── Step 5: Write config & finalize ──────────────────────────────────────────
 
 def _write_aria_config(env: dict[str, str]) -> None:
     """Write ~/.aria/config.json for aria_cli.py to read."""
@@ -463,6 +555,11 @@ def _print_summary(env: dict[str, str]) -> None:
             t.add_row("中继 Client ID", env["ARIA_RELAY_CLIENT_ID"])
         if env.get("FEISHU_APP_ID"):
             t.add_row("飞书 App ID",   env["FEISHU_APP_ID"])
+        tg_token = env.get("TELEGRAM_BOT_TOKEN", "")
+        if tg_token and tg_token != "your_bot_token_here":
+            t.add_row("Telegram Bot",  _mask(tg_token))
+        if env.get("TELEGRAM_ALLOWED_IDS"):
+            t.add_row("Telegram IDs",  env["TELEGRAM_ALLOWED_IDS"])
         if env.get("ANTHROPIC_API_KEY"):
             t.add_row("Anthropic Key", _mask(env["ANTHROPIC_API_KEY"]))
         if env.get("OPENAI_API_KEY"):
@@ -489,9 +586,10 @@ def _print_summary(env: dict[str, str]) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Aria Code Setup Wizard / 配置向导")
-    parser.add_argument("--model",  action="store_true", help="Model setup only / 仅配置模型")
-    parser.add_argument("--feishu", action="store_true", help="Feishu only / 仅配置飞书")
-    parser.add_argument("--keys",   action="store_true", help="API keys only / 仅配置 API Key")
+    parser.add_argument("--model",    action="store_true", help="Model setup only / 仅配置模型")
+    parser.add_argument("--feishu",   action="store_true", help="Feishu only / 仅配置飞书")
+    parser.add_argument("--telegram", action="store_true", help="Telegram only / 仅配置 Telegram")
+    parser.add_argument("--keys",     action="store_true", help="API keys only / 仅配置 API Key")
     args = parser.parse_args()
 
     # Show detected language
@@ -503,7 +601,8 @@ def main() -> None:
             "本向导将帮助你完成首次配置：\n"
             "  • 本地 AI 模型（Ollama）\n"
             "  • API 密钥（Claude / GPT-4，可选）\n"
-            "  • 飞书机器人连接"
+            "  • 飞书机器人连接\n"
+            "  • Telegram Bot 接入"
         )
         _title = "🔧 首次配置向导"
         _plain_intro = "\n=== Aria Code 配置向导 ===\n"
@@ -513,7 +612,8 @@ def main() -> None:
             "This wizard will help you set up:\n"
             "  • Local AI model (Ollama)\n"
             "  • API keys (Claude / GPT-4 — optional)\n"
-            "  • Feishu / Lark bot connection"
+            "  • Feishu / Lark bot connection\n"
+            "  • Telegram Bot integration"
         )
         _title = "🔧 First-Run Setup"
         _plain_intro = "\n=== Aria Code Setup Wizard ===\n"
@@ -524,7 +624,7 @@ def main() -> None:
         print(_plain_intro)
 
     env = _load_env()
-    run_all = not (args.model or args.feishu or args.keys)
+    run_all = not (args.model or args.feishu or args.telegram or args.keys)
 
     if run_all or args.model:
         setup_model(env)
@@ -534,6 +634,9 @@ def main() -> None:
 
     if run_all or args.feishu:
         setup_feishu(env)
+
+    if run_all or args.telegram:
+        setup_telegram(env)
 
     _save_env(env)
     _write_aria_config(env)

@@ -307,10 +307,39 @@ def tool_write_file(params: dict) -> dict:
         except _ChangeConflictError() as exc:
             return {"success": False, "error": str(exc), "data": {"change_id": change.change_id}}
 
+        desktop = pathlib.Path.home() / "Desktop"
+        is_on_desktop = str(p).startswith(str(desktop))
+
+        import platform as _platform, subprocess as _sub
+        _sys_name = _platform.system()
+        if _sys_name == "Darwin":
+            _reveal_hint = f'open -R "{p}"'
+        elif _sys_name == "Windows":
+            _reveal_hint = f'explorer /select,"{p}"'
+        else:
+            _reveal_hint = f'xdg-open "{p.parent}"'
+
         if has_rich and console:
-            console.print(f"  [dim]{action} {p} ({lines} lines)[/dim]")
+            console.print(f"  [dim]{action} [bold]{p}[/bold] ({lines} lines)[/dim]")
+            if not is_on_desktop and p.suffix == ".py":
+                console.print(
+                    f"  [dim]提示: 文件保存在 [yellow]{p}[/yellow]\n"
+                    f"  打开所在目录: [cyan]{_reveal_hint}[/cyan][/dim]"
+                )
         else:
             print(f"  {action} {p} ({lines} lines)")
+
+        # Auto-reveal .py/.ipynb strategy files in file manager (non-blocking)
+        if p.suffix in (".py", ".ipynb"):
+            try:
+                if _sys_name == "Darwin":
+                    _sub.Popen(["open", "-R", str(p)],
+                               stdout=_sub.DEVNULL, stderr=_sub.DEVNULL)
+                elif _sys_name == "Windows":
+                    _sub.Popen(["explorer", f"/select,{str(p)}"],
+                               stdout=_sub.DEVNULL, stderr=_sub.DEVNULL)
+            except Exception:
+                pass
 
         try:
             size_bytes = p.stat().st_size
@@ -318,11 +347,18 @@ def tool_write_file(params: dict) -> dict:
             size_bytes = len(content.encode("utf-8"))
 
         return {"success": True, "data": {
-            "path": str(p), "action": action.lower(), "lines": lines,
-            "size_bytes": size_bytes,
-            "change_id": applied.change_id,
-            "before_hash": applied.before_hash, "after_hash": applied.after_hash,
-            "diff": applied.diff, "staged": True, "applied": True,
+            "path":           str(p),
+            "absolute_path":  str(p),
+            "action":         action.lower(),
+            "lines":          lines,
+            "size_bytes":     size_bytes,
+            "change_id":      applied.change_id,
+            "before_hash":    applied.before_hash,
+            "after_hash":     applied.after_hash,
+            "diff":           applied.diff,
+            "staged":         True,
+            "applied":        True,
+            "user_message":   f"文件已保存到: {p}  打开所在目录: {_reveal_hint}",
         }}
     except Exception as e:
         return {"success": False, "error": str(e)}

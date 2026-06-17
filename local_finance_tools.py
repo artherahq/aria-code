@@ -2563,7 +2563,8 @@ def _get_funding_rates(params: dict) -> dict:
         return {"success": False, "error": "ccxt 未安装: pip install ccxt"}
 
     # Try exchanges in order; fall back if load_markets fails (network/region issues)
-    _exchange_fallback = [exchange_id] if exchange_id != "binance" else ["binance", "okx", "bybit"]
+    _all_exchanges = ["binance", "okx", "bybit"]
+    _exchange_fallback = [exchange_id] + [e for e in _all_exchanges if e != exchange_id]
 
     for _exid in _exchange_fallback:
         try:
@@ -2621,6 +2622,70 @@ def _get_funding_rates(params: dict) -> dict:
                 return {"success": False, "error": _err_msg}
 
     return {"success": False, "error": "所有备用交易所均连接失败"}
+
+
+def _get_funding_rates_compare(params: dict) -> dict:
+    """
+    并行查询 binance / okx / bybit，返回三所资金费率横向对比。
+    用于发现跨所套利机会（同一标的费率差 > 0.02% 值得关注）。
+    """
+    symbols = params.get("symbols", ["BTC/USDT", "ETH/USDT", "SOL/USDT"])
+    if isinstance(symbols, str):
+        symbols = [s.strip() for s in symbols.replace(",", " ").split()]
+
+    try:
+        import ccxt as _ccxt  # noqa: F401
+    except ImportError:
+        return {"success": False, "error": "ccxt 未安装: pip install ccxt"}
+
+    import concurrent.futures as _fut
+
+    _exchanges = ["binance", "okx", "bybit"]
+
+    def _fetch(exid):
+        return exid, _get_funding_rates({"exchange": exid, "symbols": symbols})
+
+    ex_results: dict = {}
+    with _fut.ThreadPoolExecutor(max_workers=3) as pool:
+        for exid, r in pool.map(_fetch, _exchanges):
+            ex_results[exid] = r
+
+    comparison = []
+    for sym in symbols:
+        row: dict = {"symbol": sym}
+        for exid in _exchanges:
+            r = ex_results.get(exid, {})
+            if r.get("success"):
+                match = next((x for x in r.get("rates", []) if x["symbol"] == sym), None)
+                if match:
+                    row[exid] = match
+        if len(row) > 1:
+            comparison.append(row)
+
+    if not comparison:
+        return {"success": False, "error": "三所均无数据，请检查网络或 VPN"}
+
+    # Find max cross-exchange spread per symbol
+    spreads = []
+    for row in comparison:
+        rates = [row[e]["rate"] for e in _exchanges if e in row]
+        if len(rates) >= 2:
+            spreads.append(round(max(rates) - min(rates), 4))
+
+    max_spread = max(spreads) if spreads else 0.0
+    arb_note = (
+        "⚠ 套利机会：最大价差 > 0.02%" if max_spread > 0.02
+        else "价差正常，无明显套利空间"
+    )
+
+    return {
+        "success":    True,
+        "comparison": comparison,
+        "exchanges":  _exchanges,
+        "max_spread": max_spread,
+        "arb_note":   arb_note,
+        "provider":   "ccxt_compare",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -2984,6 +3049,7 @@ LOCAL_FINANCE_TOOL_REGISTRY: Dict[str, Tuple] = {
     # ── Crypto ────────────────────────────────────────────────────────────
     "get_fear_greed_index":   (_get_fear_greed_index,   "加密恐惧贪婪指数 (0-100)，>75极度贪婪/做空信号，<25极度恐惧/做多信号"),
     "get_funding_rates":      (_get_funding_rates,      "永续合约资金费率 (ccxt): 高正费率=多头过热，负费率=空头过多"),
+    "get_funding_rates_compare": (_get_funding_rates_compare, "三所费率横向对比 (binance/okx/bybit): 并行查询，发现跨所套利机会"),
     # ── Portfolio / backtesting ───────────────────────────────────────────
     "walk_forward_backtest":  (_walk_forward_backtest,  "Walk-Forward 滚动回测：N个窗口验证策略泛化能力，避免过拟合"),
     "peer_comparison":        (_peer_comparison,        "同行对比: PE/PB/ROE/市值/股息率横向比较，自动识别同行业股票"),

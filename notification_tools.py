@@ -124,6 +124,34 @@ def _notify_webhook(url: str, title: str, body: str) -> bool:
         return False
 
 
+def _notify_telegram(token: str, chat_ids: str, title: str, body: str) -> bool:
+    """Send a Telegram message to all allowed chat IDs via Bot API."""
+    import urllib.request as _req
+    import urllib.parse as _parse
+
+    ids = [cid.strip() for cid in chat_ids.replace(";", ",").split(",") if cid.strip()]
+    if not ids:
+        return False
+
+    text = f"*{title}*\n{body}"
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    success = False
+    for chat_id in ids:
+        data = _parse.urlencode({
+            "chat_id":    chat_id,
+            "text":       text,
+            "parse_mode": "Markdown",
+        }).encode()
+        req = _req.Request(url, data=data, method="POST")
+        try:
+            with _req.urlopen(req, timeout=8) as resp:
+                if resp.status < 400:
+                    success = True
+        except Exception as e:
+            logger.debug("Telegram notification failed for chat_id %s: %s", chat_id, e)
+    return success
+
+
 def _notify_email(cfg: dict, title: str, body: str) -> bool:
     """Send a plain-text email via SMTP."""
     try:
@@ -168,12 +196,18 @@ def send_notification(
     if cfg.get("notify_macos", platform.system() == "Darwin"):
         results["macos"] = _notify_macos(title, body)
 
-    # 2. Webhook
+    # 2. Telegram Bot
+    tg_token    = os.getenv("TELEGRAM_BOT_TOKEN") or cfg.get("telegram_bot_token", "")
+    tg_chat_ids = os.getenv("TELEGRAM_ALLOWED_IDS") or cfg.get("telegram_chat_ids", "")
+    if tg_token and tg_chat_ids and tg_token != "your_bot_token_here":
+        results["telegram"] = _notify_telegram(tg_token, tg_chat_ids, title, body)
+
+    # 3. Webhook (企业微信 / 飞书 / Slack / custom)
     webhook_url = cfg.get("notify_webhook") or os.getenv("ARIA_NOTIFY_WEBHOOK")
     if webhook_url:
         results["webhook"] = _notify_webhook(webhook_url, title, body)
 
-    # 3. Email
+    # 4. Email
     email_cfg = cfg.get("notify_email")
     if email_cfg and isinstance(email_cfg, dict):
         results["email"] = _notify_email(email_cfg, title, body)
@@ -181,8 +215,8 @@ def send_notification(
     if not results:
         logger.debug(
             "No notification channels configured. "
-            "Set notify_webhook in ~/.arthera/config.json or "
-            "ARIA_NOTIFY_WEBHOOK env var."
+            "Set TELEGRAM_BOT_TOKEN + TELEGRAM_ALLOWED_IDS, "
+            "notify_webhook in ~/.arthera/config.json, or ARIA_NOTIFY_WEBHOOK env var."
         )
 
     return {

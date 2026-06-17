@@ -1,23 +1,13 @@
 {
   "name": "aria-code",
-  "version": "4.0.0",
+  "version": "4.1.0",
   "description": "AI-powered financial terminal — local LLM + 19+ cloud providers + real-time market data",
   "keywords": [
-    "ai",
-    "llm",
-    "finance",
-    "trading",
-    "terminal",
-    "cli",
-    "stocks",
-    "quantitative",
-    "ollama",
-    "investment"
+    "ai", "llm", "finance", "trading", "terminal", "cli",
+    "stocks", "quantitative", "ollama", "investment", "quant"
   ],
   "homepage": "https://github.com/Cinsoul/Aria-Code#readme",
-  "bugs": {
-    "url": "https://github.com/Cinsoul/Aria-Code/issues"
-  },
+  "bugs": { "url": "https://github.com/Cinsoul/Aria-Code/issues" },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Cinsoul/Aria-Code.git"
@@ -25,13 +15,20 @@
   "license": "MIT",
   "author": "Cinsoul",
   "bin": {
-    "aria-code": "bin/aria-code.js"
+    "aria-code": "bin/aria-code.js",
+    "aria":      "bin/aria-code.js"
   },
   "scripts": {
-    "postinstall": "node scripts/postinstall.js"
+    "postinstall":   "node scripts/postinstall.js",
+    "repair":        "node scripts/postinstall.js",
+    "update-engine": "node scripts/postinstall.js"
   },
   "engines": {
     "node": ">=16.0.0"
   },
-  "preferGlobal": true
+  "preferGlobal": true,
+  "files": [
+    "bin/",
+    "scripts/"
+  ]
 }

@@ -1,98 +1,366 @@
 #!/usr/bin/env node
 /**
- * postinstall.js — runs after `npm install -g aria-code`
+ * postinstall.js — runs automatically after `npm install -g aria-code`
  *
- * Installs the Python package from GitHub so the `aria-code` CLI is available.
- * Tries pip3 first, falls back to pip, then gives a clear error.
+ * Handles the full bootstrap chain on a fresh machine:
+ *   macOS  : Xcode CLT → Homebrew → Python 3.10+ → git clone → venv → pip
+ *   Linux  : git + python3 check → git clone → venv → pip
+ *   Windows: Python check → git clone → venv → pip
+ *
+ * Install target: ~/.aria-code/  (stable; survives npm reinstalls)
  */
 
 "use strict";
 
-const { execSync, spawnSync } = require("child_process");
-const os = require("os");
-const path = require("path");
+const { spawnSync, execSync } = require("child_process");
+const https    = require("https");
+const fs       = require("fs");
+const os       = require("os");
+const path     = require("path");
+const readline = require("readline");
 
-const REPO = "git+https://github.com/Cinsoul/Aria-Code.git";
-const MIN_PYTHON = [3, 10];
+// ── Colours ──────────────────────────────────────────────────────────────────
+const C = {
+  reset:  "\x1b[0m",
+  bold:   "\x1b[1m",
+  dim:    "\x1b[2m",
+  red:    "\x1b[31m",
+  green:  "\x1b[32m",
+  yellow: "\x1b[33m",
+  cyan:   "\x1b[36m",
+};
 
-const CYAN   = "\x1b[36m";
-const GREEN  = "\x1b[32m";
-const YELLOW = "\x1b[33m";
-const RED    = "\x1b[31m";
-const RESET  = "\x1b[0m";
-const BOLD   = "\x1b[1m";
+const log   = (m) => process.stdout.write(`  ${m}\n`);
+const ok    = (m) => log(`${C.green}✓${C.reset}  ${m}`);
+const warn  = (m) => log(`${C.yellow}⚠${C.reset}  ${m}`);
+const err   = (m) => log(`${C.red}✗${C.reset}  ${m}`);
+const info  = (m) => log(`${C.cyan}▸${C.reset}  ${m}`);
+const step  = (n, t) => process.stdout.write(`\n${C.bold}── Step ${n}: ${t}${C.reset}\n`);
+const hr    = () => log(`${C.dim}${"─".repeat(44)}${C.reset}`);
 
-function log(msg)  { process.stdout.write(`  ${msg}\n`); }
-function ok(msg)   { log(`${GREEN}✓${RESET}  ${msg}`); }
-function warn(msg) { log(`${YELLOW}⚠${RESET}  ${msg}`); }
-function err(msg)  { log(`${RED}✗${RESET}  ${msg}`); }
-function info(msg) { log(`${CYAN}▸${RESET}  ${msg}`); }
+const PLATFORM = os.platform();   // darwin | linux | win32
+const REPO_URL  = "https://github.com/Cinsoul/Aria-Code.git";
+const INSTALL_DIR = path.join(os.homedir(), ".aria-code");
+const INFO_FILE   = path.join(INSTALL_DIR, ".npm-install-info.json");
+const MIN_PY = [3, 10];
 
-// ── Detect Python ────────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
-function findPython() {
-  const candidates = os.platform() === "win32"
-    ? ["python", "python3"]
-    : ["python3", "python"];
+function run(cmd, args = [], opts = {}) {
+  return spawnSync(cmd, args, {
+    stdio: opts.silent ? "pipe" : "inherit",
+    shell: PLATFORM === "win32",
+    ...opts,
+  });
+}
+
+function runOk(cmd, args = [], opts = {}) {
+  const r = run(cmd, args, opts);
+  return r.status === 0 && !r.error;
+}
+
+function capture(cmd, args = []) {
+  const r = spawnSync(cmd, args, { encoding: "utf8", shell: PLATFORM === "win32" });
+  return r.status === 0 ? (r.stdout || "").trim() : null;
+}
+
+function which(cmd) {
+  try {
+    const r = spawnSync(PLATFORM === "win32" ? "where" : "which", [cmd],
+      { encoding: "utf8", stdio: "pipe" });
+    return r.status === 0 ? r.stdout.trim().split("\n")[0] : null;
+  } catch (_) { return null; }
+}
+
+function ask(question) {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  return new Promise((resolve) => {
+    rl.question(`\n  ${question} `, (ans) => { rl.close(); resolve(ans.trim()); });
+  });
+}
+
+function ensureDir(p) {
+  if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true });
+}
+
+// ── Step 1: Xcode Command Line Tools (macOS only) ─────────────────────────────
+
+async function ensureXcodeCLT() {
+  if (PLATFORM !== "darwin") return;
+  step(1, "Xcode Command Line Tools");
+
+  const installed = capture("xcode-select", ["-p"]);
+  if (installed) {
+    ok(`Already installed → ${installed}`);
+    return;
+  }
+
+  warn("Xcode Command Line Tools not found (provides git, make, compilers).");
+  info("Requesting installation — a dialog box will appear…");
+  run("xcode-select", ["--install"], { stdio: "ignore" });
+
+  process.stdout.write(`
+  ${C.yellow}A system dialog has appeared asking to install developer tools.${C.reset}
+  ${C.yellow}Click "Install" and wait for completion (~5 min).${C.reset}
+`);
+  await ask("Press ENTER once the Xcode installation is complete:");
+
+  const check = capture("xcode-select", ["-p"]);
+  if (!check) {
+    err("Xcode CLT still not detected. Install manually: xcode-select --install");
+    process.exit(1);
+  }
+  ok("Xcode Command Line Tools installed");
+}
+
+// ── Step 2: Homebrew (macOS only) ────────────────────────────────────────────
+
+async function ensureHomebrew() {
+  if (PLATFORM !== "darwin") { step(2, "Homebrew — skipped (not macOS)"); return; }
+  step(2, "Homebrew");
+
+  if (which("brew")) {
+    ok(`Homebrew found: ${capture("brew", ["--version"]).split("\n")[0]}`);
+    return;
+  }
+
+  warn("Homebrew not found. Installing now (this may take 2–3 minutes)…");
+  const installCmd = '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"';
+  const r = spawnSync("/bin/bash", ["-c", installCmd], { stdio: "inherit" });
+  if (r.status !== 0) {
+    err("Homebrew installation failed. Install manually from https://brew.sh");
+    process.exit(1);
+  }
+
+  // Activate brew in current process env
+  for (const prefix of ["/opt/homebrew", "/usr/local"]) {
+    const shellenv = capture(`${prefix}/bin/brew`, ["shellenv"]);
+    if (shellenv) {
+      shellenv.split("\n").forEach((line) => {
+        const m = line.match(/^export (\w+)="(.+)"$/);
+        if (m) process.env[m[1]] = m[2];
+      });
+      break;
+    }
+  }
+
+  ok("Homebrew installed");
+}
+
+// ── Step 3: Python 3.10+ ─────────────────────────────────────────────────────
+
+function detectPython() {
+  const candidates = PLATFORM === "win32"
+    ? ["python", "python3", "py"]
+    : ["python3.13", "python3.12", "python3.11", "python3.10", "python3", "python"];
 
   for (const cmd of candidates) {
-    try {
-      const out = execSync(`${cmd} --version 2>&1`, { encoding: "utf8" }).trim();
-      const m = out.match(/Python (\d+)\.(\d+)/);
-      if (!m) continue;
-      const [major, minor] = [parseInt(m[1]), parseInt(m[2])];
-      if (major > MIN_PYTHON[0] || (major === MIN_PYTHON[0] && minor >= MIN_PYTHON[1])) {
-        return { cmd, version: `${major}.${minor}` };
-      }
-      warn(`Found ${cmd} ${major}.${minor} but Aria Code requires Python ≥ ${MIN_PYTHON.join(".")}`);
-    } catch (_) {
-      // not found
+    const out = capture(cmd, ["--version"]);
+    if (!out) continue;
+    const m = out.match(/Python (\d+)\.(\d+)/);
+    if (!m) continue;
+    const [major, minor] = [+m[1], +m[2]];
+    if (major > MIN_PY[0] || (major === MIN_PY[0] && minor >= MIN_PY[1])) {
+      return { cmd, version: `${major}.${minor}`, path: which(cmd) || cmd };
     }
   }
   return null;
 }
 
-// ── Install pip package ──────────────────────────────────────────────────────
+async function ensurePython() {
+  step(3, "Python 3.10+");
 
-function pipInstall(pythonCmd) {
-  const pipCmds = [`${pythonCmd} -m pip`, "pip3", "pip"];
-
-  for (const pip of pipCmds) {
-    info(`Trying: ${pip} install "aria-code @ ${REPO}"`);
-    const r = spawnSync(
-      pip,
-      ["install", "--upgrade", `aria-code @ ${REPO}`],
-      { stdio: "inherit", shell: true }
-    );
-    if (r.status === 0) return true;
+  let python = detectPython();
+  if (python) {
+    ok(`Python ${python.version} → ${python.path}`);
+    return python;
   }
-  return false;
+
+  warn(`Python ${MIN_PY.join(".")}+ not found. Installing…`);
+
+  if (PLATFORM === "darwin") {
+    const brewOk = runOk("brew", ["install", "python@3.12"]);
+    if (!brewOk) {
+      err("brew install python@3.12 failed. Install from https://python.org");
+      process.exit(1);
+    }
+    // Rehash after brew install
+    python = detectPython();
+    if (!python) {
+      // Try the explicit brew path
+      const brewPrefix = capture("brew", ["--prefix", "python@3.12"]);
+      if (brewPrefix) {
+        const explicit = path.join(brewPrefix, "bin", "python3.12");
+        if (fs.existsSync(explicit)) python = { cmd: explicit, version: "3.12", path: explicit };
+      }
+    }
+  } else if (PLATFORM === "linux") {
+    const apt = which("apt-get");
+    const yum = which("yum");
+    if (apt) runOk("sudo", ["apt-get", "install", "-y", "python3.12", "python3.12-venv", "python3-pip"]);
+    else if (yum) runOk("sudo", ["yum", "install", "-y", "python3.12"]);
+    python = detectPython();
+  } else {
+    err("Python 3.10+ required. Download from https://python.org/downloads/");
+    process.exit(1);
+  }
+
+  if (!python) {
+    err("Python installation failed. Install manually from https://python.org");
+    process.exit(1);
+  }
+  ok(`Python ${python.version} installed`);
+  return python;
 }
 
-// ── Main ─────────────────────────────────────────────────────────────────────
+// ── Step 4: git ───────────────────────────────────────────────────────────────
 
-function main() {
-  process.stdout.write(`\n${BOLD}  Aria Code — Python package setup${RESET}\n\n`);
+function ensureGit() {
+  step(4, "git");
+  if (which("git")) {
+    ok(`git ${capture("git", ["--version"]).replace("git version ", "")}`);
+    return;
+  }
+  err("git not found.");
+  if (PLATFORM === "darwin")
+    err("Run: xcode-select --install  then re-run: npm install -g aria-code");
+  else
+    err("Run: sudo apt-get install git  then re-run: npm install -g aria-code");
+  process.exit(1);
+}
 
-  const python = findPython();
-  if (!python) {
-    err("Python 3.10+ not found.");
-    err("Install from https://python.org then re-run: npm install -g aria-code");
+// ── Step 5: Clone or update repo ──────────────────────────────────────────────
+
+function ensureRepo() {
+  step(5, "Aria Code repository");
+  ensureDir(INSTALL_DIR);
+
+  const gitDir = path.join(INSTALL_DIR, ".git");
+  if (fs.existsSync(gitDir)) {
+    info(`Updating existing repo at ${INSTALL_DIR} …`);
+    const r = run("git", ["-C", INSTALL_DIR, "pull", "--ff-only"]);
+    if (r.status !== 0) warn("git pull failed — using existing version");
+    else ok("Repository up to date");
+  } else {
+    info(`Cloning Aria Code into ${INSTALL_DIR} …`);
+    const r = run("git", ["clone", "--depth=1", REPO_URL, INSTALL_DIR]);
+    if (r.status !== 0) {
+      err(`git clone failed. Try manually:\n  git clone ${REPO_URL} ${INSTALL_DIR}`);
+      process.exit(1);
+    }
+    ok(`Cloned to ${INSTALL_DIR}`);
+  }
+}
+
+// ── Step 6: Virtual environment + pip ────────────────────────────────────────
+
+function ensureVenv(python) {
+  step(6, "Python virtual environment");
+
+  const venvDir  = path.join(INSTALL_DIR, ".venv");
+  const venvPy   = PLATFORM === "win32"
+    ? path.join(venvDir, "Scripts", "python.exe")
+    : path.join(venvDir, "bin", "python");
+  const venvPip  = PLATFORM === "win32"
+    ? path.join(venvDir, "Scripts", "pip.exe")
+    : path.join(venvDir, "bin", "pip");
+
+  if (!fs.existsSync(venvPy)) {
+    info("Creating virtual environment…");
+    const r = run(python.cmd, ["-m", "venv", venvDir]);
+    if (r.status !== 0) {
+      err("Failed to create venv. Check that python3-venv is installed.");
+      process.exit(1);
+    }
+    ok(`venv created at ${venvDir}`);
+  } else {
+    ok(`venv exists: ${venvDir}`);
+  }
+
+  info("Upgrading pip…");
+  run(venvPip, ["install", "--quiet", "--upgrade", "pip"]);
+
+  const reqFile = path.join(INSTALL_DIR, "requirements.txt");
+  if (fs.existsSync(reqFile)) {
+    info("Installing Python dependencies (this may take 3–5 minutes)…");
+    const r = run(venvPip, ["install", "--quiet", "-r", reqFile]);
+    if (r.status !== 0) {
+      warn("Some packages failed — check output above. Basic features still work.");
+    } else {
+      ok("All Python dependencies installed");
+    }
+  } else {
+    warn("requirements.txt not found — skipping pip install");
+  }
+
+  return { venvPy, venvPip, venvDir };
+}
+
+// ── Step 7: Write install-info ────────────────────────────────────────────────
+
+function writeInstallInfo(python, venv) {
+  step(7, "Saving install configuration");
+
+  const info_data = {
+    installDir: INSTALL_DIR,
+    venvDir:    venv.venvDir,
+    venvPy:     venv.venvPy,
+    ariaCli:    path.join(INSTALL_DIR, "aria_cli.py"),
+    pythonVersion: python.version,
+    installedAt:   new Date().toISOString(),
+    platform:      PLATFORM,
+  };
+
+  fs.writeFileSync(INFO_FILE, JSON.stringify(info_data, null, 2));
+  ok(`Config saved → ${INFO_FILE}`);
+  return info_data;
+}
+
+// ── Summary ───────────────────────────────────────────────────────────────────
+
+function printSummary() {
+  process.stdout.write(`
+${C.green}╔════════════════════════════════════════════╗
+║  ${C.bold}Aria Code installed successfully!${C.reset}${C.green}          ║
+╚════════════════════════════════════════════╝${C.reset}
+
+  ${C.bold}Start:${C.reset}       ${C.cyan}aria-code${C.reset}
+  ${C.bold}One-shot:${C.reset}    ${C.cyan}aria-code -p "AAPL 分析"${C.reset}
+  ${C.bold}Help:${C.reset}        ${C.cyan}aria-code --help${C.reset}
+
+  ${C.dim}Tip: Pull a free local model for offline use:${C.reset}
+  ${C.cyan}ollama pull qwen2.5:7b${C.reset}
+
+`);
+}
+
+// ── Main ──────────────────────────────────────────────────────────────────────
+
+async function main() {
+  process.stdout.write(`
+${C.cyan}    _         _
+   / \\  _ __ (_) __ _
+  / _ \\| '__|| |/ _\` |
+ / ___ \\  |  | | (_| |
+/_/   \\_\\_|  |_|\\__,_|${C.reset}
+
+  ${C.bold}Aria Code${C.reset} ${C.dim}— npm installer${C.reset}
+`);
+  hr();
+
+  try {
+    await ensureXcodeCLT();
+    await ensureHomebrew();
+    const python = await ensurePython();
+    ensureGit();
+    ensureRepo();
+    const venv = ensureVenv(python);
+    writeInstallInfo(python, venv);
+    printSummary();
+  } catch (e) {
+    err(`Unexpected error: ${e.message}`);
     process.exit(1);
   }
-  ok(`Python ${python.version} found (${python.cmd})`);
-
-  info("Installing Aria Code Python package from GitHub …");
-  const success = pipInstall(python.cmd);
-
-  if (!success) {
-    err("pip install failed. Try manually:");
-    err(`  ${python.cmd} -m pip install "aria-code @ ${REPO}"`);
-    process.exit(1);
-  }
-
-  ok("Aria Code installed successfully.");
-  process.stdout.write(`\n  ${CYAN}Run:${RESET} ${BOLD}aria-code${RESET}\n\n`);
 }
 
 main();

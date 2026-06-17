@@ -189,6 +189,13 @@ class AgentTurnState:
         if unique_tools:
             parts.append(" ".join(unique_tools))
 
+        # Turn-level cost — only for cloud providers with token data
+        _is_cloud = self.provider not in ("ollama", "ollama_cache", "local", "")
+        if _is_cloud and total_t > 0:
+            _cost = (prompt_t * 0.14 + completion_t * 0.28 + think_t * 1.10) / 1_000_000
+            if _cost >= 0.0001:
+                parts.append(f"${_cost:.4f}")
+
         return AgentTurnMetadata(
             parts=parts,
             prompt_tokens=prompt_t,

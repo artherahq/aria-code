@@ -26,7 +26,7 @@ Usage:
     python3 apps/cli/aria_cli.py -p "AAPL PE" --json     # JSON 输出
 """
 
-__version__ = "4.0.0"
+__version__ = "4.1.0"
 
 import sys
 import os
@@ -1993,24 +1993,6 @@ SKILLS = [
         "tools_hint": ["recommend_strategy"],
     },
     {
-        "command": "/orcl-deep",
-        "name": "Oracle Corp Deep Dive",
-        "category": "analysis",
-        "description": "Full multi-factor analysis of Oracle Corporation (ORCL)",
-        "args": "",
-        "prompt": (
-            "Perform a comprehensive analysis of Oracle Corporation (ORCL):\n"
-            "1. Technical: trend, RSI, MACD, Bollinger Bands, key support/resistance\n"
-            "2. Fundamental: cloud ARR growth, OCI revenue, margins, PE vs SAP/NOW/MSFT\n"
-            "3. AI infrastructure thesis: Oracle's GPU cluster deals (xAI, OpenAI, Meta)\n"
-            "4. Competitive moat: Autonomous DB, ERP lock-in, Cerner healthcare\n"
-            "5. Balance sheet: debt from cloud capex, FCF generation, buyback pace\n"
-            "6. Risks & catalysts: cloud transition pace, FX, Oracle DB migration risk\n"
-            "7. Price target range (bull/base/bear) and conviction score"
-        ),
-        "tools_hint": ["get_market_data", "calculate_factors", "analyze_news", "get_risk_metrics"],
-    },
-    {
         "command": "/train-status",
         "name": "Training Status",
         "category": "tools",
@@ -3169,6 +3151,17 @@ def _load_project_context() -> str:
             break
         current = current.parent
 
+    # Global user file — lowest priority background layer, project files override it.
+    # Lives at ~/.arthera/ARIA.md; user can edit with /memory edit global
+    _global_aria = home / ".arthera" / "ARIA.md"
+    if _global_aria.is_file() and not any(f == _global_aria for f, _ in found):
+        try:
+            _gc = _global_aria.read_text(encoding="utf-8")
+            if _gc.strip():
+                found.insert(0, (_global_aria, _gc))   # prepend = lowest priority
+        except Exception:
+            pass
+
     if not found:
         return ""
 
@@ -3307,6 +3300,44 @@ def _try_inject_file_paths(message: str) -> str:
         return ""
     header = "*以下为用户消息中引用的本地文件内容，请基于这些内容回答：*\n"
     return header + "\n".join(injected) + "\n---\n"
+
+
+_STOCK_ANALYSIS_INTENT_KW = frozenset({
+    "怎么样", "分析", "预测", "看多", "看空", "建议", "机会", "涨", "跌",
+    "值得买", "行情", "走势", "趋势", "布局", "操作", "仓位", "支撑", "压力",
+    "analyze", "predict", "outlook", "opinion", "bullish", "bearish",
+    "target", "buy", "sell", "hold", "forecast",
+})
+
+def _is_stock_analysis_intent(message: str) -> bool:
+    """Return True if the message is asking for stock/market opinion or analysis."""
+    low = message.lower()
+    return any(kw in low for kw in _STOCK_ANALYSIS_INTENT_KW)
+
+
+def _fetch_quick_ml_signal(symbols: list, timeout: float = 3.0) -> str:
+    """Fetch ML 5-day predictions for up to 3 symbols; return a compact signal string or ''."""
+    import concurrent.futures as _fut
+    try:
+        from local_finance_tools import _get_predictions
+        with _fut.ThreadPoolExecutor(max_workers=1) as pool:
+            fut = pool.submit(_get_predictions, {"symbols": symbols[:3], "prediction_days": 5})
+            r = fut.result(timeout=timeout)
+        if not r.get("success"):
+            return ""
+        lines = []
+        for p in r.get("predictions", []):
+            sym   = p.get("symbol", "")
+            ret   = float(p.get("predicted_return") or 0)
+            conf  = float(p.get("confidence") or 0.5)
+            arrow = "↑" if ret > 0 else "↓"
+            lines.append(
+                f"{sym}: 预计5日{arrow}{abs(ret)*100:.1f}%  置信度{conf:.0%}  "
+                f"({'云端LightGBM' if r.get('provider')=='aliyun_cloud' else '动量因子'})"
+            )
+        return "\n".join(lines)
+    except Exception:
+        return ""
 
 
 def _check_memory_trigger(text: str) -> Optional[str]:
@@ -3946,6 +3977,27 @@ def _print_tool_call(tool_name: str, params: dict):
         print(f"\n  ⏺ {label}", end="", flush=True)
 
 
+def _print_tool_done(tool_name: str, elapsed_ms: int, success: bool = True, summary: str = ""):
+    """Print a compact ✓/✗ result line under the ⏺ tool-call header."""
+    if _ARIA_BOT_MODE or not HAS_RICH:
+        return
+    action = _TOOL_ACTION_LABELS.get(tool_name, tool_name.replace("_", " "))
+    icon   = "[green]✓[/green]" if success else "[red]✗[/red]"
+    t_str  = f"  [dim]({elapsed_ms}ms)[/dim]" if elapsed_ms > 0 else ""
+    s_str  = f"  [dim]{summary}[/dim]"        if summary    else ""
+    console.print(f"  {icon}  [dim]{action}[/dim]{s_str}{t_str}")
+
+
+def _print_phase(label: str):
+    """Bloomberg-style phase divider for multi-step operations."""
+    if _ARIA_BOT_MODE or not HAS_RICH:
+        return
+    import shutil as _sh
+    w       = _sh.get_terminal_size((80, 24)).columns
+    bar_len = max(0, w - len(label) - 8)
+    console.print(f"\n  [dim]── {label} {'─' * bar_len}[/dim]")
+
+
 def _fuzzy_match(query: str, candidates: list, max_results: int = 3) -> list:
     """Find closest matches using simple edit distance."""
     def _edit_dist(a, b):
@@ -4343,6 +4395,64 @@ def _render_funding_rates(r: dict) -> None:
     render_funding_rates(r, console=console, has_rich=HAS_RICH)
 
 
+def _render_funding_compare(r: dict) -> None:
+    if not r.get("success"):
+        if HAS_RICH:
+            console.print(f"[red]{r.get('error', '获取失败')}[/red]")
+        else:
+            print(r.get("error", "获取失败"))
+        return
+
+    comparison = r.get("comparison", [])
+    exchanges  = r.get("exchanges", ["binance", "okx", "bybit"])
+    arb_note   = r.get("arb_note", "")
+    max_spread = r.get("max_spread", 0.0)
+
+    if HAS_RICH:
+        from rich.table import Table
+        tbl = Table(title="资金费率三所对比", box=rich_box.SIMPLE_HEAVY, show_lines=True)
+        tbl.add_column("标的", style="bold")
+        for ex in exchanges:
+            tbl.add_column(ex.upper(), justify="right")
+        tbl.add_column("价差", justify="right")
+        tbl.add_column("套利信号", justify="center")
+
+        for row in comparison:
+            sym = row["symbol"]
+            cells = []
+            rates = []
+            for ex in exchanges:
+                d = row.get(ex)
+                if d:
+                    rate = d["rate"]
+                    rates.append(rate)
+                    color = "red" if rate > 0.05 else "green" if rate < -0.01 else "white"
+                    cells.append(f"[{color}]{d['rate_pct']}[/{color}]")
+                else:
+                    cells.append("[dim]N/A[/dim]")
+            spread = round(max(rates) - min(rates), 4) if len(rates) >= 2 else 0.0
+            spread_str = f"[yellow]{spread:.4f}%[/yellow]" if spread > 0.02 else f"{spread:.4f}%"
+            signal = "⚡ 套利" if spread > 0.02 else "—"
+            tbl.add_row(sym, *cells, spread_str, signal)
+
+        console.print()
+        console.print(tbl)
+        color = "yellow" if max_spread > 0.02 else "dim"
+        console.print(f"\n[{color}]{arb_note}  最大价差 {max_spread:.4f}%[/{color}]")
+        console.print(f"[dim]资金费率对比 · 本内容不构成投资建议[/dim]")
+        console.print(Rule(style="dim"))
+    else:
+        print("\n资金费率三所对比")
+        for row in comparison:
+            sym = row["symbol"]
+            parts = []
+            for ex in exchanges:
+                d = row.get(ex)
+                parts.append(f"{ex}:{d['rate_pct'] if d else 'N/A'}")
+            print(f"  {sym}  " + "  ".join(parts))
+        print(f"\n{arb_note}")
+
+
 def _render_peer_comparison(r: dict) -> None:
     render_peer_comparison(r, console=console, has_rich=HAS_RICH)
 
@@ -4613,165 +4723,100 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
     def __init__(self, terminal: 'ArtheraTerminal'):
         self.terminal = terminal
         self.commands = {
-            "/help":      (self.cmd_help,      "Show all commands and skills"),
-            "/artifacts": (self.cmd_artifacts, "List generated reports, backtests, and data files"),
-            "/quote":     (self.cmd_quote,     "Quick quote: /quote AAPL MSFT"),
-            "/analyze":   (self.cmd_analyze,   "AI analysis: /analyze AAPL"),
-            "/backtest":  (self.cmd_backtest,  "Backtest + HTML chart: /backtest momentum SPY --period 1y"),
-            "/wf":        (self.cmd_walk_forward, "Walk-Forward: /wf SPY [momentum] [rolling]"),
-            "/compare":   (self.cmd_compare,   "Strategy compare: /compare SPY [start] [end]"),
-            "/macro":     (self.cmd_macro,     "宏观数据: /macro [us|cn|rates|calendar] [indicator]"),
-            "/options":   (self.cmd_options,   "期权链: /options AAPL [calls|puts] [expiry]"),
-            "/quality":   (self.cmd_quality,   "质量评分: /quality AAPL  (Piotroski + Altman Z)"),
-            "/ichimoku":  (self.cmd_ichimoku,  "一目均衡表: /ichimoku AAPL"),
-            "/feargreed":  (self.cmd_fear_greed,"加密恐惧贪婪指数: /feargreed"),
-            "/funding":   (self.cmd_funding,   "永续资金费率: /funding [BTC ETH SOL] [exchange]"),
-            "/peer":      (self.cmd_peer,      "同行对比: /peer AAPL [MSFT GOOGL META]"),
-            "/realty":    (self.cmd_realty,    "不动产: /realty [market|reit|valuation|rent|compare|invest] [参数]"),
-            "/football":  (self.cmd_football,  "足球分析: /football [standings|fixtures|predict|team|h2h] [参数]"),
-            "/data":      (self.cmd_data,      "数据分析: /data [sql|export|load] [参数]"),
-            "/alert":     (self.cmd_alert,     "价格预警: /alert [add|list|delete|check] AAPL gt 200"),
-            "/corr":      (self.cmd_corr,      "相关性矩阵: /corr AAPL MSFT TSLA SPY"),
-            "/ptbt":      (self.cmd_portfolio_bt, "组合回测: /ptbt AAPL MSFT GOOG [权重] [2y]"),
-            "/watch":     (self.cmd_watch,     "Watchlist: /watch add AAPL | /watch list"),
-            "/portfolio": (self.cmd_portfolio, "组合分析: /portfolio [analyze|rebalance] [symbols]"),
-            "/journal":  (self.cmd_journal,  "持仓账本: /journal [add|trades|pnl|realized|export|delete]"),
-            "/screen":    (self.cmd_screen,    "Screen stocks: /screen tech"),
-            "/model":     (self.cmd_model,     "Select AI model (interactive picker)"),
-            "/thinking":  (self.cmd_thinking,  "Toggle thinking: /thinking on"),
-            "/tools":     (self.cmd_tools,     "List all Aria tools"),
-            "/packages":  (self.cmd_packages,  "Aria/Arthera packages: /packages [connect arthera]"),
-            "/services":  (self.cmd_services,  "Show CLI service tiers and workflows"),
-            "/plan":      (self.cmd_plan,      "Draft executable plan: /plan step1 ; step2"),
-            "/apply-plan":(self.cmd_apply_plan,"Execute pending plan steps"),
-            "/plan-report":(self.cmd_plan_report,"Show/export last plan execution report"),
-            "/git":       (self.cmd_git,       "Git helper: /git status|diff|summary"),
-            "/gh":        (self.cmd_gh,        "GitHub CLI: /gh prs|issues|pr N|create-pr|search"),
-            "/skills":    (self.cmd_skills,    "List all available skills"),
-            "/status":    (self.cmd_status,    "Runtime status: engine · model · tools · context"),
-            "/trace":     (self.cmd_trace,     "Show runtime tool trace"),
-            "/health":    (self.cmd_health,    "Check backend health"),
-            "/clear":     (self.cmd_clear,     "Clear conversation"),
-            "/btw":       (self.cmd_btw,       "Side question (no history): /btw what was that function?"),
-            "/recap":     (self.cmd_recap,     "Session recap: summarise what we've done so far"),
-            "/history":   (self.cmd_history,   "Show conversation history"),
-            "/compact":   (self.cmd_compact,   "Smart compact: /compact [--hard]"),
-            "/regen":     (self.cmd_regen,     "Regenerate last AI response"),
-            "/undo":      (self.cmd_undo,      "Undo last message pair"),
-            "/fork":      (self.cmd_fork,      "Fork conversation at current point: /fork [name]"),
-            "/copy":      (self.cmd_copy,      "Copy last response to clipboard"),
-            "/bug":       (self.cmd_bug,       "Report an issue: /bug <description> (local-first)"),
-            "/accuracy":  (self.cmd_accuracy,  "Prediction track record: settle calls vs live prices"),
-            "/cost":      (self.cmd_cost,      "Show session token usage and estimated cost"),
-            "/todo":      (self.cmd_todo,      "Task tracking: /todo add|done|list|clear"),
-            "/doctor":    (self.cmd_doctor,    "Diagnose installation, models, API keys"),
-            "/hooks":     (self.cmd_hooks,     "Manage event hooks: /hooks list|edit|run"),
-            "/login":     (self.cmd_login,     "Login: /login <email>"),
-            "/logout":    (self.cmd_logout,    "Logout current user"),
-            "/whoami":    (self.cmd_whoami,    "Show current user and token status"),
-            "/sessions":  (self.cmd_sessions,  "List/search sessions: /sessions [keyword]"),
-            "/save":      (self.cmd_save,      'Save session: /save ["name"]'),
-            "/load":      (self.cmd_load,      "Load session: /load <id>"),
-            "/rename":    (self.cmd_rename,     'Rename session: /rename "title"'),
-            "/export":    (self.cmd_export,    "Export: /export json|csv|md [file]"),
-            "/feedback":  (self.cmd_feedback,  "Local feedback: /feedback good|bad|note <text>"),
-            "/privacy":   (self.cmd_privacy,   "Privacy controls: /privacy status|opt-in|opt-out|export|delete"),
-            "/code":      (self.cmd_code,      "Generate & save code: /code <description> [--save file.py]"),
-            "/scaffold":  (self.cmd_scaffold,  "Scaffold project: /scaffold <name> [--template strategy|analysis|pipeline]"),
-            "/read":      (self.cmd_read,      "Read file: /read <path> [offset] [limit]"),
-            "/write":     (self.cmd_write,     "Write file: /write [--stage] <path>"),
-            "/edit":      (self.cmd_edit,      "Edit file: /edit <path>"),
-            "/ls":        (self.cmd_ls,        "List files: /ls [path] [pattern]"),
-            "/search":    (self.cmd_search,    "Search code: /search <pattern> [path] [glob]"),
-            "/run":       (self.cmd_run,       "Run command: /run <command>"),
-            "/verify":    (self.cmd_verify,    "Infer and run focused checks: /verify [--dry-run] [paths...]"),
-            "/changes":   (self.cmd_changes,   "List staged file changes"),
-            "/apply-change": (self.cmd_apply_change, "Apply staged change: /apply-change <id>"),
-            "/reject-change": (self.cmd_reject_change, "Reject staged change: /reject-change <id>"),
-            "/apply":     (self.cmd_apply,     "Extract & save code from last AI response"),
-            "/news":      (self.cmd_news,      "Latest news: /news [topic|symbol]"),
-            "/config":    (self.cmd_config,    "Show/set config: /config set key=value"),
-            "/input":     (self.cmd_input,     "Input UI: /input panel|plain|box|theme auto|dark|light"),
-            "/context":   (self.cmd_context,   "Show current AI context & session"),
-            "/crypto":    (self.cmd_crypto,    "Crypto data: /crypto BTC ETH"),
-            "/forex":     (self.cmd_forex,     "Forex rates: /forex EUR/USD"),
-            "/commodity": (self.cmd_commodity, "Commodities: /commodity gold oil"),
-            "/risk":      (self.cmd_risk,      "Risk metrics: /risk AAPL | /risk portfolio"),
-            "/market":    (self.cmd_market,    "Market overview: /market [indices|sectors]"),
-            "/optimize":  (self.cmd_optimize,  "Optimize portfolio: /optimize AAPL MSFT"),
-            "/stress":    (self.cmd_stress,    "Stress test: /stress <strategy> [symbol]"),
-            "/factors":   (self.cmd_factors,   "Factor analysis (local+remote): /factors AAPL"),
-            "/compliance":(self.cmd_compliance,"Compliance check: /compliance <strategy>"),
-            "/web":       (self.cmd_search_web,"Web search: /web <query>"),
-            "/local":     (self.cmd_local,     "Toggle local-only mode (skip AWS): /local [on|off]"),
-            "/orcl":      (self.cmd_orcl,      "Oracle Corp analysis: /orcl [deep]"),
-            # ── New: MCP / ariarc / provider / recommend ─────────────────
-            "/mcp":       (self.cmd_mcp,       "MCP servers: /mcp status | /mcp tools | /mcp reload"),
-            "/ariarc":    (self.cmd_ariarc,    "Show .ariarc project config: /ariarc [reload]"),
-            "/providers":  (self.cmd_providers, "List all local LLM backend providers and status"),
-            "/recommend":  (self.cmd_recommend, "Recommend best local models for finance work"),
-            # ── Finance shortcuts (local tools) ────────────────────────────
-            "/screen-cn": (self.cmd_screen_cn, "A股选股筛选: /screen-cn [max_pe=50] [limit=20]"),
-            "/limitup":   (self.cmd_limitup,   "A股涨停板池: /limitup [date YYYY-MM-DD]"),
-            "/north":     (self.cmd_north,     "北向资金净流入: /north [days=10]"),
-            "/optimize-port": (self.cmd_optimize_port, "Portfolio optimisation: /optimize-port AAPL MSFT GOOGL"),
-            # ── Alibaba Cloud services ─────────────────────────────────────
-            "/cloud":     (self.cmd_cloud,     "Aliyun cloud config: /cloud status|set|data|token|health|reset"),
-            "/signal":    (self.cmd_signal,    "AI signal (BUY/SELL/HOLD): /signal sh600519 [CN|US]"),
-            "/predict":   (self.cmd_predict,   "ML predictions: /predict sh600519 sh601318 [d=5]"),
-            "/cloudbt":   (self.cmd_cloudbt,   "Cloud ML backtest: /cloudbt sh600519 [model=lightgbm] [months=12]"),
-            "/insights":  (self.cmd_insights,  "AI market insights: /insights sh600519 sh601318"),
-            # ── 金融 Agent 团队 ────────────────────────────────────────────────
-            "/team":      (self.cmd_team,      "多Agent研究团队: /team NVDA [--agents macro,technical]"),
-            "/chart":     (self.cmd_chart,     "生成股票图表(HTML): /chart AAPL | /chart 600519"),
-            "/report":    (self.cmd_report,    "综合投资报告(图表+分析): /report AAPL"),
-            "/shortterm": (self.cmd_shortterm, "A股短线分析(日线): /shortterm [000333 601138]"),
-            "/longterm":  (self.cmd_longterm,  "A股长线分析(月线): /longterm [--quick]"),
-            "/indices":   (self.cmd_indices,   "全球指数实时行情: /indices"),
-            "/hot":       (self.cmd_hot,       "热门股榜单: /hot [cn|us] [top=20]"),
-            "/ta":        (self.cmd_ta,        "技术指标: /ta NVDA [days=120]"),
-            # ── 策略金库 ───────────────────────────────────────────────────────
-            "/strategy":  (self.cmd_strategy,  "策略版本管理: /strategy save|list|diff|load|review"),
-            # ── 券商账户 ──────────────────────────────────────────────────────────
-            "/broker":    (self.cmd_broker,    "券商管理: /broker list|connect|disconnect|add|status"),
-            "/account":   (self.cmd_account,   "账户资金: /account [broker_id]"),
-            "/positions": (self.cmd_positions, "当前持仓: /positions [broker_id]"),
-            "/orders":    (self.cmd_orders,    "订单记录: /orders [open|filled|all] [broker_id]"),
-            # ── 记忆 / 项目引导 / 代码审查 ────────────────────────────────────
-            "/note":      (self.cmd_note,      "追加笔记到 ARIA.md: /note <内容>"),
-            "/memory":    (self.cmd_memory,    "记忆管理: /memory [show|add <内容>|clear|search]"),
-            "/init":      (self.cmd_init,      "为当前项目生成 ARIA.md: /init [--force]"),
-            "/review":    (self.cmd_review,    "AI 代码审查: /review [file] | /review --staged"),
-            # ── Provider / 模型配置（Open Interpreter 风格）───────────────────
-            "/apikey":    (self.cmd_apikey,    "API Key 向导: /apikey → 交互配置  /apikey list|test|remove"),
-            "/setup":     (self.cmd_setup,     "首次配置向导: /setup"),
-            # ── 量化专属（Aria 独有）────────────────────────────────────────────
-            "/auto-strategy": (self.cmd_auto_strategy, "AI 策略自动优化闭环: /auto-strategy momentum SPY --target sharpe=1.5"),
-            "/factor-lab":    (self.cmd_factor_lab,    "因子分析工作台: /factor-lab AAPL [days=252]"),
-            "/execution":     (self.cmd_execution,     "执行算法对比: /execution AAPL buy 100000 [algo=compare]"),
-            "/stat-arb":      (self.cmd_stat_arb,      "配对统计套利检验: /stat-arb GLD SLV"),
-            "/edgar":         (self.cmd_edgar,         "SEC EDGAR 财报查询: /edgar AAPL [filings|facts|insider]"),
-            "/datasource":    (self.cmd_datasource,    "数据源管理: /datasource | /datasource test FRED"),
-            # ── financial-services 风格 workflow 命令 ────────────────────────────
-            "/research":  (self.cmd_research,  "Market Researcher 工作流: /research <symbol>"),
-            "/earnings":  (self.cmd_earnings_workflow, "财报分析工作流: /earnings <symbol> [quarter]"),
-            # ── 经营权共创平台 Agent 命令 ────────────────────────────────────────────
-            "/asset-diag":    (self.cmd_asset_diag,    "资产诊断 Agent: /asset-diag <asset_id|项目名>"),
-            "/contract-draft":(self.cmd_contract_draft,"合同规则草案: /contract-draft <project_id>"),
-            "/revenue-calc":  (self.cmd_revenue_calc,  "分账测算: /revenue-calc <project_id> <流水金额>"),
-            "/risk-scan":     (self.cmd_realty_risk_scan, "项目风险扫描: /risk-scan [project_id]"),
-            "/ops-report":    (self.cmd_ops_report,    "运营汇报生成: /ops-report <project_id>"),
-            "/exit-calc":     (self.cmd_exit_calc,     "退出清算草案: /exit-calc <project_id>"),
-            "/load-fork":     (self.cmd_load_fork,    "Restore forked conversation: /load-fork <id>"),
-            # ── Vision / image input ──────────────────────────────────────────
-            "/vision":    (self.cmd_vision,    "Load image for visual analysis: /vision <path>"),
-            # ── Browser + desktop control ─────────────────────────────────────
-            "/browser":    (self.cmd_browser,    "Browser: /browser <url> | /browser screenshot <url>"),
-            "/screenshot": (self.cmd_screenshot, "Capture desktop screenshot for vision analysis"),
-            # ── File analysis (multi-format, multi-layer) ─────────────────────
-            "/file":      (self.cmd_file,      "文件分析: /file load|analyze|ask|list|clear <参数>"),
-            # ── Project folder analysis (Claude Code / Codex style) ───────────
-            "/project":   (self.cmd_project,   "项目分析: /project load|tree|grep|ask|task|status|info <参数>"),
+            # ── Session ───────────────────────────────────────────────────────
+            "/help":      (self.cmd_help,     "Show commands and examples"),
+            "/clear":     (self.cmd_clear,    "Clear conversation"),
+            "/compact":   (self.cmd_compact,  "Compress context: /compact [--hard]"),
+            "/history":   (self.cmd_history,  "Show conversation history"),
+            "/cost":      (self.cmd_cost,     "Token usage and estimated cost"),
+            "/status":    (self.cmd_status,   "Runtime: engine · model · tools · context"),
+            "/health":    (self.cmd_health,   "Check backend health"),
+            "/trace":     (self.cmd_trace,    "Show tool call trace"),
+            "/context":   (self.cmd_context,  "Show AI context and session info"),
+            "/regen":     (self.cmd_regen,    "Regenerate last response"),
+            "/undo":      (self.cmd_undo,     "Undo last message pair"),
+            "/fork":      (self.cmd_fork,     "Fork conversation: /fork [name]"),
+            "/load-fork": (self.cmd_load_fork,"Restore forked conversation: /load-fork <id>"),
+            "/copy":      (self.cmd_copy,     "Copy last response to clipboard"),
+            "/recap":     (self.cmd_recap,    "Summarise this session"),
+            "/btw":       (self.cmd_btw,      "Side question without adding to history"),
+            # ── Sessions ─────────────────────────────────────────────────────
+            "/save":      (self.cmd_save,     'Save session: /save ["name"]'),
+            "/load":      (self.cmd_load,     "Load session: /load <id>"),
+            "/rename":    (self.cmd_rename,   'Rename session: /rename "title"'),
+            "/sessions":  (self.cmd_sessions, "List/search sessions: /sessions [keyword]"),
+            "/export":    (self.cmd_export,   "Export: /export json|csv|md [file]"),
+            # ── Config / mode ─────────────────────────────────────────────────
+            "/model":     (self.cmd_model,    "Switch AI model (interactive picker)"),
+            "/thinking":  (self.cmd_thinking, "Toggle extended thinking: /thinking on|off"),
+            "/config":    (self.cmd_config,   "Show/set config: /config set key=value"),
+            "/input":     (self.cmd_input,    "UI theme: /input theme auto|dark|light"),
+            "/privacy":   (self.cmd_privacy,  "Privacy: /privacy status|opt-in|opt-out"),
+            "/local":     (self.cmd_local,    "Toggle local-only mode: /local [on|off]"),
+            # ── Setup / discovery ────────────────────────────────────────────
+            "/setup":     (self.cmd_setup,    "First-run wizard: /setup [mcp|feishu|telegram]"),
+            "/apikey":    (self.cmd_apikey,   "API key wizard: /apikey [list|test|remove]"),
+            "/doctor":    (self.cmd_doctor,   "Diagnose install, models, API keys"),
+            "/mcp":       (self.cmd_mcp,      "MCP servers: /mcp status|tools|reload"),
+            "/providers": (self.cmd_providers,"List local LLM backends and status"),
+            "/ariarc":    (self.cmd_ariarc,   "Show .ariarc project config: /ariarc [reload]"),
+            "/skills":    (self.cmd_skills,   "List all available skills"),
+            "/services":  (self.cmd_services, "Show service tiers and workflows"),
+            "/tools":     (self.cmd_tools,    "List all Aria tools"),
+            "/packages":  (self.cmd_packages, "Packages: /packages [connect arthera]"),
+            "/datasource":(self.cmd_datasource,"Data source config: /datasource [test FRED]"),
+            "/hooks":     (self.cmd_hooks,    "Event hooks: /hooks list|edit|run"),
+            # ── Auth ─────────────────────────────────────────────────────────
+            "/login":     (self.cmd_login,    "Login: /login <email>"),
+            "/logout":    (self.cmd_logout,   "Logout current user"),
+            "/whoami":    (self.cmd_whoami,   "Show current user and token status"),
+            # ── Persistent data (direct DB writes — no LLM) ──────────────────
+            "/alert":     (self.cmd_alert,    "Price alerts: /alert add AAPL gt 200 | list | delete"),
+            "/journal":   (self.cmd_journal,  "Trade ledger: /journal add buy AAPL 100 150.0 | pnl"),
+            "/watch":     (self.cmd_watch,    "Watchlist: /watch add AAPL | list | remove AAPL"),
+            "/note":      (self.cmd_note,     "Append note to ARIA.md: /note <text>"),
+            "/memory":    (self.cmd_memory,   "Memory: /memory show|add <text>|clear|search|profile"),
+            "/todo":      (self.cmd_todo,     "Tasks: /todo add|done|list|clear"),
+            # ── Broker / account (direct reads/connects) ─────────────────────
+            "/broker":    (self.cmd_broker,   "Broker: /broker list|connect|disconnect|add|status"),
+            "/account":   (self.cmd_account,  "Account funds: /account [broker_id]"),
+            "/positions": (self.cmd_positions,"Current positions: /positions [broker_id]"),
+            "/orders":    (self.cmd_orders,   "Order history: /orders [open|filled|all]"),
+            "/strategy":  (self.cmd_strategy, "Strategy vault: /strategy save|list|diff|load|review"),
+            "/accuracy":  (self.cmd_accuracy, "Prediction track record vs live prices"),
+            "/artifacts": (self.cmd_artifacts,"List generated files: /artifacts [limit]"),
+            # ── Code & project ────────────────────────────────────────────────
+            "/project":   (self.cmd_project,  "Project: /project load|tree|grep|ask|task|status"),
+            "/init":      (self.cmd_init,     "Generate ARIA.md for current project: /init [--force]"),
+            "/review":    (self.cmd_review,   "AI code review: /review [file] | /review --staged"),
+            "/code":      (self.cmd_code,     "Generate & run code: /code <description> [--save f.py]"),
+            "/scaffold":  (self.cmd_scaffold, "Scaffold: /scaffold <name> [--template strategy]"),
+            "/plan":      (self.cmd_plan,     "Draft plan: /plan step1 ; step2"),
+            "/run":       (self.cmd_run,      "Run shell command: /run <command>"),
+            "/read":      (self.cmd_read,     "Read file: /read <path> [offset] [limit]"),
+            "/write":     (self.cmd_write,    "Write file: /write [--stage] <path>"),
+            "/edit":      (self.cmd_edit,     "Edit file: /edit <path>"),
+            "/ls":        (self.cmd_ls,       "List files: /ls [path] [pattern]"),
+            "/search":    (self.cmd_search,   "Search code: /search <pattern> [path] [glob]"),
+            "/verify":    (self.cmd_verify,   "Run checks: /verify [--dry-run] [paths...]"),
+            "/changes":   (self.cmd_changes,  "List staged file changes"),
+            "/apply-change": (self.cmd_apply_change,  "Apply staged change: /apply-change <id>"),
+            "/reject-change":(self.cmd_reject_change, "Reject staged change: /reject-change <id>"),
+            "/apply":     (self.cmd_apply,    "Extract & save code from last response"),
+            # ── Quantitative (multi-step, structured output) ──────────────────
+            "/backtest":  (self.cmd_backtest, "Backtest + HTML report: /backtest momentum SPY --period 1y"),
+            "/wf":        (self.cmd_walk_forward, "Walk-forward test: /wf SPY [momentum] [rolling]"),
+            "/compare":   (self.cmd_compare,  "Compare strategies: /compare SPY [start] [end]"),
+            "/auto-strategy":(self.cmd_auto_strategy,"Auto-optimize strategy: /auto-strategy momentum SPY"),
+            "/execution": (self.cmd_execution,"Algo execution compare: /execution AAPL buy 100000"),
+            # ── UI generation (sets Bloomberg design context) ─────────────────
+            "/ui":        (self.cmd_ui,       "Generate Bloomberg-style HTML: /ui <description>"),
+            "/cloud":     (self.cmd_cloud,    "Aliyun config: /cloud status|set|data|token|health"),
+            "/vision":    (self.cmd_vision,   "Load image for visual analysis: /vision <path>"),
+            "/file":      (self.cmd_file,     "File analysis: /file load|analyze|ask|list|clear"),
+            # ── Feedback ─────────────────────────────────────────────────────
+            "/bug":       (self.cmd_bug,      "Report issue locally: /bug <description>"),
+            "/feedback":  (self.cmd_feedback, "Rate response: /feedback good|bad|note <text>"),
         }
         # ── Visible commands: shown in /help (session/config/state management only)
         # All other commands still work when typed — just not cluttering /help.
@@ -4896,6 +4941,8 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
         "/peer":      ("Usage: /peer [SYMBOL]", ["/peer AAPL", "/peer TSLA"]),
         "/corr":      ("Usage: /corr [SYMBOL...]", ["/corr AAPL MSFT NVDA", "/corr  (uses watchlist)"]),
         "/report":    ("Usage: /report [SYMBOL] [--format html|md] [--output ./aria-output]", ["/report AAPL", "/report SPY --format md --output ./reports"]),
+        "/dashboard": ("Usage: /dashboard  — 生成含持仓/行情/预警的个人化 HTML Dashboard，自动在浏览器打开", ["/dashboard"]),
+        "/ui":        ("Usage: /ui <描述>  — 生成 Bloomberg Terminal 风格 HTML (自动暗色/亮色模式)", ["/ui 今日A股热力图", "/ui 持仓组合报告", "/ui 市场晨报看板"]),
         "/artifacts": ("Usage: /artifacts [limit]", ["/artifacts", "/artifacts 50"]),
         "/shortterm": ("Usage: /shortterm [SYMBOL]", ["/shortterm AAPL", "/shortterm sh600519"]),
         "/longterm":  ("Usage: /longterm [SYMBOL]", ["/longterm AAPL", "/longterm sh600519"]),
@@ -4932,7 +4979,7 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
         "/data":      ("Usage: /data [SYMBOL] [field]", ["/data AAPL", "/data sh600519 history"]),
         "/apikey":    ("Usage: /apikey → 向导  /apikey list → 查看  /apikey test <p> → 测试  /apikey set <p> <k>", ["/apikey", "/apikey list", "/apikey test deepseek", "/apikey set openai sk-..."]),
         "/ariarc":    ("Usage: /ariarc [show|init|set key=val]", ["/ariarc show", "/ariarc init", "/ariarc set default_symbols=AAPL,MSFT"]),
-        "/setup":     ("Usage: /setup [mcp|broker|keys|all]", ["/setup", "/setup mcp", "/setup keys"]),
+        "/setup":     ("Usage: /setup [mcp|broker|keys|feishu|telegram|all]", ["/setup", "/setup mcp", "/setup feishu", "/setup telegram"]),
         "/doctor":    ("Usage: /doctor", ["/doctor"]),
         "/history":   ("Usage: /history [N]", ["/history", "/history 20"]),
         "/compact":   ("Usage: /compact", ["/compact"]),
@@ -4948,7 +4995,7 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
         "/local":     ("Usage: /local [on|off|status]", ["/local", "/local on", "/local off"]),
         "/providers": ("Usage: /providers", ["/providers"]),
         "/feargreed": ("Usage: /feargreed", ["/feargreed"]),
-        "/funding":   ("Usage: /funding [SYMBOL]", ["/funding BTC", "/funding ETH"]),
+        "/funding":   ("Usage: /funding [compare] [SYMBOL] [exchange]", ["/funding BTC", "/funding compare BTC ETH SOL", "/funding ETH bybit"]),
         "/quality":   ("Usage: /quality [SYMBOL]", ["/quality AAPL", "/quality 600519"]),
         "/ichimoku":  ("Usage: /ichimoku [SYMBOL]", ["/ichimoku AAPL", "/ichimoku USDJPY"]),
         "/factor-lab":("Usage: /factor-lab [SYMBOL]", ["/factor-lab AAPL", "/factor-lab sh600519"]),
@@ -5010,76 +5057,75 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
             return
 
         # Full help listing
-        show_all = args.strip().lower() == "all"
-
         if HAS_RICH:
             console.print()
-            if show_all:
-                console.print("[bold]全部命令[/bold]  [dim](/help <command> for details)[/dim]")
-            else:
-                console.print("[bold]Commands[/bold]  [dim](/help <command> · /help all 显示全部)[/dim]")
+
+            # ── Natural language first ──────────────────────────────────────
+            console.print("[bold]Just type what you want[/bold]  [dim]— no command needed[/dim]")
+            console.print()
+            nl_examples = [
+                ("宁德时代今天怎么样?",        "How's CATL today?"),
+                ("帮我画AAPL的K线图",          "Draw a candlestick chart for AAPL"),
+                ("分析我的组合风险",            "Analyze my portfolio risk"),
+                ("生成今日A股晨报",             "Generate a morning brief for A-shares"),
+                ("NVDA和AMD哪个更值得买?",      "NVDA vs AMD — which is a better buy?"),
+                ("给我写一个动量回测策略",       "Write a momentum backtest strategy"),
+            ]
+            for zh, en in nl_examples:
+                console.print(f"  [#C08050]{zh}[/#C08050]  [dim]{en}[/dim]")
             console.print()
 
-            # Show visible commands (or all if /help all)
-            shown = {
-                name: desc
-                for name, (_, desc) in self.commands.items()
-                if show_all or name in self._visible_cmds
-            }
-            for name, desc in shown.items():
-                console.print(f"  [bold #C08050]{name:18s}[/bold #C08050][dim]{desc}[/dim]")
-
-            if not show_all:
-                hidden_count = len(self.commands) - len(shown)
-                console.print(
-                    f"\n  [dim]+ {hidden_count} 个快捷命令已隐藏 · 直接聊天让 AI 完成分析[/dim]"
-                )
+            # ── Slash commands — grouped ────────────────────────────────────
+            console.print("[bold]Slash commands[/bold]  [dim](for direct actions and mode switches)[/dim]")
             console.print()
+            groups = [
+                ("Session", ["/help","/clear","/compact","/cost","/status","/health",
+                             "/regen","/undo","/copy","/recap","/btw",
+                             "/save","/load","/sessions","/export"]),
+                ("Config",  ["/model","/thinking","/config","/privacy","/local",
+                             "/setup","/apikey","/doctor","/mcp"]),
+                ("Data",    ["/alert","/journal","/watch","/note","/todo","/memory",
+                             "/artifacts","/strategy","/accuracy"]),
+                ("Broker",  ["/broker","/account","/positions","/orders"]),
+                ("Code",    ["/project","/init","/review","/code","/plan","/run",
+                             "/read","/write","/edit","/ls","/search","/verify",
+                             "/scaffold","/apply","/changes"]),
+                ("Quant",   ["/backtest","/wf","/compare","/auto-strategy","/execution"]),
+                ("UI",      ["/ui","/vision","/file"]),
+                ("Info",    ["/skills","/services","/tools","/providers","/ariarc",
+                             "/packages","/datasource"]),
+            ]
+            for group_name, cmd_names in groups:
+                visible = [n for n in cmd_names if n in self.commands]
+                if not visible:
+                    continue
+                console.print(f"  [dim]{group_name}[/dim]")
+                for name in visible:
+                    _, desc = self.commands[name]
+                    console.print(f"    [bold #C08050]{name:18s}[/bold #C08050][dim]{desc}[/dim]")
+                console.print()
 
-            # --- Skills (grouped by category) ---
+            # ── Skills ─────────────────────────────────────────────────────
+            console.print("[bold]Skills[/bold]  [dim](type the command or just describe what you want)[/dim]")
+            console.print()
             categories: dict = {}
             for s in SKILLS:
-                cat = s["category"]
-                if cat not in categories:
-                    categories[cat] = []
-                categories[cat].append(s)
-
-            console.print("[bold]Skills[/bold]")
-            console.print()
+                categories.setdefault(s["category"], []).append(s)
             for cat, skills in categories.items():
                 console.print(f"  [dim]{cat}[/dim]")
                 for s in skills:
                     console.print(f"    [bold #C08050]{s['command']:20s}[/bold #C08050][dim]{s['description']}[/dim]")
             console.print()
 
-            # Keyboard shortcuts
-            console.print("[bold]Keyboard Shortcuts[/bold]")
-            console.print()
-            shortcuts = [
-                ("ESC",    "Cancel current generation"),
-                ("Ctrl+D", "Exit"),
-                ("Ctrl+C", "Cancel / exit"),
-                ("↑  ↓",   "History navigation"),
-                ("Tab",    "Command autocomplete"),
-                ('"""',    "Enter multi-line input mode"),
-            ]
-            for key, desc in shortcuts:
-                console.print(f"  [bold #C08050]{key:14s}[/bold #C08050][dim]{desc}[/dim]")
+            # ── Keys ───────────────────────────────────────────────────────
+            console.print("[dim]ESC cancel  ·  Ctrl+D exit  ·  ↑↓ history  ·  Tab autocomplete  ·  \"\"\" multiline[/dim]")
             console.print()
 
-            # Footer
-            console.print(
-                "[dim]直接输入问题 — AI 会自动分析并调用工具  · "
-                "/model 切换模型 · /help all 查看全部命令[/dim]"
-            )
         else:
-            cmds_to_show = {
-                n: d for n, (_, d) in self.commands.items()
-                if show_all or n in self._visible_cmds
-            }
-            print("\nCommands:")
-            for name, desc in cmds_to_show.items():
-                print(f"  {name:18s} {desc}")
+            print("\nJust type what you want — or use a slash command:\n")
+            for name, (_, desc) in self.commands.items():
+                if name in self._visible_cmds:
+                    print(f"  {name:18s} {desc}")
             print("\nSkills:")
             for s in SKILLS:
                 print(f"  {s['command']:20s} {s['description']}")
@@ -5344,8 +5390,11 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
         _render_fear_greed(r)
 
     async def cmd_funding(self, args: str):
-        """/funding [BTC ETH SOL] [exchange]  — 永续合约资金费率"""
+        """/funding [compare] [BTC ETH SOL] [exchange]  — 永续合约资金费率"""
         parts = args.strip().split() if args.strip() else []
+        compare_mode = any(p.lower() == "compare" for p in parts)
+        parts = [p for p in parts if p.lower() != "compare"]
+
         exchange = "binance"
         syms = []
         for p in parts:
@@ -5362,16 +5411,27 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
 
         import asyncio as _asyncio
         loop = _asyncio.get_event_loop()
-        if HAS_RICH:
-            with console.status(f"[dim]获取 {exchange} 资金费率...[/dim]", spinner="dots"):
-                from local_finance_tools import _get_funding_rates
-                r = await loop.run_in_executor(None, _get_funding_rates,
-                                               {"exchange": exchange, "symbols": syms})
-        else:
-            from local_finance_tools import _get_funding_rates
-            r = _get_funding_rates({"exchange": exchange, "symbols": syms})
 
-        _render_funding_rates(r)
+        if compare_mode:
+            if HAS_RICH:
+                with console.status("[dim]并行查询 binance / okx / bybit...[/dim]", spinner="dots"):
+                    from local_finance_tools import _get_funding_rates_compare
+                    r = await loop.run_in_executor(None, _get_funding_rates_compare,
+                                                   {"symbols": syms})
+            else:
+                from local_finance_tools import _get_funding_rates_compare
+                r = _get_funding_rates_compare({"symbols": syms})
+            _render_funding_compare(r)
+        else:
+            if HAS_RICH:
+                with console.status(f"[dim]获取 {exchange} 资金费率...[/dim]", spinner="dots"):
+                    from local_finance_tools import _get_funding_rates
+                    r = await loop.run_in_executor(None, _get_funding_rates,
+                                                   {"exchange": exchange, "symbols": syms})
+            else:
+                from local_finance_tools import _get_funding_rates
+                r = _get_funding_rates({"exchange": exchange, "symbols": syms})
+            _render_funding_rates(r)
 
     # ── /realty 不动产命令 ─────────────────────────────────────────────────────
     # ── /football 足球分析命令 ────────────────────────────────────────────────
@@ -7294,11 +7354,16 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
                 msg = f"File not found: {raw}"
                 console.print(f"[red]{msg}[/red]") if HAS_RICH else print(msg)
                 return
+            _print_phase("Reading file")
             try:
                 content = p.read_text(errors="replace")[:12000]
             except Exception as e:
                 console.print(f"[red]Cannot read file: {e}[/red]") if HAS_RICH else print(f"Cannot read: {e}")
                 return
+            line_count = content.count("\n")
+            if HAS_RICH:
+                console.print(f"  [dim]↳ {p.name}  ·  {line_count} lines[/dim]")
+            _print_phase("AI Review")
             prompt = (
                 f"请对以下 `{p.name}` 的代码进行专业审查，查找 Bug、安全问题和改进点。\n"
                 f"每条发现用严重程度标签开头：**BUG**、**IMPROVEMENT**、**NIT**。\n"
@@ -7308,6 +7373,7 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
         else:
             # Git diff review
             diff_cmd = "git diff --staged" if raw.startswith("--staged") else "git diff HEAD"
+            _print_phase("Reading diff")
             tr = _tool_run_command({"command": diff_cmd})
             if not tr.get("success"):
                 msg = tr.get("error", "git diff failed")
@@ -7317,7 +7383,14 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
             if not diff_text:
                 console.print("[dim]No changes to review.[/dim]") if HAS_RICH else print("No changes to review.")
                 return
+            # Show diff summary stats before sending to LLM
+            _adds    = diff_text.count("\n+") - diff_text.count("\n+++")
+            _dels    = diff_text.count("\n-") - diff_text.count("\n---")
+            _files   = diff_text.count("\ndiff --git")
+            if HAS_RICH:
+                console.print(f"  [dim]↳ {_files} files  ·  +{_adds} −{_dels} lines[/dim]")
             diff_text = diff_text[:12000]
+            _print_phase("AI Review")
             prompt = (
                 "请审查以下 git diff，找出 Bug、潜在回归、安全问题和代码质量问题。\n"
                 "每条发现用严重程度标签开头：**BUG**、**IMPROVEMENT**、**NIT**。\n"
@@ -9384,6 +9457,96 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
         # Pretty-print result
         _print_tool_result(tool_name, result, elapsed=0)
 
+    async def cmd_ui(self, args: str):
+        """
+        Generate a Bloomberg Terminal-style HTML file for any requested view.
+        Usage: /ui <description>
+               /ui 今日A股板块热力图
+               /ui 持仓组合风险报告
+               /ui 宏观利率与大宗商品看板
+        """
+        desc = args.strip()
+        if not desc:
+            if HAS_RICH:
+                self.console.print("[dim]Usage: /ui <描述>[/dim]")
+                self.console.print("[dim]  /ui 今日A股热力图[/dim]")
+                self.console.print("[dim]  /ui 持仓组合报告[/dim]")
+                self.console.print("[dim]  /ui 市场晨报看板[/dim]")
+            else:
+                print("Usage: /ui <description>")
+            return
+
+        try:
+            from apps.cli.prompts.ui import UI_SYSTEM_PROMPT
+        except ImportError:
+            UI_SYSTEM_PROMPT = ""
+
+        prompt = (
+            f"{UI_SYSTEM_PROMPT}\n\n"
+            "---\n\n"
+            f"USER REQUEST: {desc}\n\n"
+            "Generate a Bloomberg Terminal-style HTML dashboard for this request.\n"
+            "Follow the workflow:\n"
+            "1. Identify what data you need (symbols, metrics, time range).\n"
+            "2. Write a Python generator script to ~/Desktop using write_file:\n"
+            "   - Fetch all data with yfinance / akshare\n"
+            "   - Embed data as JS/HTML constants\n"
+            "   - Apply the full Bloomberg CSS design system (dark/light via prefers-color-scheme)\n"
+            "   - Save timestamped HTML to ~/Desktop/\n"
+            "3. Run the script with run_command.\n"
+            "4. Open the output HTML in the browser.\n\n"
+            "Design requirements (non-negotiable):\n"
+            "- No emojis anywhere — use [+] [-] [!] [ACTIVE] text indicators\n"
+            "- border-radius: 0 everywhere\n"
+            "- IBM Plex Mono for all prices and numbers\n"
+            "- prefers-color-scheme: dark default, light override\n"
+            "- ALL CAPS section headers, 10px, letter-spacing 0.12em\n"
+            "- Accent color: dark=#F5A623, light=#B8520A\n"
+        )
+
+        if HAS_RICH:
+            self.console.print(f"[bold]UI Generation:[/bold] {desc}")
+        else:
+            print(f"Generating UI: {desc}")
+
+        await self.terminal.send_message(prompt)
+
+    async def cmd_dashboard(self, args: str):
+        """
+        生成个人化 Dashboard HTML，自动在浏览器打开。
+        Usage: /dashboard
+        数据来源: 本地持仓DB + 价格预警DB + yfinance 实时行情 + 最近生成文件
+        """
+        try:
+            from dashboard_generator import generate_and_open
+        except ImportError:
+            if HAS_RICH:
+                self.console.print("[red]dashboard_generator.py 未找到，请检查安装[/red]")
+            else:
+                print("dashboard_generator.py 未找到")
+            return
+
+        watchlist = self.terminal.config.get("watchlist", [])
+        if HAS_RICH:
+            self.console.print("[dim]正在抓取数据并生成 Dashboard…[/dim]")
+        else:
+            print("正在生成 Dashboard…")
+
+        try:
+            out = generate_and_open(watchlist=watchlist, config=self.terminal.config)
+            if HAS_RICH:
+                self.console.print(
+                    f"  [green]✓[/green] Dashboard 已生成并在浏览器打开\n"
+                    f"  [dim]路径: [bold]{out}[/bold][/dim]"
+                )
+            else:
+                print(f"Dashboard saved: {out}")
+        except Exception as exc:
+            if HAS_RICH:
+                self.console.print(f"[red]生成失败: {exc}[/red]")
+            else:
+                print(f"生成失败: {exc}")
+
     # ════════════════════════════════════════════════════════════════════════
     # 金融 Agent 团队命令
     # ════════════════════════════════════════════════════════════════════════
@@ -10828,6 +10991,24 @@ class ArtheraTerminal:
                 f"[执行计划]\n{_decomp_plan}\n\n"
                 f"[用户请求]\n{message}"
             )
+
+        # ── ML 预测信号注入：聊天中自动检测标的并注入 5 日预测参考 ──────────
+        # 仅在 LLM 路径触发（已过确定性路由），且消息含分析意图时启用。
+        # 信号注入 current_message（不污染 conversation history），3s 超时。
+        _ml_signal_syms: list = []
+        try:
+            if _is_stock_analysis_intent(message):
+                _ml_signal_syms = _extract_market_symbols(message, limit=3)
+                if _ml_signal_syms:
+                    _ml_sig = _fetch_quick_ml_signal(_ml_signal_syms)
+                    if _ml_sig:
+                        current_message = (
+                            f"[ML信号参考 — 仅供分析参考，非投资建议]\n{_ml_sig}\n\n"
+                            f"{current_message}"
+                        )
+        except Exception:
+            _ml_signal_syms = []
+
         turn_state = AgentTurnState(provider="aws")
         provider = turn_state.provider
         token_count = 0
@@ -10841,6 +11022,7 @@ class ArtheraTerminal:
             thinking_preview_buf: list = []  # accumulate preview chars
             thinking_full_buf: list = []     # full thinking text for Ctrl+O
             streamed_any = False
+            _tool_start_times: dict = {}     # tool_name → call start time (for ✓ elapsed)
 
             if round_num == 0:
                 if HAS_RICH:
@@ -11127,8 +11309,14 @@ class ArtheraTerminal:
                     else:
                         print(f"\r  ✻ {t_info}")
                 _print_tool_call(tool, params if isinstance(params, dict) else {})
+                _tool_start_times[tool] = time.time()
 
             def on_tool_result(tool, summary):
+                # ✓ completion line — elapsed time since on_tool_call
+                _elapsed_ms = int((time.time() - _tool_start_times.pop(tool, time.time())) * 1000)
+                _ok = not (isinstance(summary, dict) and not summary.get("success", True))
+                _print_tool_done(tool, _elapsed_ms, success=_ok)
+
                 # Track tool calls in transcript log (Ctrl+O viewer)
                 import time as _t
                 _ts = _t.strftime("%H:%M:%S")
@@ -11611,6 +11799,11 @@ class ArtheraTerminal:
             self.conversation.append({"role": "assistant", "content": final_text})
             import time as _time_ts
             self._last_turn_ts = _time_ts.time()
+
+            # ── 预测反馈记录：为本轮检测到的标的写入 DPO 训练素材 ──────────────
+            if _ml_signal_syms and final_text:
+                for _sym in _ml_signal_syms:
+                    self._record_prediction(_sym, final_text)
 
             # Metadata line — detailed stats
             metadata = turn_result.metadata

@@ -76,7 +76,21 @@ $ aria-code
 
 ---
 
-## ✨ What's New in v4.0
+## ✨ What's New in v4.1
+
+| Feature | Description |
+|---------|-------------|
+| **Bloomberg UI** | `/ui <desc>` generates Bloomberg Terminal-style HTML dashboards — amber-on-black, IBM Plex Mono, zero border-radius, `prefers-color-scheme` |
+| **Tool transparency** | `✓ action (42ms)` after every tool call · per-turn cost display · phase dividers in multi-step commands |
+| **User profile** | `~/.arthera/ARIA.md` auto-injected every session · `/memory profile add <text>` to persist your preferences |
+| **Quant engine** | Citadel/Jane Street-style 5-module engine · limit-up prediction · dynamic market pool |
+| **MCP tools** | 5 new quantitative MCP tools in the tool registry |
+| **83 commands** | Consolidated from ~150 — removed all LLM-replaceable commands; natural language handles the rest |
+| **LLM routing fix** | Model now knows it can call real-time data tools instead of saying "I don't have live data" |
+
+See [CHANGELOG.md](CHANGELOG.md) for the full history.
+
+### v4.0 highlights
 
 | Feature | Description |
 |---------|-------------|
@@ -84,10 +98,8 @@ $ aria-code
 | `!` **Shell mode** | Type `! git status` to run shell commands, output auto-added to AI context |
 | `@` **File autocomplete** | Type `@src/` to get instant file path completion anywhere in input |
 | `/btw` **Side questions** | Ask quick questions without polluting conversation history |
-| `/recap` **Session recap** | One-line summary on return · auto-shown after 3 min away |
 | 🌍 **Auto language** | UI and responses auto-detect Chinese/English from OS locale on first run |
 | 🤖 **19+ cloud providers** | Google Gemini · xAI Grok · Mistral · Cohere · Perplexity · Baidu ERNIE · ByteDance · MiniMax · StepFun · 01.AI + all originals |
-| 📊 **Finnhub primary** | US stocks now routed to Finnhub first — faster, authoritative `dp` field for % change |
 | 🔢 **All Ollama models** | Qwen3 · DeepSeek-R1 · Llama 3.x · Phi-4 · Gemma3 · Mistral families |
 
 ---
@@ -166,35 +178,70 @@ mindmap
 
 ## 🚀 Quick Start
 
-### Option 1: npm (recommended)
+### Option 1: Bootstrap (fresh Mac / Linux — recommended)
+
+No Node.js, Python, or Xcode required. One command handles everything:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Cinsoul/Aria-Code/main/bootstrap.sh | bash
+```
+
+What it does automatically:
+- ✅ Installs **Xcode Command Line Tools** (macOS) — provides `git`, `make`, compiler
+- ✅ Installs **Homebrew** (macOS package manager)
+- ✅ Installs **Python 3.12** if not present
+- ✅ Clones the repo into `~/aria-code`
+- ✅ Runs `install.sh` to create venv, install all packages, and register the `aria-code` command
+
+> Already cloned the repo? Just run `bash bootstrap.sh` from inside the folder.
+
+### Option 2: npm (requires Node.js ≥ 16)
+
+If you already have [Node.js](https://nodejs.org) installed, the npm installer handles Python, Xcode CLT, and Homebrew automatically:
 
 ```bash
 npm install -g aria-code
 aria-code
 ```
 
-The npm installer auto-detects Python 3.10+ and pulls the engine for you.
-Update anytime with `npm update -g aria-code`.
+What happens under the hood:
+- ✅ Detects / installs Xcode Command Line Tools (macOS)
+- ✅ Detects / installs Homebrew (macOS)
+- ✅ Detects / installs Python 3.12 if missing
+- ✅ Clones Aria Code into `~/.aria-code/`
+- ✅ Creates a venv and installs all Python dependencies
 
-### Option 2: One-line install (macOS / Linux)
+Update: `npm update -g aria-code`
+
+Repair if broken: `npm explore -g aria-code -- npm run repair`
+
+### Option 3: Git clone (if Python 3.10+ is already installed)
 
 ```bash
 git clone https://github.com/Cinsoul/Aria-Code.git
-cd aria-code
-./install.sh
+cd Aria-Code
+bash install.sh
 ```
 
-Add to PATH:
+Add to PATH (if prompted):
 
 ```bash
 echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc
 ```
 
-### Option 3: Run directly
+### Option 3: Windows
+
+```powershell
+git clone https://github.com/Cinsoul/Aria-Code.git
+cd Aria-Code
+.\install.ps1
+```
+
+### Option 4: Run directly (no install)
 
 ```bash
 git clone https://github.com/Cinsoul/Aria-Code.git
-cd aria-code
+cd Aria-Code
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 python3 aria_cli.py

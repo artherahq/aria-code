@@ -46,6 +46,7 @@ from .tracker      import (
     fetch_wc_league_avg,
     fetch_wc_rho,
     auto_calibrate,
+    backfill_score_metrics,
 )
 from .calibrator   import (
     get_calibrated_params,

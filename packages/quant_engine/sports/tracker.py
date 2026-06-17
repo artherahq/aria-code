@@ -3,9 +3,15 @@ sports/tracker.py — 预测追踪、准确率统计、自动 Elo 同步
 =========================================================
 功能:
   1. 记录每次预测（赛前调用 record_prediction）
-  2. 赛后记录实际结果，自动计算 Brier Score / Log-Loss
+     — 自动计算并存储比分概率矩阵 top_scorelines + predicted_score
+  2. 赛后记录实际结果，自动计算:
+     — 1X2 Brier Score / Log-Loss
+     — 比分精确命中 score_exact / 比分排名 score_rank
+     — 比分 RPS（Ranked Probability Score over scoreline space）
+     — 进球 MAE（预期进球 vs 实际进球的平均绝对误差）
   3. 从 football-data.org API 自动同步已结束 WC 比赛 Elo
   4. 动态计算赛事实际场均进球（替换硬编码 1.32）
+  5. backfill_score_metrics() — 为历史无比分指标的记录补算
 
 持久化路径:
   ~/.arthera/football_predictions.json  — 预测记录
@@ -23,6 +29,65 @@ from typing import Dict, List, Optional, Tuple
 _PRED_PATH   = Path.home() / ".arthera" / "football_predictions.json"
 _SYNCED_PATH = Path.home() / ".arthera" / "elo_synced_matches.json"
 _AVG_PATH    = Path.home() / ".arthera" / "wc_league_avg.json"
+
+_SCORE_MAX_G = 9   # 评估矩阵上限：0..8 进球
+
+
+# ── 比分概率工具 ──────────────────────────────────────────────────────────────
+
+def _poisson_pmf(k: int, lam: float) -> float:
+    if lam <= 0:
+        return 1.0 if k == 0 else 0.0
+    return (lam ** k) * math.exp(-lam) / math.factorial(k)
+
+
+def _scoreline_matrix(lh: float, la: float, max_g: int = _SCORE_MAX_G) -> Dict[Tuple[int, int], float]:
+    """全比分概率矩阵 {(home_goals, away_goals): prob}，0..max_g-1 进球。"""
+    matrix: Dict[Tuple[int, int], float] = {}
+    for h in range(max_g):
+        ph = _poisson_pmf(h, lh)
+        for a in range(max_g):
+            matrix[(h, a)] = ph * _poisson_pmf(a, la)
+    return matrix
+
+
+def _top_scorelines(lh: float, la: float, n: int = 10) -> List[Dict]:
+    """返回概率最高的 n 个比分，含排名。"""
+    matrix = _scoreline_matrix(lh, la)
+    ranked = sorted(matrix.items(), key=lambda x: -x[1])[:n]
+    return [
+        {"score": f"{h}-{a}", "h": h, "a": a, "prob": round(p * 100, 2), "rank": i + 1}
+        for i, ((h, a), p) in enumerate(ranked)
+    ]
+
+
+def _score_rps(matrix: Dict[Tuple[int, int], float], actual_h: int, actual_a: int) -> float:
+    """
+    比分空间上的 Ranked Probability Score。
+
+    在进球总数维度上累积 CDF 误差：
+      RPS = mean_over_g( (F_pred(g) - F_actual(g))^2 )
+    其中 F(g) = P(total_goals ≤ g)，范围 0..2*(max_g-1)。
+    值域 [0, 1]，越低越好；完美预测 = 0。
+    """
+    max_total = 2 * (_SCORE_MAX_G - 1)
+    actual_total = actual_h + actual_a
+
+    # CDF for predicted total goals
+    total_probs: Dict[int, float] = {}
+    for (h, a), p in matrix.items():
+        t = h + a
+        total_probs[t] = total_probs.get(t, 0.0) + p
+
+    cum_pred = 0.0
+    cum_actual = 0.0
+    rps = 0.0
+    for g in range(max_total + 1):
+        cum_pred   += total_probs.get(g, 0.0)
+        cum_actual += 1.0 if g == actual_total else 0.0
+        rps += (cum_pred - cum_actual) ** 2
+
+    return round(rps / (max_total + 1), 5)
 
 
 # ── 持久化工具 ────────────────────────────────────────────────────────────────
@@ -80,6 +145,14 @@ def record_prediction(
         "log_loss":    None,
         **(extra or {}),
     }
+    # Auto-compute scoreline distribution from lambdas if available
+    lh = (extra or {}).get("lambda_home")
+    la = (extra or {}).get("lambda_away")
+    if lh and la and lh > 0 and la > 0:
+        top = _top_scorelines(float(lh), float(la), n=10)
+        entry["top_scorelines"]  = top
+        entry["predicted_score"] = top[0]["score"] if top else None
+
     records = [r for r in records if r.get("id") != pid]
     records.append(entry)
     _save_json(_PRED_PATH, records)
@@ -121,13 +194,46 @@ def record_result(
                 r["actual_home_goals"] = home_goals
             if away_goals is not None:
                 r["actual_away_goals"] = away_goals
+
+            # ── 比分级别评估 ──────────────────────────────────────────────────
+            if home_goals is not None and away_goals is not None:
+                ah, aa = int(home_goals), int(away_goals)
+                actual_score_str = f"{ah}-{aa}"
+
+                # 1. 精确比分命中
+                r["score_exact"] = (r.get("predicted_score") == actual_score_str)
+
+                # 2. 比分排名（在存储的 top_scorelines 里的位置）
+                top = r.get("top_scorelines", [])
+                ranks = [s["rank"] for s in top if s["score"] == actual_score_str]
+                r["score_rank"] = ranks[0] if ranks else None
+
+                # 3. 用 lambda 重算完整矩阵 → RPS + 精确概率
+                lh = r.get("lambda_home")
+                la = r.get("lambda_away")
+                if lh and la and lh > 0 and la > 0:
+                    matrix = _scoreline_matrix(float(lh), float(la))
+                    r["score_prob"]   = round(matrix.get((ah, aa), 0.0) * 100, 3)
+                    r["score_rps"]    = _score_rps(matrix, ah, aa)
+                    r["goals_mae"]    = round((abs(float(lh) - ah) + abs(float(la) - aa)) / 2, 3)
+                    r["goals_mae_h"]  = round(abs(float(lh) - ah), 3)
+                    r["goals_mae_a"]  = round(abs(float(la) - aa), 3)
+                    # rank from full matrix (not just stored top 10)
+                    ranked_all = sorted(matrix.items(), key=lambda x: -x[1])
+                    for rank_idx, ((rh, ra), _) in enumerate(ranked_all):
+                        if rh == ah and ra == aa:
+                            r["score_rank_full"] = rank_idx + 1
+                            break
+                    else:
+                        r["score_rank_full"] = len(ranked_all)
+
             _save_json(_PRED_PATH, records)
             return r
     return None
 
 
 def get_accuracy_stats() -> Dict:
-    """返回所有已结算预测的准确率统计。"""
+    """返回所有已结算预测的准确率统计（含比分级别指标）。"""
     records = _load_json(_PRED_PATH, [])
     settled = [r for r in records if r.get("result") and r.get("brier_score") is not None]
     if not settled:
@@ -142,14 +248,102 @@ def get_accuracy_stats() -> Dict:
     avg_brier   = sum(r["brier_score"] for r in settled) / len(settled)
     avg_logloss = sum(r["log_loss"]    for r in settled) / len(settled)
 
-    return {
+    stats: Dict = {
         "total":           len(settled),
         "correct":         correct,
         "accuracy":        round(correct / len(settled), 3),
         "avg_brier_score": round(avg_brier, 4),
         "avg_log_loss":    round(avg_logloss, 4),
-        "records":         settled,
     }
+
+    # ── 比分级别统计 ──────────────────────────────────────────────────────────
+    has_score = [r for r in settled if r.get("actual_home_goals") is not None and r.get("score_rps") is not None]
+    if has_score:
+        exact_hits     = [r for r in has_score if r.get("score_exact")]
+        rank_vals      = [r["score_rank_full"] for r in has_score if r.get("score_rank_full")]
+        rps_vals       = [r["score_rps"]       for r in has_score if r.get("score_rps") is not None]
+        mae_vals       = [r["goals_mae"]        for r in has_score if r.get("goals_mae") is not None]
+        mae_h_vals     = [r["goals_mae_h"]      for r in has_score if r.get("goals_mae_h") is not None]
+        mae_a_vals     = [r["goals_mae_a"]      for r in has_score if r.get("goals_mae_a") is not None]
+        prob_vals      = [r["score_prob"]        for r in has_score if r.get("score_prob") is not None]
+
+        stats["score"] = {
+            "total_with_score":    len(has_score),
+            "exact_hits":          len(exact_hits),
+            "exact_rate":          round(len(exact_hits) / len(has_score), 3),
+            "avg_score_rank":      round(sum(rank_vals) / len(rank_vals), 1) if rank_vals else None,
+            "avg_score_rps":       round(sum(rps_vals)  / len(rps_vals),  5) if rps_vals  else None,
+            "avg_goals_mae":       round(sum(mae_vals)   / len(mae_vals),  3) if mae_vals  else None,
+            "avg_goals_mae_home":  round(sum(mae_h_vals) / len(mae_h_vals), 3) if mae_h_vals else None,
+            "avg_goals_mae_away":  round(sum(mae_a_vals) / len(mae_a_vals), 3) if mae_a_vals else None,
+            "avg_score_prob_pct":  round(sum(prob_vals)  / len(prob_vals),  3) if prob_vals  else None,
+        }
+
+    stats["records"] = settled
+    return stats
+
+
+# ── 历史记录比分指标补算 ──────────────────────────────────────────────────────
+
+def backfill_score_metrics() -> Dict:
+    """
+    为历史已结算但缺少比分指标的记录补算:
+      top_scorelines, predicted_score, score_exact, score_rank,
+      score_rps, goals_mae, score_rank_full, score_prob
+
+    幂等：已有完整指标的记录跳过。
+    返回 {"updated": n, "skipped": n}。
+    """
+    records = _load_json(_PRED_PATH, [])
+    updated = 0
+
+    for r in records:
+        lh = r.get("lambda_home")
+        la = r.get("lambda_away")
+        if not (lh and la and lh > 0 and la > 0):
+            continue
+
+        # 补 top_scorelines / predicted_score
+        if not r.get("top_scorelines"):
+            top = _top_scorelines(float(lh), float(la), n=10)
+            r["top_scorelines"]  = top
+            r["predicted_score"] = top[0]["score"] if top else None
+            updated += 1
+
+        # 补比分评估（仅对已有实际进球的记录）
+        ah = r.get("actual_home_goals")
+        aa = r.get("actual_away_goals")
+        if ah is None or aa is None:
+            continue
+        if r.get("score_rps") is not None:
+            continue  # 已有，跳过
+
+        ah, aa = int(ah), int(aa)
+        actual_score_str = f"{ah}-{aa}"
+        top = r.get("top_scorelines", [])
+        r["score_exact"] = (r.get("predicted_score") == actual_score_str)
+        ranks = [s["rank"] for s in top if s["score"] == actual_score_str]
+        r["score_rank"] = ranks[0] if ranks else None
+
+        matrix = _scoreline_matrix(float(lh), float(la))
+        r["score_prob"]   = round(matrix.get((ah, aa), 0.0) * 100, 3)
+        r["score_rps"]    = _score_rps(matrix, ah, aa)
+        r["goals_mae"]    = round((abs(float(lh) - ah) + abs(float(la) - aa)) / 2, 3)
+        r["goals_mae_h"]  = round(abs(float(lh) - ah), 3)
+        r["goals_mae_a"]  = round(abs(float(la) - aa), 3)
+
+        ranked_all = sorted(matrix.items(), key=lambda x: -x[1])
+        for rank_idx, ((rh, ra), _) in enumerate(ranked_all):
+            if rh == ah and ra == aa:
+                r["score_rank_full"] = rank_idx + 1
+                break
+        else:
+            r["score_rank_full"] = len(ranked_all)
+
+        updated += 1
+
+    _save_json(_PRED_PATH, records)
+    return {"updated": updated, "skipped": len(records) - updated}
 
 
 # ── 队名规范化（结算匹配用）──────────────────────────────────────────────────
@@ -327,14 +521,30 @@ def auto_calibrate(api_get_fn=None) -> Dict:
     except Exception:
         pass
 
-    # ── λ 偏差修正 ────────────────────────────────────────────────────────────
+    # ── λ 偏差修正（双路径：比值法 + MAE 网格搜索，取 MAE 更优者）────────────
     bias = optimize_lambda_bias(settled)
-    if bias["n_home"] >= 5 or bias["n_away"] >= 5:
+    try:
+        from .calibrator import optimize_lambda_bias_from_scores as _score_bias_fn
+        score_bias = _score_bias_fn(settled)
+    except Exception:
+        score_bias = {"status": "error"}
+
+    if score_bias.get("status") == "optimized":
+        # 使用 MAE 网格搜索结果（更稳健，对极端比分不敏感）
+        params["lambda_home_bias"] = score_bias["home_bias"]
+        params["lambda_away_bias"] = score_bias["away_bias"]
+        params["n_matches"]        = n
+        report["actions"].append(
+            f"λ 偏差(MAE网格): 主队×{score_bias['home_bias']:.3f}  "
+            f"客队×{score_bias['away_bias']:.3f}  "
+            f"goals_MAE={score_bias['goals_mae']:.3f}(n={score_bias['n']})"
+        )
+    elif bias["n_home"] >= 5 or bias["n_away"] >= 5:
         params["lambda_home_bias"] = bias["home_bias"]
         params["lambda_away_bias"] = bias["away_bias"]
         params["n_matches"]        = n
         report["actions"].append(
-            f"λ 偏差: 主队×{bias['home_bias']:.3f}(n={bias['n_home']})  "
+            f"λ 偏差(比值法): 主队×{bias['home_bias']:.3f}(n={bias['n_home']})  "
             f"客队×{bias['away_bias']:.3f}(n={bias['n_away']})"
         )
 

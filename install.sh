@@ -37,6 +37,51 @@ BIN_DIR="${ARIA_BIN_DIR:-$HOME/.local/bin}"
 LINK_PATH="$BIN_DIR/aria-code"
 PYTHON="${ARIA_PYTHON:-python3}"
 
+# ── Pre-flight: ensure git & python exist before anything else ─
+_OS="$(uname -s)"
+_preflight_ok=1
+
+if ! command -v git &>/dev/null; then
+    err "git not found."
+    if [[ "$_OS" == "Darwin" ]]; then
+        echo
+        echo -e "  Run ${CYAN}xcode-select --install${NC} and try again."
+        echo -e "  Or run our bootstrap instead:"
+        echo -e "  ${CYAN}bash bootstrap.sh${NC}"
+    else
+        echo -e "  Run: sudo apt-get install git  (Debian/Ubuntu)"
+        echo -e "       sudo yum install git       (RHEL/CentOS)"
+    fi
+    _preflight_ok=0
+fi
+
+if ! command -v python3 &>/dev/null && ! command -v python &>/dev/null; then
+    err "Python 3 not found."
+    if [[ "$_OS" == "Darwin" ]]; then
+        echo
+        if command -v brew &>/dev/null; then
+            echo -e "  Run: ${CYAN}brew install python@3.12${NC}"
+        else
+            echo -e "  Run our bootstrap (handles everything automatically):"
+            echo -e "  ${CYAN}bash bootstrap.sh${NC}"
+            echo
+            echo -e "  Or install manually:"
+            echo -e "    1. xcode-select --install"
+            echo -e "    2. /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
+            echo -e "    3. brew install python@3.12"
+        fi
+    else
+        echo -e "  Run: sudo apt-get install python3.12 python3.12-venv"
+    fi
+    _preflight_ok=0
+fi
+
+if [[ "$_preflight_ok" -eq 0 ]]; then
+    echo
+    err "Pre-flight checks failed. Fix the issues above and re-run."
+    exit 1
+fi
+
 # ── Parse flags ───────────────────────────────────────────────
 MODE="full"
 UPGRADE=0

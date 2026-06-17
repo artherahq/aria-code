@@ -37,8 +37,14 @@ class XTQuantBroker(BrokerBase):
 
     def connect(self) -> bool:
         try:
-            from xtquant.xttrader import XtQuantTrader
-            from xtquant import xtdata
+            import os, sys
+            with open(os.devnull, "w") as _null:
+                _old, sys.stdout = sys.stdout, _null
+                try:
+                    from xtquant.xttrader import XtQuantTrader
+                    from xtquant import xtdata
+                finally:
+                    sys.stdout = _old
             path = self._path or "."
             trader = XtQuantTrader(path, int(self.config.get("session_id", 1)))
             conn = trader.connect()

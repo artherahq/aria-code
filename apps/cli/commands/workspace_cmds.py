@@ -1072,23 +1072,93 @@ class WorkspaceCommandsMixin:
                     pass
             console.print() if HAS_RICH else print()
 
-        # ── Step 4: Summary ─────────────────────────────────────────────────
-        console.print("  [bold]Step 4/4 · 配置完成[/bold]") if HAS_RICH else print("Step 4: Done")
+        # ── Step 4: Messaging channels (Feishu / Telegram) ──────────────────
+        if sub in ("feishu", "telegram", "notify", "all", ""):
+            console.print("  [bold]Step 4/5 · 消息通知连接[/bold]") if HAS_RICH else print("Step 4: Messaging")
+            _env_path = Path.home() / ".aria" / ".env"
+            _env_vars: dict = {}
+            if _env_path.exists():
+                for _line in _env_path.read_text().splitlines():
+                    if "=" in _line and not _line.startswith("#"):
+                        k, _, v = _line.partition("=")
+                        _env_vars[k.strip()] = v.strip()
+
+            # Feishu status
+            _fs_mode  = _env_vars.get("ARIA_RELAY_MODE", "")
+            _fs_id    = _env_vars.get("ARIA_RELAY_CLIENT_ID", "")
+            _fs_app   = _env_vars.get("FEISHU_APP_ID", "")
+            if _fs_mode == "relay" and _fs_id:
+                _fs_status = f"[green]✓ 中继模式[/green]  ID: {_fs_id[:12]}…"
+            elif _fs_mode == "own_app" and _fs_app:
+                _fs_status = f"[green]✓ 自建应用[/green]  {_fs_app}"
+            else:
+                _fs_status = "[dim]未配置[/dim]  → /setup feishu"
+
+            # Telegram status
+            _tg_token = _env_vars.get("TELEGRAM_BOT_TOKEN", "")
+            _tg_ids   = _env_vars.get("TELEGRAM_ALLOWED_IDS", "")
+            if _tg_token and _tg_token != "your_bot_token_here":
+                _tg_status = f"[green]✓ 已配置[/green]  Chat IDs: {_tg_ids or '(未设置)'}"
+            else:
+                _tg_status = "[dim]未配置[/dim]  → /setup telegram"
+
+            if HAS_RICH:
+                console.print(f"  飞书  {_fs_status}")
+                console.print(f"  Telegram  {_tg_status}")
+            else:
+                print(f"  Feishu: {_fs_mode or 'not configured'}")
+                print(f"  Telegram: {'configured' if _tg_token else 'not configured'}")
+
+            # Sub-command: launch wizard for just this channel
+            if sub in ("feishu", "telegram"):
+                console.print() if HAS_RICH else print()
+                try:
+                    import importlib.util as _ilu
+                    _wiz_path = Path(__file__).parent.parent.parent.parent / "setup_wizard.py"
+                    _spec = _ilu.spec_from_file_location("_aria_setup_wizard", str(_wiz_path))
+                    _wiz = _ilu.module_from_spec(_spec)
+                    _spec.loader.exec_module(_wiz)
+                    _e = _wiz._load_env()
+                    if sub == "feishu":
+                        _wiz.setup_feishu(_e)
+                    else:
+                        _wiz.setup_telegram(_e)
+                    _wiz._save_env(_e)
+                except Exception as _we:
+                    _fallback_flag = "--feishu" if sub == "feishu" else "--telegram"
+                    if HAS_RICH:
+                        console.print(f"  [yellow]请运行: python3 setup_wizard.py {_fallback_flag}[/yellow]")
+                    else:
+                        print(f"  Run: python3 setup_wizard.py {_fallback_flag}")
+                return
+
+            console.print() if HAS_RICH else print()
+
+        # ── Step 5: Summary ─────────────────────────────────────────────────
+        console.print("  [bold]Step 5/5 · 配置完成[/bold]") if HAS_RICH else print("Step 5: Done")
         model = self.terminal.config.get("model", "?")
         provider = self.terminal.config.get("local_provider", "ollama")
         console.print(f"  模型: [cyan]{model}[/cyan]  Provider: [cyan]{provider}[/cyan]") if HAS_RICH else print(f"  Model: {model}  Provider: {provider}")
         console.print()  if HAS_RICH else print()
-        console.print("  [dim]提示: /model — 切换模型   /providers — 查看所有 provider   /setup mcp — MCP 服务器[/dim]") if HAS_RICH else print("  Tip: /model  /providers  /setup mcp")
+        console.print(
+            "  [dim]提示: /model — 切换模型   /providers — 查看所有 provider\n"
+            "        /setup feishu — 配置飞书   /setup telegram — 配置 Telegram[/dim]"
+        ) if HAS_RICH else print("  Tip: /model  /providers  /setup feishu  /setup telegram")
         console.print("[bold cyan]━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[/bold cyan]") if HAS_RICH else print("─" * 50)
         console.print() if HAS_RICH else print()
 
     def cmd_memory(self, args: str):
-        """Manage persistent ARIA.md project memory.
+        """Manage persistent memory: project ARIA.md and global user profile.
 
         Usage:
-            /memory show          — display current ARIA.md
-            /memory add <fact>    — append a fact (same as /note)
-            /memory clear         — wipe ARIA.md memory section
+            /memory show             — display current project ARIA.md
+            /memory add <fact>       — append fact to project ARIA.md
+            /memory clear            — wipe project ARIA.md memory section
+            /memory search <query>   — search across ARIA.md + sessions
+            /memory profile          — show global ~/.arthera/ARIA.md (injected every session)
+            /memory profile add <text>  — append to global profile
+            /memory profile clear    — reset global profile
+            /memory global           — legacy global Memory entries
         """
         global _PROJECT_CONTEXT
         aria_md = pathlib.Path.cwd() / "ARIA.md"
@@ -1175,6 +1245,71 @@ class WorkspaceCommandsMixin:
                 msg = f"未找到与 '{rest}' 相关的记忆"
                 console.print(f"[dim]{msg}[/dim]") if HAS_RICH else print(msg)
 
+        elif sub == "profile":
+            # Per-user ARIA.md at ~/.arthera/ARIA.md — injected into every session
+            _profile_path = pathlib.Path.home() / ".arthera" / "ARIA.md"
+            gparts = rest.strip().split(maxsplit=1)
+            gsub   = gparts[0].lower() if gparts else "show"
+            grest  = gparts[1].strip() if len(gparts) > 1 else ""
+
+            if gsub == "show":
+                if not _profile_path.exists():
+                    if HAS_RICH:
+                        console.print(f"[dim]~/.arthera/ARIA.md 还不存在。用 /memory profile add <内容> 创建。[/dim]")
+                    else:
+                        print("~/.arthera/ARIA.md not found. Use /memory profile add <text> to create.")
+                    return
+                content = _profile_path.read_text(encoding="utf-8")
+                if HAS_RICH:
+                    try:
+                        from rich.markdown import Markdown as _RMd3
+                        console.print()
+                        console.print(f"  [dim]~/.arthera/ARIA.md[/dim]")
+                        console.print(_RMd3(content))
+                    except Exception:
+                        console.print(content)
+                else:
+                    print(content)
+
+            elif gsub == "add":
+                if not grest:
+                    console.print("[dim]Usage: /memory profile add <内容>[/dim]") if HAS_RICH else print("Usage: /memory profile add <text>")
+                    return
+                _profile_path.parent.mkdir(parents=True, exist_ok=True)
+                now_str = datetime.now().strftime("%Y-%m-%d")
+                if _profile_path.exists():
+                    existing = _profile_path.read_text(encoding="utf-8")
+                    if "## 偏好与背景" not in existing and "## Preferences" not in existing:
+                        existing += "\n\n## 偏好与背景\n"
+                    existing += f"\n- [{now_str}] {grest}"
+                    _profile_path.write_text(existing, encoding="utf-8")
+                else:
+                    _profile_path.write_text(
+                        f"# 用户背景\n\n## 偏好与背景\n\n- [{now_str}] {grest}\n",
+                        encoding="utf-8",
+                    )
+                # Refresh project context so change takes effect immediately
+                global _PROJECT_CONTEXT
+                _PROJECT_CONTEXT = _load_project_context()
+                if HAS_RICH:
+                    console.print(f"  [dim]✓ 已写入 ~/.arthera/ARIA.md — 下次对话自动注入[/dim]")
+                else:
+                    print(f"Saved to ~/.arthera/ARIA.md")
+
+            elif gsub == "clear":
+                if _profile_path.exists():
+                    _profile_path.write_text("# 用户背景\n\n", encoding="utf-8")
+                    _PROJECT_CONTEXT = _load_project_context()
+                    console.print("[dim]~/.arthera/ARIA.md 已清空。[/dim]") if HAS_RICH else print("Profile cleared.")
+                else:
+                    console.print("[dim]文件不存在，无需清空。[/dim]") if HAS_RICH else print("Nothing to clear.")
+
+            else:
+                if HAS_RICH:
+                    console.print("[dim]Usage: /memory profile [show|add <内容>|clear][/dim]")
+                else:
+                    print("Usage: /memory profile [show|add <text>|clear]")
+
         elif sub == "global":
             # Global user memory (cross-project, cross-session)
             if not self.memory_mgr:
@@ -1213,5 +1348,9 @@ class WorkspaceCommandsMixin:
                 console.print("[dim]Usage: /memory global [show|add <内容>|clear][/dim]") if HAS_RICH else print("Usage: /memory global [show|add|clear]")
 
         else:
-            console.print("[dim]Usage: /memory [show|add <fact>|clear|search <query>|global][/dim]") if HAS_RICH else print("Usage: /memory [show|add <fact>|clear|search <query>|global]")
+            if HAS_RICH:
+                console.print("[dim]Usage: /memory [show|add <fact>|clear|search <query>|profile|global][/dim]")
+                console.print("[dim]       /memory profile add <内容>  — 写入全局用户背景（每次会话自动注入）[/dim]")
+            else:
+                print("Usage: /memory [show|add <fact>|clear|search <query>|profile|global]")
 
