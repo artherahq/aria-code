@@ -563,19 +563,39 @@ class MarketCommandsMixin:
             f"[dim]赔率 {pred.implied_odds['away']}[/dim]",
         )
 
-        # Top scorelines
-        score_table = Table(box=rich_box.SIMPLE, show_header=True, padding=(0, 2))
-        score_table.add_column("比分", style="bold cyan")
-        score_table.add_column("概率", justify="right")
-        for s in pred.top_scores[:5]:
-            score_table.add_row(s["score"], f"{s['prob']}%")
-
         title = f"⚽ {home} vs {away}  [{league.upper()}]"
         console.print(Panel(prob_table, title=f"[bold green]{title}[/bold green]", border_style="green"))
 
         console.print(f"  [dim]预期进球: {home} {pred.lambda_home:.2f} / {away} {pred.lambda_away:.2f}"
-                      f"  │  最可能比分: [bold]{pred.most_likely}[/bold]"
                       f"  │  双方均进球: {pred.btts:.0%}[/dim]")
+
+        # Top scorelines — show up to 8, colour-coded by outcome
+        _h_name = getattr(pred, "home_name_cn", home)
+        _a_name = getattr(pred, "away_name_cn", away)
+        if getattr(pred, "top_scores", None):
+            score_table = Table(box=rich_box.SIMPLE, show_header=True, padding=(0, 2))
+            score_table.add_column("可能比分", style="bold", width=14)
+            score_table.add_column("概率", justify="right", width=7)
+            score_table.add_column("结果", width=10)
+            for s in pred.top_scores[:8]:
+                _sc = s["score"]
+                _pr = s["prob"]
+                try:
+                    _hg, _ag = (_sc.split("-") + ["0"])[:2]
+                    _hg, _ag = int(_hg.strip()), int(_ag.strip())
+                except Exception:
+                    _hg, _ag = 0, 0
+                if _hg > _ag:
+                    _label = f"[green]{_h_name} 胜[/green]"
+                    _sc_fmt = f"[green]{_sc}[/green]"
+                elif _ag > _hg:
+                    _label = f"[red]{_a_name} 胜[/red]"
+                    _sc_fmt = f"[red]{_sc}[/red]"
+                else:
+                    _label = "[yellow]平局[/yellow]"
+                    _sc_fmt = f"[yellow]{_sc}[/yellow]"
+                score_table.add_row(_sc_fmt, f"{_pr}%", _label)
+            console.print(score_table)
 
         # Half-time / second-half breakdown
         if getattr(pred, "ht_lambda_home", 0) > 0:
