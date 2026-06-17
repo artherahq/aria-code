@@ -2720,6 +2720,10 @@ def _confirm_tool_execution_decision(tool_name: str, params: dict,
     if tool_name == "run_command":
         from safety import classify_command_risk
         cmd = params.get("command", "")
+        if isinstance(cmd, list):
+            import shlex as _shlex_tmp
+            cmd = _shlex_tmp.join(str(c) for c in cmd)
+            params["command"] = cmd
         risk = classify_command_risk(cmd)
 
         if risk == "high":

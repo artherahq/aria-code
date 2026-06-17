@@ -41,6 +41,11 @@ def tool_run_command(
     (filled in by the aria_cli.py wrapper from the active globals).
     """
     command = params.get("command", "")
+    # LLMs sometimes send command as a list e.g. ['bash', '-lc', '...'] — normalize to string
+    if isinstance(command, list):
+        import shlex as _shlex
+        command = _shlex.join(str(c) for c in command)
+        params["command"] = command
     if not command:
         return {"success": False, "error": "Missing 'command' parameter"}
 

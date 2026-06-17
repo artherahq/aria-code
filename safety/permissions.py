@@ -38,8 +38,11 @@ class PermissionDecision:
     network: bool = False
 
 
-def normalize_command(command: str) -> str:
+def normalize_command(command) -> str:
     """Normalize common macOS command aliases used by models/users."""
+    if isinstance(command, list):
+        import shlex as _shlex
+        command = _shlex.join(str(c) for c in command)
     raw = (command or "").strip()
     if not raw:
         return ""
@@ -96,9 +99,12 @@ def is_verification_command(command: str) -> bool:
     return any(stripped.startswith(prefix) for prefix in prefixes)
 
 
-def classify_command_risk(command: str) -> str:
+def classify_command_risk(command) -> str:
     """Classify command risk into low/medium/high."""
-    normalized = f" {command.lower().strip()} "
+    if isinstance(command, list):
+        import shlex as _shlex
+        command = _shlex.join(str(c) for c in command)
+    normalized = f" {str(command).lower().strip()} "
     stripped = normalized.strip()
 
     high_risk_patterns = (
