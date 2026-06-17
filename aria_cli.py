@@ -2183,6 +2183,7 @@ LOCAL_TOOLS = {
     "list_files":     (_tool_list_files,     "List files in a directory"),
     "list_dir":       (_tool_list_files,     "List files in a directory (alias for list_files)"),
     "search_code":    (_tool_search_code,    "Search for patterns in code (grep)"),
+    "search":         (_tool_search_code,    "Search for patterns in code (alias for search_code)"),
     "run_command":    (_tool_run_command,    "Execute a shell command"),
     # ── Extended tools (Claude Code parity) ─────────────────────────────────
     "web_fetch":      (_tool_web_fetch,      "Fetch a URL and return page text"),
@@ -2314,6 +2315,22 @@ LOCAL_TOOL_SCHEMAS.extend([
         "function": {
             "name": "search_code",
             "description": "Search for a regex pattern in source files. Returns matching lines with file paths and line numbers.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pattern": {"type": "string", "description": "Regex pattern to search for"},
+                    "path": {"type": "string", "description": "Directory to search in (default: current dir)"},
+                    "glob": {"type": "string", "description": "File glob filter (default: **/*.py)"},
+                },
+                "required": ["pattern"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search",
+            "description": "Search for a regex pattern in source files (alias for search_code).",
             "parameters": {
                 "type": "object",
                 "properties": {

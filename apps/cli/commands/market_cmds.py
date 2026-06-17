@@ -493,46 +493,37 @@ class MarketCommandsMixin:
                 console.print(f"[red]预测失败: {exc}[/red]")
                 return
 
-        # ── LLM reasoning ─────────────────────────────────────────────────────
-        # The WC path builds pred from the Elo/Poisson engine with analysis="".
-        # Run the LLM here so World Cup matches also get a reasoned read, not
-        # just numbers. (Non-WC path may already have set pred.analysis.)
-        if not getattr(pred, "analysis", "") and getattr(self, "terminal", None):
-            try:
-                import asyncio as _aio
-                # Use Ollama directly — the configured model (e.g. gpt-oss:120b-cloud)
-                # lives there. The api_url backend returns canned placeholders for
-                # this prompt shape, so going through stream_chat would store a
-                # welcome message as the "analysis".
-                from aria_cli import stream_ollama as _stream_ollama
-                _kf = "; ".join(getattr(pred, "key_factors", []) or [])
-                _llm_prompt = (
-                    f"你是专业足球分析师。用中文简洁分析这场比赛（不超过180字，给出明确倾向和理由，"
-                    f"结合双方强弱、预期进球与最可能比分）:\n"
-                    f"{home} vs {away}\n"
-                    f"主队胜: {pred.home_win:.0%}  平: {pred.draw:.0%}  客队胜: {pred.away_win:.0%}\n"
-                    f"预期进球: {pred.lambda_home:.1f} - {pred.lambda_away:.1f}  "
-                    f"最可能比分: {pred.most_likely}\n"
-                    f"关键因素: {_kf}"
-                )
-                console.print("  [dim]✻ 思考中…[/dim]")
-                _term = self.terminal
-                _parts: list = []
-                await _aio.wait_for(
-                    _stream_ollama(
-                        _term.config.get("ollama_url", "http://localhost:11434"),
-                        _llm_prompt, [],
-                        model=_term.config.get("model", ""),
-                        on_token=lambda _t: _parts.append(_t),
-                        enable_tools=False,
-                    ),
-                    timeout=45,
-                )
-                _txt = "".join(_parts).strip()
-                if _txt and len(_txt) > 10:
-                    pred.analysis = _txt
-            except Exception:
-                pass
+        # ── 确定性分析文字：基于 Poisson 数字生成，不调用 LLM ────────────────
+        # 避免 gpt-oss:120b-cloud 忽略 enable_tools=False 并乱用工具
+        if not getattr(pred, "analysis", ""):
+            _h_n = getattr(pred, "home_name_cn", home)
+            _a_n = getattr(pred, "away_name_cn", away)
+            _hw  = pred.home_win
+            _dw  = pred.draw
+            _aw  = pred.away_win
+            _lh  = pred.lambda_home
+            _la  = pred.lambda_away
+            _ml  = pred.most_likely
+            # Determine favorite
+            if _hw > _aw + 0.08:
+                _tend = f"{_h_n} 胜算更大（{_hw:.0%}），为本场热门"
+            elif _aw > _hw + 0.08:
+                _tend = f"{_a_n} 胜算更大（{_aw:.0%}），为本场热门"
+            else:
+                _tend = f"双方势均力敌，{_h_n} 胜/平/负概率分别为 {_hw:.0%}/{_dw:.0%}/{_aw:.0%}"
+            # Expected goals narrative
+            _total = _lh + _la
+            if _total < 2.0:
+                _goal_desc = "预计进球偏少，防守型比赛"
+            elif _total < 3.0:
+                _goal_desc = "进球适中，攻防均衡"
+            else:
+                _goal_desc = "进球较多，进攻型对决"
+            pred.analysis = (
+                f"{_tend}。"
+                f"Poisson 模型预期进球 {_lh:.1f}–{_la:.1f}（共 {_total:.1f}），"
+                f"{_goal_desc}，最可能比分为 {_ml}。"
+            )
 
         # ── display ──────────────────────────────────────────────────────────
         from rich.columns import Columns
