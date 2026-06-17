@@ -120,31 +120,40 @@ def _try_prefetch_market_data(message: str, history: list = None) -> str:
                  "rsi","macd","bollinger","均线","走势","趋势","technical")
     _is_tech_query = any(k in msg_low for k in _tech_kw)
 
-    symbol = None
     msg_for_lookup = message.lower()  # case-insensitive company name matching
-    # 1. Known Chinese company / index name → ticker (longest match first)
+    _all_syms: list = []
+    _seen_syms: set = set()
+
+    # 1. Known Chinese company / index name → ticker (longest match first, find ALL)
     for cn, tick in sorted(_COMPANY_TO_TICKER.items(), key=lambda x: -len(x[0])):
-        if cn.lower() in msg_for_lookup:
-            symbol = tick
-            break
-    # 2. Crypto name → symbol
-    if not symbol:
-        for cn, tick in _CRYPTO_WORDS.items():
-            if cn.lower() in msg_for_lookup:
-                symbol = tick
-                break
-    # 3. Uppercase ticker pattern (blocklist prevents DCF/EPS/etc being matched)
-    if not symbol:
-        m = _re_sym.search(r'\b([A-Z]{2,5}(?:\.(?:HK|SH|SZ))?)\b', message)
-        if m and m.group(1) not in _FINANCIAL_TERMS_BLOCKLIST:
-            symbol = m.group(1)
+        if cn.lower() in msg_for_lookup and tick not in _seen_syms:
+            _all_syms.append(tick)
+            _seen_syms.add(tick)
 
-    # 4. 跟进问题：从会话历史继承最近提到的标的
-    if not symbol and history:
-        symbol = _extract_symbol_from_history(history) or None
+    # 2. Crypto names
+    for cn, tick in _CRYPTO_WORDS.items():
+        if cn.lower() in msg_for_lookup and tick not in _seen_syms:
+            _all_syms.append(tick)
+            _seen_syms.add(tick)
 
-    if not symbol:
+    # 3. Uppercase ticker patterns — collect all matches
+    for _tm in _re_sym.finditer(r'\b([A-Z]{2,5}(?:\.(?:HK|SH|SZ))?)\b', message):
+        tick = _tm.group(1)
+        if tick not in _FINANCIAL_TERMS_BLOCKLIST and tick not in _seen_syms:
+            _all_syms.append(tick)
+            _seen_syms.add(tick)
+
+    # 4. History fallback when no symbols found
+    if not _all_syms and history:
+        _hs = _extract_symbol_from_history(history)
+        if _hs:
+            _all_syms = [_hs]
+
+    if not _all_syms:
         return ""
+
+    symbol = _all_syms[0]   # primary symbol drives tech-analysis fetch
+    _extra_syms = _all_syms[1:3]  # up to 2 additional symbols
 
     if not _has_mdc_lazy():
         return (
@@ -273,6 +282,27 @@ def _try_prefetch_market_data(message: str, history: list = None) -> str:
                     )
             except Exception:
                 pass  # Technical fetch failure is non-fatal; basic quote still injected
+
+        # Fetch additional symbols detected in the same message
+        for _xs in _extra_syms:
+            try:
+                _xr = mdc.quote(_xs)
+                if _xr.get("success"):
+                    _xp   = _xr.get("price", "N/A")
+                    _xchg = _xr.get("change_pct", 0)
+                    _xn   = _xr.get("name", _xs)
+                    _xc   = _xr.get("currency", "USD")
+                    _xsign = "+" if _xchg >= 0 else ""
+                    block += (
+                        f"\n## 📊 {_xs} 实时行情（来源：{_xr.get('provider', 'API')}）\n"
+                        f"- **名称**：{_xn}\n"
+                        f"- **最新价**：{_xc} {_xp}\n"
+                        f"- **涨跌幅**：{_xsign}{_xchg:.2f}%\n"
+                        f"- **今日高/低**：{_xr.get('high', 'N/A')} / {_xr.get('low', 'N/A')}\n"
+                        f"- **成交量**：{_xr.get('volume', 'N/A')}\n"
+                    )
+            except Exception:
+                pass  # additional symbol failure is non-fatal
 
         block += f"\n*⚠️ 以上均为真实市场数据。请严格基于这些数字作答，不要修改或编造任何价格/指标数值。货币单位：{currency}。*\n"
         return block

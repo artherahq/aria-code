@@ -3246,7 +3246,8 @@ _FILE_PATH_RE = _re_fi.compile(
     r'('
     r'(?:~/|\.{1,2}/|/(?:Users|home|workspace|tmp|private/tmp|var|private/var)/)\S+'  # abs/rel paths
     r'|'
-    r'(?<!\w)[\w./-]{3,}\.(?:py|js|ts|json|yaml|yml|md|txt|csv|toml|sh|cfg|ini|env|log)(?!\w)'  # bare filenames
+    r'(?<!\w)[\w./-]{3,}\.(?:py|js|ts|json|yaml|yml|md|txt|csv|toml|sh|cfg|ini|env|log'
+    r'|docx|xlsx|pptx|pdf)(?!\w)'  # bare filenames (incl. Office docs)
     r')'
 )
 _FILE_INJECT_CAP = 8000  # total chars injected across all files in one message
@@ -3267,6 +3268,8 @@ def _try_inject_file_paths(message: str) -> str:
     seen: set = set()
     for raw in candidates[:6]:
         raw = raw.strip().rstrip("，,。.）)")
+        # Unescape shell-escaped parentheses: \( → (  \) → )
+        raw = raw.replace("\\(", "(").replace("\\)", ")")
         if not raw or raw in seen:
             continue
         seen.add(raw)
@@ -3282,7 +3285,37 @@ def _try_inject_file_paths(message: str) -> str:
         except Exception:
             continue
         try:
-            content = p.read_text(errors="replace")
+            suffix = p.suffix.lower()
+            if suffix == ".docx":
+                try:
+                    from docx import Document as _DocxDocument
+                    _doc = _DocxDocument(str(p))
+                    content = "\n".join(
+                        para.text for para in _doc.paragraphs if para.text.strip()
+                    )
+                    # Also extract tables
+                    for _tbl in _doc.tables:
+                        for _row in _tbl.rows:
+                            content += "\n" + " | ".join(
+                                c.text.strip() for c in _row.cells
+                            )
+                except ImportError:
+                    content = f"[python-docx 未安装，无法解析 .docx 文件。运行: pip install python-docx]"
+                except Exception as _de:
+                    content = f"[docx 解析失败: {_de}]"
+            elif suffix == ".pdf":
+                try:
+                    import pdfplumber as _pdfplumber
+                    with _pdfplumber.open(str(p)) as _pdf:
+                        content = "\n".join(
+                            page.extract_text() or "" for page in _pdf.pages[:20]
+                        )
+                except ImportError:
+                    content = f"[pdfplumber 未安装，无法解析 PDF。运行: pip install pdfplumber]"
+                except Exception as _pe:
+                    content = f"[PDF 解析失败: {_pe}]"
+            else:
+                content = p.read_text(errors="replace")
             remaining = _FILE_INJECT_CAP - total
             if remaining <= 0:
                 break
@@ -3946,7 +3979,6 @@ def _render_answer_block(text: str) -> None:
         print(f"\n  ⏺  {text}")
         return
     from rich.padding import Padding
-    console.print(f"\n  [#C08050]⏺[/#C08050]")
     console.print(Padding(Markdown(_strip_latex(text)), (0, 0, 0, 4)))
 
 
@@ -11012,6 +11044,14 @@ class ArtheraTerminal:
                 f"[执行计划]\n{_decomp_plan}\n\n"
                 f"[用户请求]\n{message}"
             )
+
+        # ── 本地文件注入：用户消息含文件路径时自动读取内容并注入 ──────────────
+        # 支持: .txt .md .py .js .ts .json .csv .docx .pdf .xlsx .pptx
+        # docx 使用 python-docx 提取文本；pdf 使用 pdfplumber。
+        if not _det_wants_analysis:
+            _file_ctx = _try_inject_file_paths(message)
+            if _file_ctx:
+                current_message = _file_ctx + current_message
 
         # ── ML 预测信号注入：聊天中自动检测标的并注入 5 日预测参考 ──────────
         # 仅在 LLM 路径触发（已过确定性路由），且消息含分析意图时启用。
