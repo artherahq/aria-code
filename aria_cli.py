@@ -10971,7 +10971,7 @@ class ArtheraTerminal:
             return
 
         # ── Football prediction intercept: NL chat queries → built-in Poisson handler ──
-        # Prevents LLM from writing Python scripts for predictions that already have a backend.
+        # Prevents LLM from hallucinating match data — route to the real Poisson engine.
         if not message.startswith("/"):
             _fp_pair = None
             try:
@@ -10981,11 +10981,13 @@ class ArtheraTerminal:
                 pass
             if _fp_pair and any(k in message for k in (
                 "预测", "比分", "谁赢", "胜率", "谁能赢", "谁会赢", "结果预测",
-                "比赛预测", "predict", "prediction", "score",
+                "比赛预测", "分析", "比赛", "对阵", "交手", "胜负", "几比几",
+                "进球", "能赢", "会赢", "足球", "国家队", "世界杯", "欧洲杯",
+                "predict", "prediction", "score", "match", "football", "vs",
             )):
                 _h_cn, _a_cn = _fp_pair
                 if HAS_RICH:
-                    console.print(f"\n[dim]⚽ 识别足球预测意图，调用内置 Poisson 模型…[/dim]")
+                    console.print(f"\n[dim]⚽ 识别足球对阵，调用 Poisson 引擎…[/dim]")
                 await self.commands.cmd_football(f"{_h_cn} vs {_a_cn} wc")
                 return
 

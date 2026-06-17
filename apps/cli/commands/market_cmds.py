@@ -419,33 +419,59 @@ class MarketCommandsMixin:
             try:
                 from football_data_client import predict_wc_match, _find_fifa_rating
                 raw = predict_wc_match(home, away, neutral_venue=True)
-                # Convert dict to a namespace that matches the FootballAgent pred interface
                 _h_cn = raw.get("home_name_cn", home)
                 _a_cn = raw.get("away_name_cn", away)
+                # Build strength facts for display
+                _h_rank = raw.get("home_ranking", "?")
+                _a_rank = raw.get("away_ranking", "?")
+                _h_elo  = raw.get("home_elo")
+                _a_elo  = raw.get("away_elo")
+                _h_atk  = raw.get("home_attack")
+                _a_atk  = raw.get("away_attack")
+                _h_def  = raw.get("home_defense")
+                _a_def  = raw.get("away_defense")
+                _h_form = raw.get("home_form", "")
+                _a_form = raw.get("away_form", "")
+                _cal    = raw.get("calibrated_matches", 0)
+
+                _strength_facts = [
+                    f"FIFA排名: {_h_cn} #{_h_rank} · {_a_cn} #{_a_rank}",
+                ]
+                if _h_elo and _a_elo:
+                    _strength_facts.append(f"Elo评分: {_h_cn} {_h_elo:.0f} · {_a_cn} {_a_elo:.0f}")
+                if _h_atk is not None:
+                    _atk_h = f"{_h_atk:.2f}" if isinstance(_h_atk, float) else str(_h_atk)
+                    _atk_a = f"{_a_atk:.2f}" if isinstance(_a_atk, float) else str(_a_atk)
+                    _def_h = f"{_h_def:.2f}" if isinstance(_h_def, float) else str(_h_def)
+                    _def_a = f"{_a_def:.2f}" if isinstance(_a_def, float) else str(_a_def)
+                    _strength_facts.append(f"进攻强度: {_h_cn} {_atk_h} · {_a_cn} {_atk_a}")
+                    _strength_facts.append(f"防守强度: {_h_cn} {_def_h} · {_a_cn} {_def_a}")
+                _strength_facts.append(
+                    f"数据基础: {_cal} 场已完赛 WC 数据校准" if _cal > 0
+                    else "数据基础: FIFA排名 + Poisson引擎估算"
+                )
+
                 pred = types.SimpleNamespace(
-                    home_win   = raw["home_win"],
-                    draw       = raw["draw"],
-                    away_win   = raw["away_win"],
-                    btts       = raw["btts"],
-                    lambda_home= raw["lambda_home"],
-                    lambda_away= raw["lambda_away"],
-                    most_likely= raw["top_scorelines"][0]["score"] if raw["top_scorelines"] else "1-0",
-                    top_scores = [{"score": s["score"], "prob": s["prob"]} for s in raw["top_scorelines"]],
-                    implied_odds= raw["implied_odds"],
-                    key_factors= [
-                        f"FIFA排名: {_h_cn} #{raw['home_ranking']} · {_a_cn} #{raw['away_ranking']}",
-                        f"进攻强度: {_h_cn} {raw.get('home_attack', '—')} · {_a_cn} {raw.get('away_attack', '—')}",
-                        f"防守强度: {_h_cn} {raw.get('home_defense', '—')} · {_a_cn} {raw.get('away_defense', '—')}",
-                        f"校准基础: {raw['calibrated_matches']} 场已完赛 WC 数据" if raw.get('calibrated_matches', 0) > 0
-                        else "校准基础: FIFA 排名强度估算 (WC 刚开始)",
-                    ],
-                    analysis   = "",
-                    verdict    = (
+                    home_win          = raw["home_win"],
+                    draw              = raw["draw"],
+                    away_win          = raw["away_win"],
+                    btts              = raw["btts"],
+                    lambda_home       = raw["lambda_home"],
+                    lambda_away       = raw["lambda_away"],
+                    most_likely       = raw["top_scorelines"][0]["score"] if raw["top_scorelines"] else "1-0",
+                    top_scores        = [{"score": s["score"], "prob": s["prob"]} for s in raw["top_scorelines"]],
+                    implied_odds      = raw["implied_odds"],
+                    key_factors       = _strength_facts,
+                    home_form         = _h_form,
+                    away_form         = _a_form,
+                    home_elo          = _h_elo,
+                    away_elo          = _a_elo,
+                    analysis          = "",
+                    verdict           = (
                         f"[green]预测: {_h_cn} 获胜 ({raw['home_win']:.0%})[/green]" if raw["home_win"] > raw["away_win"] + 0.05
                         else f"[green]预测: {_a_cn} 获胜 ({raw['away_win']:.0%})[/green]" if raw["away_win"] > raw["home_win"] + 0.05
                         else f"[yellow]预测: 双方势均力敌，平局概率 {raw['draw']:.0%}[/yellow]"
                     ),
-                    # Half-time fields
                     ht_lambda_home    = raw.get("ht_lambda_home", 0),
                     ht_lambda_away    = raw.get("ht_lambda_away", 0),
                     st_lambda_home    = raw.get("st_lambda_home", 0),
@@ -626,20 +652,42 @@ class MarketCommandsMixin:
             )
             console.print()
 
+        # ── 实力对比 & 近期表现 ───────────────────────────────────────────────
+        _h_name_d = getattr(pred, "home_name_cn", home)
+        _a_name_d = getattr(pred, "away_name_cn", away)
+        _hform = getattr(pred, "home_form", "")
+        _aform = getattr(pred, "away_form", "")
+
         if pred.key_factors:
-            console.print(f"  [dim]近期状态:[/dim]")
+            console.print(f"\n  [bold]实力对比[/bold]")
             for f_ in pred.key_factors:
                 console.print(f"  [dim]  • {f_}[/dim]")
+
+        # Form strings (W/D/L) from live API — only show when available
+        if _hform and _hform not in ("?????", ""):
+            def _form_colored(s: str) -> str:
+                out = []
+                for c in s.upper():
+                    if c == "W": out.append("[green]W[/green]")
+                    elif c == "D": out.append("[yellow]D[/yellow]")
+                    elif c == "L": out.append("[red]L[/red]")
+                    else: out.append(c)
+                return "".join(out)
+            console.print(f"\n  [bold]近期表现[/bold]")
+            console.print(f"  {_h_name_d}  {_form_colored(_hform)}")
+            if _aform and _aform not in ("?????", ""):
+                console.print(f"  {_a_name_d}  {_form_colored(_aform)}")
 
         if pred.analysis:
             console.print(Panel(
                 pred.analysis,
-                title="[bold]AI 分析[/bold]",
+                title="[bold]量化分析[/bold]",
                 border_style="dim",
                 padding=(0, 2),
             ))
 
-        console.print(f"\n  [bold green]{pred.verdict}[/bold green]\n")
+        console.print(f"\n  [bold green]{pred.verdict}[/bold green]")
+        console.print(f"  [dim]⚠ 基于 Poisson 概率模型，仅供参考，不构成投注建议[/dim]\n")
 
     async def cmd_screen(self, args: str):
         """股票筛选: CN → screen_ashare; US → yfinance 大盘成分筛选."""
