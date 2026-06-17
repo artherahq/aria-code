@@ -1289,7 +1289,6 @@ class WorkspaceCommandsMixin:
                         encoding="utf-8",
                     )
                 # Refresh project context so change takes effect immediately
-                global _PROJECT_CONTEXT
                 _PROJECT_CONTEXT = _load_project_context()
                 if HAS_RICH:
                     console.print(f"  [dim]✓ 已写入 ~/.arthera/ARIA.md — 下次对话自动注入[/dim]")

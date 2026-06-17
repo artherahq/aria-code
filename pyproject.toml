@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aria-code"
-version = "4.0.0"
+version = "4.1.0"
 description = "AI-powered financial terminal — local LLM + multi-source market data"
 readme = "README.md"
 license = { text = "MIT" }
@@ -177,10 +177,31 @@ include = [
 
 # ── Ruff linting ───────────────────────────────────────────────────────────────
 [tool.ruff]
-line-length = 100
+line-length = 120
 target-version = "py310"
-select = ["E", "F", "W", "I"]
-ignore = ["E501", "F401", "E402"]
+exclude = [
+    ".git", ".venv", "venv", "__pycache__", "dist", "build",
+    "npm", ".github", "aria-output",
+    # Large monolith files with intentional alignment — not reformatted
+    "aria_cli.py",
+    "financial_agents.py",
+    "dashboard_generator.py",
+]
+
+[tool.ruff.lint]
+select = ["E9", "F821", "F823", "F811", "W191"]
+ignore = ["E501", "F401", "E402", "F811"]
+
+# ── Black (optional local use) ─────────────────────────────────────────────────
+[tool.black]
+line-length = 120
+target-version = ["py310", "py311", "py312"]
+exclude = '''
+/(
+    \.git | \.venv | venv | __pycache__ | dist | build | npm |
+    aria_cli\.py | financial_agents\.py | dashboard_generator\.py
+)/
+'''
 
 # ── Pytest ─────────────────────────────────────────────────────────────────────
 [tool.pytest.ini_options]

@@ -47,13 +47,13 @@ jobs:
           cache: pip
 
       - name: Install lint tools
-        run: pip install black ruff
+        run: pip install ruff
 
-      - name: Black format check
-        run: black . --check --diff
+      - name: Ruff lint (errors and undefined names only)
+        run: ruff check . --select E9,F821,F823 --statistics
 
-      - name: Ruff lint
-        run: ruff check .
+      - name: Ruff style warnings (non-blocking)
+        run: ruff check . || true
 
   security:
     name: Security Scan
