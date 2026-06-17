@@ -2971,7 +2971,10 @@ def _web_search(params: dict) -> dict:
         import warnings as _w
         with _w.catch_warnings():
             _w.simplefilter("ignore")
-            from duckduckgo_search import DDGS
+            try:
+                from ddgs import DDGS
+            except ImportError:
+                from duckduckgo_search import DDGS
         results = []
         for item in DDGS().text(query, max_results=num):
             results.append({

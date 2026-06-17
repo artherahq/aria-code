@@ -43,6 +43,23 @@ import uuid
 import threading
 from datetime import datetime
 from typing import Optional, Dict, Any, List, Callable
+def _load_aria_env() -> None:
+    """Load ~/.aria/.env into os.environ so API keys set via /config persist across restarts."""
+    _env_file = pathlib.Path.home() / ".aria" / ".env"
+    if _env_file.exists():
+        try:
+            for _line in _env_file.read_text(encoding="utf-8").splitlines():
+                _line = _line.strip()
+                if _line and not _line.startswith("#") and "=" in _line:
+                    _k, _, _v = _line.partition("=")
+                    _k, _v = _k.strip(), _v.strip()
+                    if _k and _v:
+                        os.environ.setdefault(_k, _v)
+        except Exception:
+            pass
+
+_load_aria_env()
+
 from change_store import ChangeConflictError, GLOBAL_CHANGE_STORE
 from safety import evaluate_command_policy
 from plan_utils import parse_plan_steps
@@ -2164,6 +2181,7 @@ LOCAL_TOOLS = {
     "write_file":     (_tool_write_file,     "Create or overwrite a file"),
     "edit_file":      (_tool_edit_file,      "Edit a file (find & replace)"),
     "list_files":     (_tool_list_files,     "List files in a directory"),
+    "list_dir":       (_tool_list_files,     "List files in a directory (alias for list_files)"),
     "search_code":    (_tool_search_code,    "Search for patterns in code (grep)"),
     "run_command":    (_tool_run_command,    "Execute a shell command"),
     # ── Extended tools (Claude Code parity) ─────────────────────────────────
@@ -2266,6 +2284,21 @@ LOCAL_TOOL_SCHEMAS.extend([
         "function": {
             "name": "list_files",
             "description": "List files in a directory. Use glob patterns like '**/*.py' to filter.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Directory path (default: current dir)"},
+                    "pattern": {"type": "string", "description": "Glob pattern (default: *)"},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_dir",
+            "description": "List files in a directory (alias for list_files). Use glob patterns like '**/*.py' to filter.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -10919,6 +10952,25 @@ class ArtheraTerminal:
                 console.print(f"\n[bold]Aria[/bold]  [dim]{_label}[/dim]\n")
             await self.commands._cmd_broker_add(_btype)
             return
+
+        # ── Football prediction intercept: NL chat queries → built-in Poisson handler ──
+        # Prevents LLM from writing Python scripts for predictions that already have a backend.
+        if not message.startswith("/"):
+            _fp_pair = None
+            try:
+                from apps.cli.commands.market_cmds import _parse_nl_team_pair as _pfnl
+                _fp_pair = _pfnl(message)
+            except Exception:
+                pass
+            if _fp_pair and any(k in message for k in (
+                "预测", "比分", "谁赢", "胜率", "谁能赢", "谁会赢", "结果预测",
+                "比赛预测", "predict", "prediction", "score",
+            )):
+                _h_cn, _a_cn = _fp_pair
+                if HAS_RICH:
+                    console.print(f"\n[dim]⚽ 识别足球预测意图，调用内置 Poisson 模型…[/dim]")
+                await self.commands.cmd_football(f"{_h_cn} vs {_a_cn} wc")
+                return
 
         deterministic: dict = {"success": False}
         _det_wants_analysis = False  # set True for snapshot + analysis query → LLM follows
