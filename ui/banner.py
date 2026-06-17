@@ -254,7 +254,7 @@ def render_full_banner(
     _grid.add_row(_face, _info)
 
     from rich.panel import Panel
-    console.print(Panel(_grid, box=rich_box.ROUNDED, border_style="dim", padding=(0, 1)))
+    console.print(Panel(_grid, box=rich_box.SQUARE, border_style="dim", padding=(0, 1)))
 
 
 def render_try_hints(console, has_rich: bool, lang: str = "en") -> None:
@@ -266,9 +266,9 @@ def render_try_hints(console, has_rich: bool, lang: str = "en") -> None:
     # The point: users should feel free to just type what they want.
     if lang == "zh":
         hints = [
-            ("[#C08050]宁德时代今天怎么样?[/#C08050]",          10),
-            ("[#C08050]帮我分析一下持仓风险[/#C08050]",          10),
-            ("[#C08050]生成今日A股晨报看板[/#C08050]",           10),
+            ("[#C08050]宁德时代今天怎么样?[/#C08050]",          19),  # 9 CJK×2 + 1
+            ("[#C08050]帮我分析一下持仓风险[/#C08050]",          20),  # 10 CJK×2
+            ("[#C08050]生成今日A股晨报看板[/#C08050]",           19),  # 9 CJK×2 + "A"×1
             ("[dim]/help[/dim]",                                   5),
         ]
     else:

@@ -206,12 +206,12 @@ def _divider(cfg: PanelInputConfig) -> list:
 
 def _box_top(cfg: PanelInputConfig) -> list:
     w = shutil.get_terminal_size((80, 24)).columns
-    return [("class:box", "╭" + "─" * (w - 2) + "╮")]
+    return [("class:box", "┌" + "─" * (w - 2) + "┐")]
 
 
 def _box_bottom(cfg: PanelInputConfig) -> list:
     w = shutil.get_terminal_size((80, 24)).columns
-    return [("class:box", "╰" + "─" * (w - 2) + "╯")]
+    return [("class:box", "└" + "─" * (w - 2) + "┘")]
 
 
 def _mode_prefix(cfg: PanelInputConfig, text_getter: Callable[[], str]) -> list:
