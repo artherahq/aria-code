@@ -368,6 +368,7 @@ class TestSessionManager(unittest.TestCase):
                 "api_token": "secret-token",
                 "model": "qwen2.5:7b",
             },
+            paths={"config_dir": "/tmp/aria"},
             trace=trace,
             provider_health=[{"provider": "yfinance", "status": "ok"}],
         )
@@ -377,6 +378,7 @@ class TestSessionManager(unittest.TestCase):
         self.assertEqual(bundle["conversation_count"], 1)
         self.assertEqual(bundle["config"]["api_token"], "***")
         self.assertEqual(bundle["config"]["model"], "qwen2.5:7b")
+        self.assertEqual(bundle["paths"]["config_dir"], "/tmp/aria")
         self.assertIn("runtime_trace", bundle)
         self.assertIn("turn_results", bundle["runtime_trace"])
         self.assertEqual(bundle["provider_health"][0]["provider"], "yfinance")
@@ -394,6 +396,7 @@ class TestSessionManager(unittest.TestCase):
             conversation,
             session_id=self.test_session_id,
             config={"api_token": "secret"},
+            paths={"config_dir": "/tmp/aria"},
             trace=trace,
             provider_health=[{"provider": "yfinance", "status": "ok"}],
         )
@@ -403,6 +406,7 @@ class TestSessionManager(unittest.TestCase):
         self.assertEqual(prefix, "aria_bundle")
         self.assertEqual(bundle["schema"], "aria.session_diagnostic_bundle.v1")
         self.assertEqual(bundle["config"]["api_token"], "***")
+        self.assertEqual(bundle["paths"]["config_dir"], "/tmp/aria")
         self.assertIn("runtime_trace", bundle)
 
         sft_content, sft_ext, sft_prefix = build_session_export_payload("sft", conversation)

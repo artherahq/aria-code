@@ -6,6 +6,7 @@ import json
 from datetime import datetime
 from typing import Any, Optional, Sequence
 
+from apps.cli.config_paths import config_snapshot
 from packages.aria_core import build_session_diagnostic_bundle
 
 
@@ -22,6 +23,7 @@ def build_session_export_payload(
     *,
     session_id: str = "",
     config: Optional[dict] = None,
+    paths: Optional[dict] = None,
     trace: Any = None,
     provider_health: Optional[list] = None,
 ) -> tuple[str, str, str]:
@@ -74,10 +76,10 @@ def build_session_export_payload(
             session_id=session_id,
             conversation=conversation,
             config=config,
+            paths=paths or config_snapshot(),
             trace=trace,
             provider_health=provider_health,
         )
         return json.dumps(bundle, indent=2, ensure_ascii=False), "json", "aria_bundle"
 
     raise ValueError("Unsupported export format")
-

@@ -61,6 +61,7 @@ def build_session_diagnostic_bundle(
     session_id: str,
     conversation: list,
     config: Optional[dict] = None,
+    paths: Optional[dict] = None,
     trace: Any = None,
     provider_health: Optional[list] = None,
 ) -> Dict[str, Any]:
@@ -82,6 +83,8 @@ def build_session_diagnostic_bundle(
         "conversation_count": len(conversation),
         "config": redacted_config,
     }
+    if paths:
+        bundle["paths"] = dict(paths)
     if trace is not None:
         try:
             bundle["runtime_trace"] = trace.to_dict()
