@@ -103,6 +103,7 @@ def test_cli_catalog_exposes_watchable_direct_commands_and_visible_help():
     assert is_watchable_direct_command("backtest") is False
     assert "/packages" in VISIBLE_SLASH_COMMANDS
     assert "/positions" in VISIBLE_SLASH_COMMANDS
+    assert "/upload-image" in VISIBLE_SLASH_COMMANDS
 
 
 @pytest.mark.asyncio

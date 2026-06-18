@@ -844,14 +844,19 @@ class WorkspaceCommandsMixin:
                 print(f"✅ 创建: {target_dir}"); [print(f"  {p}") for p in created]
             # Optionally generate ARIA.md inside the new project
             try:
+                from apps.cli.project_aria import build_project_aria_md
                 _aria_tgt = target_dir / "ARIA.md"
                 if not _aria_tgt.exists():
                     _aria_tgt.write_text(
-                        f"# Memory\n\n"
-                        f"- **Project**: {_target_name}\n"
-                        f"- **Stack**: {tmpl['desc']}\n"
-                        f"- **Entry**: main.py\n"
-                        f"- **Notes**: 由 /init {_tmpl_key} 生成的脚手架项目\n",
+                        build_project_aria_md(
+                            project_name=_target_name,
+                            stack=tmpl["desc"],
+                            entry="main.py",
+                            purpose=f"由 /init {_tmpl_key} 生成的脚手架项目",
+                            notes=[
+                                "脚手架目录已经就绪，后续功能与服务应继续按模块拆分。",
+                            ],
+                        ),
                         encoding="utf-8",
                     )
             except Exception:

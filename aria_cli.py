@@ -43,6 +43,8 @@ import uuid
 import threading
 from datetime import datetime
 from typing import Optional, Dict, Any, List, Callable
+
+from apps.cli.plotly_html import plotly_script_tag
 def _load_aria_env() -> None:
     """Load ~/.aria/.env into os.environ so API keys set via /config persist across restarts."""
     _env_file = pathlib.Path.home() / ".aria" / ".env"
@@ -3608,6 +3610,7 @@ def _test_datasource(name: str) -> None:
 def _generate_stat_arb_chart(sym_a: str, sym_b: str, period: str = "2y") -> None:
     """Generate interactive z-score history chart for stat-arb pair."""
     try:
+        import pandas as _pd
         import yfinance as _yf
         import numpy as _np
         import pathlib as _pl
@@ -3636,7 +3639,7 @@ def _generate_stat_arb_chart(sym_a: str, sym_b: str, period: str = "2y") -> None
 
         html = f"""<!DOCTYPE html><html><head><meta charset="utf-8">
 <title>{sym_a}/{sym_b} Z-Score</title>
-<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+{plotly_script_tag()}
 </head><body style="background:#0d1117;color:#e6edf3;margin:0;padding:16px;font-family:monospace">
 <h2 style="color:#58a6ff">{sym_a} / {sym_b} — 配对价差 Z-Score ({period})</h2>
 <div id="chart" style="width:100%;height:500px"></div>
@@ -4858,7 +4861,8 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
             # ── UI generation (sets Bloomberg design context) ─────────────────
             "/ui":        (self.cmd_ui,       "Generate Bloomberg-style HTML: /ui <description>"),
             "/cloud":     (self.cmd_cloud,    "Aliyun config: /cloud status|set|data|token|health"),
-            "/vision":    (self.cmd_vision,   "Load image for visual analysis: /vision <path>"),
+            "/vision":    (self.cmd_vision,   "Load image for visual analysis: /vision <path|url|clipboard>"),
+            "/upload-image": (self.cmd_vision, "Upload image for visual analysis: /upload-image <path|url|clipboard>"),
             "/file":      (self.cmd_file,     "File analysis: /file load|analyze|ask|list|clear"),
             # ── Feedback ─────────────────────────────────────────────────────
             "/bug":       (self.cmd_bug,      "Report issue locally: /bug <description>"),
@@ -5020,7 +5024,8 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
         "/positions": ("Usage: /positions", ["/positions"]),
         "/orders":    ("Usage: /orders [pending|all]", ["/orders", "/orders pending"]),
         # ── Utilities ───────────────────────────────────────────────────────
-        "/vision":      ("Usage: /vision <image_path>", ["/vision ~/Desktop/chart.png", "/vision /tmp/screenshot.png"]),
+        "/vision":      ("Usage: /vision <image_path|image_url|clipboard>", ["/vision ~/Desktop/chart.png", "/vision https://example.com/chart.png", "/vision clipboard"]),
+        "/upload-image": ("Usage: /upload-image <image_path|image_url|clipboard>", ["/upload-image ~/Desktop/chart.png", "/upload-image clipboard"]),
         "/browser":     ("Usage: /browser <url>  or  /browser screenshot <url>", ["/browser https://example.com", "/browser screenshot https://github.com"]),
         "/screenshot":  ("Usage: /screenshot [monitor]", ["/screenshot", "/screenshot 1"]),
         "/memory":    ("Usage: /memory [show|add|clear|search]", ["/memory show", "/memory add 我偏好技术分析", "/memory search 风险偏好"]),
@@ -6547,6 +6552,14 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
             description = parts[0].strip()
             save_path = parts[1].strip() if len(parts) > 1 else None
 
+        from artifacts import user_generated_dir
+        from apps.cli.codegen_paths import resolve_user_code_path
+        default_save = resolve_user_code_path(
+            description,
+            None,
+            user_generated_dir=user_generated_dir(),
+        )
+
         # Build code generation prompt
         prompt = (
             f"Generate complete, production-ready Python code for: {description}\n\n"
@@ -6574,7 +6587,7 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
         self.terminal.config["model"] = original_model
 
         # Extract code from last AI response and save if requested
-        if save_path:
+        if save_path or description:
             last_response = ""
             for msg in reversed(self.terminal.conversation):
                 if msg["role"] == "assistant":
@@ -6582,11 +6595,17 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
                     break
             code = _extract_code_block(last_response)
             if code:
-                if not save_path.endswith(".py"):
-                    save_path += ".py"
-                with open(save_path, "w") as f:
-                    f.write(code)
-                _save_label = _display_path(save_path)
+                if save_path:
+                    _save_path = resolve_user_code_path(
+                        description,
+                        save_path,
+                        user_generated_dir=user_generated_dir(),
+                    )
+                else:
+                    _save_path = default_save
+                _save_path.parent.mkdir(parents=True, exist_ok=True)
+                _save_path.write_text(code, encoding="utf-8")
+                _save_label = _display_path(str(_save_path))
                 if HAS_RICH:
                     console.print(f"\n[green]Code saved to {_save_label}[/green] "
                                   f"[dim]({len(code.splitlines())} lines)[/dim]")

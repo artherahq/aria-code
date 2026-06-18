@@ -5,6 +5,33 @@ Extracted from aria_cli.py. Module globals imported lazily inside method bodies.
 from __future__ import annotations
 
 
+def format_backtest_data_error(
+    symbol: str,
+    *,
+    start_date: str,
+    end_date: str,
+    local_error: str = "",
+    bars: int = 0,
+) -> str:
+    """Return a user-facing backtest failure message."""
+    if bars and bars < 5:
+        return (
+            f"{symbol} 历史数据仅 {bars} 个交易日，不足以回测。"
+            "请换历史更长的标的或缩短策略周期。"
+        )
+    if local_error:
+        low = local_error.lower()
+        if "histor" in low or "data" in low or "empty" in low:
+            return (
+                f"{symbol} 回测失败：{local_error}。"
+                "请检查数据源是否可用、ticker 是否正确，或先运行 /doctor /health。"
+            )
+    return (
+        f"{symbol} 在 {start_date} → {end_date} 范围内没有可用历史数据。"
+        "请检查代码是否正确、标的是否已上市/未停牌，或缩短回测区间。"
+    )
+
+
 class BacktestCommandsMixin:
     """Mixin providing backtest, strategy, factor-lab, and scaffold commands."""
 
@@ -160,15 +187,23 @@ class BacktestCommandsMixin:
                 slow_period=int(_slow_period),
                 momentum_period=int(_momentum_period),
             )
+            local_error = ""
             try:
-                _out_path = pathlib.Path(_output_dir).expanduser() if _output_dir else None
+                _out_path = None
+                if _output_dir:
+                    _out_path = pathlib.Path(_output_dir).expanduser()
+                    if not _out_path.is_absolute():
+                        from artifacts import user_generated_dir
+                        _out_path = user_generated_dir() / _out_path
                 local_result = await asyncio.get_event_loop().run_in_executor(
                     None, lambda: generate_backtest_report(local_config, output_dir=_out_path)
                 )
                 if local_result and local_result.get("success"):
                     return {"success": True, "data": local_result, "_source": "local-real-data"}
-                logger.debug("local backtest failed, falling back to yfinance direct: %s", local_result.get("error") if local_result else "None")
+                local_error = local_result.get("error") if local_result else ""
+                logger.debug("local backtest failed, falling back to yfinance direct: %s", local_error or "None")
             except Exception as _e:
+                local_error = str(_e)
                 logger.debug("local backtest failed, falling back to yfinance direct: %s", _e)
 
             # ── Direct yfinance backtest — works offline, no backend needed ──
@@ -183,11 +218,21 @@ class BacktestCommandsMixin:
                     _ticker = _yf.Ticker(symbol)
                     _df = _ticker.history(start=start_date, end=end_date, auto_adjust=True)
                     if _df is None or _df.empty:
-                        return None
+                        return {"success": False, "error": format_backtest_data_error(
+                            symbol,
+                            start_date=start_date,
+                            end_date=end_date,
+                            bars=0,
+                        ), "bars": 0}
                     _close = _df["Close"].dropna()
                     _yf_bars[0] = len(_close)
                     if len(_close) < 5:
-                        return None
+                        return {"success": False, "error": format_backtest_data_error(
+                            symbol,
+                            start_date=start_date,
+                            end_date=end_date,
+                            bars=_yf_bars[0],
+                        ), "bars": _yf_bars[0]}
                     _prices = list(_close)
                     n = len(_prices)
                     # Momentum strategy: buy when N-day momentum > 0
@@ -263,6 +308,8 @@ class BacktestCommandsMixin:
                 yf_result = await asyncio.get_event_loop().run_in_executor(None, _run_yf_backtest)
                 if yf_result and yf_result.get("success"):
                     return {"success": True, "data": yf_result, "_source": "yfinance-local"}
+                if yf_result and not yf_result.get("success"):
+                    return yf_result
             except Exception as _e:
                 logger.debug("yfinance direct backtest failed: %s", _e)
 
@@ -289,11 +336,19 @@ class BacktestCommandsMixin:
             # Honest, actionable error: the dominant cause is too little history
             # (new IPO / halted / wrong ticker), not "all data sources down".
             if 0 < _yf_bars[0] < 5:
-                return {"success": False, "error": (
-                    f"{symbol} 历史数据仅 {_yf_bars[0]} 个交易日，不足以回测"
-                    f"（可能为新上市，如 SPCX 刚 IPO）。请换历史更长的标的或缩短策略周期。")}
-            return {"success": False, "error": (
-                f"{symbol} 无可用历史数据 — 请检查代码是否正确，或该标的是否已上市/未停牌。")}
+                return {"success": False, "error": format_backtest_data_error(
+                    symbol,
+                    start_date=start_date,
+                    end_date=end_date,
+                    bars=_yf_bars[0],
+                )}
+            return {"success": False, "error": format_backtest_data_error(
+                symbol,
+                start_date=start_date,
+                end_date=end_date,
+                local_error=local_error,
+                bars=_yf_bars[0],
+            )}
 
         if HAS_RICH:
             with console.status(f"[dim]{label}...[/dim]", spinner="dots"):

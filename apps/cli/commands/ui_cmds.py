@@ -2,14 +2,97 @@
 
 from __future__ import annotations
 
+import base64
+import io
+import pathlib
+from urllib.parse import urlsplit
+
 
 class UiCommandsMixin:
     """Mixin: visual input and terminal UI commands."""
 
-    def cmd_vision(self, args: str):
-        from pathlib import Path as _Path
-        import base64 as _b64
+    @staticmethod
+    def _short_url_label(url: str) -> str:
+        try:
+            from urllib.parse import urlsplit
+            parsed = urlsplit(url if url.startswith(("http://", "https://")) else f"https://{url}")
+            host = parsed.netloc or parsed.path
+            path = parsed.path.rstrip("/")
+            if len(path) > 32:
+                path = path[:29] + "..."
+            return f"{host}{path}" if path and path != "/" else host
+        except Exception:
+            return url[:48]
 
+    @staticmethod
+    def _load_image_source(path_or_url: str) -> dict:
+        """Load an image from a local path, URL, or clipboard."""
+        raw = (path_or_url or "").strip().strip("\"'")
+        if not raw:
+            raise ValueError("Missing image source")
+
+        mime_map = {
+            "png": "image/png",
+            "jpg": "image/jpeg",
+            "jpeg": "image/jpeg",
+            "gif": "image/gif",
+            "webp": "image/webp",
+        }
+
+        def _from_bytes(data: bytes, mime: str, label: str) -> dict:
+            if not data:
+                raise ValueError("Empty image data")
+            return {
+                "label": label,
+                "mime": mime,
+                "b64": base64.b64encode(data).decode(),
+                "size_kb": max(1, len(data) // 1024),
+            }
+
+        if raw.lower() in {"clipboard", "clip", "paste"}:
+            try:
+                from PIL import ImageGrab
+                img = ImageGrab.grabclipboard()
+                if img is None:
+                    raise ValueError("Clipboard does not contain an image")
+                if isinstance(img, list):
+                    for item in img:
+                        p = pathlib.Path(str(item))
+                        if p.is_file() and p.suffix.lstrip(".").lower() in mime_map:
+                            return UiCommandsMixin._load_image_source(str(p))
+                    raise ValueError("Clipboard does not contain a supported image file")
+                if hasattr(img, "save"):
+                    buf = io.BytesIO()
+                    img.save(buf, format="PNG")
+                    return _from_bytes(buf.getvalue(), "image/png", "clipboard")
+                raise ValueError("Clipboard image format not supported")
+            except Exception as exc:
+                raise ValueError(str(exc)) from exc
+
+        if raw.startswith(("http://", "https://", "www.")):
+            try:
+                import requests
+                url = raw if raw.startswith(("http://", "https://")) else f"https://{raw}"
+                resp = requests.get(url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
+                resp.raise_for_status()
+                content_type = (resp.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
+                mime = content_type if content_type.startswith("image/") else "image/png"
+                if mime == "application/octet-stream":
+                    mime = "image/png"
+                return _from_bytes(resp.content, mime, UiCommandsMixin._short_url_label(url))
+            except Exception as exc:
+                raise ValueError(f"Cannot download image: {exc}") from exc
+
+        path = pathlib.Path(raw).expanduser().resolve()
+        if not path.exists():
+            raise FileNotFoundError(f"File not found: {path}")
+        suffix = path.suffix.lstrip(".").lower()
+        mime = mime_map.get(suffix)
+        if not mime:
+            raise ValueError(f"Unsupported image type: .{suffix}")
+        return _from_bytes(path.read_bytes(), mime, path.name)
+
+    def cmd_vision(self, args: str):
         _curr_model = self.terminal.config.get("model", "")
         if _curr_model and _HAS_MODEL_CAP:
             _vcap = get_model_capability(_curr_model)
@@ -26,52 +109,31 @@ class UiCommandsMixin:
 
         path_str = args.strip().strip("\"'")
         if not path_str:
-            msg = "Usage: /vision <image_path>  (e.g. /vision ~/Desktop/chart.png)"
+            msg = "Usage: /vision <image_path|image_url|clipboard>  (e.g. /vision ~/Desktop/chart.png)"
             console.print(f"[dim]{msg}[/dim]" if HAS_RICH else msg)
             return
 
-        path = _Path(path_str).expanduser().resolve()
-        if not path.exists():
-            _print_error(f"File not found: {path}", "vision")
-            return
-
-        suffix = path.suffix.lstrip(".").lower()
-        mime_map = {
-            "png": "image/png",
-            "jpg": "image/jpeg",
-            "jpeg": "image/jpeg",
-            "gif": "image/gif",
-            "webp": "image/webp",
-        }
-        mime = mime_map.get(suffix)
-        if not mime:
-            _print_error(
-                f"Unsupported image type: .{suffix}",
-                "vision — supported: .png .jpg .jpeg .gif .webp",
-            )
-            return
-
         try:
-            data = _b64.b64encode(path.read_bytes()).decode()
-        except OSError as e:
-            _print_error(f"Cannot read image: {e}", "vision")
+            payload = self._load_image_source(path_str)
+        except Exception as e:
+            _print_error(str(e), "vision")
             return
 
         self.terminal._pending_image = {
             "type": "image_url",
-            "image_url": {"url": f"data:{mime};base64,{data}"},
+            "image_url": {"url": f"data:{payload['mime']};base64,{payload['b64']}"},
         }
-        size_kb = path.stat().st_size // 1024
+        size_kb = payload["size_kb"]
         if HAS_RICH:
             console.print(Panel(
-                f"[green]✓[/green] [dim]{path.name}[/dim]  [dim]{size_kb} KB · {mime}[/dim]\n"
+                f"[green]✓[/green] [dim]{payload['label']}[/dim]  [dim]{size_kb} KB · {payload['mime']}[/dim]\n"
                 f"[dim]Image queued — ask your question now[/dim]",
                 border_style="dim",
                 box=rich_box.ROUNDED,
                 padding=(0, 1),
             ))
         else:
-            print(f"Image loaded: {path.name} ({size_kb} KB) — send your question now")
+            print(f"Image loaded: {payload['label']} ({size_kb} KB) — send your question now")
 
     async def cmd_browser(self, args: str):
         """Open a URL in a headless browser."""
@@ -92,7 +154,7 @@ class UiCommandsMixin:
         if parts[0].lower() == "screenshot" and len(parts) > 1:
             url = parts[1].strip()
             if HAS_RICH:
-                with console.status(f"[dim]Screenshotting {url[:60]}…[/dim]", spinner="dots"):
+                with console.status(f"[dim]Screenshotting {self._short_url_label(url)}…[/dim]", spinner="dots"):
                     result = _tool_browser_screenshot({"url": url})
             else:
                 result = _tool_browser_screenshot({"url": url})
@@ -108,7 +170,7 @@ class UiCommandsMixin:
                 if HAS_RICH:
                     console.print(Panel(
                         f"[green]✓[/green]  [bold]{d.get('title','')[:60]}[/bold]\n"
-                        f"[dim]{url}  ·  {d.get('size_kb', 0)} KB[/dim]\n"
+                        f"[dim]{self._short_url_label(url)}  ·  {d.get('size_kb', 0)} KB[/dim]\n"
                         f"[dim]Screenshot queued — ask your question now[/dim]",
                         border_style="dim", box=rich_box.ROUNDED, padding=(0, 1),
                     ))
@@ -119,7 +181,7 @@ class UiCommandsMixin:
         else:
             url = parts[0].strip()
             if HAS_RICH:
-                with console.status(f"[dim]Opening {url[:60]}…[/dim]", spinner="dots"):
+                with console.status(f"[dim]Opening {self._short_url_label(url)}…[/dim]", spinner="dots"):
                     result = _tool_browser_navigate({"url": url})
             else:
                 result = _tool_browser_navigate({"url": url})
@@ -135,7 +197,7 @@ class UiCommandsMixin:
                         f"[bold]{title[:80]}[/bold]  [dim]({engine})[/dim]\n\n"
                         f"{text}\n\n[dim]Links:[/dim]\n{link_str}",
                         border_style="dim", box=rich_box.ROUNDED, padding=(0, 1),
-                        title=f"[dim]{url[:60]}[/dim]", title_align="left",
+                        title=f"[dim]{self._short_url_label(url)}[/dim]", title_align="left",
                     ))
                 else:
                     print(f"Title: {title}\n{text[:500]}")

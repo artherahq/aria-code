@@ -208,3 +208,6 @@ exclude = '''
 asyncio_mode = "auto"
 testpaths = ["tests"]
 python_files = ["test_*.py"]
+filterwarnings = [
+    "ignore:datetime\\.datetime\\.utcfromtimestamp\\(\\) is deprecated:DeprecationWarning:google\\.protobuf\\.internal\\.well_known_types",
+]

@@ -28,6 +28,7 @@ import json
 import logging
 import os
 import traceback
+from importlib.util import find_spec
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -76,11 +77,7 @@ try:
 except ImportError:
     _HAS_CCXT = False
 
-try:
-    import pandas_ta as ta
-    _HAS_TA = True
-except ImportError:
-    _HAS_TA = False
+_HAS_TA = find_spec("pandas_ta") is not None
 
 try:
     import vectorbt as vbt
@@ -134,6 +131,16 @@ def _normalise_ashare(symbol: str) -> str:
         prefix = "sh" if s.startswith("6") else "sz"
         return prefix + s
     return s
+
+
+def _get_pandas_ta():
+    if not _HAS_TA:
+        return None
+    try:
+        import pandas_ta as ta
+    except Exception:
+        return None
+    return ta
 
 
 # ---------------------------------------------------------------------------
@@ -425,9 +432,15 @@ def _calculate_factors(params: dict) -> dict:
 
     # ── RSI ────────────────────────────────────────────────────────────────
     if _HAS_TA and len(close) >= 14:
-        rsi = ta.rsi(close, length=14)
-        if rsi is not None and not rsi.empty:
-            factors["rsi_14"] = round(float(rsi.iloc[-1]), 2)
+        ta = _get_pandas_ta()
+        if ta is not None:
+            rsi = ta.rsi(close, length=14)
+            if rsi is not None and not rsi.empty:
+                factors["rsi_14"] = round(float(rsi.iloc[-1]), 2)
+            else:
+                factors["rsi_14"] = None
+        else:
+            factors["rsi_14"] = None
     else:
         # Manual RSI
         delta = close.diff()

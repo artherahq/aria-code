@@ -77,5 +77,5 @@ VISIBLE_SLASH_COMMANDS: FrozenSet[str] = frozenset({
     # UI generation
     "/ui",
     # Other
-    "/artifacts", "/vision", "/file", "/strategy", "/accuracy",
+    "/artifacts", "/vision", "/upload-image", "/file", "/strategy", "/accuracy",
 })

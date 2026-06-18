@@ -13,7 +13,7 @@ import logging
 import math
 import time
 import urllib.request
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -133,7 +133,7 @@ class FinnhubSource(BaseDataSource):
             if not c:
                 return None
             df = pd.DataFrame({
-                "日期":  [datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d") for ts in t],
+                "日期":  [datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d") for ts in t],
                 "开盘":  o, "最高": h, "最低": l, "收盘": c, "成交量": v,
             })
             df.index = pd.to_datetime(df["日期"])

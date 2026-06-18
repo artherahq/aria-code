@@ -32,7 +32,7 @@ import logging
 import os
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -290,7 +290,7 @@ class MarketDataClient:
                 return {"success": False, "error": "no candle data", "symbol": symbol}
             records = [
                 {
-                    "date":   datetime.utcfromtimestamp(t).strftime("%Y-%m-%d"),
+                    "date":   datetime.fromtimestamp(t, tz=timezone.utc).strftime("%Y-%m-%d"),
                     "open":   round(float(o), 4),
                     "high":   round(float(h), 4),
                     "low":    round(float(l), 4),
@@ -1206,7 +1206,7 @@ class MarketDataClient:
             ex = ccxt.binance({"enableRateLimit": True,
                                "proxies": {"http": "", "https": ""}})
             ohlcv = ex.fetch_ohlcv(sym, timeframe=tf, limit=limit)
-            records = [{"date":   datetime.utcfromtimestamp(c[0]/1000).strftime("%Y-%m-%d"),
+            records = [{"date":   datetime.fromtimestamp(c[0] / 1000, tz=timezone.utc).strftime("%Y-%m-%d"),
                         "open":   c[1], "high": c[2], "low": c[3],
                         "close":  c[4], "volume": c[5]}
                        for c in ohlcv]

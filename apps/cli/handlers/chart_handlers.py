@@ -7,6 +7,8 @@ import time
 from datetime import datetime
 from typing import Callable
 
+from apps.cli.plotly_html import plotly_script_tag
+
 
 def _normalise_history_frame(hist):
     """Return a clean OHLCV frame with title-case columns, or None."""
@@ -265,8 +267,23 @@ def handle_stock_chart_analysis_direct(symbol: str, period: str = "1y") -> dict:
 
     # ── 序列化 ──────────────────────────────────────────────────────────────────
     def _ser(col):
-        return json.dumps([None if (v is None or (isinstance(v, float) and math.isnan(v)))
-                           else round(float(v), 4) for v in hist[col]])
+        values = []
+        for v in hist[col]:
+            try:
+                if v is None:
+                    values.append(None)
+                    continue
+                if hasattr(v, "__class__") and str(v) in {"<NA>", "NaT"}:
+                    values.append(None)
+                    continue
+                fv = float(v)
+                if math.isnan(fv):
+                    values.append(None)
+                else:
+                    values.append(round(fv, 4))
+            except Exception:
+                values.append(None)
+        return json.dumps(values)
 
     def _ser_int(col):
         if col not in hist.columns:
@@ -359,7 +376,7 @@ def handle_stock_chart_analysis_direct(symbol: str, period: str = "1y") -> dict:
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{_html.escape(name)} ({_html.escape(symbol)}) 分析图表</title>
-<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+{plotly_script_tag()}
 <style>
   *{{box-sizing:border-box}}
   body{{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f0f2f5;color:#17202a}}
@@ -656,7 +673,7 @@ def handle_stock_chart_analysis(
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{_html.escape(symbol)} 股票分析图表</title>
-  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+  {plotly_script_tag()}
   <style>
     body {{ margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f7f8fa; color: #17202a; }}
     main {{ max-width: 1180px; margin: 0 auto; padding: 28px; }}
