@@ -7,22 +7,14 @@ import json
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
-
-
-def _resolve_config_dir() -> Path:
-    if "ARIA_HOME" in os.environ:
-        return Path(os.environ["ARIA_HOME"]).expanduser()
-    legacy = Path.home() / ".arthera"
-    if legacy.exists():
-        return legacy
-    return Path.home() / ".aria-code"
+from apps.cli.config_paths import resolve_config_dir
 
 
 class SessionManager:
     """Manage chat sessions with local file persistence."""
 
     def __init__(self, sessions_dir: Optional[Path] = None):
-        self.root = sessions_dir or (_resolve_config_dir() / "sessions")
+        self.root = sessions_dir or (resolve_config_dir() / "sessions")
         self.root.mkdir(parents=True, exist_ok=True)
 
     def _path(self, session_id: str) -> Path:

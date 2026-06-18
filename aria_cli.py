@@ -45,6 +45,7 @@ from datetime import datetime
 from typing import Optional, Dict, Any, List, Callable
 
 from apps.cli.plotly_html import plotly_script_tag
+from apps.cli.config_paths import resolve_paths
 def _load_aria_env() -> None:
     """Load ~/.aria/.env into os.environ so API keys set via /config persist across restarts."""
     _env_file = pathlib.Path.home() / ".aria" / ".env"
@@ -320,27 +321,12 @@ from ui.picker import arrow_select as _arrow_select, run_picker_in_thread as _ru
 # ============================================================================
 # Configuration & Persistent Memory
 # ============================================================================
-
-def _resolve_config_dir() -> pathlib.Path:
-    """Resolve the user config directory.
-
-    Priority:
-      1. ARIA_HOME environment variable (explicit override)
-      2. ~/.arthera  — legacy path, kept for backward compat if it exists
-      3. ~/.aria-code — new default for fresh installs
-    """
-    if "ARIA_HOME" in os.environ:
-        return pathlib.Path(os.environ["ARIA_HOME"]).expanduser()
-    legacy = pathlib.Path.home() / ".arthera"
-    if legacy.exists():
-        return legacy
-    return pathlib.Path.home() / ".aria-code"
-
-CONFIG_DIR = _resolve_config_dir()
-CONFIG_FILE = CONFIG_DIR / "config.json"
-HISTORY_FILE = CONFIG_DIR / "history"
-SESSIONS_DIR = CONFIG_DIR / "sessions"
-PROVIDERS_FILE = CONFIG_DIR / "providers.json"  # Cloud API keys (Open Interpreter style)
+_PATHS = resolve_paths()
+CONFIG_DIR = _PATHS.config_dir
+CONFIG_FILE = _PATHS.config_file
+HISTORY_FILE = _PATHS.history_file
+SESSIONS_DIR = _PATHS.sessions_dir
+PROVIDERS_FILE = _PATHS.providers_file  # Cloud API keys (Open Interpreter style)
 
 # ── Cloud Provider key map ───────────────────────────────────────────────────
 # Maps provider short name → environment variable name for API key.

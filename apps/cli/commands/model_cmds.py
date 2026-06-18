@@ -1110,6 +1110,7 @@ class ModelCommandsMixin:
 
     def cmd_config(self, args: str):
         """Show or set CLI configuration."""
+        from apps.cli.config_paths import config_snapshot
         parts = args.strip().split(maxsplit=1)
         if not parts or parts[0] == "show":
             # Show current config
@@ -1118,16 +1119,22 @@ class ModelCommandsMixin:
                 console.print()
                 console.print("[bold]Configuration[/bold]")
                 console.print()
+                snap = config_snapshot()
                 for key in ("api_url", "ollama_url", "model", "thinking_mode",
                             "command_policy", "permission_mode", "network_enabled",
                             "write_policy", "input_style", "input_theme",
                             "auto_save_sessions"):
                     val = cfg.get(key, "-")
                     console.print(f"  [dim]{key:<24s}[/dim]{val}")
-                # Show notification/search config from ~/.arthera/config.json
+                console.print(f"  [dim]{'config_dir':<24s}[/dim]{snap['config_dir']}")
+                console.print(f"  [dim]{'config_file':<24s}[/dim]{snap['config_file']}")
+                console.print(f"  [dim]{'sessions_dir':<24s}[/dim]{snap['sessions_dir']}")
+                console.print(f"  [dim]{'user_output_root':<24s}[/dim]{snap['user_output_root']}")
+                # Show notification/search config from resolved config.json
                 try:
                     import json as _j
-                    _ncfg = _j.loads((Path.home() / ".arthera" / "config.json").read_text())
+                    _ncfg_path = Path(snap["config_file"])
+                    _ncfg = _j.loads(_ncfg_path.read_text()) if _ncfg_path.exists() else {}
                     if _wh := _ncfg.get("notify_webhook"):
                         console.print(f"  [dim]{'notify_webhook':<24s}[/dim]{_wh[:50]}{'…' if len(_wh)>50 else ''}")
                 except Exception:
@@ -1138,7 +1145,7 @@ class ModelCommandsMixin:
                 else:
                     console.print(f"  [dim]{'brave_key':<24s}[/dim][dim]未设置 — /config set brave_key=BSAAxxx[/dim]")
                 # Security check: warn if providers.json has plaintext api_key
-                _pf = Path.home() / ".arthera" / "providers.json"
+                _pf = Path(snap["providers_file"])
                 if _pf.exists():
                     try:
                         _pd = _j.loads(_pf.read_text())
@@ -1313,7 +1320,7 @@ class ModelCommandsMixin:
         elif parts[0] == "reload":
             fresh = load_config()
             self.terminal.config.update(fresh)
-            msg = "Config reloaded from ~/.arthera/config.json"
+            msg = f"Config reloaded from {config_snapshot()['config_file']}"
             console.print(f"[dim]{msg}[/dim]" if HAS_RICH else msg)
         else:
             console.print("[dim]Usage: /config [show] | /config set key=value | /config reload[/dim]" if HAS_RICH

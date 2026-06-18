@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from apps.cli.config_paths import resolve_config_dir
+
 if TYPE_CHECKING:
     from rich.console import Console
 
@@ -28,8 +30,8 @@ class ToolContext:
     has_rich: bool = True
     write_policy: list[str] = field(default_factory=lambda: ["desktop_only"])
     change_store: Any = None   # GLOBAL_CHANGE_STORE
-    config_dir: Path = field(default_factory=lambda: Path.home() / ".arthera")
-    sessions_dir: Path = field(default_factory=lambda: Path.home() / ".arthera" / "sessions")
+    config_dir: Path = field(default_factory=resolve_config_dir)
+    sessions_dir: Path = field(default_factory=lambda: resolve_config_dir() / "sessions")
 
     # ── helpers ──────────────────────────────────────────────────────
     def print(self, *args, **kwargs) -> None:

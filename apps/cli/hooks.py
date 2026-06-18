@@ -36,9 +36,11 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
+from apps.cli.config_paths import resolve_config_dir
+
 logger = logging.getLogger(__name__)
 
-_CONFIG_DIR = Path.home() / ".arthera"
+_CONFIG_DIR = resolve_config_dir()
 _GLOBAL_HOOKS_FILE = _CONFIG_DIR / "hooks.json"
 _LOCAL_HOOKS_FILE = Path.cwd() / ".aria" / "hooks.json"
 
