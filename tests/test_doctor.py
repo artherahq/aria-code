@@ -1,6 +1,6 @@
 import tomllib
 
-from doctor import format_doctor_plain, provider_health_checks, run_doctor
+from doctor import format_doctor_plain, provider_health_checks, provider_health_summary, run_doctor
 
 
 def test_run_doctor_reports_core_checks(monkeypatch, tmp_path):
@@ -68,6 +68,21 @@ def test_provider_health_checks_warn_without_calls():
     assert checks[0].name == "data_provider_health"
     assert checks[0].status == "warn"
     assert "no provider calls" in checks[0].detail
+
+
+def test_provider_health_summary_compacts_state():
+    summary = provider_health_summary([
+        {"provider": "yfinance", "status": "ok", "cooldown_active": False, "last_success_at": 100.0},
+        {"provider": "finnhub", "status": "rate_limited", "cooldown_active": True, "cooldown_remaining_seconds": 42, "last_error_category": "rate_limited"},
+        {"provider": "akshare", "status": "auth", "cooldown_active": False, "last_error_category": "auth"},
+    ])
+
+    assert summary.name == "provider_health_summary"
+    assert summary.status == "err"
+    assert "3 providers" in summary.detail
+    assert "1 ok" in summary.detail
+    assert "1 cooldown" in summary.detail
+    assert "Fix API keys first" in summary.suggestion
 
 
 def test_pyproject_includes_top_level_modules():

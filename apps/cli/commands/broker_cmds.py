@@ -630,9 +630,10 @@ class BrokerCommandsMixin:
 
                 if HAS_RICH:
                     from rich.syntax import Syntax
+                    from ui.render.output import display_path as _display_path
                     console.print()
                     console.print(Panel(
-                        f"[bold]已在编辑器中打开:[/bold] {path}\n\n"
+                        f"[bold]已在编辑器中打开:[/bold] {_display_path(path, fallback='config')}\n\n"
                         f"[dim]文件已预填所有券商模板。\n"
                         f"删除不需要的券商块，填写你的实际凭证后保存。[/dim]\n\n"
                         f"[dim]保存后回到此终端，运行:[/dim]\n"

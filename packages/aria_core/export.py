@@ -56,6 +56,42 @@ def build_package_manifest(
     }
 
 
+def build_session_diagnostic_bundle(
+    *,
+    session_id: str,
+    conversation: list,
+    config: Optional[dict] = None,
+    trace: Any = None,
+    provider_health: Optional[list] = None,
+) -> Dict[str, Any]:
+    """Build a stable export bundle for debugging and replay."""
+    config = dict(config or {})
+    redacted_config: Dict[str, Any] = {}
+    for key, value in config.items():
+        if any(token in key.lower() for token in ("key", "token", "secret", "password")):
+            if value:
+                redacted_config[key] = "***"
+        else:
+            redacted_config[key] = value
+
+    bundle: Dict[str, Any] = {
+        "schema": "aria.session_diagnostic_bundle.v1",
+        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+        "session_id": session_id,
+        "conversation": list(conversation),
+        "conversation_count": len(conversation),
+        "config": redacted_config,
+    }
+    if trace is not None:
+        try:
+            bundle["runtime_trace"] = trace.to_dict()
+        except Exception:
+            bundle["runtime_trace"] = {}
+    if provider_health is not None:
+        bundle["provider_health"] = list(provider_health)
+    return bundle
+
+
 def write_package_manifest(path: Path, manifest: Dict[str, Any]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2, default=str), encoding="utf-8")

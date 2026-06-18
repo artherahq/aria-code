@@ -27,6 +27,8 @@ class ProviderState:
     last_error: str = ""
     failures: int = 0
     cooldown_until: float = 0.0
+    last_seen_at: float = 0.0
+    last_success_at: float = 0.0
 
     def to_dict(self) -> Dict[str, Any]:
         data = asdict(self)
@@ -68,17 +70,22 @@ class ProviderHealthRegistry:
         state.last_error = ""
         state.failures = 0
         state.cooldown_until = 0.0
+        now = time.time()
+        state.last_seen_at = now
+        state.last_success_at = now
 
     def mark_issue(self, issue: ProviderIssue) -> None:
         if not issue.provider:
             return
         state = self._states.setdefault(issue.provider, ProviderState(provider=issue.provider))
+        now = time.time()
         state.status = issue.category
         state.last_error_category = issue.category
         state.last_error = issue.message
         state.failures += 1
+        state.last_seen_at = now
         if issue.cooldown_seconds:
-            state.cooldown_until = max(state.cooldown_until, time.time() + issue.cooldown_seconds)
+            state.cooldown_until = max(state.cooldown_until, now + issue.cooldown_seconds)
 
     def provider_in_cooldown(self, provider: str) -> bool:
         state = self._states.get(provider)

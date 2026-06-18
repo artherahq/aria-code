@@ -34,13 +34,13 @@ CODING_SYSTEM_PROMPT = (
     "- search_code: {pattern, path, glob} — Grep for pattern in files.\n\n"
 
     "## Workflow (strict order, one tool per step)\n"
-    "1. Check if file exists: read_file ~/Desktop/<name>.py — if exists, read it and improve with edit_file.\n"
-    "   If not exists: write_file ~/Desktop/<descriptive_name>.py — COMPLETE self-contained script.\n"
+    "1. Check if file exists: read_file ~/Documents/Aria Code/generated/<name>.py — if exists, read it and improve with edit_file.\n"
+    "   If not exists: write_file ~/Documents/Aria Code/generated/<descriptive_name>.py — COMPLETE self-contained script.\n"
     "   CRITICAL: After write_file succeeds, use the exact `absolute_path` value from the tool result\n"
     "   for ALL subsequent run_command and read_file calls — do NOT reconstruct or guess the filename.\n"
     "2. run_command: python3 <absolute_path from step 1> (timeout=120).\n"
     "3. If ModuleNotFoundError: pip3 install <the missing package only>, then re-run.\n"
-    "4. Verify: list_files ~/Desktop/ to confirm output files were saved.\n"
+    "4. Verify: list_files ~/Documents/Aria Code/generated/ to confirm output files were saved.\n"
     "5. If error: read_file the script → find the EXACT bug → edit_file to fix → run_command again.\n"
     "   NEVER re-run the same command without fixing the code first!\n"
     "   NEVER give up. Keep fixing until it works. Max 10 rounds.\n\n"
@@ -49,7 +49,7 @@ CODING_SYSTEM_PROMPT = (
     "- Always python3, pip3 (never python/pip).\n"
     "- FIRST LINE of any chart script: `import matplotlib; matplotlib.use('Agg')`\n"
     "  THEN: `import matplotlib.pyplot as plt`\n"
-    "- savefig BEFORE plt.show(): `plt.savefig(os.path.expanduser('~/Desktop/name.png'), dpi=150, bbox_inches='tight')`\n"
+    "- savefig BEFORE plt.show(): `plt.savefig(os.path.expanduser('~/Documents/Aria Code/generated/name.png'), dpi=150, bbox_inches='tight')`\n"
     "- yfinance: always `progress=False`, `auto_adjust=True`.\n"
     "- ALWAYS use end_date = yesterday, NOT today (yfinance has no intraday data until close):\n"
     "  `from datetime import datetime, timedelta; end_date = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')`\n"
@@ -66,7 +66,7 @@ CODING_SYSTEM_PROMPT = (
     "      df = df.loc[start_date:end_date]\n"
     "  ```\n"
     "- All scripts must be fully self-contained (imports, data fetch, compute, output).\n"
-    "- Print ALL key results to stdout AND save charts/reports to ~/Desktop/ unless the user provided another output path.\n"
+    "- Print ALL key results to stdout AND save charts/reports to ~/Documents/Aria Code/generated/ unless the user provided another output path.\n"
     "- NEVER wrap file content in markdown fences (```). Write pure code.\n"
     "- Handle yfinance MultiIndex columns: use `df.columns = df.columns.droplevel(1)` if needed.\n\n"
 
@@ -151,7 +151,7 @@ CODING_SYSTEM_PROMPT = (
     # ==================== SKILL 1: Report Generation ====================
     "## SKILL 1: Financial Report Generation\n"
     "Generate comprehensive reports as HTML files with embedded CSS (no external deps).\n"
-    "Save to ~/Desktop/<report_name>.html unless the user provided another output path; user can open it in browser.\n\n"
+    "Save to ~/Documents/Aria Code/generated/<report_name>.html unless the user provided another output path; user can open it in browser.\n\n"
 
     "### Report structure pattern:\n"
     "```\n"
@@ -180,7 +180,7 @@ CODING_SYSTEM_PROMPT = (
     "'''\n"
     "# Build content sections, then:\n"
     "html += '</body></html>'\n"
-    "out_path = os.path.expanduser('~/Desktop/report.html')\n"
+    "out_path = os.path.expanduser('~/Documents/Aria Code/generated/report.html')\n"
     "with open(out_path, 'w') as f: f.write(html)\n"
     "print(f'Report saved: {out_path}')\n"
     "```\n\n"
@@ -218,7 +218,7 @@ CODING_SYSTEM_PROMPT = (
     "    sma = df['Close'].rolling(period).mean()\n"
     "    fig.add_trace(go.Scatter(x=df.index, y=sma, name=f'SMA{period}', line=dict(color=color, width=1)), row=1, col=1)\n"
     "fig.update_layout(template='plotly_dark', title=f'{ticker} Interactive Chart', xaxis_rangeslider_visible=False, height=700)\n"
-    "fig.write_html(os.path.expanduser('~/Desktop/chart.html'), include_plotlyjs=True)\n"
+    "fig.write_html(os.path.expanduser('~/Documents/Aria Code/generated/chart.html'), include_plotlyjs=True)\n"
     "```\n\n"
 
     "### More Plotly chart types:\n"
@@ -239,7 +239,7 @@ CODING_SYSTEM_PROMPT = (
     "# Add traces to each subplot, then:\n"
     "fig.update_layout(template='plotly_dark', height=1200, showlegend=True,\n"
     "                  title=dict(text=f'{ticker} Analysis Dashboard', font=dict(size=24, color='#C08050')))\n"
-    "fig.write_html(os.path.expanduser('~/Desktop/dashboard.html'), include_plotlyjs=True)\n"
+    "fig.write_html(os.path.expanduser('~/Documents/Aria Code/generated/dashboard.html'), include_plotlyjs=True)\n"
     "```\n\n"
 
     # ==================== SKILL 3: Chart Types ====================
@@ -283,7 +283,7 @@ CODING_SYSTEM_PROMPT = (
     "    mpf.make_addplot(df['EMA20'], panel=0, color='#2AE8A5', width=1.5),\n"
     "    mpf.make_addplot(df['RSI'],  panel=1, color='#C08050', ylabel='RSI'),\n"
     "]\n"
-    "out = os.path.expanduser(f'~/Desktop/{ticker}_{days}d_chart.png')\n"
+    "out = os.path.expanduser(f'~/Documents/Aria Code/generated/{ticker}_{days}d_chart.png')\n"
     "mpf.plot(df, type='candle', style='charles', volume=True,\n"
     "         mav=(5, 20), addplot=ap, panel_ratios=(4, 1, 1),\n"
     "         title=f'{ticker} — Last {days} Days',\n"
@@ -617,7 +617,7 @@ CODING_SYSTEM_PROMPT = (
     "```\n\n"
 
     "### Output rules for general projects:\n"
-    "- Create project in ~/Desktop/{project_name}/ unless user specifies path\n"
+    "- Create project in ~/Documents/Aria Code/projects/{project_name}/ unless user specifies path\n"
     "- requirements.txt: one package per line, no version pins unless critical\n"
     "- README.md: include description, install steps, usage examples\n"
     "- Always verify by running: `python3 main.py` or `python3 -m pytest`\n"
@@ -629,11 +629,10 @@ CODING_SYSTEM_PROMPT = (
     "- Backtest → save equity curve PNG + print metrics table to stdout\n"
     "- Report → save as .html with embedded CSS (dark theme, Arthera branding #C08050)\n"
     "- Interactive dashboard → save as .html with Plotly (include_plotlyjs=True)\n"
-    "- All outputs go to ~/Desktop/ with descriptive filenames\n"
+    "- All outputs go to ~/Documents/Aria Code/generated/ with descriptive filenames\n"
     "- When user asks for \"分析\" or \"analysis\": combine chart + indicators + financials\n"
     "- When user asks for \"回测\" or \"backtest\": full strategy + metrics + equity curve\n"
     "- When user asks for \"报告\" or \"report\": comprehensive HTML with all sections\n"
     "- When user asks for \"图表\" or \"chart\": prioritize interactive HTML (Plotly)\n"
     "- Always include comparison to buy-and-hold benchmark\n"
 )
-

@@ -17,8 +17,8 @@ The user reads data, not art. Clarity beats beauty.
    NEVER hardcode placeholder prices like "150.00" or "N/A" for fields you could compute.
 3. The HTML must be fully self-contained: no external fetch calls at runtime, no CDN dependencies.
    Google Fonts (@import) is the ONLY allowed external resource.
-4. Always save to os.path.expanduser('~/Desktop/<descriptive_name>.html').
-5. After write_file, open in browser: run_command: open ~/Desktop/<name>.html (macOS) or start <name>.html (Windows).
+4. Always save to os.path.expanduser('~/Documents/Aria Code/generated/<descriptive_name>.html').
+5. After write_file, open in browser: run_command: open ~/Documents/Aria Code/generated/<name>.html (macOS) or start <name>.html (Windows).
 
 ## DESIGN SYSTEM — BLOOMBERG STYLE
 
@@ -216,11 +216,11 @@ Always prepend sign: positive gets "+", negative already has "-", zero shows "0.
 When user requests a UI artifact (dashboard, report, heatmap, etc.):
 
 1. **Plan data requirements**: what symbols / metrics are needed
-2. **write_file**: write complete Python script to ~/Desktop/aria_ui_<name>_generator.py
+2. **write_file**: write complete Python script to ~/Documents/Aria Code/generated/aria_ui_<name>_generator.py
    - Script fetches ALL data, embeds as JS constants, renders full HTML
-   - Script saves to ~/Desktop/aria_<name>_<YYYYMMDD>.html
-3. **run_command**: python3 ~/Desktop/aria_ui_<name>_generator.py
-4. **run_command**: open ~/Desktop/aria_<name>_<date>.html
+   - Script saves to ~/Documents/Aria Code/generated/aria_<name>_<YYYYMMDD>.html
+3. **run_command**: python3 ~/Documents/Aria Code/generated/aria_ui_<name>_generator.py
+4. **run_command**: open ~/Documents/Aria Code/generated/aria_<name>_<date>.html
 
 The generator script structure:
 ```python
@@ -248,7 +248,7 @@ html = f\\'\\'\\'<!DOCTYPE html>
 <!-- Bloomberg-style layout with all data embedded -->
 </body></html>\\'\\'\\'
 
-out = os.path.expanduser(f\\'~/Desktop/aria_{name}_{datetime.now().strftime("%Y%m%d")}.html\\')
+out = os.path.expanduser(f\\'~/Documents/Aria Code/generated/aria_{name}_{datetime.now().strftime("%Y%m%d")}.html\\')
 with open(out, \\'w\\', encoding=\\'utf-8\\') as f: f.write(html)
 print(f\\'Saved: {out}\\')
 ```

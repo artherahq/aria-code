@@ -89,6 +89,81 @@ def test_tool_error_summary_hides_curl_details():
     assert "curl" not in summary.lower()
 
 
+def test_run_command_activity_summary_uses_exit_code_field():
+    from ui.render.output import _one_line_tool_summary
+
+    icon, detail = _one_line_tool_summary(
+        "run_command",
+        {"success": True, "data": {"exit_code": 2}},
+        0.0,
+        {},
+    )
+
+    assert "red" in icon
+    assert "exit 2" in detail
+
+
+def test_activity_summary_hides_local_file_paths():
+    from ui.render.output import _one_line_tool_summary
+
+    _icon, detail = _one_line_tool_summary(
+        "write_file",
+        {"success": True, "data": {"path": "/Users/mac/Desktop/aria-code/secret.py", "lines": 12, "size_bytes": 48}},
+        0.0,
+        {"path": "/Users/mac/Desktop/aria-code/secret.py", "content": "x\n"},
+    )
+
+    assert "file tool" in detail
+    assert "12 lines" in detail
+    assert "/Users" not in detail
+    assert "secret.py" not in detail
+
+
+def test_activity_summary_hides_web_fetch_url():
+    from ui.render.output import _one_line_tool_summary
+
+    _icon, detail = _one_line_tool_summary(
+        "web_fetch",
+        {"success": True, "data": {"url": "https://example.com/private/report", "length": 1234}},
+        0.0,
+        {"url": "https://example.com/private/report"},
+    )
+
+    assert "web fetch" in detail
+    assert "1,234c" in detail
+    assert "example.com" not in detail
+    assert "/private/report" not in detail
+
+
+def test_activity_summary_hides_full_output_path():
+    from ui.render.output import _one_line_tool_summary
+
+    _icon, detail = _one_line_tool_summary(
+        "run_command",
+        {"success": True, "data": {"exit_code": 0, "full_output_path": "/Users/mac/.aria/artifacts/command-output.txt"}},
+        0.0,
+        {},
+    )
+
+    assert "full output saved" in detail
+    assert "/Users" not in detail
+    assert "command-output.txt" not in detail
+
+
+def test_tool_display_label_marks_mcp_without_target_details():
+    from ui.render.output import tool_display_label
+
+    assert tool_display_label("mcp__github__read_file") == "github · read file · MCP"
+    assert tool_display_label("web_search") == "web_search · web search"
+
+
+def test_display_path_returns_filename_only():
+    from ui.render.output import display_path
+
+    assert display_path("/Users/mac/Desktop/aria-code/report.html") == "report.html"
+    assert display_path("", fallback="artifact") == "artifact"
+
+
 def test_report_markdown_prompt_omits_na_placeholders(monkeypatch, tmp_path):
     import aria_cli
     import packages.aria_services.data as service_data

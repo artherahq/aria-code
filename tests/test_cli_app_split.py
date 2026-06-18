@@ -105,6 +105,27 @@ def test_cli_catalog_exposes_watchable_direct_commands_and_visible_help():
     assert "/positions" in VISIBLE_SLASH_COMMANDS
 
 
+@pytest.mark.asyncio
+async def test_football_nl_query_uses_parser_after_mixin_rebind(monkeypatch):
+    import aria_cli
+
+    calls = []
+
+    class FakeTerminal:
+        pass
+
+    commands = aria_cli.SlashCommands(FakeTerminal())
+
+    async def fake_predict(home, away, league):
+        calls.append((home, away, league))
+
+    monkeypatch.setattr(commands, "_football_predict", fake_predict)
+
+    await commands.cmd_football("葡萄牙和波兰的比赛比分预测")
+
+    assert calls == [("葡萄牙", "波兰", "wc")]
+
+
 def test_console_script_points_to_apps_cli_entrypoint():
     with open("pyproject.toml", "rb") as handle:
         data = tomllib.load(handle)

@@ -7,6 +7,7 @@ _HAS_MDC and _get_mdc are resolved via lazy import to avoid circular deps.
 from __future__ import annotations
 import json
 import os
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -72,6 +73,13 @@ def _get_provider_key(provider: str) -> str:
 
 # Lazy MDC accessor (mirrors the pattern in market_tools.py)
 def _get_mdc_lazy():
+    aria_cli = sys.modules.get("aria_cli")
+    injected = getattr(aria_cli, "_get_mdc", None) if aria_cli else None
+    if callable(injected):
+        try:
+            return injected()
+        except Exception:
+            pass
     try:
         from market_data_client import get_mdc as _gm
         return _gm()
@@ -79,6 +87,9 @@ def _get_mdc_lazy():
         return None
 
 def _has_mdc_lazy() -> bool:
+    aria_cli = sys.modules.get("aria_cli")
+    if aria_cli is not None and hasattr(aria_cli, "_HAS_MDC"):
+        return bool(getattr(aria_cli, "_HAS_MDC"))
     try:
         import market_data_client  # noqa
         return True
@@ -679,6 +690,12 @@ def _try_handle_market_snapshot_analysis(message: str, history: list = None) -> 
                 if _quote_result.provider_chain:
                     quote.setdefault("provider_chain", _quote_result.provider_chain)
                 quote.setdefault("success", bool(_quote_result.success))
+                if not quote.get("success"):
+                    raw_quote = mdc.quote(symbol)
+                    if raw_quote:
+                        quote = raw_quote if isinstance(raw_quote, dict) else (
+                            raw_quote.to_dict() if hasattr(raw_quote, "to_dict") else vars(raw_quote)
+                        )
             except Exception:
                 quote = mdc.quote(symbol)
             if quote.get("success"):
@@ -1393,4 +1410,3 @@ def _try_handle_market_snapshot_analysis(message: str, history: list = None) -> 
         lines.append(f"- `/backtest momentum {symbol} --period 1y` — {_L['backtest_desc']}")
 
     return {"success": True, "response": "\n".join(lines), "tools_used": ["market_snapshot"]}
-

@@ -15,7 +15,7 @@ Public surface
 from __future__ import annotations
 
 import difflib
-import json
+import pathlib
 import re
 import time
 
@@ -32,6 +32,50 @@ FINANCE_TOOL_NAMES: frozenset = frozenset({
     "get_market_insights", "get_predictions",
     "broker_query", "broker_order",
 })
+
+
+# ── Tool display helpers ──────────────────────────────────────────────────────
+
+def tool_display_kind(tool_name: str) -> str:
+    """Return a user-facing service/tool kind without exposing local targets."""
+    if tool_name.startswith("mcp__"):
+        return "MCP"
+    if tool_name in FINANCE_TOOL_NAMES:
+        return "finance tool"
+    if tool_name in {"web_search", "search_web"}:
+        return "web search"
+    if tool_name == "web_fetch":
+        return "web fetch"
+    if tool_name in {"read_file", "write_file", "edit_file", "list_files", "search_code"}:
+        return "file tool"
+    if tool_name == "run_command":
+        return "shell tool"
+    if tool_name.startswith("skill") or tool_name in {"TaskCreate", "TaskUpdate"}:
+        return "skill"
+    if tool_name.startswith("broker_") or tool_name in {"broker_query", "broker_order"}:
+        return "broker tool"
+    return "tool"
+
+
+def tool_display_label(tool_name: str) -> str:
+    """Short label for activity UI: tool name plus its service kind."""
+    if tool_name.startswith("mcp__"):
+        parts = tool_name.split("__")
+        if len(parts) >= 3:
+            return f"{parts[1]} · {parts[2].replace('_', ' ')} · MCP"
+        return "MCP"
+    return f"{tool_name} · {tool_display_kind(tool_name)}"
+
+
+def display_path(path: object, *, fallback: str = "file") -> str:
+    """Return a path-safe display value for user-facing UI."""
+    if not path:
+        return fallback
+    try:
+        name = pathlib.Path(str(path)).name
+    except Exception:
+        name = ""
+    return name or fallback
 
 
 # ── Error helpers ──────────────────────────────────────────────────────────────
@@ -178,19 +222,17 @@ def print_tool_result(
         data = result.get("data", {})
 
         if tool_name == "write_file":
-            path      = params.get("path", data.get("path", ""))
             lines     = data.get("lines") or (params.get("content", "").count("\n") + 1 if params.get("content") else 0)
             size      = data.get("size_bytes") or len((params.get("content", "") or "").encode())
             size_str  = f"{size}B" if size < 1024 else f"{size // 1024}KB"
             if has_rich:
-                console.print(f"  [dim]⎿[/dim]  [green]✓[/green]  [dim]{path}  {lines} lines  {size_str}[/dim]{ts}")
+                console.print(f"  [dim]⎿[/dim]  [green]✓[/green]  [dim]file tool  {lines} lines  {size_str}[/dim]{ts}")
             else:
-                print(f"  ⎿  ✓ {path}  {lines} lines  {size_str}{ts_plain}")
+                print(f"  ⎿  ✓ file tool  {lines} lines  {size_str}{ts_plain}")
 
         elif tool_name == "edit_file":
             old = params.get("old_string", "")
             new = params.get("new_string", "")
-            path = params.get("path", "")
             if old and new and has_rich:
                 import re as _re_diff
                 diff = list(difflib.unified_diff(
@@ -199,7 +241,7 @@ def print_tool_result(
                     lineterm="",
                 ))
                 if diff:
-                    _hdr = f"  [#C08050]{path}[/#C08050]" if path else "  [dim]⎿[/dim]"
+                    _hdr = "  [dim]⎿[/dim]  [#C08050]file tool[/#C08050]"
                     console.print(f"{_hdr}{ts}")
                     o_ln = n_ln = 0
                     for line in diff[2:]:
@@ -229,7 +271,7 @@ def print_tool_result(
 
         elif tool_name == "run_command":
             stdout     = data.get("stdout", "").strip()
-            returncode = data.get("returncode", 0)
+            returncode = data.get("returncode", data.get("exit_code", 0))
             if has_rich:
                 from rich.panel import Panel
                 rc_color = "green" if returncode == 0 else "red"
@@ -241,6 +283,8 @@ def print_tool_result(
                         truncated = "\n".join(out_lines[:40])
                         if len(out_lines) > 40:
                             truncated += f"\n[dim]… +{len(out_lines) - 40} lines[/dim]"
+                        if data.get("full_output_path"):
+                            truncated += "\n[dim]full output saved[/dim]"
                         console.print(Panel(
                             f"[dim]{truncated}[/dim]",
                             border_style="dim",
@@ -250,6 +294,8 @@ def print_tool_result(
                     else:
                         for ol in out_lines:
                             console.print(f"    [dim]{ol[:120]}[/dim]")
+                        if data.get("full_output_path"):
+                            console.print("    [dim]full output saved[/dim]")
             else:
                 print(f"  ⎿  exit {returncode}{ts_plain}")
                 for ol in stdout.splitlines()[:4]:
@@ -257,11 +303,10 @@ def print_tool_result(
 
         elif tool_name == "read_file":
             lines = data.get("lines", 0)
-            path  = params.get("path", "")
             if has_rich:
-                console.print(f"  [dim]⎿  {path}  {lines} lines[/dim]{ts}")
+                console.print(f"  [dim]⎿  file tool  {lines} lines[/dim]{ts}")
             else:
-                print(f"  ⎿  {path}  {lines} lines{ts_plain}")
+                print(f"  ⎿  file tool  {lines} lines{ts_plain}")
 
         elif tool_name == "list_files":
             count = data.get("count", 0)
@@ -280,16 +325,14 @@ def print_tool_result(
                 print(f"  ⎿  {matches} matches{ts_plain}")
 
         elif tool_name == "web_fetch":
-            url    = data.get("url", params.get("url", ""))
             length = data.get("length", 0)
             trunc  = data.get("truncated", False)
-            short_url = url.replace("https://", "").replace("http://", "")[:70]
             len_str = f"  {length:,} chars" if length else ""
             trunc_str = "  [dim]truncated[/dim]" if trunc else ""
             if has_rich:
-                console.print(f"  [dim]⎿  {short_url}{len_str}[/dim]{trunc_str}{ts}")
+                console.print(f"  [dim]⎿  web fetch{len_str}[/dim]{trunc_str}{ts}")
             else:
-                print(f"  ⎿  {short_url}{ts_plain}")
+                print(f"  ⎿  web fetch{ts_plain}")
 
         elif tool_name in ("web_search", "search_web"):
             results = data.get("results", [])
@@ -300,10 +343,9 @@ def print_tool_result(
                 print(f"  ⎿  {count} results{ts_plain}")
 
         else:
-            summary = json.dumps(data, ensure_ascii=False)
-            short   = (summary[:100] + "…") if len(summary) > 100 else summary
+            short = tool_display_kind(tool_name)
             if has_rich:
-                console.print(f"  [dim]⎿  {short}[/dim]{ts}")
+                console.print(f"  [dim]⎿  {short} done[/dim]{ts}")
             else:
                 print(f"  ⎿  done{ts_plain}")
 
@@ -335,28 +377,27 @@ def _one_line_tool_summary(
         return "[red]✗[/red]", f"[red]{error[:80]}[/red]{ts}"
 
     data = result.get("data", {})
+    kind = tool_display_kind(tool_name)
 
     if tool_name == "write_file":
-        path  = params.get("path", data.get("path", ""))
         lines = data.get("lines") or (params.get("content", "").count("\n") + 1 if params.get("content") else 0)
         size  = data.get("size_bytes") or len((params.get("content", "") or "").encode())
         size_str = f"{size}B" if size < 1024 else f"{size // 1024}KB"
-        return "[green]✓[/green]", f"[dim]{path}  {lines} lines  {size_str}[/dim]{ts}"
+        return "[green]✓[/green]", f"[dim]{kind}  {lines} lines  {size_str}[/dim]{ts}"
 
     elif tool_name == "edit_file":
-        path = params.get("path", data.get("path", ""))
-        return "[green]✓[/green]", f"[dim]edited  {path}[/dim]{ts}"
+        return "[green]✓[/green]", f"[dim]edited  {kind}[/dim]{ts}"
 
     elif tool_name == "run_command":
-        rc = data.get("returncode", 0)
+        rc = data.get("returncode", data.get("exit_code", 0))
         icon  = "[green]✓[/green]" if rc == 0 else "[red]✗[/red]"
         color = "green" if rc == 0 else "red"
-        return icon, f"[{color}]exit {rc}[/{color}]{ts}"
+        suffix = " [dim]· full output saved[/dim]" if data.get("full_output_path") else ""
+        return icon, f"[{color}]exit {rc}[/{color}]{suffix}{ts}"
 
     elif tool_name == "read_file":
         lines = data.get("lines", 0)
-        path  = params.get("path", "")
-        return "[green]✓[/green]", f"[dim]{path}  {lines} lines[/dim]{ts}"
+        return "[green]✓[/green]", f"[dim]{kind}  {lines} lines[/dim]{ts}"
 
     elif tool_name == "list_files":
         count = data.get("count", 0)
@@ -369,18 +410,16 @@ def _one_line_tool_summary(
         return "[green]✓[/green]", f"[dim]{matches} matches[/dim]{ts}"
 
     elif tool_name == "web_fetch":
-        url    = data.get("url", params.get("url", ""))
         length = data.get("length", 0)
-        short  = url.replace("https://", "").replace("http://", "")[:55]
         len_s  = f"  {length:,}c" if length else ""
-        return "[green]✓[/green]", f"[dim]{short}{len_s}[/dim]{ts}"
+        return "[green]✓[/green]", f"[dim]{kind}{len_s}[/dim]{ts}"
 
     elif tool_name in ("web_search", "search_web"):
         count = len(data.get("results", []))
         return "[green]✓[/green]", f"[dim]{count} results[/dim]{ts}"
 
     else:
-        return "[green]✓[/green]", f"[dim]done[/dim]{ts}"
+        return "[green]✓[/green]", f"[dim]{kind} done[/dim]{ts}"
 
 
 def print_tool_activity_group(

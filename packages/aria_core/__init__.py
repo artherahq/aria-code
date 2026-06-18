@@ -1,6 +1,6 @@
 """Core contracts shared by Aria packages."""
 
-from .export import build_package_manifest, write_package_manifest
+from .export import build_package_manifest, build_session_diagnostic_bundle, write_package_manifest
 from .manifest import CapabilityManifest, PackageLink, PermissionLevel, ServiceKind
 
 __all__ = [
@@ -9,5 +9,6 @@ __all__ = [
     "PermissionLevel",
     "ServiceKind",
     "build_package_manifest",
+    "build_session_diagnostic_bundle",
     "write_package_manifest",
 ]

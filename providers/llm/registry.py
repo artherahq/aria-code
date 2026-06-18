@@ -34,6 +34,11 @@ from .openai_compat import (
     SiliconFlowProvider, MoonshotProvider, ZhiPuProvider,
 )
 from .anthropic import AnthropicProvider
+from packages.aria_services.provider_health import (
+    GLOBAL_PROVIDER_HEALTH,
+    ProviderHealthRegistry,
+    classify_provider_error,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -215,8 +220,11 @@ async def _try_provider(
     messages: List[Message],
     on_token: Optional[Callable] = None,
     cancel_event=None,
+    *,
+    health: ProviderHealthRegistry | None = None,
 ) -> Optional[Dict[str, Any]]:
     """尝试用指定 provider 完成对话，失败返回 None。"""
+    health = health or GLOBAL_PROVIDER_HEALTH
     try:
         name, model = _parse_provider_spec(spec)
         cls = _PROVIDER_CLASSES.get(name)
@@ -226,8 +234,13 @@ async def _try_provider(
         cfg      = _build_cfg(name, model)
         provider = cls(cfg)
 
+        if health.provider_in_cooldown(name):
+            logger.debug(f"[{name}] cooling down, skipped")
+            return None
+
         if not await provider.is_available():
             logger.debug(f"[{name}] 不可用，跳过")
+            health.mark_issue(classify_provider_error(name, "provider unavailable"))
             return None
 
         logger.info(f"[{name}] 尝试生成响应 (model={cfg.model})")
@@ -242,14 +255,18 @@ async def _try_provider(
                 if on_token:
                     on_token(tok)
             elif t == "error":
-                logger.warning(f"[{name}] 流式错误: {event.get('message')}")
+                err = event.get("message")
+                logger.warning(f"[{name}] 流式错误: {err}")
+                health.mark_issue(classify_provider_error(name, err))
                 return None
             elif t == "done":
                 break
 
         if not full_text.strip():
+            health.mark_issue(classify_provider_error(name, "provider returned no usable data"))
             return None
 
+        health.mark_success(name)
         return {
             "success":  True,
             "response": full_text,
@@ -258,6 +275,7 @@ async def _try_provider(
         }
     except Exception as e:
         logger.debug(f"[{spec}] 异常: {e}")
+        health.mark_issue(classify_provider_error(_parse_provider_spec(spec)[0], e))
         return None
 
 
@@ -266,6 +284,8 @@ async def stream_cloud_fallback(
     history: List[Dict],
     on_token: Optional[Callable] = None,
     cancel_event=None,
+    *,
+    health: ProviderHealthRegistry | None = None,
 ) -> Dict[str, Any]:
     """
     CLI fallback 入口：当 Ollama 不可用时调用。
@@ -293,12 +313,14 @@ async def stream_cloud_fallback(
     user_cfg = _load_user_config()
     user_fallback: List[str] = user_cfg.get("fallback", [])
 
+    health = health or GLOBAL_PROVIDER_HEALTH
+
     # 云端 provider 列表（跳过本地）
     cloud_specs: List[str] = []
     for spec in user_fallback:
         name, _ = _parse_provider_spec(spec)
         cls = _PROVIDER_CLASSES.get(name)
-        if cls and not cls.local:
+        if cls and not cls.local and not health.provider_in_cooldown(name):
             cloud_specs.append(spec)
 
     # 补充内置默认链中未出现的
@@ -311,7 +333,7 @@ async def stream_cloud_fallback(
             # 环境变量 OR providers.json 任一有 key 即可
             has_key = (env_var and os.getenv(env_var)) or \
                       bool(_load_provider_cfg_from_file(name).get("api_key"))
-            if has_key:
+            if has_key and not health.provider_in_cooldown(name):
                 cloud_specs.append(spec)
 
     if not cloud_specs:
@@ -324,7 +346,7 @@ async def stream_cloud_fallback(
 
     for spec in cloud_specs:
         result = await _try_provider(spec, msgs, on_token=on_token,
-                                     cancel_event=cancel_event)
+                                     cancel_event=cancel_event, health=health)
         if result:
             return result
 

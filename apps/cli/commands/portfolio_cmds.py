@@ -388,6 +388,8 @@ class PortfolioCommandsMixin:
             return
 
         path = str(out_f)
+        from ui.render.output import display_path as _display_path
+        path_label = _display_path(out_f, fallback="report")
         _file_kb = report_file_size_kb(out_f)
         # Check if all agents failed — show warning instead of false success
         _all_agents_failed = all_agents_failed(_team_result)
@@ -400,10 +402,10 @@ class PortfolioCommandsMixin:
             else:
                 console.print(
                     f"\n  [green]✅ 研报已保存[/green]"
-                    f"  [link={path}]{out_f.name}[/link]"
+                    f"  [link={path}]{path_label}[/link]"
                     f"  [dim]({_file_kb}KB)[/dim]"
                 )
-            console.print(f"  [dim]路径: {path}[/dim]")
+            console.print(f"  [dim]文件: {path_label}[/dim]")
             if _team_result:
                 _print_verdict_banner(
                     _team_result.final_signal,
@@ -412,7 +414,7 @@ class PortfolioCommandsMixin:
                 )
         else:
             _pfx = "⚠ 研报已保存（Agent 全部失败）" if _all_agents_failed else "✅ 研报已保存"
-            print(f"\n  {_pfx}: {path}  ({_file_kb}KB)")
+            print(f"\n  {_pfx}: {path_label}  ({_file_kb}KB)")
 
         # ── PDF 导出 ──────────────────────────────────────────────────────────
         if export_pdf_flag:
@@ -844,4 +846,3 @@ class PortfolioCommandsMixin:
         )
         msg = f"  📄 报告已保存: {saved.path}"
         console.print(f"  [dim]{msg}[/dim]") if HAS_RICH else print(msg)
-

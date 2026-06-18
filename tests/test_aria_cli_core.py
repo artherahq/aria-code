@@ -12,6 +12,8 @@ import tempfile
 # Allow importing from parent directory
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from packages.aria_core import build_session_diagnostic_bundle
+from apps.cli.session_export import build_session_export_payload
 from aria_cli import (
     _strip_markdown_fences,
     _is_safe_path,
@@ -35,6 +37,7 @@ from aria_cli import (
     _sync_write_policy,
 )
 from change_store import ChangeConflictError, GLOBAL_CHANGE_STORE
+from runtime import AgentTurnState, RuntimeTrace
 
 
 # ============================================================================
@@ -113,6 +116,23 @@ class TestFileTools(unittest.TestCase):
         read = _tool_read_file({"path": self.test_file})
         self.assertTrue(read["success"])
         self.assertIn("x = 42", read["data"]["content"])
+
+    def test_relative_write_goes_to_user_generated_dir(self):
+        old_root = os.environ.get("ARIA_USER_OUTPUT_ROOT")
+        os.environ["ARIA_USER_OUTPUT_ROOT"] = self.tmpdir
+        try:
+            content = "import os\n\nx = 7\nprint('result:', x)\n"
+            result = _tool_write_file({"path": "relative_strategy.py", "content": content})
+        finally:
+            if old_root is None:
+                os.environ.pop("ARIA_USER_OUTPUT_ROOT", None)
+            else:
+                os.environ["ARIA_USER_OUTPUT_ROOT"] = old_root
+
+        self.assertTrue(result["success"], result.get("error"))
+        expected = pathlib.Path(self.tmpdir) / "generated" / "relative_strategy.py"
+        self.assertEqual(pathlib.Path(result["data"]["path"]), expected.resolve())
+        self.assertTrue(expected.exists())
 
     def test_stage_only_write_requires_explicit_apply(self):
         content = "import os\nimport sys\n\nx = 99\nprint('result:', x)\n"
@@ -334,6 +354,62 @@ class TestSessionManager(unittest.TestCase):
         matching = [s for s in sessions if s["id"] == self.test_session_id]
         self.assertTrue(matching)
         self.assertEqual(matching[0]["title"], "My Title")
+
+    def test_build_session_diagnostic_bundle_redacts_sensitive_config(self):
+        trace = RuntimeTrace()
+        turn = AgentTurnState(provider="deepseek")
+        turn.append_response("done")
+        trace.add_turn_result(turn.build_result(elapsed=1.0).to_envelope().to_dict())
+
+        bundle = build_session_diagnostic_bundle(
+            session_id=self.test_session_id,
+            conversation=[{"role": "user", "content": "hello"}],
+            config={
+                "api_token": "secret-token",
+                "model": "qwen2.5:7b",
+            },
+            trace=trace,
+            provider_health=[{"provider": "yfinance", "status": "ok"}],
+        )
+
+        self.assertEqual(bundle["schema"], "aria.session_diagnostic_bundle.v1")
+        self.assertEqual(bundle["session_id"], self.test_session_id)
+        self.assertEqual(bundle["conversation_count"], 1)
+        self.assertEqual(bundle["config"]["api_token"], "***")
+        self.assertEqual(bundle["config"]["model"], "qwen2.5:7b")
+        self.assertIn("runtime_trace", bundle)
+        self.assertIn("turn_results", bundle["runtime_trace"])
+        self.assertEqual(bundle["provider_health"][0]["provider"], "yfinance")
+
+    def test_build_session_export_payload_supports_bundle_and_sft(self):
+        conversation = [
+            {"role": "user", "content": "How is AAPL doing?"},
+            {"role": "assistant", "content": "AAPL is up with a clear positive trend and improving momentum."},
+        ]
+        trace = RuntimeTrace()
+        trace.add_turn_result(AgentTurnState(provider="ollama").build_result(elapsed=1.0).to_envelope().to_dict())
+
+        content, ext, prefix = build_session_export_payload(
+            "bundle",
+            conversation,
+            session_id=self.test_session_id,
+            config={"api_token": "secret"},
+            trace=trace,
+            provider_health=[{"provider": "yfinance", "status": "ok"}],
+        )
+
+        bundle = json.loads(content)
+        self.assertEqual(ext, "json")
+        self.assertEqual(prefix, "aria_bundle")
+        self.assertEqual(bundle["schema"], "aria.session_diagnostic_bundle.v1")
+        self.assertEqual(bundle["config"]["api_token"], "***")
+        self.assertIn("runtime_trace", bundle)
+
+        sft_content, sft_ext, sft_prefix = build_session_export_payload("sft", conversation)
+        pairs = json.loads(sft_content)
+        self.assertEqual(sft_ext, "json")
+        self.assertEqual(sft_prefix, "aria_sft")
+        self.assertEqual(pairs[0]["instruction"], "How is AAPL doing?")
 
 
 # ============================================================================

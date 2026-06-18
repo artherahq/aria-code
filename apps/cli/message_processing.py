@@ -164,7 +164,7 @@ def compact_messages(
     """
     if max_chars <= 0:
         ctx = _get_model_cfg(model_key).get("num_ctx", 16384)
-        max_chars = int(ctx * 3 * 0.80)
+        max_chars = int(ctx * 3 * 0.70)
 
     total = sum(len(m.get("content", "")) for m in messages)
     if total <= max_chars:

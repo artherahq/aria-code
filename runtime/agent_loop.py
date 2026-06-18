@@ -353,6 +353,51 @@ class AgentTurnResult:
             },
         }
 
+    def to_envelope(self) -> "AgentTurnEnvelope":
+        return AgentTurnEnvelope.from_result(self)
+
+
+@dataclass(frozen=True)
+class AgentTurnEnvelope:
+    """Stable runtime envelope for CLI/API consumers."""
+
+    status: str
+    success: bool
+    cancelled: bool
+    error: str
+    final_text: str
+    provider: str
+    tools: List[str]
+    summary: str
+    metadata: dict
+
+    @classmethod
+    def from_result(cls, result: AgentTurnResult) -> "AgentTurnEnvelope":
+        return cls(
+            status="ok" if result.success else "error",
+            success=result.success,
+            cancelled=result.cancelled,
+            error=result.error,
+            final_text=result.final_text,
+            provider=result.provider,
+            tools=list(result.tools),
+            summary=" · ".join(result.metadata.parts),
+            metadata=result.to_dict()["metadata"],
+        )
+
+    def to_dict(self) -> dict:
+        return {
+            "status": self.status,
+            "success": self.success,
+            "cancelled": self.cancelled,
+            "error": self.error,
+            "final_text": self.final_text,
+            "provider": self.provider,
+            "tools": list(self.tools),
+            "summary": self.summary,
+            "metadata": dict(self.metadata),
+        }
+
 
 @dataclass(frozen=True)
 class AgentErrorPresentation:
@@ -560,9 +605,9 @@ def build_tool_followup(tool_results: Sequence[dict]) -> str:
         )
         if is_error:
             error_tools.append(tool)
-            blocks.append(f"### [{tool}] ❌ Error\n{result_str}")
+            blocks.append(f"[{tool}]: {result_str}\n\n### [{tool}] ❌ Error\n{result_str}")
         else:
-            blocks.append(f"### [{tool}] ✓ Success\n{result_str}")
+            blocks.append(f"[{tool}]: {result_str}\n\n### [{tool}] ✓ Success\n{result_str}")
 
     followup = "## Tool Results\n\n" + "\n\n---\n\n".join(blocks)
 
@@ -578,7 +623,8 @@ def build_tool_followup(tool_results: Sequence[dict]) -> str:
         followup += (
             "\n\nAll tools completed successfully. "
             "If the task is now complete, provide your final response. "
-            "If additional steps are needed, continue using tools."
+            "If additional steps are needed, continue using tools.\n\n"
+            "Please continue your analysis using these results."
         )
 
     return followup
@@ -701,7 +747,7 @@ AgentEvent = Union[
 class AgentOptions:
     """Tunable parameters for one run_agent() invocation."""
 
-    max_rounds: int = 10
+    max_rounds: int = 30
     serial_tools: FrozenSet[str] = field(
         default_factory=lambda: frozenset(DEFAULT_SERIAL_TOOLS)
     )

@@ -65,8 +65,8 @@ def artifact_root() -> Path:
     """Return the per-user local artifact root.
 
     Override with ARIA_ARTIFACT_ROOT when a user wants reports/projects under a
-    specific workspace. Defaults to a product-owned folder on that user's
-    Desktop, not the developer's Arthera repo.
+    specific workspace. Defaults to a product-owned folder under that user's
+    Documents directory, not the developer's Arthera repo.
     """
     configured = os.getenv("ARIA_ARTIFACT_ROOT")
     if configured:
@@ -75,6 +75,33 @@ def artifact_root() -> Path:
     if project_root:
         return project_root
     return Path.home() / "Documents" / "Aria Code"
+
+
+def user_output_root() -> Path:
+    """Return a user-owned output root that never falls back to project cwd.
+
+    Use this for generated code, strategies, and project scaffolds. Reports and
+    charts may still honor project `.ariarc` via `artifact_root()`, but user
+    code should not silently land in the Aria source checkout.
+    """
+    configured = os.getenv("ARIA_USER_OUTPUT_ROOT")
+    if configured:
+        return Path(configured).expanduser()
+    return Path.home() / "Documents" / "Aria Code"
+
+
+def user_projects_dir(create: bool = True) -> Path:
+    path = user_output_root() / "projects"
+    if create:
+        path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def user_generated_dir(create: bool = True) -> Path:
+    path = user_output_root() / "generated"
+    if create:
+        path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def artifact_dir(category: str, topic: Optional[str] = None, create: bool = True) -> Path:

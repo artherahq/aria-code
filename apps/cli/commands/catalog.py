@@ -63,7 +63,7 @@ VISIBLE_SLASH_COMMANDS: FrozenSet[str] = frozenset({
     # Config
     "/model", "/thinking", "/config", "/privacy",
     # Setup & discovery
-    "/setup", "/apikey", "/doctor", "/mcp", "/skills", "/tools",
+    "/setup", "/apikey", "/doctor", "/mcp", "/skills", "/tools", "/packages",
     # Auth
     "/login", "/logout", "/whoami",
     # Persistent data (direct writes)
@@ -79,4 +79,3 @@ VISIBLE_SLASH_COMMANDS: FrozenSet[str] = frozenset({
     # Other
     "/artifacts", "/vision", "/file", "/strategy", "/accuracy",
 })
-

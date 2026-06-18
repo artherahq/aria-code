@@ -8,6 +8,65 @@ from datetime import datetime
 from typing import Callable
 
 
+def _normalise_history_frame(hist):
+    """Return a clean OHLCV frame with title-case columns, or None."""
+    if hist is None or getattr(hist, "empty", True):
+        return None
+    try:
+        hist = hist.copy()
+        if getattr(hist, "columns", None) is not None:
+            try:
+                import pandas as _pd
+                if isinstance(hist.columns, _pd.MultiIndex):
+                    hist.columns = hist.columns.droplevel(-1)
+            except Exception:
+                pass
+            hist.columns = [str(c).title() for c in hist.columns]
+        if "Close" not in hist.columns:
+            return None
+        hist = hist.dropna(subset=["Close"]).copy()
+        return hist if not hist.empty else None
+    except Exception:
+        return None
+
+
+def _fetch_yahoo_chart_frame(symbol: str, period: str, interval: str = "1d"):
+    """Fetch Yahoo chart API data without yfinance; returns (frame, currency, error)."""
+    try:
+        import pandas as _pd
+        import requests as _req
+        p2 = int(time.time())
+        days_by_period = {
+            "1mo": 35, "3mo": 100, "6mo": 185, "ytd": 370,
+            "1y": 370, "2y": 740, "3y": 1100, "5y": 1830, "max": 7300,
+        }
+        p1 = p2 - days_by_period.get(period, 370) * 86400
+        url = (
+            f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+            f"?period1={p1}&period2={p2}&interval={interval}&events=history"
+            f"&includeAdjustedClose=true"
+        )
+        resp = _req.get(url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
+        resp.raise_for_status()
+        result = (resp.json().get("chart", {}).get("result") or [None])[0]
+        if not result:
+            return None, None, "empty Yahoo Chart result"
+        quote = ((result.get("indicators") or {}).get("quote") or [{}])[0]
+        timestamps = result.get("timestamp") or []
+        frame = _pd.DataFrame({
+            "Open": quote.get("open", []),
+            "High": quote.get("high", []),
+            "Low": quote.get("low", []),
+            "Close": quote.get("close", []),
+            "Volume": quote.get("volume", []),
+        }, index=_pd.to_datetime(timestamps, unit="s"))
+        frame = _normalise_history_frame(frame)
+        meta = result.get("meta") or {}
+        return frame, meta.get("currency"), ""
+    except Exception as exc:
+        return None, None, str(exc)
+
+
 def _fmt_num(value, digits: int = 2, prefix: str = "") -> str:
     try:
         if value is None or (hasattr(value, "__class__") and str(value) == "nan"):
@@ -84,34 +143,17 @@ def handle_stock_chart_analysis_direct(symbol: str, period: str = "1y") -> dict:
     err1   = ""
     try:
         hist = ticker.history(period=period, interval="1d", auto_adjust=True)
-        if hist is not None and not hist.empty and "Close" not in hist.columns:
-            hist.columns = [c.title() for c in hist.columns]
+        hist = _normalise_history_frame(hist)
     except Exception as exc:
         err1 = str(exc)
 
     if hist is None or hist.empty:
-        try:
-            import requests as _req
-            p2   = int(time.time())
-            _DAY = {"1mo": 35, "3mo": 100, "6mo": 185, "ytd": 370,
-                    "1y": 370, "2y": 740, "3y": 1100, "5y": 1830, "max": 7300}
-            p1   = p2 - _DAY.get(period, 370) * 86400
-            url  = (f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
-                    f"?period1={p1}&period2={p2}&interval=1d&events=history")
-            r    = _req.get(url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
-            r.raise_for_status()
-            res  = (r.json().get("chart", {}).get("result") or [None])[0]
-            if res:
-                q    = ((res.get("indicators") or {}).get("quote") or [{}])[0]
-                hist = _pd.DataFrame({
-                    "Open":   q.get("open",   []),
-                    "High":   q.get("high",   []),
-                    "Low":    q.get("low",    []),
-                    "Close":  q.get("close",  []),
-                    "Volume": q.get("volume", []),
-                }, index=_pd.to_datetime(res.get("timestamp", []), unit="s")).dropna(subset=["Close"])
-        except Exception as exc:
-            return {"success": False, "error": f"无法获取 {symbol} 数据: {err1 or exc}"}
+        hist, _provider_currency, chart_err = _fetch_yahoo_chart_frame(symbol, period, "1d")
+        if hist is None or hist.empty:
+            return {
+                "success": False,
+                "error": f"无法获取 {symbol} 数据: yfinance={err1 or 'empty'}; YahooChart={chart_err or 'empty'}",
+            }
 
     if hist is None or hist.empty:
         return {"success": False, "error": f"无法获取 {symbol} 历史数据"}
@@ -510,6 +552,7 @@ def handle_stock_chart_analysis(
     try:
         ticker = _yf.Ticker(symbol)
         hist = ticker.history(period=period, interval=interval, auto_adjust=False)
+        hist = _normalise_history_frame(hist)
     except Exception as exc:
         hist = None
         yahoo_error = str(exc)
@@ -517,43 +560,9 @@ def handle_stock_chart_analysis(
         yahoo_error = ""
 
     if hist is None or hist.empty:
-        try:
-            import requests as _requests
-            period2 = int(time.time())
-            period1 = period2 - 370 * 86400
-            url = (
-                f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
-                f"?period1={period1}&period2={period2}&interval=1d"
-                f"&events=history&includeAdjustedClose=true"
-            )
-            resp = _requests.get(url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
-            resp.raise_for_status()
-            payload = resp.json()
-            result = (payload.get("chart", {}).get("result") or [None])[0]
-            if result:
-                ts = result.get("timestamp") or []
-                quote = ((result.get("indicators") or {}).get("quote") or [{}])[0]
-                dates = _pd.to_datetime(ts, unit="s")
-                hist = _pd.DataFrame({
-                    "Open": quote.get("open", []),
-                    "High": quote.get("high", []),
-                    "Low": quote.get("low", []),
-                    "Close": quote.get("close", []),
-                    "Volume": quote.get("volume", []),
-                }, index=dates).dropna(subset=["Close"])
-                meta = result.get("meta") or {}
-                if meta.get("currency"):
-                    provider_currency = meta.get("currency")
-                else:
-                    provider_currency = None
-                provider = "Yahoo Chart API"
-            else:
-                provider_currency = None
-        except Exception as exc:
-            hist = None
-            chart_error = str(exc)
-        else:
-            chart_error = ""
+        hist, provider_currency, chart_error = _fetch_yahoo_chart_frame(symbol, period, interval)
+        if hist is not None and not hist.empty:
+            provider = "Yahoo Chart API"
 
     if hist is None or hist.empty:
         try:
@@ -565,6 +574,7 @@ def handle_stock_chart_analysis(
             if hist is not None and not hist.empty:
                 hist["Date"] = _pd.to_datetime(hist["Date"])
                 hist = hist.set_index("Date").sort_index().tail(260)
+                hist = _normalise_history_frame(hist)
                 provider = "Stooq"
         except Exception as exc:
             return {

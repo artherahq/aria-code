@@ -13,6 +13,7 @@ from .agent_loop import (
     AgentEventToolResult,
     AgentOptions,
     AgentTurnMetadata,
+    AgentTurnEnvelope,
     AgentTurnResult,
     AgentTurnState,
     ToolBatchState,
@@ -29,7 +30,7 @@ from .agent_loop import (
     split_tool_calls,
 )
 from .approval import ApprovalDecision, apply_approval_decision
-from .events import RuntimeEvent, RuntimeTrace, ToolCallRecord
+from .events import RuntimeEvent, RuntimeTrace, ToolCallRecord, TurnResultRecord
 from .tool_executor import ToolExecutor
 
 __all__ = [
@@ -45,12 +46,14 @@ __all__ = [
     "AgentEventToolResult",
     "AgentOptions",
     "AgentTurnMetadata",
+    "AgentTurnEnvelope",
     "AgentTurnResult",
     "AgentTurnState",
     "ApprovalDecision",
     "RuntimeEvent",
     "RuntimeTrace",
     "ToolCallRecord",
+    "TurnResultRecord",
     "ToolBatchState",
     "ToolCallTask",
     "ToolExecutor",

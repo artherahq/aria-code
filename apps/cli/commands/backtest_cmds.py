@@ -544,7 +544,8 @@ class BacktestCommandsMixin:
             )
 
             _fname = f"auto_strat_{strategy_type}_{symbol}_r{round_num}_{int(_time.time())}.py"
-            _fpath = pathlib.Path.home() / "Desktop" / _fname
+            from artifacts import user_generated_dir as _user_generated_dir
+            _fpath = _user_generated_dir() / _fname
 
             console.print(f"  [dim]生成策略代码...[/dim]") if HAS_RICH else print("  Generating strategy...")
             await self.terminal.send_message(gen_prompt)
@@ -998,9 +999,10 @@ class BacktestCommandsMixin:
         elif len(parts) > 1:
             description = " ".join(parts[1:])  # everything after name = LLM description
 
-        # Resolve base directory under the per-user Aria Code artifact workspace.
-        from artifacts import artifact_dir as _artifact_dir
-        base_dir = _artifact_dir("projects", project_name)
+        # Resolve base directory under the user's local Aria Code workspace.
+        # Generated strategy/code projects must not silently land in the source repo.
+        from artifacts import user_projects_dir as _user_projects_dir
+        base_dir = _user_projects_dir() / project_name
 
         # ── LLM-generated scaffold (when user gives a description) ────────────
         if description and not template:
@@ -1716,4 +1718,3 @@ def _print_sparkline(label: str, nav: "pd.Series", color: str = "white", width: 
             print(f"  {label:<8} {spark}  {sign}{change:.2f}%")
     except Exception:
         pass
-

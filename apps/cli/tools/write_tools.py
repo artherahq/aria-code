@@ -268,7 +268,7 @@ def tool_write_file(params: dict) -> dict:
             return {
                 "success": False,
                 "error": (
-                    f"拒绝写入: '{path}' 只包含 print() 语句，是无意义的占位脚本。"
+                    f"拒绝写入: '{pathlib.Path(path).name or 'file'}' 只包含 print() 语句，是无意义的占位脚本。"
                     " 请直接用文字输出结果，或者写包含真实逻辑的代码（网络请求、数据处理、计算等）。"
                 ),
             }
@@ -276,15 +276,22 @@ def tool_write_file(params: dict) -> dict:
     content = _auto_fix_python(content, path)
 
     try:
-        p = pathlib.Path(path).expanduser().resolve()
+        raw_path = pathlib.Path(path).expanduser()
+        if not raw_path.is_absolute():
+            from artifacts import user_generated_dir
+            raw_path = user_generated_dir() / raw_path
+        p = raw_path.resolve()
         if not _is_safe(p):
             return {"success": False, "error": f"Access denied: path '{p}' is outside allowed directories"}
 
         existed = p.exists()
         desktop = pathlib.Path.home() / "Desktop"
         import tempfile as _tf
+        from artifacts import user_output_root
+        user_root = user_output_root().resolve()
         _auto_trusted_prefixes = (
             str(desktop),
+            str(user_root),
             str(pathlib.Path(_tf.gettempdir()).resolve()),
             "/tmp", "/private/tmp", "/private/var/folders",
             _config_dir(), _sessions_dir(),

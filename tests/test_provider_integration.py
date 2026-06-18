@@ -26,6 +26,17 @@ import providers.llm.registry as _reg
 from providers.llm.base import Message, ProviderConfig
 from providers.llm.openai_compat import DeepSeekProvider, SiliconFlowProvider
 from providers.llm.registry import _try_provider, stream_cloud_fallback
+from packages.aria_services.provider_health import ProviderIssue, ProviderHealthRegistry
+
+
+@pytest.fixture(autouse=True)
+def _reset_provider_health():
+    old = _reg.GLOBAL_PROVIDER_HEALTH
+    _reg.GLOBAL_PROVIDER_HEALTH = ProviderHealthRegistry()
+    try:
+        yield
+    finally:
+        _reg.GLOBAL_PROVIDER_HEALTH = old
 
 # 所有云端 provider env keys
 _ALL_KEY_ENV_VARS = [
@@ -187,7 +198,7 @@ class TestStreamCloudFallback:
 
         received_cancel = []
 
-        async def _capture_try(spec, msgs, on_token=None, cancel_event=None):
+        async def _capture_try(spec, msgs, on_token=None, cancel_event=None, **kwargs):
             received_cancel.append(cancel_event)
             return None  # 模拟取消后无结果
 
@@ -223,6 +234,24 @@ class TestStreamCloudFallback:
 
         assert call_order[0].startswith("siliconflow")
         assert result["success"] is True
+
+    @pytest.mark.asyncio
+    async def test_cooldown_skips_failing_provider(self):
+        """provider 在 cooldown 中时应被跳过，避免重复撞同一个坏端点。"""
+        health = ProviderHealthRegistry()
+        health.mark_issue(ProviderIssue("deepseek", "network", "down", True, cooldown_seconds=60))
+
+        def _fake_load(name):
+            return {"api_key": "sk-x"} if name == "deepseek" else {}
+
+        with self._no_env_keys(), \
+             patch.object(_reg, "_load_provider_cfg_from_file", side_effect=_fake_load), \
+             patch.object(_reg, "_load_user_config", return_value={}), \
+             patch.object(_reg, "_try_provider", AsyncMock(side_effect=AssertionError("should not call"))):
+            result = await stream_cloud_fallback("test", [], health=health)
+
+        assert result["success"] is False
+        assert result["error"] == "no_cloud_provider"
 
 
 # ── TestTryProvider ───────────────────────────────────────────────────────────
@@ -301,7 +330,8 @@ class TestTryProvider:
              patch.object(DeepSeekProvider, "stream", _token_stream), \
              patch.object(DeepSeekProvider, "is_available", AsyncMock(return_value=True)):
             await _try_provider("deepseek/deepseek-chat", msgs,
-                                on_token=lambda t: received.append(t))
+                                on_token=lambda t: received.append(t),
+                                health=ProviderHealthRegistry())
 
         assert received == ["深圳", "房价", "走势"]
 
@@ -316,7 +346,8 @@ class TestTryProvider:
              patch.object(DeepSeekProvider, "stream", _thinking_then_token_stream), \
              patch.object(DeepSeekProvider, "is_available", AsyncMock(return_value=True)):
             await _try_provider("deepseek/deepseek-chat", msgs,
-                                on_token=lambda t: received.append(t))
+                                on_token=lambda t: received.append(t),
+                                health=ProviderHealthRegistry())
 
         assert received == ["回答内容"]   # thinking 未进 on_token
 

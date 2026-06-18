@@ -514,17 +514,22 @@ def run_async(coro) -> Any:
     accidentally create nested event loops.
     """
     try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # We're already inside an async context — schedule via executor
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                future = pool.submit(asyncio.run, coro)
-                return future.result(timeout=15)
-        else:
-            return loop.run_until_complete(coro)
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(coro)
+
+        # We're already inside an async context — run the coroutine on a fresh
+        # event loop in a worker thread to avoid nested-loop errors.
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(asyncio.run, coro)
+            return future.result(timeout=15)
     except Exception as exc:
         logger.debug("run_async failed: %s", exc)
+        close = getattr(coro, "close", None)
+        if callable(close):
+            close()
         return None
 
 

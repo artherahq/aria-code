@@ -1,6 +1,6 @@
 import unittest
 
-from runtime import RuntimeTrace, ToolExecutor
+from runtime import AgentTurnState, RuntimeTrace, ToolExecutor
 
 
 def _echo_tool(params):
@@ -43,6 +43,20 @@ class RuntimeToolExecutorTests(unittest.TestCase):
         result = executor.execute_local("missing", {})
         self.assertFalse(result["success"])
         self.assertIn("Unknown local tool", result["error"])
+
+    def test_trace_records_turn_results(self):
+        trace = RuntimeTrace()
+        state = AgentTurnState(provider="deepseek")
+        state.append_response("done")
+        state.add_usage({"prompt_tokens": 2, "completion_tokens": 4})
+        turn = state.build_result(elapsed=1.0).to_envelope()
+
+        record = trace.add_turn_result(turn.to_dict())
+
+        self.assertEqual(len(trace.turn_results), 1)
+        self.assertEqual(record.provider, "deepseek")
+        self.assertEqual(trace.events[-1].type, "turn_complete")
+        self.assertEqual(trace.to_dict()["turn_results"][0]["summary"], turn.summary)
 
 
 if __name__ == "__main__":

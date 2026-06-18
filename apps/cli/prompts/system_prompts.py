@@ -57,7 +57,7 @@ def build_coding_prompt_lite(user_message: str) -> str:
                 "'最低':'Low','成交量':'Volume'}, inplace=True)\n"
                 "- df.index = pd.to_datetime(df['日期'])\n"
                 "- 计算 RSI/MACD 后再传给 addplot\n"
-                "- 保存到 os.path.expanduser('~/Desktop/<name>.png')\n"
+                "- 保存到 os.path.expanduser('~/Documents/Aria Code/generated/<name>.png')\n"
             )
         else:
             rules = (
@@ -65,7 +65,7 @@ def build_coding_prompt_lite(user_message: str) -> str:
                 "- import mplfinance as mpf (required for candlestick charts)\n"
                 "- import matplotlib; matplotlib.use('Agg') before importing pyplot\n"
                 "- Compute RSI/MACD BEFORE passing to addplot\n"
-                "- savefig to os.path.expanduser('~/Desktop/<name>.png')\n"
+                "- savefig to os.path.expanduser('~/Documents/Aria Code/generated/<name>.png')\n"
                 "- Download: df = yf.download(ticker, start=start, progress=False, auto_adjust=True)\n"
                 "- Flatten MultiIndex: if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.droplevel(1)\n"
             )

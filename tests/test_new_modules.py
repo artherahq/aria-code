@@ -329,6 +329,31 @@ class TestPluginLoader:
 # local_finance_tools.py (offline / mock tests)
 # ===========================================================================
 
+def test_run_async_closes_coroutine_like_object_on_setup_failure(monkeypatch):
+    import asyncio
+    from aliyun_data_client import run_async
+
+    class FakeCoro:
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    fake = FakeCoro()
+
+    def fail_get_running_loop():
+        raise RuntimeError("no event loop")
+
+    def fail_run(_coro):
+        raise RuntimeError("cannot run")
+
+    monkeypatch.setattr(asyncio, "get_running_loop", fail_get_running_loop)
+    monkeypatch.setattr(asyncio, "run", fail_run)
+
+    assert run_async(fake) is None
+    assert fake.closed is True
+
+
 class TestLocalFinanceTools:
     def test_register_adds_tools(self):
         from local_finance_tools import register_local_finance_tools

@@ -7,6 +7,7 @@ import json
 import os
 import platform
 import sys
+import time
 import tempfile
 import urllib.request
 from dataclasses import dataclass, field
@@ -58,6 +59,19 @@ class DoctorReport:
 
 def _check(name: str, status: str, detail: str = "", suggestion: str = "") -> DoctorCheck:
     return DoctorCheck(name=name, status=status, detail=detail, suggestion=suggestion)
+
+
+def _format_age(seconds: float | int | None) -> str:
+    if not seconds or seconds <= 0:
+        return ""
+    seconds = int(seconds)
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes, sec = divmod(seconds, 60)
+    if minutes < 60:
+        return f"{minutes}m{sec:02d}s"
+    hours, rem = divmod(minutes, 60)
+    return f"{hours}h{rem:02d}m"
 
 
 def _has_module(name: str) -> bool:
@@ -121,12 +135,73 @@ def provider_health_checks(snapshot: Optional[List[Dict[str, Any]]] = None) -> L
             detail += f", cooldown={remaining}s"
         if row.get("last_error"):
             detail += f", last={row.get('last_error')}"
+        last_success = _format_age((time.time() - float(row.get("last_success_at"))) if row.get("last_success_at") else None)
+        if last_success:
+            detail += f", last_ok={last_success}"
         check_status = "ok" if status == "ok" else "warn" if row.get("last_error_category") != "auth" else "err"
         suggestion = "Wait for cooldown or switch provider/API key." if cooldown else ""
         if row.get("last_error_category") == "auth":
             suggestion = "Check provider API key with /apikey list or /apikey set."
         checks.append(_check(f"data_provider:{provider}", check_status, detail, suggestion))
     return checks
+
+
+def provider_health_summary(snapshot: Optional[List[Dict[str, Any]]] = None) -> DoctorCheck:
+    """Summarise provider health into one dashboard-style check."""
+    if snapshot is None:
+        try:
+            from packages.aria_services.provider_health import GLOBAL_PROVIDER_HEALTH
+
+            snapshot = GLOBAL_PROVIDER_HEALTH.snapshot()
+        except Exception:
+            snapshot = []
+
+    if not snapshot:
+        return _check(
+            "provider_health_summary",
+            "warn",
+            "no provider calls recorded in this session",
+            "Run /quote, /ta, /analyze, or /report to populate provider health.",
+        )
+
+    ok = warn = err = cooldown = 0
+    auth_err = 0
+    names: list[str] = []
+    for row in snapshot:
+        names.append(str(row.get("provider") or "provider"))
+        status = str(row.get("status") or "unknown")
+        if status == "ok":
+            ok += 1
+        elif row.get("last_error_category") == "auth":
+            err += 1
+            auth_err += 1
+        else:
+            warn += 1
+        if row.get("cooldown_active"):
+            cooldown += 1
+
+    total = len(snapshot)
+    if err:
+        level = "err"
+    elif warn or cooldown:
+        level = "warn"
+    else:
+        level = "ok"
+
+    parts = [f"{total} providers"]
+    if ok:
+        parts.append(f"{ok} ok")
+    if warn:
+        parts.append(f"{warn} warn")
+    if err:
+        parts.append(f"{err} err")
+    if cooldown:
+        parts.append(f"{cooldown} cooldown")
+
+    suggestion = "Run /doctor --network or inspect /apikey." if level != "ok" else "All providers healthy."
+    if auth_err:
+        suggestion = "Fix API keys first, then retry /doctor or /cloud health."
+    return _check("provider_health_summary", level, ", ".join(parts), suggestion)
 
 
 def _iter_required_modules() -> Iterable[tuple[str, str]]:
@@ -203,6 +278,7 @@ def run_doctor(
     except Exception as exc:
         checks.append(_check("datasources", "warn", str(exc)))
 
+    checks.append(provider_health_summary())
     checks.extend(provider_health_checks())
 
     if check_network:

@@ -11,6 +11,9 @@ from artifacts import (
     create_artifact,
     recent_artifacts,
     slugify_topic,
+    user_generated_dir,
+    user_output_root,
+    user_projects_dir,
     write_artifact_metadata,
 )
 from data_cleaner import CleanResult
@@ -25,6 +28,21 @@ def test_artifact_dir_uses_per_user_aria_code_root(monkeypatch, tmp_path: Path):
     assert artifact_root() == tmp_path / "aria-artifacts"
     assert out == tmp_path / "aria-artifacts" / "reports" / "stock-charts" / "AAPL-市场分析"
     assert out.exists()
+
+
+def test_user_output_dirs_ignore_project_ariarc(monkeypatch, tmp_path: Path):
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".ariarc").write_text('{"artifact_root": "aria-output"}', encoding="utf-8")
+    user_root = tmp_path / "user-local"
+    monkeypatch.setenv("ARIA_USER_OUTPUT_ROOT", str(user_root))
+    monkeypatch.chdir(project)
+
+    assert user_output_root() == user_root
+    assert user_projects_dir() == user_root / "projects"
+    assert user_generated_dir() == user_root / "generated"
+    assert user_projects_dir().exists()
+    assert user_generated_dir().exists()
 
 
 def test_artifact_root_defaults_to_project_aria_output(monkeypatch, tmp_path: Path):

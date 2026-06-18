@@ -29,29 +29,29 @@ def build_analyze_prompt(symbol: str, context: str, is_cn: bool) -> str:
 
     symbol = symbol.upper()
     _no_explain = (
-        "\n注意：如某字段数据缺失，请直接省略该项，不要写'数据缺失'或'未提供'的说明文字。"
+        "注意：如某字段数据缺失，请直接省略该项，不要写'数据缺失'或'未提供'的说明文字。"
         "对于无数据的章节整体跳过即可。\n"
         if is_cn else
-        "\nNote: If any data field is missing, skip that item entirely. Do not write 'data unavailable' or explain why it is missing.\n"
+        "Note: If any data field is missing, skip that item entirely. Do not write 'data unavailable' or explain why it is missing.\n"
     )
     if is_cn:
         return (
-            f"{context}\n"
-            f"{_no_explain}\n"
+            f"{context}\n\n"
             f"请对以上 {symbol} 进行综合分析，包括：\n"
             f"1. 技术面分析（趋势判断、支撑/阻力、指标信号）\n"
             f"2. 基本面评估（估值合理性、盈利能力）\n"
             f"3. 风险提示（简要 2-3 条）\n"
             f"4. 综合建议（操作方向 + 关键价位参考）\n"
+            f"\n{_no_explain}"
         )
     return (
-        f"{context}\n"
-        f"{_no_explain}\n"
+        f"{context}\n\n"
         f"Please provide a comprehensive analysis of {symbol}, covering:\n"
         f"1. Technical analysis (trend, support/resistance, indicator signals)\n"
         f"2. Fundamentals (valuation, profitability — only if data is available)\n"
-        f"3. Risk factors (2-3 key points)\n"
+        f"3. Risk assessment (2-3 key points)\n"
         f"4. Summary outlook with key price levels\n"
+        f"\n{_no_explain}"
     )
 
 
@@ -74,6 +74,7 @@ async def build_analyze_context(
 
     quote: dict[str, Any] = {}
     technical: dict[str, Any] = {}
+    quality: dict[str, Any] = {}
 
     # ── Primary: cloud DataService bundle ────────────────────────────────────
     try:
@@ -91,6 +92,11 @@ async def build_analyze_context(
         )
         quote = bundle.quote or {}
         technical = bundle.technical or {}
+        quality = dict(bundle.quality or {})
+        if not quality.get("providers") and getattr(bundle, "provider_chain", None):
+            quality["providers"] = list(getattr(bundle, "provider_chain", []) or [])
+        if not quality.get("missing_fields") and getattr(bundle, "missing_fields", None):
+            quality["missing_fields"] = list(getattr(bundle, "missing_fields", []) or [])
         _store_ta(symbol, technical)
     except Exception as exc:
         log.debug("analyze data service failed for %s: %s", symbol, exc)
@@ -126,6 +132,21 @@ async def build_analyze_context(
     # If no technical from above, try cached
     if not technical:
         technical = _cached_ta(symbol)
+
+    if quality:
+        ctx_lines.append(f"\n### {'数据质量' if is_cn else 'Data Quality'}")
+        status = quality.get("status")
+        if status:
+            ctx_lines.append(f"- {'状态' if is_cn else 'Status'}: {status}")
+        providers = quality.get("providers") or []
+        if providers:
+            ctx_lines.append(f"- {'数据源' if is_cn else 'Providers'}: {', '.join(map(str, providers))}")
+        missing = quality.get("missing_fields") or []
+        if missing:
+            ctx_lines.append(f"- {'缺失字段' if is_cn else 'Missing fields'}: {', '.join(map(str, missing))}")
+        warnings = quality.get("warnings") or []
+        if warnings:
+            ctx_lines.append(f"- {'警告' if is_cn else 'Warnings'}: {'; '.join(map(str, warnings[:3]))}")
 
     # ── Price / header line ───────────────────────────────────────────────────
     price      = quote.get("price") if quote else None

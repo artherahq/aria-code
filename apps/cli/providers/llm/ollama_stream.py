@@ -437,8 +437,17 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
     #   · 正常问题 → 模型 max_tokens 配置值
     _is_small_model = _HAS_MODEL_CAP and get_model_capability(model).context_window < 8192
     _is_greeting    = _is_general and len(message.strip()) < 25
+    _wants_complete_output = any(k in message.lower() for k in (
+        "完整", "完整输出", "完整给出", "全面", "详细", "不要中断", "不要截断",
+        "complete", "full output", "comprehensive", "do not stop", "don't stop",
+        "do not truncate", "end-to-end",
+    ))
+
     if _is_greeting:
         _effective_max_tokens = 200
+    elif _wants_complete_output:
+        _complete_cap = max(2048, min(8192, int(_num_ctx * 0.45)))
+        _effective_max_tokens = max(_max_tokens, _complete_cap)
     elif _is_general:
         _effective_max_tokens = 1500   # 足够完整回答概念解释，不截断
     elif _use_lite_prompt:
@@ -526,7 +535,7 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
     full_response = ""
     tools_used = []
     tool_calls_pending = []
-    max_tool_rounds = 10
+    max_tool_rounds = 25 if _wants_complete_output or _intent == "coding" else 12
     usage = {"prompt_tokens": 0, "completion_tokens": 0, "thinking_tokens": 0}
     _last_tool_had_error = False  # Track if previous tool failed
     _in_error_recovery = False    # Stays True until run_command succeeds (not reset by read_file)
@@ -971,7 +980,7 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
                 _fname = os.path.basename(_fname)
             else:
                 _fname = f"aria_generated_{int(time.time())}.py"
-            _fpath = f"~/Desktop/{_fname}"
+            _fpath = f"~/Documents/Aria Code/generated/{_fname}"
 
             # Validate Python syntax before writing — prepend warning comment if broken
             import py_compile as _pyc, tempfile as _tf2
@@ -994,8 +1003,15 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
 
             _auto_tool_calls = [
                 {"tool": "write_file",  "params": {"path": _fpath, "content": _code}},
-                {"tool": "run_command", "params": {"command": f"python3 {os.path.expanduser(_fpath)}", "timeout": 120}},
             ]
+            import shlex as _shlex_auto
+            _auto_tool_calls.append({
+                "tool": "run_command",
+                "params": {
+                    "command": f"python3 {_shlex_auto.quote(os.path.expanduser(_fpath))}",
+                    "timeout": 120,
+                },
+            })
             if on_tool_call:
                 on_tool_call("write_file",  _auto_tool_calls[0]["params"])
                 on_tool_call("run_command", _auto_tool_calls[1]["params"])
@@ -1009,4 +1025,3 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
     return {"success": True, "response": full_response,
             "tools_used": tools_used, "sources": [], "thinking": "", "provider": "ollama",
             "usage": usage}
-

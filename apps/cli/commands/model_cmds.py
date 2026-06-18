@@ -1032,23 +1032,57 @@ class ModelCommandsMixin:
             with console.status("[dim]Checking cloud services…[/dim]", spinner="dots") if HAS_RICH else _null_ctx():
                 cloud_h = await client.health_cloud()
                 data_h  = await client.health_data()
+                st = client.status()
+
+            def _svc_label(name: str, health: dict) -> str:
+                status = str(health.get("status", "?"))
+                ok = status in ("healthy", "ok", "ready", "online")
+                color = "green" if ok else "red"
+                icon = "✓" if ok else "✗"
+                breaker = st.get("cloud_cb" if name == "cloud_api_server" else "data_cb", "?")
+                return f"  [{color}]●[/{color}] {name}  {icon} {status}  [dim]breaker={breaker}[/dim]"
+
+            def _print_health_detail(title: str, health: dict):
+                if HAS_RICH:
+                    console.print()
+                    console.print(_svc_label(title, health))
+                    detail_keys = [
+                        (k, v) for k, v in health.items()
+                        if k not in {"status", "services", "cloud_url", "data_url"}
+                    ]
+                    if detail_keys:
+                        for k, v in detail_keys:
+                            console.print(f"    [dim]{k}: {v}[/dim]")
+                    services = health.get("services") or {}
+                    if services:
+                        for svc, svc_status in services.items():
+                            svc_ok = "online" in str(svc_status) or "ready" in str(svc_status)
+                            svc_icon = "✓" if svc_ok else "○"
+                            svc_color = "green" if svc_ok else "yellow"
+                            console.print(f"    [dim]{svc_icon} {svc}: [{svc_color}]{svc_status}[/{svc_color}][/dim]")
+                else:
+                    print(f"  {title}: {health.get('status', '?')}")
+                    for k, v in health.items():
+                        if k not in {"status", "services", "cloud_url", "data_url"}:
+                            print(f"    {k}: {v}")
+                    for svc, svc_status in (health.get("services") or {}).items():
+                        print(f"    {svc}: {svc_status}")
 
             if HAS_RICH:
                 console.print()
-                _c = "green" if cloud_h.get("status") == "healthy" else "red"
-                _d = "green" if data_h.get("status") not in ("unreachable", None) else "red"
-                console.print(f"  [{_c}]● cloud_api_server[/{_c}]  {client.cloud_url}")
-                console.print(f"    status: {cloud_h.get('status', '?')}")
-                if cloud_h.get("services"):
-                    for svc, st in cloud_h["services"].items():
-                        icon = "✓" if "online" in str(st) or "ready" in str(st) else "○"
-                        console.print(f"    [dim]{icon} {svc}: {st}[/dim]")
-                console.print()
-                console.print(f"  [{_d}]● akshare_data_server[/{_d}]  {client.data_url}")
-                console.print(f"    status: {data_h.get('status', '?')}")
+                cloud_ok = cloud_h.get("status") in ("healthy", "ok", "ready", "online")
+                data_ok = data_h.get("status") in ("healthy", "ok", "ready", "online")
+                summary = f"cloud={'ok' if cloud_ok else 'err'}  data={'ok' if data_ok else 'err'}"
+                console.print(f"  [bold]Summary[/bold]  {summary}")
+                console.print(f"  [dim]cloud_api_server: {client.cloud_url}[/dim]")
+                console.print(f"  [dim]akshare_data_server: {client.data_url}[/dim]")
+                _print_health_detail("cloud_api_server", cloud_h)
+                _print_health_detail("akshare_data_server", data_h)
                 console.print()
             else:
-                print(f"  cloud: {cloud_h.get('status')} | data: {data_h.get('status')}")
+                print(f"  Summary: cloud={cloud_h.get('status')} | data={data_h.get('status')}")
+                _print_health_detail("cloud_api_server", cloud_h)
+                _print_health_detail("akshare_data_server", data_h)
             return
 
         # Default: /cloud status
@@ -1284,4 +1318,3 @@ class ModelCommandsMixin:
         else:
             console.print("[dim]Usage: /config [show] | /config set key=value | /config reload[/dim]" if HAS_RICH
                           else "Usage: /config [show] | /config set key=value | /config reload")
-

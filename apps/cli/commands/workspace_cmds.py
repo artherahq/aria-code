@@ -307,16 +307,17 @@ class WorkspaceCommandsMixin:
 
             console.print()
             console.print("[bold]Arthera Packages[/bold]")
+            from ui.render.output import display_path as _display_path
             if arthera.available:
-                console.print(f"  [green]found[/green] [dim]{arthera.root}[/dim]")
+                console.print(f"  [green]found[/green] [dim]{_display_path(arthera.root, fallback='package root')}[/dim]")
                 for name, path in sorted(arthera.packages.items()):
-                    console.print(f"  [dim]·[/dim] [bold]{name:14s}[/bold] [dim]{path}[/dim]")
+                    console.print(f"  [dim]·[/dim] [bold]{name:14s}[/bold] [dim]{_display_path(path, fallback='package')}[/dim]")
                 if arthera.mcp_servers:
                     console.print("  [dim]MCP server candidates:[/dim]")
                     for path in arthera.mcp_servers[:5]:
-                        console.print(f"    [dim]{path}[/dim]")
+                        console.print(f"    [dim]{_display_path(path, fallback='server')}[/dim]")
             else:
-                console.print(f"  [yellow]not found[/yellow] [dim]{arthera.root}[/dim]")
+                console.print(f"  [yellow]not found[/yellow] [dim]{_display_path(arthera.root, fallback='package root')}[/dim]")
 
             console.print()
             console.print("[bold]Recommended MCP bridge[/bold]")
@@ -816,7 +817,12 @@ class WorkspaceCommandsMixin:
             # Optional second arg: target directory name
             _args_parts = args.strip().split()
             _target_name = _args_parts[1] if len(_args_parts) > 1 else f"{_tmpl_key}_project"
-            target_dir = cwd / _target_name
+            _target_path = pathlib.Path(_target_name).expanduser()
+            if _target_path.is_absolute():
+                target_dir = _target_path
+            else:
+                from artifacts import user_projects_dir as _user_projects_dir
+                target_dir = _user_projects_dir() / _target_name
             if target_dir.exists():
                 console.print(f"[yellow]目录已存在: {target_dir}[/yellow]") if HAS_RICH else print(f"目录已存在: {target_dir}")
             else:
@@ -825,10 +831,10 @@ class WorkspaceCommandsMixin:
             if HAS_RICH:
                 from rich.panel import Panel as _SPanel
                 from rich import box as _sbox
-                lines = "\n".join(f"  [dim]{pathlib.Path(p).relative_to(cwd)}[/dim]" for p in created)
+                lines = "\n".join(f"  [dim]{pathlib.Path(p)}[/dim]" for p in created)
                 console.print(_SPanel(
                     f"[green]✅ 项目脚手架已创建[/green]  [bold]{_target_name}[/bold]\n\n{lines}\n\n"
-                    f"[dim]cd {_target_name} && pip install -r requirements.txt[/dim]",
+                    f"[dim]cd \"{target_dir}\" && pip install -r requirements.txt[/dim]",
                     title=f"[bold cyan]/init {_tmpl_key}[/bold cyan]",
                     border_style="cyan",
                     box=_sbox.ROUNDED,
@@ -1352,4 +1358,3 @@ class WorkspaceCommandsMixin:
                 console.print("[dim]       /memory profile add <内容>  — 写入全局用户背景（每次会话自动注入）[/dim]")
             else:
                 print("Usage: /memory [show|add <fact>|clear|search <query>|profile|global]")
-

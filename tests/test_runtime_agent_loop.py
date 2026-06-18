@@ -4,6 +4,7 @@ from runtime import (
     AgentErrorPresentation,
     AgentTurnState,
     AgentTurnResult,
+    AgentTurnEnvelope,
     ToolExecutor,
     ToolBatchState,
     ToolTurnPlan,
@@ -186,6 +187,22 @@ class RuntimeAgentLoopTests(unittest.TestCase):
         self.assertEqual(cancelled.final_text, "partial")
         self.assertFalse(failed.success)
         self.assertEqual(failed.error, "no_provider")
+
+    def test_agent_turn_result_to_envelope_is_stable(self):
+        state = AgentTurnState(provider="deepseek")
+        state.append_response("done")
+        state.add_usage({"prompt_tokens": 2, "completion_tokens": 4})
+
+        result = state.build_result(elapsed=1.2)
+        env = result.to_envelope()
+
+        self.assertIsInstance(env, AgentTurnEnvelope)
+        self.assertEqual(env.status, "ok")
+        self.assertEqual(env.provider, "deepseek")
+        self.assertIn("1.2s", env.summary)
+        self.assertIn("6 tokens (in: 2, out: 4)", env.summary)
+        self.assertIn("deepseek", env.summary)
+        self.assertTrue(env.to_dict()["success"])
 
     def test_split_tool_calls_keeps_write_tools_serial(self):
         read = {"tool": "read_file", "params": {}}

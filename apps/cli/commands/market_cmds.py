@@ -16,31 +16,65 @@ def _parse_nl_team_pair(text: str) -> Optional[Tuple[str, str]]:
       "葡萄牙和刚果比赛比分预测"
       "巴西跟阿根廷谁赢"
       "英格兰对阵法国"
-      "germany vs france prediction"
+      "Germany vs France prediction"    ← English also supported
     Returns None if two teams cannot be confidently identified.
     """
     try:
-        from football_data_client import _CN_TEAM_MAP
+        from football_data_client import _CN_TEAM_MAP, _FIFA_RATINGS
     except Exception:
         return None
 
+    # Build reverse map: english_lower → cn_name (from _CN_TEAM_MAP values)
+    _EN_TO_CN: dict = {}
+    for cn, en in _CN_TEAM_MAP.items():
+        _EN_TO_CN.setdefault(en.lower(), cn)
+    # Also add direct FIFA rating keys → cn name
+    for en_key, data in _FIFA_RATINGS.items():
+        cn_name = data.get("name", "")
+        if cn_name and en_key.lower() not in _EN_TO_CN:
+            _EN_TO_CN[en_key.lower()] = cn_name
+
     # Ordered connectors — longer ones first to avoid partial matches
     _CONNECTORS = (
-        "对阵", "对战", "对决", " vs ", " VS ", " v.s. ",
+        "对阵", "对战", "对决", " vs ", " VS ", "vs", "VS", " v.s. ",
         " versus ", "跟", "和", "与", "对", "pk", "PK",
     )
     # Words to strip from team-name fragments
     _STRIP_WORDS = (
         "预测", "分析", "比赛", "比分", "胜率", "结果", "谁赢", "谁会赢",
         "今天", "今日", "明天", "的", "了", "吗", "呢",
-        "prediction", "match", "game", "preview", "who wins",
+        "prediction", "match", "game", "preview", "who wins", "predict",
+        "football", "soccer", "score",
     )
 
     def _clean(s: str) -> str:
-        s = s.strip("？！，。、《》（）[]【】:：'\"-— ")
-        for w in _STRIP_WORDS:
+        s = s.strip("？！，。、《》（）[]【】:：'\"-— \t")
+        for w in sorted(_STRIP_WORDS, key=len, reverse=True):
             s = s.replace(w, "").strip()
         return s.strip()
+
+    def _resolve(name: str) -> Optional[str]:
+        """Resolve a name (CN or EN) to its canonical Chinese name."""
+        name = name.strip()
+        if not name:
+            return None
+        # Direct CN lookup
+        if name in _CN_TEAM_MAP:
+            return name
+        # English → CN
+        nl = name.lower()
+        if nl in _EN_TO_CN:
+            return _EN_TO_CN[nl]
+        # Partial English match
+        for en_key, cn_n in _EN_TO_CN.items():
+            if nl in en_key or en_key in nl:
+                return cn_n
+        # Partial CN match
+        for cn in _CN_TEAM_MAP:
+            if name in cn or cn in name:
+                return cn
+        # Return as-is if it looks like a real name (≥2 chars)
+        return name if len(name) >= 2 else None
 
     # ── Approach 1: split on connector ───────────────────────────────────────
     for conn in _CONNECTORS:

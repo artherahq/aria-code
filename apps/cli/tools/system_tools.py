@@ -12,6 +12,7 @@ import re
 import shlex
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 
 _ROOT = Path(__file__).parent.parent.parent.parent  # aria-code/
@@ -19,6 +20,45 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from safety import evaluate_command_policy  # noqa: E402
+
+
+def _persist_command_output(command: str, stdout: str, stderr: str, returncode: int) -> dict:
+    """Persist full command output when it is too large for inline tool context."""
+    if len(stdout) <= 5000 and len(stderr) <= 2000:
+        return {}
+    try:
+        from artifacts import create_artifact, write_artifact_metadata
+
+        record = create_artifact(
+            "command-output",
+            "shell",
+            "command_output",
+            ".txt",
+            timestamp=datetime.now(),
+        )
+        text = (
+            f"$ {command}\n"
+            f"exit_code={returncode}\n\n"
+            "===== STDOUT =====\n"
+            f"{stdout}"
+            "\n\n===== STDERR =====\n"
+            f"{stderr}"
+        )
+        record.path.write_text(text, encoding="utf-8", errors="replace")
+        write_artifact_metadata(record, {
+            "kind": "command_output",
+            "status": "complete" if returncode == 0 else "failed",
+            "created_at": datetime.now().isoformat(timespec="seconds"),
+            "command": command,
+            "exit_code": returncode,
+            "stdout_chars": len(stdout),
+            "stderr_chars": len(stderr),
+            "stdout_truncated_inline": len(stdout) > 5000,
+            "stderr_truncated_inline": len(stderr) > 2000,
+        })
+        return {"full_output_path": str(record.path)}
+    except Exception:
+        return {}
 
 
 def _cprint(msg: str, *, console, has_rich: bool) -> None:
@@ -114,8 +154,11 @@ def tool_run_command(
             timeout=timeout,
             cwd=cwd,
         )
-        output = result.stdout[-5000:] if len(result.stdout) > 5000 else result.stdout
-        stderr = result.stderr[-2000:] if len(result.stderr) > 2000 else result.stderr
+        full_stdout = result.stdout
+        full_stderr = result.stderr
+        output = full_stdout[-5000:] if len(full_stdout) > 5000 else full_stdout
+        stderr = full_stderr[-2000:] if len(full_stderr) > 2000 else full_stderr
+        output_artifact = _persist_command_output(command, full_stdout, full_stderr, result.returncode)
 
         # ── Auto-fix loop (up to 3 rounds for python3 scripts) ──────────────
         MAX_AUTO_FIX_ROUNDS = 3
@@ -291,8 +334,13 @@ def tool_run_command(
                         command, shell=True, capture_output=True, text=True,
                         timeout=timeout, cwd=cwd,
                     )
-                    output = result.stdout[-5000:] if len(result.stdout) > 5000 else result.stdout
-                    stderr = result.stderr[-2000:] if len(result.stderr) > 2000 else result.stderr
+                    full_stdout = result.stdout
+                    full_stderr = result.stderr
+                    output = full_stdout[-5000:] if len(full_stdout) > 5000 else full_stdout
+                    stderr = full_stderr[-2000:] if len(full_stderr) > 2000 else full_stderr
+                    output_artifact = _persist_command_output(
+                        command, full_stdout, full_stderr, result.returncode
+                    )
                     if result.returncode == 0:
                         break
                 else:
@@ -309,15 +357,21 @@ def tool_run_command(
                 console.print(f"    [dim]{ol[:120]}[/dim]")
             if len(output.strip().splitlines()) > 6:
                 console.print("    [dim]...truncated[/dim]")
+            if output_artifact.get("full_output_path"):
+                console.print("    [dim]full output saved[/dim]")
             if stderr.strip() and result.returncode != 0:
                 for el in stderr.strip().splitlines()[:3]:
                     console.print(f"    [red]{el[:120]}[/red]")
         else:
             print(f"  Command exit: {result.returncode}")
-        return {"success": True, "data": {
+        data = {
             "command": command, "exit_code": result.returncode,
             "stdout": output, "stderr": stderr,
-        }}
+            "stdout_truncated": len(full_stdout) > 5000,
+            "stderr_truncated": len(full_stderr) > 2000,
+        }
+        data.update(output_artifact)
+        return {"success": True, "data": data}
     except subprocess.TimeoutExpired:
         return {"success": False, "error": f"Command timed out ({timeout}s)"}
     except KeyboardInterrupt:

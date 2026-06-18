@@ -64,8 +64,10 @@ from change_store import ChangeConflictError, GLOBAL_CHANGE_STORE
 from safety import evaluate_command_policy
 from plan_utils import parse_plan_steps
 from privacy import FeedbackRecord, FeedbackStore, PrivacySettings
+from apps.cli.session_store import SessionManager
 from runtime import (
     AgentErrorPresentation,
+    AgentTurnEnvelope,
     AgentTurnState,
     ApprovalDecision,
     RuntimeTrace,
@@ -169,6 +171,16 @@ from apps.cli.utils.market_detect import (  # noqa: F401 — re-exported
 
 from apps.cli.commands.broker_cmds import BrokerCommandsMixin
 from apps.cli.commands.backtest_cmds import BacktestCommandsMixin
+from apps.cli.commands.analysis_cmds import AnalysisCommandsMixin
+from apps.cli.commands.data_cmds import DataCommandsMixin
+from apps.cli.commands.ops_cmds import OpsCommandsMixin
+from apps.cli.commands.diagnostic_cmds import DiagnosticCommandsMixin
+from apps.cli.commands.diagnostic_ops_cmds import DiagnosticOpsCommandsMixin
+from apps.cli.commands.ui_cmds import UiCommandsMixin
+from apps.cli.commands.session_ux_cmds import SessionUxCommandsMixin
+from apps.cli.commands.workflow_cmds import WorkflowCommandsMixin
+from apps.cli.commands.business_workflow_cmds import BusinessWorkflowCommandsMixin
+from apps.cli.commands.session_cmds import SessionCommandsMixin
 from apps.cli.commands.workspace_cmds import WorkspaceCommandsMixin
 from apps.cli.commands.model_cmds import ModelCommandsMixin
 from apps.cli.commands.market_cmds import MarketCommandsMixin
@@ -2609,13 +2621,7 @@ def _show_edit_preview(params: dict):
         return
 
     p = pathlib.Path(path).expanduser().resolve()
-    try:
-        tw = os.get_terminal_size().columns
-    except Exception:
-        tw = 80
-    short = str(p)
-    if len(short) > tw - 10:
-        short = "…" + short[-(tw - 11):]
+    short = "file tool"
 
     if not HAS_RICH:
         print(f"\n  Edit file  {short}")
@@ -2686,13 +2692,7 @@ def _show_write_preview(params: dict):
     content = _strip_markdown_fences(content)
 
     p = pathlib.Path(path).expanduser().resolve()
-    try:
-        tw = os.get_terminal_size().columns
-    except Exception:
-        tw = 80
-    short = str(p)
-    if len(short) > tw - 10:
-        short = "…" + short[-(tw - 11):]
+    short = "file tool"
 
     existed = p.exists()
     action = "Overwrite file" if existed else "Write new file"
@@ -3677,7 +3677,7 @@ Plotly.newPlot('chart', [
         art = create_artifact("reports/stat-arb", f"{sym_a}_{sym_b}", f"{safe}_zscore", ".html")
         art.path.write_text(html, encoding="utf-8")
         if HAS_RICH:
-            console.print(f"  [dim]Z-Score 图表: [link={art.path}]{art.path}[/link][/dim]")
+            console.print(f"  [dim]Z-Score 图表: [link={art.path}]{_display_path(art.path)}[/link][/dim]")
             import subprocess
             try:
                 subprocess.Popen(["open", str(art.path)])
@@ -3911,38 +3911,36 @@ def _format_tool_summary(tool_name: str, result: dict) -> str:
 
 
 def _format_tool_params(tool_name: str, params: dict) -> str:
-    """Format tool params into a readable short string (Claude Code style)."""
+    """Format tool params into a short, target-safe UI hint."""
     if not params:
         return ""
     if tool_name in ("read_file", "write_file", "edit_file"):
-        return params.get("path", "")
+        return "file tool"
     if tool_name == "run_command":
-        return params.get("command", "")[:60]
+        return "shell tool"
     if tool_name == "list_files":
-        p = params.get("path", ".")
-        pat = params.get("pattern", "*")
-        return f"{p}/{pat}" if pat != "*" else p
+        return "file tool"
     if tool_name == "search_code":
-        return params.get("pattern", "")[:40]
+        return "file tool"
     if tool_name in ("get_market_data", "get_crypto_data", "get_forex_data",
                       "get_commodities_data", "get_futures_data", "get_bonds_data"):
         return params.get("symbol", params.get("symbols", ""))
     if tool_name == "backtest_strategy":
         return f"{params.get('strategy', '')} {params.get('symbol', '')}"
     if tool_name == "web_search":
-        return params.get("query", "")[:60]
+        return "web search"
+    if tool_name == "search_web":
+        return "web search"
     if tool_name == "web_fetch":
-        url = params.get("url", "")
-        # Trim scheme + show only meaningful part of URL
-        short = url.replace("https://", "").replace("http://", "")
-        return short[:60] + ("…" if len(short) > 60 else "")
+        return "web fetch"
     if tool_name == "analyze_news":
         return params.get("symbol", params.get("query", ""))
+    if tool_name.startswith("mcp__"):
+        return "MCP"
+    if tool_name.startswith("skill") or tool_name in {"TaskCreate", "TaskUpdate"}:
+        return "skill"
     # Fallback: show first value
-    for v in params.values():
-        s = str(v)
-        return s[:50] if len(s) > 50 else s
-    return ""
+    return "tool"
 
 
 _TOOL_ACTION_LABELS: dict = {
@@ -4430,6 +4428,7 @@ def _ashare_code_to_name(symbol: str) -> str:
 
 
 from ui.render.output import FINANCE_TOOL_NAMES as _FINANCE_TOOL_NAMES
+from ui.render.output import display_path as _display_path
 
 
 def _print_tool_result(tool_name: str, result: dict, elapsed: float = 0, params: dict = None):
@@ -4691,68 +4690,6 @@ def format_sparkline(prices: list, width: int = 30) -> str:
 
 
 # ============================================================================
-# Session Manager — local persistence + cloud sync
-# ============================================================================
-
-class SessionManager:
-    """Manage chat sessions with local file persistence."""
-
-    def __init__(self):
-        SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
-
-    def save_session(self, session_id: str, conversation: list, metadata: dict = None):
-        meta = metadata or {}
-        if not meta.get("created_at"):
-            meta["created_at"] = datetime.now().isoformat()
-        for msg in conversation:
-            if msg["role"] == "user":
-                meta.setdefault("title", msg["content"][:60])
-                break
-        data = {
-            "id": session_id,
-            "messages": conversation,
-            "metadata": meta,
-            "updated_at": datetime.now().isoformat(),
-        }
-        path = SESSIONS_DIR / f"{session_id}.json"
-        with open(path, "w") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-
-    def load_session(self, session_id: str) -> Optional[dict]:
-        path = SESSIONS_DIR / f"{session_id}.json"
-        if path.exists():
-            with open(path) as f:
-                return json.load(f)
-        return None
-
-    def list_sessions(self, limit: int = 20) -> list:
-        sessions = []
-        for path in sorted(SESSIONS_DIR.glob("*.json"),
-                           key=lambda p: p.stat().st_mtime, reverse=True):
-            try:
-                with open(path) as f:
-                    data = json.load(f)
-                sessions.append({
-                    "id": data.get("id", path.stem),
-                    "title": data.get("metadata", {}).get("title", "Untitled"),
-                    "messages": len(data.get("messages", [])),
-                    "updated": data.get("updated_at", ""),
-                })
-            except Exception:
-                continue
-            if len(sessions) >= limit:
-                break
-        return sessions
-
-    def delete_session(self, session_id: str) -> bool:
-        path = SESSIONS_DIR / f"{session_id}.json"
-        if path.exists():
-            path.unlink()
-            return True
-        return False
-
-
-# ============================================================================
 # Tab Completer — commands, skills, stock symbols
 # ============================================================================
 
@@ -4780,6 +4717,7 @@ class ArtheraCompleter:
 
 
 from ui.completer import AriaPTCompleter, ARIA_PT_STYLE, build_aria_pt_style
+from apps.cli.commands.market_cmds import _parse_nl_team_pair
 
 
 
@@ -4802,12 +4740,22 @@ def _rebind_mixin_globals(mixin_cls):
 
 _rebind_mixin_globals(BrokerCommandsMixin)
 _rebind_mixin_globals(BacktestCommandsMixin)
+_rebind_mixin_globals(AnalysisCommandsMixin)
+_rebind_mixin_globals(DataCommandsMixin)
+_rebind_mixin_globals(OpsCommandsMixin)
+_rebind_mixin_globals(DiagnosticCommandsMixin)
+_rebind_mixin_globals(DiagnosticOpsCommandsMixin)
+_rebind_mixin_globals(UiCommandsMixin)
+_rebind_mixin_globals(SessionUxCommandsMixin)
+_rebind_mixin_globals(WorkflowCommandsMixin)
+_rebind_mixin_globals(BusinessWorkflowCommandsMixin)
+_rebind_mixin_globals(SessionCommandsMixin)
 _rebind_mixin_globals(WorkspaceCommandsMixin)
 _rebind_mixin_globals(ModelCommandsMixin)
 _rebind_mixin_globals(MarketCommandsMixin)
 _rebind_mixin_globals(PortfolioCommandsMixin)
 
-class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommandsMixin, ModelCommandsMixin, MarketCommandsMixin, PortfolioCommandsMixin):
+class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommandsMixin, DataCommandsMixin, OpsCommandsMixin, DiagnosticCommandsMixin, DiagnosticOpsCommandsMixin, UiCommandsMixin, SessionUxCommandsMixin, WorkflowCommandsMixin, BusinessWorkflowCommandsMixin, SessionCommandsMixin, WorkspaceCommandsMixin, ModelCommandsMixin, MarketCommandsMixin, PortfolioCommandsMixin):
     """Claude Code-style slash command system."""
 
     def __init__(self, terminal: 'ArtheraTerminal'):
@@ -4835,7 +4783,7 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
             "/load":      (self.cmd_load,     "Load session: /load <id>"),
             "/rename":    (self.cmd_rename,   'Rename session: /rename "title"'),
             "/sessions":  (self.cmd_sessions, "List/search sessions: /sessions [keyword]"),
-            "/export":    (self.cmd_export,   "Export: /export json|csv|md [file]"),
+            "/export":    (self.cmd_export,   "Export: /export json|csv|md|sft|bundle [file]"),
             # ── Config / mode ─────────────────────────────────────────────────
             "/model":     (self.cmd_model,    "Switch AI model (interactive picker)"),
             "/thinking":  (self.cmd_thinking, "Toggle extended thinking: /thinking on|off"),
@@ -4897,6 +4845,14 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
             "/backtest":  (self.cmd_backtest, "Backtest + HTML report: /backtest momentum SPY --period 1y"),
             "/wf":        (self.cmd_walk_forward, "Walk-forward test: /wf SPY [momentum] [rolling]"),
             "/compare":   (self.cmd_compare,  "Compare strategies: /compare SPY [start] [end]"),
+            "/research":  (self.cmd_research, "Market research workflow: /research AAPL"),
+            "/earnings":  (self.cmd_earnings, "Earnings review workflow: /earnings AAPL"),
+            "/asset-diag": (self.cmd_asset_diag, "Asset diagnosis workflow: /asset-diag asset_000001"),
+            "/contract-draft": (self.cmd_contract_draft, "Contract draft workflow: /contract-draft proj_001"),
+            "/revenue-calc": (self.cmd_revenue_calc, "Revenue split workflow: /revenue-calc proj_001 200000"),
+            "/risk-scan": (self.cmd_realty_risk_scan, "Realty risk scan workflow: /risk-scan proj_001"),
+            "/ops-report": (self.cmd_ops_report, "Ops report workflow: /ops-report proj_001"),
+            "/exit-calc": (self.cmd_exit_calc, "Exit settlement workflow: /exit-calc proj_001"),
             "/auto-strategy":(self.cmd_auto_strategy,"Auto-optimize strategy: /auto-strategy momentum SPY"),
             "/execution": (self.cmd_execution,"Algo execution compare: /execution AAPL buy 100000"),
             # ── UI generation (sets Bloomberg design context) ─────────────────
@@ -5009,7 +4965,7 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
         "/thinking":  ("Usage: /thinking [on|off|auto]", ["/thinking on", "/thinking off"]),
         "/login":     ("Usage: /login <email>  (password prompted securely)", ["/login user@example.com"]),
         "/whoami":    ("Usage: /whoami", ["/whoami"]),
-        "/export":    ("Usage: /export [json|csv|md] [file]", ["/export md report.md", "/export json"]),
+        "/export":    ("Usage: /export [json|csv|md|sft|bundle] [file]", ["/export bundle", "/export md report.md"]),
         "/save":      ("Usage: /save [name]", ["/save", '/save "AAPL Strategy Research"']),
         "/load":      ("Usage: /load <session_id>", ["/load abc123"]),
         "/sessions":  ("Usage: /sessions", ["/sessions"]),
@@ -5022,10 +4978,16 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
         "/team":      ("Usage: /team [SYMBOL] [--agents a,b] [--full]", ["/team NVDA", "/team AAPL --agents technical,risk", "/team watchlist", "/team SPY --full"]),
         "/ta":        ("Usage: /ta [SYMBOL] [days=N]", ["/ta AAPL", "/ta NVDA days=60"]),
         "/signal":    ("Usage: /signal [SYMBOL] [market]", ["/signal AAPL", "/signal sh600519 CN"]),
-        "/predict":   ("Usage: /predict [SYMBOL...]", ["/predict sh600519 sh601318"]),
-        "/research":  ("Usage: /research [topic or symbol]", ["/research NVDA AI chips", "/research 600519"]),
-        "/earnings":  ("Usage: /earnings [SYMBOL]", ["/earnings AAPL", "/earnings TSLA"]),
-        "/chart":     ("Usage: /chart [SYMBOL] [period]", ["/chart AAPL", "/chart NVDA 6mo"]),
+            "/predict":   ("Usage: /predict [SYMBOL...]", ["/predict sh600519 sh601318"]),
+            "/research":  ("Usage: /research [topic or symbol]", ["/research NVDA AI chips", "/research 600519"]),
+            "/earnings":  ("Usage: /earnings [SYMBOL]", ["/earnings AAPL", "/earnings TSLA"]),
+            "/asset-diag": ("Usage: /asset-diag <asset_id>", ["/asset-diag asset_000001"]),
+            "/contract-draft": ("Usage: /contract-draft <project_id>", ["/contract-draft proj_001"]),
+            "/revenue-calc": ("Usage: /revenue-calc <project_id> <gross> [refunds]", ["/revenue-calc proj_001 200000"]),
+            "/risk-scan": ("Usage: /risk-scan [project_id]", ["/risk-scan proj_001"]),
+            "/ops-report": ("Usage: /ops-report [project_id]", ["/ops-report proj_001"]),
+            "/exit-calc": ("Usage: /exit-calc <project_id> [--reason <reason>]", ["/exit-calc proj_001"]),
+            "/chart":     ("Usage: /chart [SYMBOL] [period]", ["/chart AAPL", "/chart NVDA 6mo"]),
         "/options":   ("Usage: /options [SYMBOL]", ["/options AAPL", "/options SPY"]),
         "/macro":     ("Usage: /macro [topic]", ["/macro", "/macro fed rates"]),
         "/peer":      ("Usage: /peer [SYMBOL]", ["/peer AAPL", "/peer TSLA"]),
@@ -5230,298 +5192,58 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
         root = artifact_root()
         items = recent_artifacts(limit=limit, root=root)
         if not items:
-            msg = f"No artifacts found under {root}"
+            msg = "No artifacts found"
             console.print(f"[dim]{msg}[/dim]") if HAS_RICH else print(msg)
             return
 
         if HAS_RICH:
             from rich.table import Table
-            table = Table(title=f"Generated artifacts · {root}", show_header=True, header_style="bold")
+            table = Table(title="Generated artifacts", show_header=True, header_style="bold")
             table.add_column("Kind", style="dim")
             table.add_column("Status")
             table.add_column("Topic")
-            table.add_column("Path", overflow="fold")
+            table.add_column("File", overflow="fold")
             for item in items:
+                _path = item.get("path") or item.get("metadata_path") or ""
                 table.add_row(
                     str(item.get("kind") or "artifact"),
                     str(item.get("status") or "unknown"),
                     str(item.get("topic") or ""),
-                    str(item.get("path") or item.get("metadata_path") or ""),
+                    pathlib.Path(str(_path)).name if _path else "",
                 )
             console.print(table)
         else:
-            print(f"Generated artifacts · {root}")
+            print("Generated artifacts")
             for item in items:
-                print(f"- {item.get('kind')} [{item.get('status')}] {item.get('topic')}: {item.get('path')}")
+                _path = item.get("path") or item.get("metadata_path") or ""
+                _name = pathlib.Path(str(_path)).name if _path else ""
+                print(f"- {item.get('kind')} [{item.get('status')}] {item.get('topic')}: {_name}")
     async def cmd_analyze(self, args: str):
-        """Deep analysis: fetch real quote + TA + fundamentals, then ask LLM."""
-        symbol = args.strip().upper() or "AAPL"
-        is_cn  = _is_ashare_symbol(symbol)
-
-        if HAS_RICH:
-            with console.status(f"[dim]正在获取 {symbol} 数据...[/dim]", spinner="dots"):
-                ctx = await self._build_analyze_context(symbol, is_cn)
-        else:
-            print(f"Fetching data for {symbol}...")
-            ctx = await self._build_analyze_context(symbol, is_cn)
-
-        await self.terminal.send_message(build_analyze_prompt(symbol, ctx, is_cn))
-        # Record the LLM's directional call for later outcome verification (DPO loop)
-        try:
-            _resp = next((m["content"] for m in reversed(self.terminal.conversation)
-                          if m.get("role") == "assistant" and m.get("content")), "")
-            if _resp:
-                self.terminal._record_prediction(symbol, _resp)
-        except Exception:
-            pass
+        return await super().cmd_analyze(args)
 
     async def _build_analyze_context(self, symbol: str, is_cn: bool) -> str:
-        """Fetch real market data and return a structured context string for the LLM."""
-        return await build_analyze_context(
-            symbol,
-            is_cn,
-            has_mdc=_HAS_MDC,
-            get_mdc=_get_mdc if _HAS_MDC else None,
-            ashare_name_lookup=_ashare_code_to_name,
-            has_brokers=_HAS_BROKERS,
-            get_broker_registry=_get_broker_registry if _HAS_BROKERS else None,
-            logger=logger,
-        )
+        return await AnalysisCommandsMixin._build_analyze_context(self, symbol, is_cn)
     # ────────────────────────────────────────────────────────────────────────
     # New Industry Commands
     # ────────────────────────────────────────────────────────────────────────
 
     async def cmd_macro(self, args: str):
-        """/macro [us|cn|rates|calendar] [indicator]  — 宏观经济数据仪表板"""
-        import asyncio as _asyncio
-        parts = args.strip().lower().split() if args.strip() else []
-        region = parts[0] if parts else "all"
-        indicator = parts[1] if len(parts) > 1 else "all"
-
-        try:
-            from macro_tools import get_us_macro, get_cn_macro, get_central_bank_rates, get_economic_calendar
-        except ImportError:
-            if HAS_RICH:
-                console.print("[red]macro_tools 模块未找到[/red]")
-            return
-
-        loop = _asyncio.get_event_loop()
-
-        if region in ("us", "all"):
-            if HAS_RICH:
-                with console.status("[dim]获取美国宏观数据 (FRED)...[/dim]", spinner="dots"):
-                    r = await loop.run_in_executor(None, lambda: get_us_macro(indicator if region == "us" else "all"))
-            else:
-                r = get_us_macro(indicator if region == "us" else "all")
-            _render_macro_result(r, "🇺🇸 美国宏观")
-
-        if region in ("cn", "all"):
-            if HAS_RICH:
-                with console.status("[dim]获取中国宏观数据 (akshare)...[/dim]", spinner="dots"):
-                    r_cn = await loop.run_in_executor(None, lambda: get_cn_macro(indicator if region == "cn" else "all"))
-            else:
-                r_cn = get_cn_macro(indicator if region == "cn" else "all")
-            _render_macro_result(r_cn, "🇨🇳 中国宏观")
-
-        if region in ("rates", "all"):
-            if HAS_RICH:
-                with console.status("[dim]获取央行利率...[/dim]", spinner="dots"):
-                    r_rates = await loop.run_in_executor(None, get_central_bank_rates)
-            else:
-                r_rates = get_central_bank_rates()
-            _render_cb_rates(r_rates)
-
-        if region == "calendar":
-            if HAS_RICH:
-                with console.status("[dim]获取经济日历...[/dim]", spinner="dots"):
-                    r_cal = await loop.run_in_executor(None, lambda: get_economic_calendar(7))
-            else:
-                r_cal = get_economic_calendar(7)
-            _render_econ_calendar(r_cal)
+        return await super().cmd_macro(args)
 
     async def cmd_options(self, args: str):
-        """/options <symbol> [calls|puts] [expiry]  — 期权链查询"""
-        parts = args.strip().split() if args.strip() else []
-        symbol = parts[0].upper() if parts else "AAPL"
-        opt_type = "both"
-        expiry = ""
-        for p in parts[1:]:
-            if p.lower() in ("calls", "puts"):
-                opt_type = p.lower()
-            elif "-" in p and len(p) == 10:
-                expiry = p
-
-        if not _HAS_LOCAL_FINANCE:
-            if HAS_RICH: console.print("[red]local_finance_tools 未加载[/red]")
-            return
-
-        import asyncio as _asyncio
-        loop = _asyncio.get_event_loop()
-        if HAS_RICH:
-            with console.status(f"[dim]获取 {symbol} 期权链...[/dim]", spinner="dots"):
-                from local_finance_tools import _get_options_chain
-                r = await loop.run_in_executor(None, _get_options_chain,
-                                               {"symbol": symbol, "type": opt_type, "expiry": expiry, "limit": 20})
-        else:
-            from local_finance_tools import _get_options_chain
-            r = _get_options_chain({"symbol": symbol, "type": opt_type, "expiry": expiry, "limit": 20})
-
-        if not r.get("success"):
-            if HAS_RICH: console.print(f"[red]{r.get('error')}[/red]")
-            return
-
-        _render_options_chain(r)
-
-        # ── B-S 理论定价附加展示（ATM call + put）──────────────────────────
-        try:
-            spot = r.get("current_price") or r.get("spot_price")
-            if spot and spot > 0:
-                # quant_engine is bundled in aria-code's packages/ — no external
-                # Arthera path needed (commodity Black-Scholes math ships with CLI).
-                from packages.quant_engine.stochastic.options_pricing import (
-                    OptionSpec, black_scholes,
-                )
-                T   = 30 / 365   # 近月合约估算
-                r_f = 0.05
-                # 从返回数据中提取第一个合约的 IV 作为 sigma 估算
-                chain = r.get("calls", []) or r.get("chain", []) or []
-                sigma = 0.25
-                for row in chain[:5]:
-                    iv = row.get("impliedVolatility") or row.get("iv")
-                    if iv and 0.01 < float(iv) < 5.0:
-                        sigma = float(iv)
-                        break
-
-                atm_call = black_scholes(OptionSpec(S=spot, K=round(spot, -1) or spot,
-                                                     T=T, r=r_f, sigma=sigma, option_type="call"))
-                atm_put  = black_scholes(OptionSpec(S=spot, K=round(spot, -1) or spot,
-                                                     T=T, r=r_f, sigma=sigma, option_type="put"))
-                if HAS_RICH:
-                    from rich.table import Table
-                    from rich import box as _box
-                    tbl = Table(title=f"[bold]B-S ATM 理论价格[/bold]  σ={sigma:.0%}  T=30d  r=5%",
-                                box=_box.SIMPLE, show_header=True, header_style="bold dim")
-                    tbl.add_column("", style="dim")
-                    tbl.add_column("理论价", justify="right")
-                    tbl.add_column("Delta", justify="right")
-                    tbl.add_column("Gamma", justify="right")
-                    tbl.add_column("Theta/日", justify="right")
-                    tbl.add_column("Vega/1%", justify="right")
-                    tbl.add_column("Vanna", justify="right")
-                    tbl.add_row("Call", f"{atm_call.price:.2f}", f"{atm_call.delta:+.3f}",
-                                f"{atm_call.gamma:.4f}", f"{atm_call.theta:+.4f}",
-                                f"{atm_call.vega:.4f}", f"{atm_call.vanna:.4f}")
-                    tbl.add_row("Put",  f"{atm_put.price:.2f}",  f"{atm_put.delta:+.3f}",
-                                f"{atm_put.gamma:.4f}",  f"{atm_put.theta:+.4f}",
-                                f"{atm_put.vega:.4f}",  f"{atm_put.vanna:.4f}")
-                    console.print(tbl)
-                else:
-                    print(f"B-S ATM call={atm_call.price:.2f} Δ={atm_call.delta:+.3f}  "
-                          f"put={atm_put.price:.2f} Δ={atm_put.delta:+.3f}  σ={sigma:.0%}")
-        except Exception:
-            pass   # B-S 附加展示失败不阻断主流程
+        return await super().cmd_options(args)
 
     async def cmd_quality(self, args: str):
-        """/quality <symbol>  — Piotroski F-Score + Altman Z-Score 双维财务质量评估"""
-        symbol = args.strip().upper() if args.strip() else "AAPL"
-        if not _HAS_LOCAL_FINANCE:
-            if HAS_RICH: console.print("[red]local_finance_tools 未加载[/red]")
-            return
-
-        import asyncio as _asyncio
-        loop = _asyncio.get_event_loop()
-        if HAS_RICH:
-            with console.status(f"[dim]计算 {symbol} 财务质量评分...[/dim]", spinner="dots"):
-                from local_finance_tools import _piotroski_fscore, _altman_zscore
-                f_r = await loop.run_in_executor(None, _piotroski_fscore, {"symbol": symbol})
-                z_r = await loop.run_in_executor(None, _altman_zscore,    {"symbol": symbol})
-        else:
-            from local_finance_tools import _piotroski_fscore, _altman_zscore
-            f_r = _piotroski_fscore({"symbol": symbol})
-            z_r = _altman_zscore({"symbol": symbol})
-
-        _render_quality_scores(symbol, f_r, z_r)
+        return await super().cmd_quality(args)
 
     async def cmd_ichimoku(self, args: str):
-        """/ichimoku <symbol>  — 一目均衡表分析"""
-        symbol = args.strip().upper() if args.strip() else "AAPL"
-        if not _HAS_LOCAL_FINANCE:
-            if HAS_RICH: console.print("[red]local_finance_tools 未加载[/red]")
-            return
-
-        import asyncio as _asyncio
-        loop = _asyncio.get_event_loop()
-        if HAS_RICH:
-            with console.status(f"[dim]计算 {symbol} 一目均衡表...[/dim]", spinner="dots"):
-                from local_finance_tools import _calculate_ichimoku
-                r = await loop.run_in_executor(None, _calculate_ichimoku, {"symbol": symbol})
-        else:
-            from local_finance_tools import _calculate_ichimoku
-            r = _calculate_ichimoku({"symbol": symbol})
-
-        _render_ichimoku(r)
+        return await super().cmd_ichimoku(args)
 
     async def cmd_fear_greed(self, args: str):
-        """/feargreed  — 加密货币恐惧贪婪指数"""
-        if not _HAS_LOCAL_FINANCE:
-            if HAS_RICH: console.print("[red]local_finance_tools 未加载[/red]")
-            return
-
-        import asyncio as _asyncio
-        loop = _asyncio.get_event_loop()
-        if HAS_RICH:
-            with console.status("[dim]获取恐惧贪婪指数...[/dim]", spinner="dots"):
-                from local_finance_tools import _get_fear_greed_index
-                r = await loop.run_in_executor(None, _get_fear_greed_index, {})
-        else:
-            from local_finance_tools import _get_fear_greed_index
-            r = _get_fear_greed_index({})
-
-        _render_fear_greed(r)
+        return await super().cmd_fear_greed(args)
 
     async def cmd_funding(self, args: str):
-        """/funding [compare] [BTC ETH SOL] [exchange]  — 永续合约资金费率"""
-        parts = args.strip().split() if args.strip() else []
-        compare_mode = any(p.lower() == "compare" for p in parts)
-        parts = [p for p in parts if p.lower() != "compare"]
-
-        exchange = "binance"
-        syms = []
-        for p in parts:
-            if p.lower() in ("binance", "okx", "bybit", "coinbase"):
-                exchange = p.lower()
-            else:
-                syms.append(p.upper() + "/USDT" if "/" not in p else p.upper())
-        if not syms:
-            syms = ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
-
-        if not _HAS_LOCAL_FINANCE:
-            if HAS_RICH: console.print("[red]local_finance_tools 未加载[/red]")
-            return
-
-        import asyncio as _asyncio
-        loop = _asyncio.get_event_loop()
-
-        if compare_mode:
-            if HAS_RICH:
-                with console.status("[dim]并行查询 binance / okx / bybit...[/dim]", spinner="dots"):
-                    from local_finance_tools import _get_funding_rates_compare
-                    r = await loop.run_in_executor(None, _get_funding_rates_compare,
-                                                   {"symbols": syms})
-            else:
-                from local_finance_tools import _get_funding_rates_compare
-                r = _get_funding_rates_compare({"symbols": syms})
-            _render_funding_compare(r)
-        else:
-            if HAS_RICH:
-                with console.status(f"[dim]获取 {exchange} 资金费率...[/dim]", spinner="dots"):
-                    from local_finance_tools import _get_funding_rates
-                    r = await loop.run_in_executor(None, _get_funding_rates,
-                                                   {"exchange": exchange, "symbols": syms})
-            else:
-                from local_finance_tools import _get_funding_rates
-                r = _get_funding_rates({"exchange": exchange, "symbols": syms})
-            _render_funding_rates(r)
+        return await super().cmd_funding(args)
 
     # ── /realty 不动产命令 ─────────────────────────────────────────────────────
     # ── /football 足球分析命令 ────────────────────────────────────────────────
@@ -5534,717 +5256,40 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
     # ── /data 数据分析命令 ─────────────────────────────────────────────────────
 
     async def cmd_data(self, args: str):
-        """
-        /data sql "SELECT ..."     — DuckDB SQL 查询
-        /data export [filename]    — 导出上次结果到 Excel
-        /data load <csv_path>      — 加载 CSV 到 DuckDB
-        /data tables               — 列出已加载的表
-        """
-        import asyncio as _asyncio
-        loop = _asyncio.get_event_loop()
-        parts = args.strip().split(None, 1) if args.strip() else []
-        sub = parts[0].lower() if parts else "help"
-        rest = parts[1] if len(parts) > 1 else ""
-
-        try:
-            from data_analysis_tools import (sql_query, sql_list_tables,
-                                              export_to_excel, load_csv_data)
-        except ImportError as e:
-            if HAS_RICH: console.print(f"[red]data_analysis_tools 未加载: {e}[/red]")
-            return
-
-        if sub == "sql":
-            query = rest.strip().strip('"').strip("'")
-            if not query:
-                if HAS_RICH: console.print("[dim]用法: /data sql \"SELECT ...\"|/dim]")
-                return
-            if HAS_RICH:
-                with console.status("[dim]执行 SQL...[/dim]", spinner="dots"):
-                    r = await loop.run_in_executor(None, sql_query, {"query": query})
-            else:
-                r = sql_query({"query": query})
-            _render_sql_result(r)
-
-        elif sub == "export":
-            # Export the last finance tool result or a placeholder
-            fname = rest.strip() or None
-            # We'll export a sample from watchlist if available
-            watchlist = self.terminal.config.get("watchlist", ["AAPL","MSFT","SPY"])
-            try:
-                import yfinance as _yf
-                raw = _yf.download(watchlist[:5], period="1mo", progress=False, auto_adjust=True)
-                closes = raw["Close"] if hasattr(raw.columns, "levels") else raw
-                export_data = {"价格历史": closes.reset_index().to_dict("records")}
-            except Exception:
-                export_data = {"示例数据": [{"symbol": s, "note": "需 yfinance"} for s in watchlist]}
-            p = {"data": export_data, "filename": fname}
-            if HAS_RICH:
-                with console.status("[dim]生成 Excel...[/dim]", spinner="dots"):
-                    r = await loop.run_in_executor(None, export_to_excel, p)
-            else:
-                r = export_to_excel(p)
-            if r.get("success"):
-                msg = f"✓ 已导出: {r['path']}  ({r['total_rows']} 行)"
-                if HAS_RICH: console.print(f"[green]{msg}[/green]")
-                else: print(msg)
-            else:
-                if HAS_RICH: console.print(f"[red]{r.get('error')}[/red]")
-
-        elif sub == "load":
-            csv_path = rest.strip()
-            if not csv_path:
-                if HAS_RICH: console.print("[dim]用法: /data load <csv文件路径>[/dim]")
-                return
-            if HAS_RICH:
-                with console.status("[dim]加载 CSV...[/dim]", spinner="dots"):
-                    r = await loop.run_in_executor(None, load_csv_data, {"path": csv_path})
-            else:
-                r = load_csv_data({"path": csv_path})
-            if r.get("success"):
-                if HAS_RICH:
-                    console.print(f"[green]✓ 已加载 {r['rows']} 行 → 表 {r['table_name']}[/green]")
-                    console.print(f"[dim]列: {', '.join(r['columns'][:10])}[/dim]")
-                    console.print(f"[dim]现在可以: /data sql \"SELECT * FROM {r['table_name']} LIMIT 10\"[/dim]")
-            else:
-                if HAS_RICH: console.print(f"[red]{r.get('error')}[/red]")
-
-        elif sub == "tables":
-            r = sql_list_tables()
-            if r.get("success"):
-                tables = r.get("tables", [])
-                if HAS_RICH:
-                    if tables:
-                        console.print(f"[bold]已加载表:[/bold] {', '.join(tables)}")
-                    else:
-                        console.print("[dim]暂无已加载的表。使用 /data load <csv> 加载数据[/dim]")
-
-        else:
-            if HAS_RICH:
-                console.print("[dim]用法: /data [sql|export|load|tables][/dim]")
-                console.print("[dim]  /data sql \"SELECT * FROM my_table LIMIT 10\"[/dim]")
-                console.print("[dim]  /data load ~/Desktop/data.csv[/dim]")
-                console.print("[dim]  /data export my_report.xlsx[/dim]")
-                console.print("[dim]  /data tables[/dim]")
-
-    # ── /alert 价格预警 ────────────────────────────────────────────────────────
+        return await DataCommandsMixin.cmd_data(self, args)
 
     async def cmd_alert(self, args: str):
-        """
-        /alert add AAPL gt 200     — 设置预警（gt/lt/cross_up/cross_down）
-        /alert list                 — 列出所有预警
-        /alert delete <id>          — 删除预警
-        /alert check                — 检查所有预警状态
-        """
-        import asyncio as _asyncio
-        loop = _asyncio.get_event_loop()
-        parts = args.strip().split() if args.strip() else []
-        sub = parts[0].lower() if parts else "list"
-
-        try:
-            from data_analysis_tools import (add_price_alert, list_price_alerts,
-                                              delete_price_alert, check_alerts)
-        except ImportError as e:
-            if HAS_RICH: console.print(f"[red]data_analysis_tools 未加载: {e}[/red]")
-            return
-
-        if sub == "add":
-            # /alert add AAPL gt 200 [note...]
-            if len(parts) < 4:
-                if HAS_RICH:
-                    console.print("[dim]用法: /alert add <symbol> <gt|lt|cross_up|cross_down> <price> [备注][/dim]")
-                return
-            sym  = parts[1].upper()
-            cond = parts[2].lower()
-            try:
-                price = float(parts[3])
-            except ValueError:
-                if HAS_RICH: console.print("[red]价格必须是数字[/red]")
-                return
-            note = " ".join(parts[4:]) if len(parts) > 4 else ""
-            r = add_price_alert({"symbol": sym, "condition": cond, "price": price, "note": note})
-            if r.get("success"):
-                msg = r.get("message", "预警已设置")
-                if HAS_RICH: console.print(f"[green]✓ {msg}[/green]")
-                else: print(f"✓ {msg}")
-            else:
-                if HAS_RICH: console.print(f"[red]{r.get('error')}[/red]")
-
-        elif sub == "list":
-            r = list_price_alerts()
-            _render_alerts(r)
-
-        elif sub in ("delete", "del", "remove"):
-            alert_id = parts[1] if len(parts) > 1 else ""
-            if not alert_id:
-                if HAS_RICH: console.print("[dim]用法: /alert delete <预警ID>[/dim]")
-                return
-            r = delete_price_alert({"alert_id": alert_id})
-            if r.get("success"):
-                if HAS_RICH: console.print(f"[green]✓ 已删除预警 {r['deleted_id']}[/green]")
-            else:
-                if HAS_RICH: console.print(f"[red]{r.get('error')}[/red]")
-
-        elif sub == "check":
-            if HAS_RICH:
-                with console.status("[dim]检查价格预警...[/dim]", spinner="dots"):
-                    r = await loop.run_in_executor(None, check_alerts)
-            else:
-                r = check_alerts()
-            triggered = r.get("triggered", [])
-            if triggered:
-                if HAS_RICH:
-                    console.print(f"[bold yellow]🔔 {len(triggered)} 个预警已触发![/bold yellow]")
-                    for a in triggered:
-                        console.print(f"  [yellow]{a['symbol']}[/yellow] {a.get('condition','')} "
-                                      f"{a['price']} → 当前 [bold]{a.get('triggered_price','')}[/bold]")
-            else:
-                msg = r.get("message", "暂无触发的预警")
-                if HAS_RICH: console.print(f"[dim]{msg}[/dim]")
-
-        else:
-            if HAS_RICH:
-                console.print("[dim]用法: /alert [add|list|delete|check][/dim]")
-
-    # ── /corr 相关性矩阵 ───────────────────────────────────────────────────────
+        return await DataCommandsMixin.cmd_alert(self, args)
 
     async def cmd_corr(self, args: str):
-        """/corr AAPL MSFT TSLA SPY [1y|2y|6mo]  — 计算相关性矩阵"""
-        import asyncio as _asyncio
-        loop = _asyncio.get_event_loop()
-        parts = args.strip().upper().split() if args.strip() else []
-
-        # Last part can be period
-        period = "1y"
-        if parts and parts[-1].lower() in ("1y","2y","3y","6mo","ytd","5y"):
-            period = parts[-1].lower()
-            parts = parts[:-1]
-
-        symbols = parts if parts else ["AAPL","MSFT","TSLA","SPY","QQQ"]
-
-        try:
-            from data_analysis_tools import calc_correlation_matrix
-        except ImportError as e:
-            if HAS_RICH: console.print(f"[red]data_analysis_tools 未加载: {e}[/red]")
-            return
-
-        if HAS_RICH:
-            with console.status(f"[dim]计算 {', '.join(symbols)} 相关性矩阵...[/dim]", spinner="dots"):
-                r = await loop.run_in_executor(None, calc_correlation_matrix,
-                                               {"symbols": symbols, "period": period})
-        else:
-            r = calc_correlation_matrix({"symbols": symbols, "period": period})
-        _render_corr_matrix(r)
-
-    # ── /ptbt 多资产组合回测 ───────────────────────────────────────────────────
+        return await DataCommandsMixin.cmd_corr(self, args)
 
     async def cmd_portfolio_bt(self, args: str):
-        """/ptbt AAPL MSFT GOOG [0.4 0.3 0.3] [2y] [monthly]  — 多资产组合回测"""
-        import asyncio as _asyncio
-        loop = _asyncio.get_event_loop()
-        parts = args.strip().split() if args.strip() else []
-
-        try:
-            from data_analysis_tools import portfolio_backtest
-        except ImportError as e:
-            if HAS_RICH: console.print(f"[red]data_analysis_tools 未加载: {e}[/red]")
-            return
-
-        # Parse: symbols, optional weights (floats < 1), optional period, optional rebalance
-        symbols, weights, period, rebalance = [], [], "2y", "monthly"
-        _PERIODS   = {"1y","2y","3y","5y","6mo","ytd","max"}
-        _REBALANCE = {"monthly","quarterly","none"}
-        for p in parts:
-            pl = p.lower()
-            if pl in _PERIODS:   period = pl; continue
-            if pl in _REBALANCE: rebalance = pl; continue
-            try:
-                f = float(p)
-                if f < 2:   weights.append(f)
-                else:        symbols.append(p.upper())
-            except ValueError:
-                symbols.append(p.upper())
-
-        if not symbols:
-            symbols = ["AAPL","MSFT","GOOGL","SPY"]
-            if HAS_RICH:
-                console.print(f"[dim]未指定标的，使用默认: {symbols}[/dim]")
-
-        p_params = {"symbols": symbols, "period": period, "rebalance": rebalance}
-        if weights: p_params["weights"] = weights
-
-        if HAS_RICH:
-            with console.status(f"[dim]回测 {', '.join(symbols)} ({period})...[/dim]", spinner="dots"):
-                r = await loop.run_in_executor(None, portfolio_backtest, p_params)
-        else:
-            r = portfolio_backtest(p_params)
-        _render_portfolio_bt(r)
+        return await DataCommandsMixin.cmd_portfolio_bt(self, args)
 
     async def cmd_peer(self, args: str):
-        """/peer <symbol> [peer1 peer2 ...]  — 同行估值对比"""
-        parts = args.strip().upper().split() if args.strip() else []
-        symbol = parts[0] if parts else "AAPL"
-        peers  = parts[1:] if len(parts) > 1 else []
-
-        if not _HAS_LOCAL_FINANCE:
-            if HAS_RICH: console.print("[red]local_finance_tools 未加载[/red]")
-            return
-
-        import asyncio as _asyncio
-        loop = _asyncio.get_event_loop()
-        if HAS_RICH:
-            with console.status(f"[dim]获取 {symbol} 同行数据...[/dim]", spinner="dots"):
-                from local_finance_tools import _peer_comparison
-                r = await loop.run_in_executor(None, _peer_comparison,
-                                               {"symbol": symbol, "peers": peers})
-        else:
-            from local_finance_tools import _peer_comparison
-            r = _peer_comparison({"symbol": symbol, "peers": peers})
-
-        _render_peer_comparison(r)
+        return await DataCommandsMixin.cmd_peer(self, args)
 
     async def cmd_compare(self, args: str):
-        """多策略横向对比 → /api/v1/backtest/compare-strategies"""
-        parts = args.split() if args else ["SPY"]
-        symbol = parts[0].upper() if parts else "SPY"
-        start = parts[1] if len(parts) > 1 else "2020-01-01"
-        end = parts[2] if len(parts) > 2 else __import__("datetime").date.today().isoformat()
-        api_url = self.terminal.config.get("api_url", "http://localhost:8000")
-        import aiohttp
-
-        async def _do():
-            payload = {"symbol": symbol, "strategies": ["momentum","mean_reversion","breakout","turtle","ma_crossover"],
-                       "start_date": start, "end_date": end, "initial_capital": 100000, "commission_rate": 0.0003}
-            async with aiohttp.ClientSession() as sess:
-                async with sess.post(f"{api_url}/api/v1/backtest/compare-strategies", json=payload, timeout=aiohttp.ClientTimeout(total=90)) as resp:
-                    if resp.status != 200: raise RuntimeError(f"HTTP {resp.status}")
-                    body = await resp.json()
-                    return body.get("data", body)
-
-        if HAS_RICH:
-            with console.status(f"[dim]Comparing strategies on {symbol}...[/dim]", spinner="dots"):
-                try: data = await _do()
-                except Exception as e: _print_error(str(e), "tool"); return
-        else:
-            print(f"Comparing strategies on {symbol}...")
-            try: data = await _do()
-            except Exception as e: _print_error(str(e), "tool"); return
-
-        strategies = data.get("strategies", [])
-        bh = data.get("benchmark", {})
-        if HAS_RICH:
-            from rich.table import Table
-            tbl = Table(title=f"[bold]{symbol} Strategy Comparison[/bold]  {start} → {end}", show_header=True, header_style="bold")
-            for col in ["Rank", "Strategy", "Ann.Ret%", "Sharpe", "MaxDD%", "Calmar", "Sortino", "Win%", "Trades"]:
-                tbl.add_column(col, justify="right")
-            for s in strategies:
-                tbl.add_row(
-                    str(s.get("rank_by_sharpe", "")),
-                    s["name"],
-                    f"{s.get('annualized_return_pct',0):+.1f}%",
-                    f"{s.get('sharpe_ratio',0):.3f}",
-                    f"{s.get('max_drawdown_pct',0):.1f}%",
-                    f"{s.get('calmar_ratio',0):.2f}",
-                    f"{s.get('sortino_ratio',0):.2f}",
-                    f"{s.get('win_rate_pct',0):.0f}%",
-                    str(s.get("n_trades",0)),
-                )
-            tbl.add_row("—", "[dim]Buy & Hold[/dim]",
-                f"{bh.get('annualized_return_pct',0):+.1f}%",
-                f"{bh.get('sharpe_ratio',0):.3f}",
-                f"{bh.get('max_drawdown_pct',0):.1f}%", "—","—","—","2")
-            console.print(tbl)
-        else:
-            for s in strategies:
-                print(f"{s['name']}: Ann={s.get('annualized_return_pct',0):+.1f}% Sharpe={s.get('sharpe_ratio',0):.2f} DD={s.get('max_drawdown_pct',0):.1f}%")
+        return await DataCommandsMixin.cmd_compare(self, args)
 
     def cmd_watch(self, args: str):
-        parts = args.split() if args else ["list"]
-        action = parts[0].lower() if parts else "list"
-        watchlist = self.terminal.config.get("watchlist", [])
+        return OpsCommandsMixin.cmd_watch(self, args)
 
-        if action == "add" and len(parts) > 1:
-            symbol = parts[1].upper()
-            if symbol not in watchlist:
-                watchlist.append(symbol)
-                self.terminal.config["watchlist"] = watchlist
-                save_config(self.terminal.config)
-                console.print(f"[green]Added {symbol} to watchlist[/green]" if HAS_RICH
-                              else f"Added {symbol}")
-            else:
-                console.print(f"[dim]{symbol} already in watchlist[/dim]" if HAS_RICH
-                              else f"{symbol} already in watchlist")
-
-        elif action == "remove" and len(parts) > 1:
-            symbol = parts[1].upper()
-            if symbol in watchlist:
-                watchlist.remove(symbol)
-                self.terminal.config["watchlist"] = watchlist
-                save_config(self.terminal.config)
-                console.print(f"[dim]Removed {symbol} from watchlist[/dim]" if HAS_RICH
-                              else f"Removed {symbol}")
-            else:
-                console.print(f"[red]{symbol} not in watchlist[/red]" if HAS_RICH
-                              else f"{symbol} not in watchlist")
-
-        else:  # list
-            if HAS_RICH:
-                if watchlist:
-                    console.print(f"  [dim]Watchlist:[/dim] {', '.join(watchlist)}")
-                else:
-                    console.print("  [dim]Watchlist: Empty[/dim]")
-            else:
-                print(f"Watchlist: {', '.join(watchlist)}")
     def cmd_services(self, args: str):
-        """Show CLI service tiers and core workflows."""
-        service_groups = [
-            (
-                "CORE (Standard)",
-                [
-                    "Code agent with local tools (read/write/edit/search/run)",
-                    "Slash command workflows for quote/analyze/backtest/risk/screen",
-                    "Session save/load/export and interactive history management",
-                    "Model switching + thinking mode controls for response depth",
-                ],
-            ),
-            (
-                "QUANTUM Automation",
-                [
-                    "Agentic multi-step loop (auto read -> analyze -> edit -> execute)",
-                    "Auto-recovery guidance for failed commands and code fixes",
-                    "Strategy generation, backtest reporting, and risk analysis skills",
-                    "Cross-workspace research sync hooks (session + export pipeline)",
-                ],
-            ),
-            (
-                "ENTERPRISE Controls (included in Quantum)",
-                [
-                    "Service health diagnostics (/health) for backend + local model stack",
-                    "Governed command execution with dangerous-command blocking",
-                    "Audit-friendly session logs and reproducible command trails",
-                    "MCP-ready service integration path via external tool endpoints",
-                ],
-            ),
-        ]
-
-        quick_flow = [
-            "/model",
-            "/gen-strategy momentum AAPL",
-            "/backtest momentum AAPL 2024-01-01 2025-01-01",
-            "/risk AAPL",
-            "/export md strategy_report.md",
-        ]
-
-        if HAS_RICH:
-            console.print()
-            console.print("[bold]CLI Services[/bold] [dim](tiers + workflow)[/dim]")
-            console.print()
-            for group_name, items in service_groups:
-                console.print(f"  [bold #C08050]{group_name}[/bold #C08050]")
-                for item in items:
-                    console.print(f"    [dim]> {item}[/dim]")
-                console.print()
-
-            console.print("  [bold]Quick Start Flow[/bold]")
-            for cmd in quick_flow:
-                console.print(f"    [bold]{cmd}[/bold]")
-            console.print()
-        else:
-            print("\nCLI Services (tiers + workflow)\n")
-            for group_name, items in service_groups:
-                print(f"  {group_name}")
-                for item in items:
-                    print(f"    > {item}")
-                print()
-
-            print("  Quick Start Flow")
-            for cmd in quick_flow:
-                print(f"    {cmd}")
-            print()
+        return OpsCommandsMixin.cmd_services(self, args)
 
     def cmd_plan(self, args: str):
-        """Create an executable plan and store it for /apply-plan.
+        return OpsCommandsMixin.cmd_plan(self, args)
 
-        Supports multiple input styles:
-            /plan 1. Fetch quote  2. Generate chart  3. Output report
-            /plan fetch quote -> generate chart -> output report
-            /plan step one; step two; step three
-        """
-        raw = args.strip()
-        if not raw:
-            if HAS_RICH:
-                console.print("[dim]Usage: /plan <steps>  — see examples below[/dim]")
-                console.print("[dim]  /plan fetch AAPL quote -> generate chart -> write report[/dim]")
-                console.print("[dim]  /plan 1. Analyze sentiment  2. Build model  3. Backtest[/dim]")
-            else:
-                print("Usage: /plan <steps>")
-                print("  /plan fetch AAPL quote -> generate chart -> write report")
-                print("  /plan 1. Analyze sentiment  2. Build model  3. Backtest")
-            return
-
-        from plan_utils import parse_plan, format_plan
-        plan_steps = parse_plan(raw)
-        if not plan_steps:
-            console.print("[dim]No valid steps found[/dim]" if HAS_RICH else "No valid steps found")
-            return
-
-        # Store plain descriptions for /apply-plan (backwards compatible)
-        self.terminal.pending_plan = [s.description for s in plan_steps]
-
-        if HAS_RICH:
-            console.print()
-            console.print(f"[bold]Execution Plan[/bold]  [dim]({len(plan_steps)} steps)[/dim]")
-            console.print()
-            for s in plan_steps:
-                dep_str = f"  [dim](after {', '.join(str(d) for d in s.deps)})[/dim]" if s.deps else ""
-                label   = f" [dim][{s.name}][/dim]" if s.name else ""
-                console.print(f"  [dim]{s.index}.[/dim]{label} [bold]{s.description}[/bold]{dep_str}")
-            console.print()
-            console.print("[dim]Run /apply-plan to execute these steps.[/dim]")
-            console.print()
-        else:
-            print(f"\nExecution Plan ({len(plan_steps)} steps)")
-            for s in plan_steps:
-                dep_str = f"  (after {', '.join(str(d) for d in s.deps)})" if s.deps else ""
-                label   = f" [{s.name}]" if s.name else ""
-                print(f"  {s.index}.{label} {s.description}{dep_str}")
-            print("Run /apply-plan to execute these steps.\n")
     def cmd_plan_report(self, args: str):
-        """Show or export last plan execution report."""
-        rows = list(getattr(self.terminal, "last_plan_results", []) or [])
-        if not rows:
-            msg = "No plan report available. Run /apply-plan first."
-            console.print(f"[dim]{msg}[/dim]" if HAS_RICH else msg)
-            return
-
-        parts = args.split()
-        open_after = "--open" in parts
-        parts = [p for p in parts if p != "--open"]
-        fmt = parts[0].lower() if parts else "show"
-        out_file = parts[1] if len(parts) > 1 else None
-
-        if fmt == "show":
-            if HAS_RICH:
-                console.print()
-                console.print("[bold]Last Plan Report[/bold]")
-                for idx, row in enumerate(rows, 1):
-                    status_color = "green" if row["status"] == "completed" else ("yellow" if row["status"] == "blocked" else "red")
-                    console.print(
-                        f"  [dim]{idx}.[/dim] [{status_color}]{row['status']}[/{status_color}] "
-                        f"[bold]{row['step']}[/bold] [dim]({row['duration']}s, exit={row.get('exit_code')})[/dim]"
-                    )
-                    if row.get("error"):
-                        console.print(f"     [red]{row['error']}[/red]")
-                console.print()
-            else:
-                print("\nLast Plan Report")
-                for idx, row in enumerate(rows, 1):
-                    print(f"  {idx}. {row['status']}  {row['step']} ({row['duration']}s, exit={row.get('exit_code')})")
-                    if row.get("error"):
-                        print(f"     ERROR: {row['error']}")
-            return
-
-        if fmt not in {"md", "json"}:
-            msg = "Usage: /plan-report [md|json] [file] [--open]"
-            console.print(f"[dim]{msg}[/dim]" if HAS_RICH else msg)
-            return
-
-        if not out_file:
-            out_file = f"plan_report.{fmt}"
-
-        try:
-            if fmt == "json":
-                content = json.dumps(rows, ensure_ascii=False, indent=2)
-            else:
-                md_lines = ["# Plan Execution Report", ""]
-                for idx, row in enumerate(rows, 1):
-                    md_lines.append(
-                        f"{idx}. **{row['status']}** `{row['step']}` "
-                        f"({row['duration']}s, exit={row.get('exit_code')})"
-                    )
-                    if row.get("error"):
-                        md_lines.append(f"   - Error: {row['error']}")
-                md_lines.append("")
-                content = "\n".join(md_lines)
-
-            result = _tool_write_file({"path": out_file, "content": content})
-            if result.get("success"):
-                saved_path = result['data']['path']
-                msg = f"Plan report saved to {saved_path}"
-                console.print(f"[green]{msg}[/green]" if HAS_RICH else msg)
-                if open_after:
-                    self._open_file(saved_path)
-            else:
-                err = result.get("error", "Failed to save report")
-                console.print(f"[red]{err}[/red]" if HAS_RICH else err)
-        except Exception as e:
-            console.print(f"[red]{e}[/red]" if HAS_RICH else str(e))
+        return OpsCommandsMixin.cmd_plan_report(self, args)
 
     def cmd_git(self, args: str):
-        """Git helper shortcuts."""
-        policy = self.terminal.config.get("command_policy", "safe")
-        raw = args.strip()
-        if not raw:
-            sub = "status"
-            sub_args = ""
-        else:
-            parts = raw.split(maxsplit=1)
-            sub = parts[0].lower()
-            sub_args = parts[1].strip() if len(parts) > 1 else ""
-
-        mapping = {
-            "status":  "git status --short --branch",
-            "diff":    "git diff --stat",
-            "summary": "git status --short --branch && git diff --stat",
-            "branch":  "git branch -v",
-            "stash":   "git stash list",
-            "remote":  "git remote -v",
-        }
-        if sub == "patch":
-            cmd = "git diff" if not sub_args else f"git diff -- {sub_args}"
-        elif sub == "log":
-            limit = sub_args if sub_args and sub_args.isdigit() else "15"
-            cmd = f"git log --oneline --graph --decorate -{limit}"
-        elif sub == "commit":
-            status_probe = _tool_run_command({"command": "git status --porcelain", "policy": policy})
-            if not status_probe.get("success"):
-                err = status_probe.get("error", "Failed to inspect git status")
-                console.print(f"[red]{err}[/red]" if HAS_RICH else err)
-                return
-
-            status_out = status_probe.get("data", {}).get("stdout", "").strip()
-            if not status_out:
-                msg = "No changes to commit."
-                console.print(f"[dim]{msg}[/dim]" if HAS_RICH else msg)
-                return
-
-            changed_files = []
-            for line in status_out.splitlines():
-                if len(line) >= 4:
-                    changed_files.append(line[3:].strip())
-            unique_files = [f for f in changed_files if f]
-            total_files = len(unique_files)
-            file_preview = ", ".join(unique_files[:5]) if unique_files else "workspace"
-            body_summary = f"Files changed: {total_files}"
-            body_preview = f"Top files: {file_preview}"
-
-            if not sub_args:
-                files = []
-                for line in status_out.splitlines()[:3]:
-                    if len(line) >= 4:
-                        files.append(line[3:].strip())
-                sample = ", ".join(files) if files else "workspace"
-                total = len(status_out.splitlines())
-                sub_args = f"chore: update {total} file(s) ({sample})"
-                if HAS_RICH:
-                    console.print(f"[dim]Auto commit message:[/dim] {sub_args}")
-                else:
-                    print(f"Auto commit message: {sub_args}")
-
-            cmd = (
-                f"git add -A && git commit "
-                f"-m {shlex.quote(sub_args)} "
-                f"-m {shlex.quote(body_summary)} "
-                f"-m {shlex.quote(body_preview)}"
-            )
-        elif sub in mapping:
-            cmd = mapping[sub]
-        else:
-            msg = "Usage: /git [status|diff|summary|patch|log [N]|branch|stash|remote|commit <msg>]"
-            console.print(f"[dim]{msg}[/dim]" if HAS_RICH else msg)
-            return
-        result = _tool_run_command({"command": cmd, "policy": policy})
-        if not result.get("success"):
-            console.print(f"[red]{result.get('error', 'Command failed')}[/red]" if HAS_RICH
-                          else result.get("error", "Command failed"))
-            return
-        data = result.get("data", {})
-        out = (data.get("stdout", "") + ("\n" + data.get("stderr", "") if data.get("stderr") else "")).strip()
-        if out:
-            if HAS_RICH:
-                console.print(Syntax(out, "text", theme=_SYNTAX_THEME))
-            else:
-                print(out)
+        return OpsCommandsMixin.cmd_git(self, args)
 
     def cmd_gh(self, args: str):
-        """GitHub CLI helper — prs | issues | pr N | issue N | search | create-pr | diff N | checks N"""
-        raw = args.strip()
-        if not raw or raw in ("help", "--help"):
-            lines = [
-                "Usage: /gh <command>",
-                "  prs            List open pull requests",
-                "  issues         List open issues",
-                "  pr <N>         View pull request #N",
-                "  issue <N>      View issue #N",
-                "  diff <N>       Show PR #N diff",
-                "  checks <N>     Show PR #N CI checks",
-                "  search <q>     Search code in this repo",
-                "  create-pr      Create a PR (follow prompts)",
-                "  commits [N]    Show last N commits (default 10)",
-            ]
-            for ln in lines:
-                console.print(f"  [dim]{ln}[/dim]" if HAS_RICH else ln)
-            return
-
-        parts  = raw.split(maxsplit=1)
-        sub    = parts[0].lower()
-        subarg = parts[1].strip() if len(parts) > 1 else ""
-
-        def _run(action: str, extra: dict = None):
-            p = {"action": action}
-            if extra:
-                p.update(extra)
-            r = _tool_github(p)
-            if not r.get("success"):
-                msg = r.get("error", "GitHub command failed")
-                console.print(f"[red]{msg}[/red]" if HAS_RICH else msg)
-                return
-            data = r.get("data", {})
-            out = data.get("stdout", "") if isinstance(data, dict) else str(data)
-            if out.strip():
-                if HAS_RICH:
-                    # Pretty-print JSON if possible
-                    try:
-                        import json as _jj
-                        parsed = _jj.loads(out)
-                        from rich.pretty import pprint as _pp
-                        _pp(parsed, expand_all=False)
-                    except Exception:
-                        console.print(Syntax(out, "text", theme=_SYNTAX_THEME))
-                else:
-                    print(out)
-
-        if sub in ("prs", "pr_list"):
-            _run("list_prs")
-        elif sub in ("issues", "issue_list"):
-            _run("list_issues")
-        elif sub == "pr" and subarg.isdigit():
-            _run("view_pr", {"number": int(subarg)})
-        elif sub == "issue" and subarg.isdigit():
-            _run("view_issue", {"number": int(subarg)})
-        elif sub == "diff" and subarg.isdigit():
-            _run("pr_diff", {"number": int(subarg)})
-        elif sub == "checks" and subarg.isdigit():
-            _run("pr_checks", {"number": int(subarg)})
-        elif sub in ("commits", "log"):
-            n = int(subarg) if subarg.isdigit() else 10
-            _run("list_commits", {"limit": n})
-        elif sub == "search":
-            if not subarg:
-                console.print("[dim]Usage: /gh search <query>[/dim]" if HAS_RICH else "Usage: /gh search <query>")
-                return
-            _run("search", {"q": subarg, "kind": "code"})
-        elif sub in ("create-pr", "createpr", "create_pr"):
-            # Interactive prompts
-            try:
-                title = (console.input("  PR title: ") if HAS_RICH else input("  PR title: ")).strip()
-                body  = (console.input("  PR body (optional): ") if HAS_RICH else input("  PR body (optional): ")).strip()
-                base  = (console.input("  Base branch [main]: ") if HAS_RICH else input("  Base branch [main]: ")).strip() or "main"
-                _run("create_pr", {"title": title, "body": body, "base": base})
-            except (EOFError, KeyboardInterrupt):
-                console.print("[dim]Cancelled[/dim]" if HAS_RICH else "Cancelled")
-        else:
-            console.print(f"[dim]Unknown /gh sub-command: {sub}. Try /gh help[/dim]" if HAS_RICH
-                          else f"Unknown /gh sub-command: {sub}. Try /gh help")
+        return OpsCommandsMixin.cmd_gh(self, args)
 
     def _confirm_high_risk_command(self, command: str, risk: str, policy: str) -> bool:
         """Double-confirm high-risk commands even if policy allows them."""
@@ -6264,140 +5309,6 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
             os.system(f'start "" {path_q}')
         else:
             os.system(f"xdg-open {path_q} >/dev/null 2>&1")
-
-    async def cmd_status(self, args: str):
-        """Runtime status panel: engine · tools · model · context · risk"""
-        t = self.terminal
-        cfg = t.config
-        model_id  = cfg.get("model", "qwen2.5:7b")
-        tool_count = len(ARIA_TOOLS) + len(LOCAL_TOOLS)
-        skill_count = len(SKILLS)
-
-        # Runtime
-        _lp = t._last_provider or ""
-        _badge = next((v.get("badge","") for v in MODELS.values() if v["id"]==model_id), "")
-        if _lp == "ollama":
-            runtime = "local (Ollama)"
-        elif _lp in ("deepseek","openai","anthropic","groq","dashscope","together"):
-            runtime = f"cloud ({_lp})"
-        elif _badge == "Cloud" or "cloud" in model_id.lower():
-            runtime = "cloud"
-        else:
-            runtime = "local" if getattr(t, "_ollama_alive", False) else "unknown"
-
-        # Context usage
-        conv = t.conversation
-        est_tok = sum(len(m.get("content","")) for m in conv) // 3
-        max_ctx = get_model_cfg(model_id).get("num_ctx", 16384)
-        ctx_pct = min(100, int(est_tok / max_ctx * 100))
-
-        # Model display name
-        mk = next((k for k,v in MODELS.items() if v["id"]==model_id), None)
-        model_display = MODELS[mk]["name"] if mk else model_id
-
-        if HAS_RICH:
-            console.print()
-            console.print("[bold]Runtime Status[/bold]")
-            console.print()
-            rows = [
-                ("runtime",   runtime),
-                ("model",     model_display),
-                ("engine",    "quant engine v3.0"),
-                ("tools",     f"{tool_count} available  ·  {skill_count} skills"),
-                ("risk",      "enabled"),
-                ("context",   f"{est_tok:,} / {max_ctx:,} tokens  ({ctx_pct}%)"),
-            ]
-            # Loaded context sources
-            if getattr(t, "_project_session", None):
-                rows.append(("project", f"{t._project_session.name}  ({t._project_session.stats.get('total_files',0)} files)"))
-            if getattr(t, "_file_session", None) and t._file_session.get_active():
-                fc = t._file_session.get_active()
-                rows.append(("file", f"{fc.filename}  ({fc.size_kb:.0f} KB)"))
-            # Banner mode
-            rows.append(("banner", cfg.get("banner", "full")))
-            rows.append(("workspace", os.getcwd().replace(os.path.expanduser("~"), "~")))
-            for k, v in rows:
-                console.print(f"  [dim]{k:<12}[/dim][cyan]{v}[/cyan]")
-            console.print()
-        else:
-            print("\nRuntime Status")
-            print(f"  runtime  {runtime}")
-            print(f"  model    {model_display}")
-            print(f"  tools    {tool_count}")
-            print(f"  context  {est_tok}/{max_ctx}")
-            print()
-
-    def cmd_trace(self, args: str):
-        """Show runtime trace for recent tool calls."""
-        trace = getattr(self.terminal, "runtime_trace", None)
-        if trace is None:
-            msg = "Runtime trace is unavailable."
-            console.print(f"[dim]{msg}[/dim]" if HAS_RICH else msg)
-            return
-        if "--json" in args.split():
-            payload = json.dumps(trace.to_dict(), ensure_ascii=False, indent=2)
-            if HAS_RICH:
-                console.print(Syntax(payload, "json", theme=_SYNTAX_THEME))
-            else:
-                print(payload)
-            return
-        calls = trace.tool_calls[-20:]
-        if not calls:
-            msg = "No tool calls recorded yet."
-            console.print(f"[dim]{msg}[/dim]" if HAS_RICH else msg)
-            return
-        if HAS_RICH:
-            console.print()
-            console.print("[bold]Runtime Trace[/bold]")
-            console.print()
-            for call in calls:
-                ok = bool(call.result.get("success"))
-                style = "green" if ok else "red"
-                console.print(
-                    f"  [{style}]{'ok' if ok else 'err':<3}[/{style}] "
-                    f"[bold]{call.tool}[/bold] "
-                    f"[dim]{call.elapsed_ms:.0f} ms[/dim]"
-                )
-                if not ok and call.result.get("error"):
-                    console.print(f"      [red]{str(call.result.get('error'))[:180]}[/red]")
-            console.print()
-        else:
-            print("\nRuntime Trace")
-            for call in calls:
-                ok = "ok" if call.result.get("success") else "err"
-                print(f"  {ok:<3} {call.tool} {call.elapsed_ms:.0f} ms")
-            print()
-
-    async def cmd_health(self, args: str):
-        import aiohttp
-        if HAS_RICH:
-            console.print()
-        urls = [
-            ("AWS Backend", self.terminal.api_url, "/health"),
-            ("Local Server", self.terminal.config.get("local_url", "http://localhost:8001"), "/health"),
-            ("Ollama", self.terminal.config.get("ollama_url", "http://localhost:11434"), "/api/tags"),
-        ]
-        for label, url, path in urls:
-            try:
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(f"{url}{path}", timeout=aiohttp.ClientTimeout(total=5)) as resp:
-                        data = await resp.json()
-                        if label == "Ollama":
-                            models = [m.get("name", "?") for m in data.get("models", [])[:3]]
-                            detail = ", ".join(models)
-                        else:
-                            detail = f"v{data.get('version', '?')}"
-                        if HAS_RICH:
-                            console.print(f"  [green]●[/green] [dim]{label}[/dim]  {detail}")
-                        else:
-                            print(f"  + {label}  {detail}")
-            except Exception:
-                if HAS_RICH:
-                    console.print(f"  [red]●[/red] [dim]{label}[/dim]  offline")
-                else:
-                    print(f"  - {label}  offline")
-        if HAS_RICH:
-            console.print()
 
     def cmd_clear(self, args: str):
         self.terminal.conversation = []
@@ -6738,439 +5649,19 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
             )
 
     def cmd_bug(self, args: str):
-        """Report an issue — Claude Code-style /bug.
-
-        Usage: /bug <描述问题>
-        Saves the report + recent conversation context + env locally. Uploaded
-        only if you opted in via /privacy; otherwise file at the GitHub issues
-        link shown. Honors ARIA_NO_TELEMETRY.
-        """
-        desc = args.strip()
-        if not desc:
-            console.print("[dim]用法: /bug <描述你遇到的问题>[/dim]" if HAS_RICH
-                          else "Usage: /bug <description>")
-            return
-        ctx_parts = []
-        for m in self.terminal.conversation[-6:]:
-            _c = (m.get("content", "") or "")[:300]
-            ctx_parts.append(f"{m.get('role','')}: {_c}")
-        ctx = "\n".join(ctx_parts)
-        import platform as _pf
-        env = (f"v{__version__} · {_pf.system()} · py{_pf.python_version()} · "
-               f"model={self.terminal.config.get('model','')}")
-        self.terminal._record_feedback("bug", ctx, comment=f"{desc}\n\n[env] {env}")
-        gh = "https://github.com/Cinsoul/Aria-Code/issues"
-        if HAS_RICH:
-            console.print("  [#C08050]✓ 已记录问题（本地）[/#C08050]")
-            console.print(f"  [dim]上传需 /privacy opt-in · 或直接提 issue: {gh}[/dim]")
-        else:
-            print(f"  ✓ Bug recorded locally. Upload via /privacy opt-in, or file: {gh}")
+        return DiagnosticOpsCommandsMixin.cmd_bug(self, args)
 
     def cmd_accuracy(self, args: str):
-        """Settle pending market calls vs live prices and show the track record.
-
-        Usage: /accuracy
-        Verifies the LLM's directional calls (看多/看空/neutral) against actual
-        moves — the finance ground-truth feedback loop. Correct/wrong calls
-        become chosen/rejected DPO signals (local; uploaded only if opted in).
-        """
-        res = self.terminal._verify_predictions(min_age_hours=24.0)
-        try:
-            from apps.cli.prediction_feedback import PredictionTracker
-            acc = PredictionTracker(CONFIG_DIR).accuracy()
-        except Exception:
-            acc = {}
-        if HAS_RICH:
-            console.print()
-            console.print("  [bold]预测战绩[/bold]  [dim]LLM 方向判断 vs 实际行情[/dim]")
-            if res.get("settled"):
-                console.print(f"  [dim]本次结算 {res['settled']} 笔："
-                              f"命中 [green]{res['correct']}[/green] / "
-                              f"落空 [red]{res['wrong']}[/red][/dim]")
-            _acc = acc.get("accuracy")
-            _acc_str = f"{_acc:.0%}" if _acc is not None else "—"
-            console.print(
-                f"  累计：已结算 [bold]{acc.get('settled',0)}[/bold] · "
-                f"命中率 [#C08050]{_acc_str}[/#C08050] · "
-                f"待结算 [dim]{acc.get('pending',0)}[/dim]"
-            )
-            if not acc.get("total"):
-                console.print("  [dim]暂无记录 — 用 /team 或 /analyze 让 AI 给出方向判断后会自动追踪[/dim]")
-        else:
-            print(f"  预测战绩: 结算{res.get('settled',0)} 命中率"
-                  f"{acc.get('accuracy')} 待结算{acc.get('pending',0)}")
-
-    # ── Cost / usage display ─────────────────────────────────────────────────
+        return DiagnosticOpsCommandsMixin.cmd_accuracy(self, args)
 
     def cmd_cost(self, args: str):
-        """Show session token usage and estimated cost.
-
-        Token pricing (rough estimates, OpenAI/DeepSeek comparable tier):
-          - Input:   $0.14 / 1M tokens
-          - Output:  $0.28 / 1M tokens
-          - Thinking: $1.10 / 1M tokens  (if thinking model)
-        Local Ollama models: $0 (free).
-        """
-        import time as _t
-        elapsed = _t.time() - self.terminal._session_start
-        inp = self.terminal._session_input_tokens
-        out = self.terminal._session_output_tokens
-        think = self.terminal._session_thinking_tokens
-        turns = self.terminal._session_turns
-        total = inp + out + think
-
-        # Estimate cost (USD) — only meaningful for cloud providers
-        is_local = self.terminal._last_provider in ("ollama", "ollama_cache", "local")
-        cost_usd = 0.0
-        if not is_local:
-            cost_usd = (inp * 0.14 + out * 0.28 + think * 1.10) / 1_000_000
-
-        hh = int(elapsed // 3600)
-        mm = int((elapsed % 3600) // 60)
-        ss = int(elapsed % 60)
-        duration = f"{hh}h {mm:02d}m {ss:02d}s" if hh else f"{mm}m {ss:02d}s"
-
-        if HAS_RICH:
-            console.print()
-            console.print("[bold]Session Usage[/bold]")
-            console.print()
-            console.print(f"  [dim]{'Duration':<22}[/dim]{duration}")
-            console.print(f"  [dim]{'Turns':<22}[/dim]{turns}")
-            console.print(f"  [dim]{'Input tokens':<22}[/dim]{inp:,}")
-            console.print(f"  [dim]{'Output tokens':<22}[/dim]{out:,}")
-            if think:
-                console.print(f"  [dim]{'Thinking tokens':<22}[/dim]{think:,}")
-            console.print(f"  [dim]{'Total tokens':<22}[/dim][bold]{total:,}[/bold]")
-            if is_local:
-                console.print(f"  [dim]{'Est. cost':<22}[/dim][green]$0.00 (local)[/green]")
-            elif total > 0:
-                console.print(f"  [dim]{'Est. cost':<22}[/dim]${cost_usd:.4f} USD")
-            console.print(f"  [dim]{'Provider':<22}[/dim]{self.terminal._last_provider}")
-            console.print()
-        else:
-            print(f"  Session: {duration}  Turns: {turns}")
-            print(f"  Tokens: {inp:,} in / {out:,} out / {total:,} total")
-            if not is_local and total > 0:
-                print(f"  Est. cost: ${cost_usd:.4f}")
-
-    # ── Todo / task tracking ─────────────────────────────────────────────────
+        return DiagnosticOpsCommandsMixin.cmd_cost(self, args)
 
     def cmd_todo(self, args: str):
-        """Persistent task tracking for the current session.
-
-        Usage:
-            /todo                 — list all tasks
-            /todo add <task>      — add a new task
-            /todo done <id>       — mark task done
-            /todo remove <id>     — remove task
-            /todo clear           — wipe all tasks
-
-        Inspired by Claude Code's TodoRead / TodoWrite tools.
-        Tasks are stored in ~/.arthera/todos.json and injected into context.
-        """
-        import json as _json
-        todo_file = CONFIG_DIR / "todos.json"
-
-        def _load():
-            try:
-                if todo_file.exists():
-                    return _json.loads(todo_file.read_text(encoding="utf-8"))
-            except Exception:
-                pass
-            return []
-
-        def _save(tasks):
-            CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-            todo_file.write_text(_json.dumps(tasks, ensure_ascii=False, indent=2), encoding="utf-8")
-
-        parts = args.strip().split(maxsplit=1)
-        sub  = parts[0].lower() if parts else "list"
-        rest = parts[1].strip() if len(parts) > 1 else ""
-        tasks = _load()
-
-        if sub in ("", "list", "ls"):
-            if not tasks:
-                console.print("[dim]No tasks. Add with: /todo add <task>[/dim]" if HAS_RICH
-                              else "No tasks")
-                return
-            if HAS_RICH:
-                console.print()
-                for i, t in enumerate(tasks):
-                    status_icon = "[green]✓[/green]" if t.get("done") else "[yellow]○[/yellow]"
-                    style = "dim" if t.get("done") else ""
-                    text = t.get("text", "")
-                    console.print(f"  {status_icon} [dim]{i}[/dim]  [{style}]{text}[/{style}]" if style
-                                  else f"  {status_icon} [dim]{i}[/dim]  {text}")
-                pending = sum(1 for t in tasks if not t.get("done"))
-                console.print(f"\n  [dim]{pending}/{len(tasks)} pending[/dim]")
-                console.print()
-            else:
-                for i, t in enumerate(tasks):
-                    mark = "✓" if t.get("done") else "○"
-                    print(f"  {mark} {i}  {t.get('text', '')}")
-
-        elif sub == "add":
-            if not rest:
-                console.print("[dim]Usage: /todo add <task text>[/dim]" if HAS_RICH
-                              else "Usage: /todo add <task>")
-                return
-            task = {"text": rest, "done": False, "id": len(tasks)}
-            tasks.append(task)
-            _save(tasks)
-            console.print(f"  [dim]✓ Added: {rest}[/dim]" if HAS_RICH else f"Added: {rest}")
-
-        elif sub in ("done", "check", "complete"):
-            try:
-                idx = int(rest)
-                tasks[idx]["done"] = True
-                _save(tasks)
-                console.print(f"  [dim]✓ Done: {tasks[idx]['text']}[/dim]" if HAS_RICH
-                              else f"Done: {tasks[idx]['text']}")
-            except (ValueError, IndexError):
-                console.print("[dim]Usage: /todo done <id>[/dim]" if HAS_RICH else "Usage: /todo done <id>")
-
-        elif sub in ("remove", "rm", "delete", "del"):
-            try:
-                idx = int(rest)
-                removed = tasks.pop(idx)
-                _save(tasks)
-                console.print(f"  [dim]Removed: {removed['text']}[/dim]" if HAS_RICH
-                              else f"Removed: {removed['text']}")
-            except (ValueError, IndexError):
-                console.print("[dim]Usage: /todo remove <id>[/dim]" if HAS_RICH else "bad index")
-
-        elif sub == "clear":
-            _save([])
-            console.print("[dim]All tasks cleared[/dim]" if HAS_RICH else "Cleared")
-
-        else:
-            # Treat unrecognised subcommand as shorthand for /todo add
-            full_text = (sub + " " + rest).strip()
-            task = {"text": full_text, "done": False, "id": len(tasks)}
-            tasks.append(task)
-            _save(tasks)
-            console.print(f"  [dim]✓ Added: {full_text}[/dim]" if HAS_RICH else f"Added: {full_text}")
-
-    # ── Doctor diagnostic ────────────────────────────────────────────────────
+        return DiagnosticOpsCommandsMixin.cmd_todo(self, args)
 
     def cmd_doctor(self, args: str):
-        """Diagnose Aria Code installation: models, API keys, backends, tools.
-
-        Inspired by Claude Code's /doctor command.
-        """
-        try:
-            from doctor import run_doctor
-
-            report = run_doctor(
-                self.terminal.config,
-                check_network="--network" in (args or "").split(),
-            )
-            if HAS_RICH:
-                from rich.table import Table as _DoctorTable
-                table = _DoctorTable(title="Aria Code doctor", box=rich_box.ROUNDED)
-                table.add_column("Status", width=8)
-                table.add_column("Check", style="bold")
-                table.add_column("Detail", style="dim")
-                table.add_column("Suggestion", style="dim")
-                icons = {"ok": "[green]OK[/green]", "warn": "[yellow]WARN[/yellow]", "err": "[red]ERR[/red]"}
-                for check in report.checks:
-                    table.add_row(
-                        icons.get(check.status, check.status.upper()),
-                        check.name,
-                        check.detail,
-                        check.suggestion,
-                    )
-                console.print()
-                console.print(table)
-                color = "green" if report.errors == 0 and report.warnings == 0 else ("yellow" if report.errors == 0 else "red")
-                console.print(f"[{color}]{report.passed} passed · {report.warnings} warnings · {report.errors} errors[/{color}]")
-                console.print()
-            else:
-                from doctor import format_doctor_plain
-                print(format_doctor_plain(report))
-            return
-        except Exception as exc:
-            console.print(f"[yellow]doctor module unavailable, using legacy checks: {exc}[/yellow]" if HAS_RICH else f"doctor module unavailable: {exc}")
-
-        import importlib as _il, subprocess as _sp, shutil as _sh
-
-        cfg = self.terminal.config
-        ollama_url = cfg.get("ollama_url", "http://localhost:11434")
-        api_url    = cfg.get("api_url", "http://localhost:8000")
-
-        checks: List[tuple] = []  # (label, status, detail)
-
-        def _ok(label, detail=""): checks.append(("ok",   label, detail))
-        def _warn(label, detail=""): checks.append(("warn", label, detail))
-        def _err(label, detail=""): checks.append(("err",  label, detail))
-
-        # 1. Python version
-        import sys as _sys
-        pyver = f"{_sys.version_info.major}.{_sys.version_info.minor}.{_sys.version_info.micro}"
-        if _sys.version_info >= (3, 9):
-            _ok("Python", pyver)
-        else:
-            _warn("Python", f"{pyver} (3.9+ recommended)")
-
-        # 2. Ollama connectivity
-        try:
-            import urllib.request as _ur
-            _opener = _ur.build_opener(_ur.ProxyHandler({}))
-            _r = _opener.open(f"{ollama_url}/api/tags", timeout=3)
-            _data = json.loads(_r.read())
-            models = [m["name"] for m in _data.get("models", [])]
-            if models:
-                _ok("Ollama", f"{len(models)} models: {', '.join(models[:4])}")
-            else:
-                _warn("Ollama", "running but no models installed (ollama pull qwen2.5-coder:1.5b)")
-        except Exception as e:
-            _err("Ollama", f"not reachable at {ollama_url} ({e})")
-
-        # 3. Backend API
-        try:
-            import urllib.request as _ur
-            _opener = _ur.build_opener(_ur.ProxyHandler({}))
-            _r = _opener.open(f"{api_url}/health", timeout=3)
-            _ok("Backend", f"running at {api_url}")
-        except Exception as e:
-            _warn("Backend", f"offline at {api_url} — local Ollama mode will be used")
-
-        # 4. API keys
-        key_checks = [
-            ("finnhub",      "股票行情"),
-            ("alphavantage", "历史数据"),
-            ("newsapi",      "新闻"),
-            ("brave",        "网络搜索"),
-            ("coingecko",    "加密货币"),
-        ]
-        for svc, desc in key_checks:
-            k = _get_provider_key(svc)
-            if k:
-                _ok(f"API key: {svc}", f"{desc} ({'*'*6}{k[-4:]})")
-            else:
-                _warn(f"API key: {svc}", f"{desc} 未配置 (/apikey set {svc} <key>)")
-
-        # Check LLM cloud keys
-        llm_keys = [("deepseek","DeepSeek"),("openai","OpenAI"),
-                    ("siliconflow","SiliconFlow"),("moonshot","Moonshot")]
-        _has_any_llm = False
-        for svc, name in llm_keys:
-            k = _get_provider_key(svc)
-            if k:
-                _ok(f"LLM key: {svc}", f"{name} configured")
-                _has_any_llm = True
-        if not _has_any_llm:
-            _warn("LLM keys", "No cloud LLM keys — Ollama must be running for AI responses")
-
-        # 5. Core Python packages
-        _pkgs = [
-            ("aiohttp",     "async HTTP"),
-            ("rich",        "terminal UI"),
-            ("prompt_toolkit", "autocomplete"),
-            ("yfinance",    "market data"),
-            ("pandas",      "data processing"),
-            ("requests",    "HTTP client"),
-        ]
-        for pkg, desc in _pkgs:
-            try:
-                m = _il.import_module(pkg)
-                ver = getattr(m, "__version__", "?")
-                _ok(f"pkg: {pkg}", f"{desc} v{ver}")
-            except ImportError:
-                _warn(f"pkg: {pkg}", f"{desc} not installed (pip install {pkg})")
-
-        # 6. ARIA.md / project context
-        aria_md = pathlib.Path.cwd() / "ARIA.md"
-        if aria_md.exists():
-            lines = len(aria_md.read_text(encoding="utf-8").splitlines())
-            _ok("ARIA.md", f"{lines} lines of project context")
-        else:
-            _warn("ARIA.md", f"not found in {pathlib.Path.cwd()} (use /init to create)")
-
-        # 7. MCP servers
-        if _HAS_MCP:
-            try:
-                reg = self.terminal._mcp_registry
-                if reg and hasattr(reg, "list_tools"):
-                    tools = reg.list_tools()
-                    _ok("MCP", f"{len(tools)} tools from MCP servers")
-                else:
-                    _warn("MCP", "registry not started yet")
-            except Exception:
-                _warn("MCP", "loaded but no active servers")
-        else:
-            _warn("MCP", "mcp_client not found — MCP support disabled")
-
-        # 8. Tools count
-        tool_count = len(ARIA_TOOLS) + len(LOCAL_TOOLS)
-        _ok("Aria tools", f"{tool_count} tools loaded")
-
-        # Render results
-        console.print() if HAS_RICH else None
-        if HAS_RICH:
-            console.print("[bold]Aria Code — Diagnostics[/bold]")
-            console.print()
-            icons = {"ok": "[green]✓[/green]", "warn": "[yellow]⚠[/yellow]", "err": "[red]✗[/red]"}
-            for status, label, detail in checks:
-                icon = icons[status]
-                detail_str = f"  [dim]{detail}[/dim]" if detail else ""
-                console.print(f"  {icon}  {label:<28}{detail_str}")
-            console.print()
-            n_ok = sum(1 for s, *_ in checks if s == "ok")
-            n_w  = sum(1 for s, *_ in checks if s == "warn")
-            n_e  = sum(1 for s, *_ in checks if s == "err")
-            summary_color = "green" if n_e == 0 and n_w == 0 else ("yellow" if n_e == 0 else "red")
-            console.print(f"  [{summary_color}]{n_ok} passed · {n_w} warnings · {n_e} errors[/{summary_color}]")
-            console.print()
-
-            # ── Data source configuration guide ───────────────────────────────
-            _fh_ok  = bool(_get_provider_key("finnhub"))
-            _av_ok  = bool(_get_provider_key("alphavantage"))
-            _na_ok  = bool(_get_provider_key("newsapi"))
-            _ak_ok  = True  # akshare is always available (no key needed)
-            _llm_ok = any(_get_provider_key(p) for p in ("deepseek","openai","anthropic","groq"))
-
-            _guide_needed = not (_fh_ok and _av_ok and _na_ok and _llm_ok)
-            if _guide_needed:
-                console.print("[bold]数据源配置指南[/bold]  [dim](完整功能需要以下 key)[/dim]")
-                console.print()
-                _guide_rows = [
-                    # (service, key_configured, priority, what_it_unlocks, register_url, config_cmd)
-                    ("finnhub",      _fh_ok,  "P0",
-                     "美股/港股实时行情 + 完整 TA 指标（RSI/MACD/MA）",
-                     "finnhub.io/register",  "finnhub"),
-                    ("akshare",      _ak_ok,  "P0",
-                     "A 股历史数据 + TA 指标（内置，无需 key）",
-                     "",                      ""),
-                    ("alphavantage", _av_ok,  "P1",
-                     "补充历史 OHLCV、基本面数据（每日 500 次免费）",
-                     "alphavantage.co/support",  "alphavantage"),
-                    ("newsapi",      _na_ok,  "P1",
-                     "全球财经新闻摘要（100 req/天免费）",
-                     "newsapi.org/register",     "newsapi"),
-                    ("deepseek",     _llm_ok, "P2",
-                     "云端 LLM — 本地模型不够时的备用推理引擎",
-                     "platform.deepseek.com",    "deepseek"),
-                ]
-                for svc, ok, pri, desc, url, cmd in _guide_rows:
-                    if ok:
-                        console.print(f"  [green]✓[/green]  [dim]{svc:<14}[/dim]{desc}")
-                    else:
-                        pri_color = "cyan" if pri == "P0" else ("yellow" if pri == "P1" else "dim")
-                        console.print(f"  [dim]○[/dim]  [dim]{svc:<14}[/dim]{desc}")
-                        if cmd:
-                            console.print(
-                                f"       [dim]注册：{url}  →  配置：[/dim]"
-                                f"[bold cyan]/apikey set {cmd} <KEY>[/bold cyan]"
-                            )
-                console.print()
-                console.print("[dim]配置后运行 /doctor 重新检查 · /apikey list 查看已有 key[/dim]")
-                console.print()
-        else:
-            print("Aria Code Diagnostics")
-            for status, label, detail in checks:
-                mark = "✓" if status == "ok" else ("⚠" if status == "warn" else "✗")
-                print(f"  {mark}  {label}  {detail}")
+        return DiagnosticOpsCommandsMixin.cmd_doctor(self, args)
 
     # ── Hooks management ─────────────────────────────────────────────────────
 
@@ -7249,7 +5740,7 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
                     console.print(f"  [dim]No hooks found.[/dim]")
                     console.print(f"  [dim]Hook dirs:[/dim]")
                     for d in hooks_dirs:
-                        console.print(f"    [dim]{d}[/dim]")
+                        console.print(f"    [dim]{_display_path(d, fallback='hook dir')}[/dim]")
                     console.print(f"  [dim]Events: prompt_submit  response_done  tool_use  compact[/dim]")
                 else:
                     print("No hooks. Dirs:", [str(d) for d in hooks_dirs])
@@ -7257,11 +5748,11 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
             if HAS_RICH:
                 console.print()
                 for hdir, name, path in found:
-                    console.print(f"  [dim]{name:<28}[/dim]  {path}")
+                    console.print(f"  [dim]{name:<28}[/dim]  {_display_path(path, fallback='hook')}")
                 console.print()
             else:
                 for hdir, name, path in found:
-                    print(f"  {name}  {path}")
+                    print(f"  {name}  {_display_path(path, fallback='hook')}")
 
         elif sub == "edit":
             if not rest:
@@ -7510,424 +6001,6 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
                 fp.write_text(content, encoding="utf-8")
                 created.append(str(fp))
         return created
-    # ---- Aria-exclusive quant features ----
-    # ── financial-services workflow 命令 ────────────────────────────────────────
-
-    async def cmd_research(self, args: str):
-        """Market Researcher 工作流（参考 anthropics/financial-services market-researcher agent）。
-
-        触发完整研究流程：行情 → 技术图表 → 近期新闻 → 信号摘要 → 研究报告。
-
-        Usage:
-            /research AAPL
-            /research BTC-USD
-            /research 600519.SS
-        """
-        sym = args.strip().upper() or "AAPL"
-        prompt = (
-            f"请对 {sym} 进行完整的 Market Researcher 分析：\n"
-            f"1. 获取实时行情并显示报价卡片\n"
-            f"2. 生成 6 个月技术图表（含 SMA20、SMA50、BB、RSI）\n"
-            f"3. 抓取最新 5 条相关新闻\n"
-            f"4. 分析主要技术信号（趋势、超买/超卖、关键支撑/阻力）\n"
-            f"5. 输出一份简明研究报告（结论 + 风险提示）\n\n"
-            f"标的代码：{sym}"
-        )
-        await self.terminal.handle_user_input(prompt)
-
-    async def cmd_earnings_workflow(self, args: str):
-        """财报分析工作流（参考 anthropics/financial-services earnings-reviewer agent）。
-
-        工具链：SEC Edgar → Finnhub financials → AI 摘要 → 财报 table card + 报告。
-
-        Usage:
-            /earnings AAPL
-            /earnings MSFT Q1 2026
-        """
-        parts  = args.strip().split()
-        sym    = parts[0].upper() if parts else "AAPL"
-        period = " ".join(parts[1:]) if len(parts) > 1 else "最近一个季度"
-        prompt = (
-            f"请对 {sym} 进行 Earnings Reviewer 财报分析（{period}）：\n"
-            f"1. 获取最新季报关键指标（EPS、营收、毛利率、同比增速）\n"
-            f"2. 对比市场预期与实际结果（beat/miss 分析）\n"
-            f"3. 提取管理层展望与主要风险因素\n"
-            f"4. 以结构化 table card 呈现核心财务数据\n"
-            f"5. 输出一份简明财报评论（3-5 段）\n\n"
-            f"标的：{sym}，报告期：{period}"
-        )
-        await self.terminal.handle_user_input(prompt)
-
-    # ── 经营权共创平台 Agent 命令 ─────────────────────────────────────────────────
-
-    async def cmd_asset_diag(self, args: str):
-        """资产诊断 Agent: /asset-diag <资产ID>
-
-        对指定资产运行 AssetDiagnosisAgent，判断处置方式（出租/共创/出售）。
-        优先从后端 API 拉取完整资产数据；无数据时以 ID 作为位置标识演示。
-
-        Usage:
-            /asset-diag asset_000001
-            /asset-diag 中关村创业大街101号
-        """
-        asset_id = args.strip()
-        if not asset_id:
-            _p("用法: /asset-diag <资产ID或名称>  例: /asset-diag asset_000001", "dim")
-            return
-
-        # 1. 先尝试从后端拉取资产详情
-        asset_info = {}
-        api_url = self.terminal.config.get("api_url", "http://localhost:8000")
-        try:
-            import aiohttp
-            async with aiohttp.ClientSession() as sess:
-                async with sess.get(
-                    f"{api_url}/api/realty/assets/{asset_id}",
-                    timeout=aiohttp.ClientTimeout(total=5)
-                ) as resp:
-                    if resp.status == 200:
-                        body = await resp.json()
-                        raw = body.get("data", {})
-                        # 映射 API 字段 → Agent 期望字段
-                        asset_info = {
-                            "area":             raw.get("area_sqm", 0),
-                            "location":         raw.get("address", asset_id),
-                            "vacancy_days":     raw.get("vacancy_days", 0),
-                            "expected_rent":    raw.get("monthly_rent_market", 0),
-                            "allowed_business": raw.get("allowed_business_types", []),
-                            "property_state":   raw.get("property_state", "正常"),
-                            "floor_height":     raw.get("floor_height", 0),
-                        }
-                        _p(f"已从 API 加载资产: {raw.get('name', asset_id)}", "ok")
-        except Exception:
-            pass
-
-        # 2. 无 API 数据时用最小演示集并提示
-        if not asset_info:
-            _p("[dim]提示: 未找到资产数据，以 ID 作为位置标识演示（结果仅供参考）[/dim]")
-            asset_info = {
-                "location": asset_id,
-                "area": 0, "vacancy_days": 0,
-                "expected_rent": 0, "allowed_business": [],
-                "property_state": "正常",
-            }
-
-        await self._run_realty_agent("asset_diagnosis", asset_id, {
-            "asset_info": asset_info,
-        })
-
-    async def cmd_contract_draft(self, args: str):
-        """合同规则草案 Agent: /contract-draft <project_id>
-
-        运行 ContractRulesAgent，将谈判结果转化为结构化合同条款草案。
-
-        Usage:
-            /contract-draft proj_001
-            /contract-draft proj_001 --guaranteed 50000 --share 10
-        """
-        parts = args.split() if args else []
-        project_id = parts[0] if parts else "demo_project"
-
-        # 简单参数解析
-        nego = {"guaranteed_amount": 0, "revenue_share_pct": 0}
-        for i, p in enumerate(parts):
-            if p == "--guaranteed" and i+1 < len(parts):
-                try: nego["guaranteed_amount"] = float(parts[i+1])
-                except ValueError: pass
-            elif p == "--share" and i+1 < len(parts):
-                try: nego["revenue_share_pct"] = float(parts[i+1])
-                except ValueError: pass
-
-        await self._run_realty_agent("contract_rules", project_id, {
-            "negotiation": nego,
-            "asset_info":  {"name": project_id},
-            "operator_info": {},
-        })
-
-    async def cmd_revenue_calc(self, args: str):
-        """分账测算: /revenue-calc <project_id> <总流水金额> [退款金额]
-
-        运行 RevenueShareAgent，精确计算本期各方分账金额。
-
-        Usage:
-            /revenue-calc proj_001 200000
-            /revenue-calc proj_001 200000 5000
-        """
-        parts = args.split() if args else []
-        if len(parts) < 2:
-            _p("用法: /revenue-calc <project_id> <总流水> [退款]  "
-               "例: /revenue-calc proj_001 200000", "dim")
-            return
-
-        project_id = parts[0]
-        try:
-            gross   = float(parts[1])
-            refunds = float(parts[2]) if len(parts) > 2 else 0.0
-        except ValueError:
-            _p("流水金额必须为数字", "error")
-            return
-
-        # 尝试从后端获取合同规则
-        api_url = self.terminal.config.get("api_url", "http://localhost:8000")
-        rules = {}
-        try:
-            import aiohttp
-            async with aiohttp.ClientSession() as sess:
-                async with sess.get(f"{api_url}/api/realty/contracts/{project_id}",
-                                    timeout=aiohttp.ClientTimeout(total=5)) as resp:
-                    if resp.status == 200:
-                        body = await resp.json()
-                        rules = body.get("data", {})
-        except Exception:
-            pass
-
-        if not rules:
-            _p(f"[dim]未找到 {project_id} 的合同规则，使用默认值演示[/dim]")
-            rules = {"guaranteed_monthly": 30000, "revenue_share_pct": 10,
-                     "revenue_share_base": 0, "platform_fee_pct": 5,
-                     "risk_reserve_pct": 3, "settlement_cycle": "monthly"}
-
-        await self._run_realty_agent("revenue_share", project_id, {
-            "contract_rules":  rules,
-            "transaction_data":{"gross_revenue": gross, "refunds": refunds},
-        })
-
-    async def cmd_realty_risk_scan(self, args: str):
-        """项目风险扫描: /risk-scan [project_id]
-
-        并行运行 cashflow_verify + energy_anomaly + fulfillment_risk 三个 Agent，
-        生成综合风险报告。无 project_id 时扫描所有项目。
-
-        Usage:
-            /risk-scan
-            /risk-scan proj_001
-        """
-        project_id = args.strip() or "demo_project"
-
-        if HAS_RICH:
-            console.print(f"\n  [bold]风险扫描[/bold]  项目: [cyan]{project_id}[/cyan]")
-
-        # 先尝试从后端 API 扫描
-        api_url = self.terminal.config.get("api_url", "http://localhost:8000")
-        try:
-            import aiohttp
-            async with aiohttp.ClientSession() as sess:
-                async with sess.get(
-                    f"{api_url}/api/realty/risks/scan/{project_id}",
-                    timeout=aiohttp.ClientTimeout(total=10)
-                ) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        _print_risk_scan(data)
-                        return
-        except Exception:
-            pass
-
-        # 降级：本地 Agent 并行运行
-        await self._run_realty_team(
-            ["cashflow_verify", "energy_anomaly", "fulfillment_risk"],
-            project_id, {}
-        )
-
-    async def cmd_ops_report(self, args: str):
-        """运营汇报生成: /ops-report <project_id>
-
-        运行 OpsOptimizeAgent，分析坪效/客流/营销效果，生成运营优化建议报告。
-        优先从后端 API 拉取运营数据，无数据时生成空模板（供人工填写）。
-
-        Usage:
-            /ops-report proj_001
-        """
-        project_id = args.strip() or "demo_project"
-        api_url = self.terminal.config.get("api_url", "http://localhost:8000")
-
-        project_info     = {"name": project_id, "area": 0, "business_type": "未知"}
-        performance_data = {}
-        marketing_data   = {}
-
-        try:
-            import aiohttp
-            async with aiohttp.ClientSession() as sess:
-                # 拉取项目基础信息
-                async with sess.get(
-                    f"{api_url}/api/realty/assets/{project_id}",
-                    timeout=aiohttp.ClientTimeout(total=5)
-                ) as resp:
-                    if resp.status == 200:
-                        raw = (await resp.json()).get("data", {})
-                        project_info = {
-                            "name":          raw.get("name", project_id),
-                            "area":          raw.get("area_sqm", 0),
-                            "business_type": raw.get("current_business_type", "未知"),
-                            "open_date":     raw.get("open_date", ""),
-                        }
-                # 拉取最近分账数据估算坪效
-                async with sess.get(
-                    f"{api_url}/api/realty/revenue/splits?project_id={project_id}&page_size=3",
-                    timeout=aiohttp.ClientTimeout(total=5)
-                ) as resp2:
-                    if resp2.status == 200:
-                        splits = (await resp2.json()).get("data", {}).get("splits", [])
-                        if splits:
-                            revenues = [s["split_result"].get("gross_revenue", 0) for s in splits]
-                            avg_rev = sum(revenues) / len(revenues)
-                            performance_data = {
-                                "monthly_revenue": avg_rev,
-                                "daily_visits": 0,   # IoT 数据，暂无
-                            }
-                            _p(f"已加载近 {len(splits)} 期分账数据，月均流水 {avg_rev:,.0f}元", "ok")
-        except Exception:
-            pass
-
-        if not performance_data:
-            _p("[dim]提示: 未找到运营数据，建议先录入分账记录后再运行此命令[/dim]")
-
-        await self._run_realty_agent("ops_optimize", project_id, {
-            "project_info":     project_info,
-            "performance_data": performance_data,
-            "marketing_data":   marketing_data,
-            "peer_benchmarks":  {"revenue_per_sqm": 300},
-        })
-
-    async def cmd_exit_calc(self, args: str):
-        """退出清算草案: /exit-calc <project_id> [--reason <原因>]
-
-        运行 ExitSettlementAgent，生成退出清算方案和交接清单草案。
-        从后端 API 读取合同规则和未结账单，生成精确清算草案。
-
-        Usage:
-            /exit-calc proj_001
-            /exit-calc proj_001 --reason 提前退出
-        """
-        parts = args.split() if args else []
-        project_id = parts[0] if parts else "demo_project"
-        reason = "到期终止"
-        for i, p in enumerate(parts):
-            if p == "--reason" and i+1 < len(parts):
-                reason = " ".join(parts[i+1:])
-                break
-
-        api_url = self.terminal.config.get("api_url", "http://localhost:8000")
-        project_info  = {"name": project_id}
-        financials    = {"deposit_amount": 0, "unpaid_invoices": 0,
-                         "guaranteed_monthly": 0, "exit_penalty_months": 3,
-                         "prepayment_received": 0, "renovation_cost": 0}
-
-        try:
-            import aiohttp
-            async with aiohttp.ClientSession() as sess:
-                # 拉取合同规则
-                async with sess.get(
-                    f"{api_url}/api/realty/contracts/{project_id}",
-                    timeout=aiohttp.ClientTimeout(total=5)
-                ) as resp:
-                    if resp.status == 200:
-                        ctr = (await resp.json()).get("data", {})
-                        from datetime import date
-                        start = ctr.get("start_date", "")
-                        used_months = 0
-                        if start:
-                            try:
-                                from dateutil.relativedelta import relativedelta
-                                d0 = date.fromisoformat(start)
-                                delta = relativedelta(date.today(), d0)
-                                used_months = delta.years * 12 + delta.months
-                            except Exception:
-                                pass
-                        project_info.update({
-                            "contract_years":  ctr.get("contract_years", 1),
-                            "used_months":     used_months,
-                            "contract_end":    ctr.get("end_date", ""),
-                        })
-                        financials.update({
-                            "deposit_amount":     ctr.get("deposit_amount", 0),
-                            "guaranteed_monthly": ctr.get("guaranteed_monthly", 0),
-                            "exit_penalty_months":ctr.get("exit_penalty_months", 3),
-                        })
-                        _p(f"已加载合同规则: 保底 {ctr.get('guaranteed_monthly',0):,}元/月", "ok")
-                # 拉取未结账单
-                async with sess.get(
-                    f"{api_url}/api/realty/invoices?project_id={project_id}&status=unpaid",
-                    timeout=aiohttp.ClientTimeout(total=5)
-                ) as resp2:
-                    if resp2.status == 200:
-                        body2 = await resp2.json()
-                        summary = body2.get("data", {}).get("summary", {})
-                        unpaid = summary.get("total_amount", 0) - summary.get("paid_amount", 0)
-                        financials["unpaid_invoices"] = unpaid
-                        if unpaid > 0:
-                            _p(f"发现未结账单合计: {unpaid:,.2f}元", "ok")
-        except Exception:
-            pass
-
-        await self._run_realty_agent("exit_settlement", project_id, {
-            "project_info": project_info,
-            "financials":   financials,
-            "asset_condition": {},
-            "exit_reason":  reason,
-        })
-
-    # ── 经营权共创 Agent 辅助方法 ─────────────────────────────────────────────
-
-    async def _run_realty_agent(self, agent_name: str, project_id: str,
-                                input_data: dict):
-        """运行单个 realty Agent，打印结果（本地直接调用，不经过后端）"""
-        if HAS_RICH:
-            with console.status(
-                f"[dim]运行 {agent_name} Agent...[/dim]", spinner="dots"
-            ):
-                result = await self._call_realty_agent(agent_name, project_id, input_data)
-        else:
-            print(f"Running {agent_name}...")
-            result = await self._call_realty_agent(agent_name, project_id, input_data)
-
-        if result:
-            _print_realty_result(result, agent_name)
-
-    async def _run_realty_team(self, agents: list, project_id: str, input_data: dict):
-        """并行运行多个 realty Agent"""
-        import asyncio
-        if HAS_RICH:
-            with console.status(
-                f"[dim]并行扫描 {', '.join(agents)}...[/dim]", spinner="dots"
-            ):
-                tasks = [self._call_realty_agent(n, project_id, input_data) for n in agents]
-                results = await asyncio.gather(*tasks, return_exceptions=False)
-        else:
-            tasks = [self._call_realty_agent(n, project_id, input_data) for n in agents]
-            results = await asyncio.gather(*tasks, return_exceptions=False)
-
-        for res, name in zip(results, agents):
-            if res:
-                _print_realty_result(res, name)
-
-    async def _call_realty_agent(self, agent_name: str, project_id: str,
-                                  input_data: dict):
-        """从 registry 加载并调用 realty Agent"""
-        try:
-            from agents.registry import get_registry
-            cls = get_registry().get(agent_name)
-            if not cls:
-                _p(f"Agent '{agent_name}' 未注册", "error")
-                return None
-
-            # 尝试获取 LLM provider
-            llm = None
-            try:
-                from providers.llm.registry import list_available_providers, get_provider
-                avail = [p for p in list_available_providers() if p.get("available")]
-                if avail:
-                    llm = get_provider(avail[0]["name"])
-            except Exception:
-                pass
-
-            agent = cls(llm_provider=llm)
-            result = await agent.analyze(project_id, input_data)
-            return result
-        except Exception as e:
-            _p(f"Agent {agent_name} 执行失败: {e}", "error")
-            return None
-
 
 
     # ---- Provider / API Key management (Open Interpreter style) ----
@@ -8055,173 +6128,6 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
             if expires:
                 print(f"Expires: {expires}")
 
-    # ---- Session commands ----
-
-    def cmd_sessions(self, args: str):
-        keyword = args.strip().lower()
-        sessions = self.terminal.session_mgr.list_sessions()
-        if keyword:
-            sessions = [s for s in sessions if keyword in s["title"].lower()]
-        if not sessions:
-            msg = f"No sessions matching '{keyword}'" if keyword else "No saved sessions"
-            console.print(f"[dim]{msg}[/dim]" if HAS_RICH else msg)
-            return
-        if HAS_RICH:
-            console.print()
-            header = f"  [bold]Sessions[/bold]  [dim]({len(sessions)} found)[/dim]" if keyword else "  [bold]Sessions[/bold]"
-            console.print(header)
-            for i, s in enumerate(sessions, 1):
-                updated = s["updated"][:16] if s["updated"] else "-"
-                console.print(f"    [dim]{i}.[/dim] [bold]{s['title']}[/bold]  "
-                              f"[dim]{s['id'][:8]}  {s['messages']} msgs  {updated}[/dim]")
-            console.print()
-            console.print("  [dim]Use /load <number> to resume · /sessions <keyword> to search[/dim]")
-        else:
-            for i, s in enumerate(sessions, 1):
-                print(f"  {i}. [{s['id'][:8]}] {s['title']} ({s['messages']} msgs)")
-
-    def cmd_save(self, args: str):
-        if not self.terminal.conversation:
-            console.print("[dim]Nothing to save[/dim]" if HAS_RICH else "Nothing to save")
-            return
-        sid = self.terminal.session_id
-        title = args.strip().strip('"').strip("'") if args.strip() else None
-        meta = {}
-        if title:
-            meta["title"] = title
-        self.terminal.session_mgr.save_session(sid, self.terminal.conversation, metadata=meta)
-        self.terminal.config["last_session_id"] = sid
-        save_config(self.terminal.config)
-        display = f"{title} ({sid[:8]})" if title else f"{sid[:8]}..."
-        console.print(f"[green]Session saved: {display}[/green]" if HAS_RICH
-                      else f"Saved: {display}")
-
-    def cmd_rename(self, args: str):
-        """Rename current session."""
-        title = args.strip().strip('"').strip("'")
-        if not title:
-            console.print("[dim]Usage: /rename <title>[/dim]" if HAS_RICH else "Usage: /rename <title>")
-            return
-        sid = self.terminal.session_id
-        data = self.terminal.session_mgr.load_session(sid)
-        if data:
-            meta = data.get("metadata", {})
-            meta["title"] = title
-            self.terminal.session_mgr.save_session(sid, self.terminal.conversation, metadata=meta)
-        else:
-            self.terminal.session_mgr.save_session(sid, self.terminal.conversation, metadata={"title": title})
-        console.print(f"[green]Renamed: {title}[/green]" if HAS_RICH else f"Renamed: {title}")
-
-    def cmd_load(self, args: str):
-        session_id = args.strip()
-        if not session_id:
-            # Try to load by index from /sessions listing
-            sessions = self.terminal.session_mgr.list_sessions()
-            if not sessions:
-                console.print("[dim]No sessions. Usage: /load <session_id>[/dim]" if HAS_RICH
-                              else "No sessions")
-                return
-            # Arrow-key picker for sessions
-            options = []
-            for s in sessions[:20]:
-                title = s.get("metadata", {}).get("title", s["id"][:8])
-                ts = s.get("updated", "")[:10]
-                options.append((title, ts))
-            choice = _arrow_select(options, selected=0, title="Load Session")
-            if 0 <= choice < len(sessions):
-                session_id = sessions[choice]["id"]
-            else:
-                if HAS_RICH:
-                    console.print("[dim]Cancelled[/dim]")
-                else:
-                    print("Cancelled")
-                return
-
-        data = self.terminal.session_mgr.load_session(session_id)
-        if data:
-            self.terminal.conversation = data.get("messages", [])
-            self.terminal.session_id = data["id"]
-            title = data.get("metadata", {}).get("title", "Untitled")
-            n = len(self.terminal.conversation)
-            console.print(f"[green]Loaded: {title} ({n} messages)[/green]" if HAS_RICH
-                          else f"Loaded: {title} ({n} msgs)")
-        else:
-            _print_error(f"Session not found: {session_id}", "session")
-
-    # ---- Export command ----
-
-    async def cmd_export(self, args: str):
-        parts = args.split()
-        fmt = parts[0].lower() if parts else "json"
-        filename = parts[1] if len(parts) > 1 else None
-
-        if not self.terminal.conversation:
-            console.print("[dim]Nothing to export[/dim]" if HAS_RICH else "Nothing to export")
-            return
-
-        if fmt == "json":
-            content = json.dumps(self.terminal.conversation, indent=2, ensure_ascii=False)
-            ext = "json"
-        elif fmt == "csv":
-            lines = ["role,content"]
-            for msg in self.terminal.conversation:
-                escaped = msg["content"].replace('"', '""').replace('\n', ' ')
-                lines.append(f'{msg["role"]},"{escaped}"')
-            content = "\n".join(lines)
-            ext = "csv"
-        elif fmt == "md":
-            lines = [f"# Aria Code Chat Export — {datetime.now().strftime('%Y-%m-%d %H:%M')}\n"]
-            for msg in self.terminal.conversation:
-                prefix = "**You:**" if msg["role"] == "user" else "**Aria:**"
-                lines.append(f"{prefix}\n{msg['content']}\n")
-            content = "\n".join(lines)
-            ext = "md"
-        elif fmt == "sft":
-            # Export as Alpaca-format SFT training data (user→assistant pairs)
-            conv = self.terminal.conversation
-            pairs = []
-            i = 0
-            while i < len(conv) - 1:
-                if conv[i]["role"] == "user" and conv[i + 1]["role"] == "assistant":
-                    user_text = conv[i]["content"].strip()
-                    assistant_text = conv[i + 1]["content"].strip()
-                    # Skip very short or tool-result messages
-                    if len(user_text) > 10 and len(assistant_text) > 20:
-                        if not user_text.startswith("Tool results:"):
-                            pairs.append({
-                                "instruction": user_text,
-                                "input": "",
-                                "output": assistant_text,
-                                "source": "aria_cli_export",
-                                "timestamp": datetime.now().strftime("%Y-%m-%d"),
-                            })
-                    i += 2
-                else:
-                    i += 1
-            if not pairs:
-                console.print("[dim]No user→assistant pairs to export[/dim]" if HAS_RICH
-                              else "No pairs to export")
-                return
-            content = json.dumps(pairs, indent=2, ensure_ascii=False)
-            ext = "json"
-            if not filename:
-                filename = f"aria_sft_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-            if HAS_RICH:
-                console.print(f"[dim]{len(pairs)} training pairs extracted[/dim]")
-            else:
-                print(f"{len(pairs)} training pairs")
-        else:
-            console.print("[dim]Format: json, csv, md, or sft (SFT training data)[/dim]" if HAS_RICH
-                          else "Format: json, csv, md, sft")
-            return
-
-        if not filename:
-            filename = f"aria_code_chat_{datetime.now().strftime('%Y%m%d_%H%M%S')}.{ext}"
-        with open(filename, "w") as f:
-            f.write(content)
-        console.print(f"[green]Exported to {filename}[/green]" if HAS_RICH
-                      else f"Exported: {filename}")
-
     # ---- File operation commands (Claude Code-style) ----
 
     def cmd_read(self, args: str):
@@ -8258,10 +6164,10 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
                 # Strip line numbers we added, use Syntax's own
                 raw = "\n".join(line.split("│ ", 1)[1] if "│ " in line else line
                                 for line in content.split("\n"))
-                console.print(f"\n[dim]{path} ({result['data']['lines']} lines)[/dim]")
+                console.print(f"\n[dim]{_display_path(path)} ({result['data']['lines']} lines)[/dim]")
                 console.print(Syntax(raw, lang, line_numbers=True, theme=_SYNTAX_THEME))
             else:
-                print(f"\n{result['data']['path']} ({result['data']['lines']} lines)")
+                print(f"\n{_display_path(result['data']['path'])} ({result['data']['lines']} lines)")
                 print(content)
         else:
             console.print(f"[red]{result['error']}[/red]" if HAS_RICH else result["error"])
@@ -8282,9 +6188,9 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
             return
         if HAS_RICH:
             mode = "Staging" if stage_only else "Writing"
-            console.print(f"[dim]{mode} {path} — paste content, end with 'EOF' on a new line:[/dim]")
+            console.print(f"[dim]{mode} {_display_path(path)} — paste content, end with 'EOF' on a new line:[/dim]")
         else:
-            print(f"{'Staging' if stage_only else 'Writing'} {path} — paste content, end with EOF:")
+            print(f"{'Staging' if stage_only else 'Writing'} {_display_path(path)} — paste content, end with EOF:")
         lines = []
         try:
             while True:
@@ -8323,7 +6229,7 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
         if not instruction:
             # Show file and ask for instruction
             if HAS_RICH:
-                console.print(f"[dim]{read_result['data']['path']} ({read_result['data']['lines']} lines)[/dim]")
+                console.print(f"[dim]{_display_path(read_result['data']['path'])} ({read_result['data']['lines']} lines)[/dim]")
             try:
                 instruction = (console.input("[bold]>[/bold] What to change: ") if HAS_RICH
                                else input("What to change: ")).strip()
@@ -8351,7 +6257,7 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
         if result["success"]:
             items = result["data"]["items"]
             if HAS_RICH:
-                console.print(f"\n[dim]{result['data']['path']} ({result['data']['count']} items)[/dim]\n")
+                console.print(f"\n[dim]{_display_path(result['data']['path'], fallback='directory')} ({result['data']['count']} items)[/dim]\n")
                 for item in items:
                     if item["type"] == "dir":
                         console.print(f"  [bold]{item['name']}/[/bold]")
@@ -8680,11 +6586,12 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
                     save_path += ".py"
                 with open(save_path, "w") as f:
                     f.write(code)
+                _save_label = _display_path(save_path)
                 if HAS_RICH:
-                    console.print(f"\n[green]Code saved to {save_path}[/green] "
+                    console.print(f"\n[green]Code saved to {_save_label}[/green] "
                                   f"[dim]({len(code.splitlines())} lines)[/dim]")
                 else:
-                    print(f"\nSaved: {save_path} ({len(code.splitlines())} lines)")
+                    print(f"\nSaved: {_save_label} ({len(code.splitlines())} lines)")
             else:
                 if HAS_RICH:
                     console.print("[dim]No code block found in response to save[/dim]")
@@ -8775,7 +6682,7 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
         if HAS_RICH:
             comment_note = f" — {comment}" if comment else ""
             console.print(f"[green]Feedback {icon}[/green]{comment_note}{sync_note}")
-            console.print(f"[dim]Path: {feedback_path}[/dim]")
+            console.print(f"[dim]Saved: {_display_path(feedback_path)}[/dim]")
         else:
             print(f"Feedback {icon}" + (f" — {comment}" if comment else "") +
                   (" (uploaded)" if api_success else " (saved locally)"))
@@ -8830,7 +6737,7 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
                 msg = f"Export failed: {exc}"
                 console.print(f"[red]{msg}[/red]" if HAS_RICH else msg)
                 return
-            msg = f"Exported feedback to {path}"
+            msg = f"Exported feedback to {_display_path(path)}"
             console.print(f"[green]{msg}[/green]" if HAS_RICH else msg)
             return
 
@@ -9674,12 +7581,13 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
 
         if result.get("success"):
             path    = result.get("chart_path", "")
+            path_label = _display_path(path, fallback="chart")
             issues  = result.get("review_issues") or []
             sup3    = result.get("support") or []
             res3    = result.get("resistance") or []
             rsi_val = result.get("rsi")
             if HAS_RICH:
-                console.print(f"\n  ✅ 图表已生成: [link={path}]{path}[/link]")
+                console.print(f"\n  ✅ 图表已生成: [link={path}]{path_label}[/link]")
                 console.print(
                     f"  [dim]趋势: {result.get('trend','—')}  "
                     f"RSI: {f'{rsi_val:.1f}' if rsi_val else '—'}  "
@@ -9693,7 +7601,7 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
                 else:
                     console.print("  [green dim]✓ 自审通过（数据质量正常）[/green dim]")
             else:
-                print(f"\n  ✅ 图表已生成: {path}")
+                print(f"\n  ✅ 图表已生成: {path_label}")
                 print(f"  趋势: {result.get('trend','—')}  RSI: {f'{rsi_val:.1f}' if rsi_val else '—'}")
                 if issues:
                     print(f"  ⚠ 自审发现 {len(issues)} 个问题:")
@@ -9942,100 +7850,7 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
         await self.terminal._handle_ai_message(prompt)
 
     async def cmd_macro(self, args: str):
-        """
-        宏观经济指标查询（FRED / 世界银行 / macro_tools）。
-        Usage: /macro                   — 美国宏观全览（macro_tools）
-               /macro us|cn|rates       — 分地区宏观面板
-               /macro US10Y             — 10年美债收益率（FRED）
-               /macro CPI 3y            — CPI通胀历史3年
-               /macro CN:GDP            — 中国GDP（世界银行）
-        支持别名: US10Y US2Y FEDFUNDS CPI PCE GDP UNRATE NFP SP500 VIX M2
-                  USDCNY USDEUR MORTGAGE HOUSING WILSHIRE
-        """
-        parts = args.strip().split()
-
-        # Legacy sub-command routing: us / cn / rates / calendar / (empty)
-        _LEGACY_SUBS = {"us", "cn", "rates", "calendar", "all"}
-        if not parts or (parts and parts[0].lower() in _LEGACY_SUBS):
-            # delegate to old macro_tools behavior
-            try:
-                from macro_tools import get_us_macro, get_cn_macro, get_central_bank_rates
-                region    = parts[0].lower() if parts else "all"
-                indicator = parts[1] if len(parts) > 1 else "all"
-                loop = asyncio.get_event_loop()
-                if region in ("us", "all"):
-                    with console.status("[dim]获取美国宏观数据...[/dim]", spinner="dots") if HAS_RICH else _null_ctx():
-                        r = await loop.run_in_executor(None, lambda: get_us_macro(indicator if region == "us" else "all"))
-                    _render_macro_result(r, "🇺🇸 美国宏观")
-                if region in ("cn", "all"):
-                    with console.status("[dim]获取中国宏观数据...[/dim]", spinner="dots") if HAS_RICH else _null_ctx():
-                        r_cn = await loop.run_in_executor(None, lambda: get_cn_macro("all"))
-                    _render_macro_result(r_cn, "🇨🇳 中国宏观")
-                if region in ("rates", "all"):
-                    with console.status("[dim]获取央行利率...[/dim]", spinner="dots") if HAS_RICH else _null_ctx():
-                        r_rates = await loop.run_in_executor(None, get_central_bank_rates)
-                    _render_cb_rates(r_rates)
-            except ImportError:
-                console.print("  [dim]macro_tools 未找到，请用 /macro US10Y 查询具体指标[/dim]" if HAS_RICH
-                             else "Use /macro US10Y for specific indicators")
-            return
-
-        if not parts:
-            if HAS_RICH:
-                console.print(
-                    "  [dim]用法: /macro US10Y | /macro CPI 3y | /macro CN:GDP\n"
-                    "  可用: US10Y US2Y FEDFUNDS CPI GDP UNRATE NFP SP500 VIX "
-                    "M2 USDCNY USDEUR MORTGAGE[/dim]"
-                )
-            return
-
-        indicator = parts[0].upper()
-        period    = parts[1] if len(parts) > 1 else "1y"
-        country   = "WLD"
-        if ":" in indicator:
-            country, indicator = indicator.split(":", 1)
-
-        # Convert period to days
-        _PERIOD_DAYS = {"1m":30,"3m":90,"6m":180,"1y":365,"2y":730,
-                        "3y":1095,"5y":1825,"10y":3650,"max":365*30}
-        days = _PERIOD_DAYS.get(period.lower(), 365)
-
-        if HAS_RICH:
-            with console.status(f"[dim]获取宏观数据 {indicator}...[/dim]", spinner="dots"):
-                result = await asyncio.get_event_loop().run_in_executor(
-                    None, lambda: _fetch_macro_data(indicator, country, days)
-                )
-        else:
-            result = await asyncio.get_event_loop().run_in_executor(
-                None, lambda: _fetch_macro_data(indicator, country, days)
-            )
-
-        if not result:
-            _print_error(f"无法获取 {indicator} 数据，请检查指标代码或网络连接")
-            return
-
-        if HAS_RICH:
-            from rich.table import Table
-            from rich import box as rich_box
-            table = Table(
-                title=f"[bold]{indicator}[/bold]  [{country}]  最近 {min(10, len(result))} 期",
-                box=rich_box.SIMPLE, show_header=True,
-                header_style="bold dim",
-            )
-            table.add_column("日期", style="dim", width=12)
-            table.add_column("数值", justify="right")
-            table.add_column("环比", justify="right", style="dim")
-            vals = [(str(d), float(v)) for d, v in result[-20:]]
-            for i, (d, v) in enumerate(reversed(vals[-10:])):
-                prev_v = vals[-(i+2)][1] if i+1 < len(vals) else v
-                chg    = v - prev_v
-                chg_str = f"[green]+{chg:.3f}[/green]" if chg > 0 else (
-                          f"[red]{chg:.3f}[/red]" if chg < 0 else "─")
-                table.add_row(d, f"{v:,.4f}", chg_str)
-            console.print(table)
-        else:
-            for d, v in result[-10:]:
-                print(f"  {d}  {v}")
+        return await super().cmd_macro(args)
 
     async def cmd_edgar(self, args: str):
         """
@@ -10094,79 +7909,7 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
             print(f"  {symbol} EDGAR 数据: {len(result) if isinstance(result, list) else 'OK'}")
 
     async def cmd_datasource(self, args: str):
-        """
-        数据源管理：查看已配置的数据源及其状态。
-        Usage: /datasource             — 列出所有数据源
-               /datasource test FRED   — 测试指定数据源连通性
-               /datasource config      — 显示配置文件路径
-        """
-        sub = args.strip().lower()
-
-        if sub.startswith("test "):
-            src_name = sub[5:].strip()
-            await asyncio.get_event_loop().run_in_executor(
-                None, lambda: _test_datasource(src_name)
-            )
-            return
-
-        if sub == "config":
-            paths = [
-                "~/.aria/datasources.yaml",
-                "~/.aria/.env",
-                str(CONFIG_DIR / "providers.json"),
-            ]
-            if HAS_RICH:
-                console.print("  [bold]数据源配置文件:[/bold]")
-                for p in paths:
-                    import pathlib
-                    full = pathlib.Path(p).expanduser()
-                    exists = "[green]✓[/green]" if full.exists() else "[dim]✗ (未创建)[/dim]"
-                    console.print(f"  {exists}  [dim]{p}[/dim]")
-                console.print("\n  [dim]环境变量: TUSHARE_TOKEN FRED_API_KEY ALPHA_VANTAGE_KEY[/dim]")
-            return
-
-        # Default: list all sources
-        try:
-            from datasources.router import _SOURCE_REGISTRY, DataRouter
-            router = DataRouter()
-        except ImportError:
-            _print_error("datasources 模块未找到")
-            return
-
-        if HAS_RICH:
-            from rich.table import Table
-            from rich import box as rich_box
-            table = Table(title="数据源状态", box=rich_box.SIMPLE, header_style="bold dim")
-            table.add_column("名称", width=16)
-            table.add_column("市场", width=20)
-            table.add_column("需要Key", width=8)
-            table.add_column("状态", width=8)
-            table.add_column("说明")
-            _DESC = {
-                "yfinance":      "Yahoo Finance (免费)",
-                "akshare":       "AkShare A股 (免费)",
-                "tushare":       "Tushare Pro (需Token)",
-                "fred":          "美联储经济数据 (免费)",
-                "edgar":         "SEC EDGAR 财报 (免费)",
-                "alpha_vantage": "Alpha Vantage (免费Key)",
-                "world_bank":    "世界银行 (免费)",
-            }
-            for name, cls in _SOURCE_REGISTRY.items():
-                try:
-                    src = cls()
-                    configured = src.is_configured()
-                    status = "[green]✓ 就绪[/green]" if configured else "[dim]✗ 未配置[/dim]"
-                    needs_key = "是" if cls.requires_key else "否"
-                    markets = ", ".join(getattr(cls, "markets", []))
-                except Exception:
-                    status, needs_key, markets = "[red]错误[/red]", "?", "?"
-                table.add_row(name, markets, needs_key, status, _DESC.get(name, ""))
-            console.print(table)
-            console.print("  [dim]/datasource config — 配置文件路径[/dim]")
-        else:
-            for name, cls in _SOURCE_REGISTRY.items():
-                src = cls()
-                print(f"  {name}: {'ready' if src.is_configured() else 'not configured'}")
+        return await DiagnosticOpsCommandsMixin.cmd_datasource(self, args)
 
     # ---- News command ----
     # ── /file 多格式文件分析命令 ──────────────────────────────────────────────
@@ -10469,6 +8212,93 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, WorkspaceCommand
             print(f"  Messages: {conv_len}  Tokens: ~{est_tokens:,}/{max_ctx:,} ({ctx_pct}%)")
             print(f"  Session: {self.terminal.session_id}")
 
+    def cmd_vision(self, args: str):
+        return UiCommandsMixin.cmd_vision(self, args)
+
+    async def cmd_browser(self, args: str):
+        return await UiCommandsMixin.cmd_browser(self, args)
+
+    async def cmd_screenshot(self, args: str):
+        return await UiCommandsMixin.cmd_screenshot(self, args)
+
+    def cmd_input(self, args: str):
+        return UiCommandsMixin.cmd_input(self, args)
+
+    def cmd_context(self, args: str):
+        return UiCommandsMixin.cmd_context(self, args)
+
+    def cmd_clear(self, args: str):
+        return SessionUxCommandsMixin.cmd_clear(self, args)
+
+    def cmd_btw(self, args: str):
+        return SessionUxCommandsMixin.cmd_btw(self, args)
+
+    def cmd_recap(self, args: str):
+        return SessionUxCommandsMixin.cmd_recap(self, args)
+
+    def cmd_history(self, args: str):
+        return SessionUxCommandsMixin.cmd_history(self, args)
+
+    def cmd_compact(self, args: str):
+        return SessionUxCommandsMixin.cmd_compact(self, args)
+
+    async def _smart_compact_async(self, silent: bool = False):
+        return await SessionUxCommandsMixin._smart_compact_async(self, silent=silent)
+
+    def cmd_fork(self, args: str):
+        return SessionUxCommandsMixin.cmd_fork(self, args)
+
+    def cmd_load_fork(self, args: str):
+        return SessionUxCommandsMixin.cmd_load_fork(self, args)
+
+    def cmd_copy(self, args: str):
+        return SessionUxCommandsMixin.cmd_copy(self, args)
+
+    def cmd_hooks(self, args: str):
+        return WorkflowCommandsMixin.cmd_hooks(self, args)
+
+    async def cmd_regen(self, args: str):
+        return await WorkflowCommandsMixin.cmd_regen(self, args)
+
+    def cmd_undo(self, args: str):
+        return WorkflowCommandsMixin.cmd_undo(self, args)
+
+    async def cmd_retry(self, args: str):
+        return await WorkflowCommandsMixin.cmd_retry(self, args)
+
+    def cmd_note(self, args: str):
+        return WorkflowCommandsMixin.cmd_note(self, args)
+
+    async def cmd_review(self, args: str):
+        return await WorkflowCommandsMixin.cmd_review(self, args)
+
+    async def cmd_research(self, args: str):
+        return await BusinessWorkflowCommandsMixin.cmd_research(self, args)
+
+    async def cmd_earnings(self, args: str):
+        return await BusinessWorkflowCommandsMixin.cmd_earnings_workflow(self, args)
+
+    async def cmd_earnings_workflow(self, args: str):
+        return await BusinessWorkflowCommandsMixin.cmd_earnings_workflow(self, args)
+
+    async def cmd_asset_diag(self, args: str):
+        return await BusinessWorkflowCommandsMixin.cmd_asset_diag(self, args)
+
+    async def cmd_contract_draft(self, args: str):
+        return await BusinessWorkflowCommandsMixin.cmd_contract_draft(self, args)
+
+    async def cmd_revenue_calc(self, args: str):
+        return await BusinessWorkflowCommandsMixin.cmd_revenue_calc(self, args)
+
+    async def cmd_realty_risk_scan(self, args: str):
+        return await BusinessWorkflowCommandsMixin.cmd_realty_risk_scan(self, args)
+
+    async def cmd_ops_report(self, args: str):
+        return await BusinessWorkflowCommandsMixin.cmd_ops_report(self, args)
+
+    async def cmd_exit_calc(self, args: str):
+        return await BusinessWorkflowCommandsMixin.cmd_exit_calc(self, args)
+
 
 # ── 经营权共创平台：Agent 输出辅助函数（模块级，SlashCommands 内外均可用）────────────
 
@@ -10550,7 +8380,7 @@ class ArtheraTerminal:
         self.conversation: List[dict] = []
         self.running = True
         self.session_id = config.get("last_session_id") or str(uuid.uuid4())[:8]
-        self.session_mgr = SessionManager()
+        self.session_mgr = SessionManager(SESSIONS_DIR)
         # JSONL session store: crash-safe, append-per-turn
         try:
             from apps.cli.session_jsonl import JsonlSessionStore
@@ -10592,6 +8422,7 @@ class ArtheraTerminal:
         self._session_thinking_tokens: int = 0
         self._session_turns: int = 0           # number of exchange pairs
         self._last_response: str = ""          # last assistant message text (for /copy)
+        self._last_turn_envelope: Optional[AgentTurnEnvelope] = None
         self._forks: List[dict] = []           # forked conversation snapshots
         self._pending_image: Optional[dict] = None  # pending vision content block
         # ── Multi-file analysis session ──────────────────────────────────────
@@ -11067,7 +8898,9 @@ class ArtheraTerminal:
         start_time = time.time()
 
         # --- Dynamic max_rounds: scale with task complexity ---
-        # Simple queries get 10 rounds; complex multi-step tasks get up to 20.
+        # Treat this as a soft budget. If the model is still making concrete
+        # tool progress at the soft limit, keep going so one user instruction
+        # can finish end-to-end instead of stopping after a tool result.
         _task_complexity_signals = (
             len(message) > 120 or
             any(kw in message for kw in (
@@ -11076,7 +8909,9 @@ class ArtheraTerminal:
                 "完整", "全面", "详细", "系统", "comprehensive", "complete",
             ))
         )
-        max_rounds = 20 if _task_complexity_signals else 10
+        max_rounds = 30 if _task_complexity_signals else 16
+        hard_max_rounds = max_rounds + (20 if _task_complexity_signals else 10)
+        _round_extension_notified = False
 
         # --- Task decomposition for complex multi-step requests ---
         # For long or multi-step messages, ask the AI to produce a plan first,
@@ -11154,7 +8989,8 @@ class ArtheraTerminal:
         token_count = 0
         thinking_tokens = 0
 
-        for round_num in range(max_rounds):
+        round_num = 0
+        while round_num < hard_max_rounds:
             response_text = ""
             thinking_shown = False
             thinking_start = None
@@ -11688,6 +9524,20 @@ class ArtheraTerminal:
 
             if not result.get("success"):
                 set_robot_state(RobotState.ERROR)
+                turn_result = turn_state.build_error_result(
+                    result.get("error"),
+                    elapsed=elapsed,
+                    fallback_response=response_text,
+                    token_count=token_count,
+                    thinking_tokens=thinking_tokens,
+                )
+                self._last_turn_envelope = turn_result.to_envelope()
+                _turn_envelope = self._last_turn_envelope.to_dict()
+                if self.runtime_trace is not None:
+                    try:
+                        self.runtime_trace.add_turn_result(_turn_envelope)
+                    except Exception:
+                        pass
                 error_presentation = AgentErrorPresentation.from_error(result.get("error", "Unknown error"))
                 console.print() if HAS_RICH else print()
                 if error_presentation.use_generic_error_prefix:
@@ -11715,15 +9565,26 @@ class ArtheraTerminal:
                 # "task complete" signal even after a tool-heavy sequence.
                 break
 
-            # Warn on final available round so user sees progress
-            if round_num == max_rounds - 1:
-                if HAS_RICH:
-                    console.print(
-                        f"  [yellow]⚠ 已达最大工具轮次 ({max_rounds}). "
-                        f"若任务未完成，请继续对话或用 /compact 释放上下文。[/yellow]"
-                    )
+            # Soft limit: keep going if tools are still pending. The previous
+            # behavior executed the final tool batch and then exited before the
+            # model could summarize, which looked like a mid-task cutoff.
+            if round_num >= max_rounds - 1:
+                if round_num < hard_max_rounds - 1:
+                    if not _round_extension_notified:
+                        _round_extension_notified = True
+                        if HAS_RICH:
+                            console.print(
+                                f"  [dim]↻ 任务仍在推进，自动延长工具轮次 "
+                                f"({max_rounds} → {hard_max_rounds})[/dim]"
+                            )
+                        else:
+                            print(f"  Auto-extending tool rounds ({max_rounds} -> {hard_max_rounds})")
                 else:
-                    print(f"  ⚠ Max rounds ({max_rounds}) reached.")
+                    turn_state.append_response(
+                        "\n\n任务已达到硬性工具轮次上限，已停止继续调用工具。"
+                        "上方是已完成的结果；如仍缺少内容，请基于当前输出继续追问。"
+                    )
+                    break
 
             # ── Parallel tool dispatch ─────────────────────────────────────────
             # Read-only / remote tools run concurrently via asyncio.gather().
@@ -11864,6 +9725,7 @@ class ArtheraTerminal:
             self.conversation.append(user_message)
             current_message = followup
             turn_state.reset_response()
+            round_num += 1
 
         # --- End of agentic loop ---
         _esc_watcher.stop()
@@ -11882,6 +9744,13 @@ class ArtheraTerminal:
                 token_count=token_count,
                 thinking_tokens=thinking_tokens,
             )
+            self._last_turn_envelope = turn_result.to_envelope()
+            _turn_envelope = self._last_turn_envelope.to_dict()
+            if self.runtime_trace is not None:
+                try:
+                    self.runtime_trace.add_turn_result(_turn_envelope)
+                except Exception:
+                    pass
             if HAS_RICH:
                 # Batch-render mode (Ollama): tokens were silently accumulated.
                 # Render whatever was generated before the cancel so the user
@@ -11899,6 +9768,39 @@ class ArtheraTerminal:
                 self.conversation.append(
                     {"role": "assistant", "content": turn_result.final_text}
                 )
+            _run_event_hook("response_done", {
+                "ARIA_RESPONSE":  (turn_result.final_text or "")[:500],
+                "ARIA_PROVIDER":  turn_result.provider,
+                "ARIA_TOKENS":    str((token_count or 0)),
+                "ARIA_SESSION":   self.session_id,
+                "ARIA_TURN_STATUS": _turn_envelope.get("status", ""),
+                "ARIA_TURN_SUMMARY": _turn_envelope.get("summary", "")[:500],
+            })
+            if _HAS_JSON_HOOKS:
+                try:
+                    _fire_json_hook(
+                        "ResponseDone",
+                        response=(turn_result.final_text or "")[:500],
+                        session_id=self.session_id,
+                        turn=_turn_envelope,
+                        hooks=_JSON_HOOKS,
+                    )
+                except Exception:
+                    pass
+            if self.config.get("auto_save_sessions") and self._jsonl_store is not None:
+                try:
+                    if turn_result.final_text:
+                        self._jsonl_store.append_message(self.session_id, "assistant", turn_result.final_text)
+                    self._jsonl_store.flush_meta(
+                        self.session_id,
+                        extra={
+                            "last_turn_status": self._last_turn_envelope.status,
+                            "last_turn_provider": self._last_turn_envelope.provider,
+                            "last_turn_summary": self._last_turn_envelope.summary,
+                        },
+                    )
+                except Exception:
+                    pass
             return
 
         if result.get("success") and not result.get("cancelled"):
@@ -11908,6 +9810,13 @@ class ArtheraTerminal:
                 token_count=token_count,
                 thinking_tokens=thinking_tokens,
             )
+            self._last_turn_envelope = turn_result.to_envelope()
+            _turn_envelope = self._last_turn_envelope.to_dict()
+            if self.runtime_trace is not None:
+                try:
+                    self.runtime_trace.add_turn_result(_turn_envelope)
+                except Exception:
+                    pass
             final_text = turn_result.final_text
 
             # Flush any unclosed LaTeX buffer (e.g. stream cut off mid-formula).
@@ -11978,11 +9887,14 @@ class ArtheraTerminal:
             self._last_response = final_text   # for /copy
 
             # Fire response_done lifecycle hooks (shell + JSON)
+            _turn_envelope = self._last_turn_envelope.to_dict() if self._last_turn_envelope else {}
             _run_event_hook("response_done", {
                 "ARIA_RESPONSE":  (final_text or "")[:500],
                 "ARIA_PROVIDER":  turn_result.provider,
                 "ARIA_TOKENS":    str((prompt_t or 0) + (completion_t or 0)),
                 "ARIA_SESSION":   self.session_id,
+                "ARIA_TURN_STATUS": _turn_envelope.get("status", ""),
+                "ARIA_TURN_SUMMARY": _turn_envelope.get("summary", "")[:500],
             })
             if _HAS_JSON_HOOKS:
                 try:
@@ -11990,6 +9902,7 @@ class ArtheraTerminal:
                         "ResponseDone",
                         response=(final_text or "")[:500],
                         session_id=self.session_id,
+                        turn=_turn_envelope,
                         hooks=_JSON_HOOKS,
                     )
                 except Exception:
@@ -12006,23 +9919,24 @@ class ArtheraTerminal:
             if len(self.conversation) > 40:
                 self.conversation = self.conversation[-40:]
 
-            # Auto-warn when context approaching limit; auto-compact at 95%
+            # Auto-warn when context approaches the limit; auto-compact before
+            # the prompt is already at the edge and tool traces become noisy.
             _est = sum(len(m.get("content", "")) for m in self.conversation) // 3
             _mkey = resolve_model_key(self.config.get("model", "qwen2.5:7b"))
             _default_m2 = MODELS.get("qwen7b") or MODELS.get("qwen-fast") or next(iter(MODELS.values()))
             _max = MODELS.get(_mkey, _default_m2).get("num_ctx", 16384)
             _pct = min(100, int(_est / _max * 100))
-            if _pct >= 95:
+            if _pct >= 90:
                 # Auto-compact: silently summarise and truncate
                 try:
                     await self.commands._smart_compact_async(silent=True)
                 except Exception:
                     # Fallback: hard trim
-                    self.conversation = self.conversation[-8:]
+                    self.conversation = self.conversation[-10:]
                 if HAS_RICH:
-                    console.print("  [dim]↩ Auto-compacted context (was 95%+ full)[/dim]")
-            elif _pct >= 75 and HAS_RICH:
-                _color = "yellow" if _pct < 90 else "red"
+                    console.print("  [dim]↩ Auto-compacted context (was 90%+ full)[/dim]")
+            elif _pct >= 70 and HAS_RICH:
+                _color = "yellow" if _pct < 85 else "red"
                 console.print(
                     f"  [{_color}]⚠ Context {_pct}% full "
                     f"({_est:,}/{_max:,} tokens) — /compact to free space[/{_color}]"
@@ -12040,6 +9954,15 @@ class ArtheraTerminal:
                         self._jsonl_store.append_message(self.session_id, "user", message)
                         if final_text:
                             self._jsonl_store.append_message(self.session_id, "assistant", final_text)
+                        if self._last_turn_envelope is not None:
+                            self._jsonl_store.flush_meta(
+                                self.session_id,
+                                extra={
+                                    "last_turn_status": self._last_turn_envelope.status,
+                                    "last_turn_provider": self._last_turn_envelope.provider,
+                                    "last_turn_summary": self._last_turn_envelope.summary,
+                                },
+                            )
                     except Exception:
                         pass
 
@@ -12676,9 +10599,8 @@ class ArtheraTerminal:
                     tr = fn(tool_params)
                     if not quiet:
                         if tool_name == "write_file":
-                            _path = tool_params.get("path", "")
                             _status = "Created" if tr.get("success") else "Failed"
-                            msg = f"{_status}: {_path}"
+                            msg = f"{_status}: file tool"
                             print(msg if not HAS_RICH else msg, file=sys.stderr)
                         elif tool_name == "run_command":
                             _out = tr.get("data", {}).get("stdout", "") or tr.get("error", "")
