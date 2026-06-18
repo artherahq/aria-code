@@ -74,6 +74,12 @@ Thumbs.db
 *.sublime-project
 *.sublime-workspace
 
+# ── Local codex/assistant state ───────────────────────────────────────────────
+.claude/
+aria-output/
+apps/vscode/node_modules/
+apps/vscode/*.vsix
+
 # ── Build artifacts ───────────────────────────────────────────────────────────
 *.dmg
 *.pkg

@@ -1,0 +1,70 @@
+{
+  "name": "aria-code",
+  "displayName": "Aria Code — AI Financial Terminal",
+  "description": "AI-powered financial analysis in your editor",
+  "version": "1.0.0",
+  "publisher": "Cinsoul",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Other", "Data Science"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./extension.js",
+  "contributes": {
+    "configuration": {
+      "title": "Aria Code",
+      "properties": {
+        "ariaCode.apiBase": {
+          "type": "string",
+          "default": "http://127.0.0.1:8000",
+          "description": "Aria backend base URL used by the VS Code extension."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "aria-code.openPanel",
+        "title": "Open Aria Dashboard",
+        "category": "Aria"
+      },
+      {
+        "command": "aria-code.analyzeSelection",
+        "title": "Analyze with Aria AI",
+        "category": "Aria"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "aria-sidebar",
+          "title": "Aria",
+          "icon": "$(graph)"
+        }
+      ]
+    },
+    "views": {
+      "aria-sidebar": [
+        {
+          "id": "aria-code.sidebar",
+          "name": "Aria Financial",
+          "type": "webview"
+        }
+      ]
+    },
+    "menus": {
+      "editor/context": [
+        {
+          "command": "aria-code.analyzeSelection",
+          "when": "editorHasSelection",
+          "group": "aria@1"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "package": "npx @vscode/vsce package"
+  },
+  "devDependencies": {
+    "@vscode/vsce": "^2.24.0"
+  }
+}
