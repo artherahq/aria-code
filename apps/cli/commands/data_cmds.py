@@ -299,8 +299,10 @@ class DataCommandsMixin:
         api_url = self.terminal.config.get("api_url", "http://localhost:8000")
         import aiohttp
 
+        _STRATS = ["momentum", "mean_reversion", "breakout", "turtle", "ma_crossover"]
+
         async def _do():
-            payload = {"symbol": symbol, "strategies": ["momentum", "mean_reversion", "breakout", "turtle", "ma_crossover"],
+            payload = {"symbol": symbol, "strategies": _STRATS,
                        "start_date": start, "end_date": end, "initial_capital": 100000, "commission_rate": 0.0003}
             async with aiohttp.ClientSession() as sess:
                 async with sess.post(f"{api_url}/api/v1/backtest/compare-strategies", json=payload, timeout=aiohttp.ClientTimeout(total=90)) as resp:
@@ -309,20 +311,70 @@ class DataCommandsMixin:
                     body = await resp.json()
                     return body.get("data", body)
 
+        def _do_local():
+            """Fallback: run each strategy via the local backtest engine and
+            assemble the same shape the backend endpoint returns. Used when the
+            backend is down or lacks the compare-strategies endpoint."""
+            import asyncio as _aio
+            rows = []
+            bench_pct = 0.0
+            for strat in _STRATS:
+                try:
+                    res = LOCAL_TOOLS["backtest_strategy"][0](
+                        {"symbol": symbol, "strategy": strat})
+                except Exception:
+                    continue
+                if not res.get("success"):
+                    continue
+                d = res.get("data", res)
+                ann = float(d.get("annual_return", 0) or 0)
+                mdd = float(d.get("max_drawdown", 0) or 0)
+                calmar = (ann / abs(mdd)) if mdd else 0.0
+                rows.append({
+                    "name": strat,
+                    "annualized_return_pct": ann * 100,
+                    "sharpe_ratio": float(d.get("sharpe_ratio", 0) or 0),
+                    "max_drawdown_pct": mdd * 100,
+                    "calmar_ratio": calmar,
+                    "sortino_ratio": float(d.get("sortino_ratio", 0) or 0),
+                    "win_rate_pct": float(d.get("win_rate", 0) or 0) * 100,
+                    "n_trades": int(d.get("total_trades", 0) or 0),
+                })
+                br = d.get("benchmark_return")
+                if br is not None and br == br:  # not NaN
+                    bench_pct = float(br) * 100
+            rows.sort(key=lambda r: r["sharpe_ratio"], reverse=True)
+            for i, r in enumerate(rows, 1):
+                r["rank_by_sharpe"] = i
+            return {"strategies": rows, "benchmark": {"annualized_return_pct": bench_pct},
+                    "provider": "local"}
+
+        async def _do_with_fallback():
+            try:
+                return await _do()
+            except Exception:
+                # Backend unavailable / missing endpoint → local engine
+                if HAS_RICH:
+                    console.print("  [dim]后端不可用，使用本地回测引擎对比…[/dim]")
+                return _do_local()
+
         if HAS_RICH:
             with console.status(f"[dim]Comparing strategies on {symbol}...[/dim]", spinner="dots"):
                 try:
-                    data = await _do()
+                    data = await _do_with_fallback()
                 except Exception as e:
                     _print_error(str(e), "tool")
                     return
         else:
             print(f"Comparing strategies on {symbol}...")
             try:
-                data = await _do()
+                data = await _do_with_fallback()
             except Exception as e:
                 _print_error(str(e), "tool")
                 return
+        if not data.get("strategies"):
+            _print_error("策略对比无结果", "本地回测引擎未返回数据，检查标的代码是否正确")
+            return
 
         strategies = data.get("strategies", [])
         bh = data.get("benchmark", {})
