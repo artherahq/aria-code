@@ -381,7 +381,7 @@ def _get_forex_data(params: dict) -> dict:
     pair   = params.get("pair", "EURUSD=X")
     period = params.get("period", "3mo")
     if not _HAS_YF:
-        return {"success": False, "error": "yfinance not installed"}
+        return {"success": False, "error": "yfinance not installed: 运行 pip install yfinance 或 /install yfinance"}
     # Normalise to yfinance format
     p = pair.replace("/", "").upper()
     if not p.endswith("=X"):
@@ -917,7 +917,7 @@ def _get_sector_performance(params: dict) -> dict:
             "provider":      "yfinance",
         }
 
-    return {"success": False, "error": "akshare / yfinance not available"}
+    return {"success": False, "error": "akshare / yfinance not available: 运行 pip install akshare yfinance 或 /install akshare yfinance"}
 
 
 # ---------------------------------------------------------------------------
@@ -926,7 +926,7 @@ def _get_sector_performance(params: dict) -> dict:
 
 def _get_northbound_flow(params: dict) -> dict:
     if not _HAS_AK:
-        return {"success": False, "error": "akshare not installed"}
+        return {"success": False, "error": "akshare not installed: 运行 pip install akshare 或 /install akshare"}
     try:
         # stock_hsgt_fund_flow_summary_em returns today's 沪深港通 summary.
         # 成交净买额 is already in 亿元 — no further scaling needed.
@@ -963,7 +963,7 @@ def _screen_ashare(params: dict) -> dict:
     limit           = int(params.get("limit", 20))
 
     if not _HAS_AK:
-        return {"success": False, "error": "akshare not installed"}
+        return {"success": False, "error": "akshare not installed: 运行 pip install akshare 或 /install akshare"}
 
     try:
         # A股实时行情
@@ -1022,7 +1022,7 @@ def _screen_ashare(params: dict) -> dict:
 def _get_limit_up_pool(params: dict) -> dict:
     date = params.get("date", _today())
     if not _HAS_AK:
-        return {"success": False, "error": "akshare not installed"}
+        return {"success": False, "error": "akshare not installed: 运行 pip install akshare 或 /install akshare"}
     try:
         date_str = date.replace("-", "")
         df = ak.stock_zt_pool_em(date=date_str)
@@ -1073,7 +1073,7 @@ def _get_market_indices(params: dict) -> dict:
                 return {"success": True, "indices": df.head(10).to_dict("records"), "provider": "akshare"}
             except Exception as exc:
                 return {"success": False, "error": str(exc)}
-        return {"success": False, "error": "yfinance not installed"}
+        return {"success": False, "error": "yfinance not installed: 运行 pip install yfinance 或 /install yfinance"}
 
     results = []
     for name, ticker in indices.items():
@@ -1437,7 +1437,7 @@ def _get_futures_data(params: dict) -> dict:
 
 def _get_bonds_data(params: dict) -> dict:
     if not _HAS_YF:
-        return {"success": False, "error": "yfinance not installed"}
+        return {"success": False, "error": "yfinance not installed: 运行 pip install yfinance 或 /install yfinance"}
     tickers = {
         "2Y": "^IRX", "5Y": "^FVX", "10Y": "^TNX", "30Y": "^TYX",
     }
@@ -2229,7 +2229,7 @@ def _piotroski_fscore(params: dict) -> dict:
     """
     symbol = params.get("symbol", "AAPL")
     if not _HAS_YF:
-        return {"success": False, "error": "yfinance not installed"}
+        return {"success": False, "error": "yfinance not installed: 运行 pip install yfinance 或 /install yfinance"}
 
     try:
         tkr  = yf.Ticker(symbol)
@@ -2333,7 +2333,7 @@ def _altman_zscore(params: dict) -> dict:
     """
     symbol = params.get("symbol", "AAPL")
     if not _HAS_YF:
-        return {"success": False, "error": "yfinance not installed"}
+        return {"success": False, "error": "yfinance not installed: 运行 pip install yfinance 或 /install yfinance"}
 
     try:
         tkr  = yf.Ticker(symbol)
@@ -2429,7 +2429,7 @@ def _get_options_chain(params: dict) -> dict:
     limit   = int(params.get("limit", 15))
 
     if not _HAS_YF:
-        return {"success": False, "error": "yfinance not installed"}
+        return {"success": False, "error": "yfinance not installed: 运行 pip install yfinance 或 /install yfinance"}
 
     try:
         tkr = yf.Ticker(symbol)
@@ -2489,7 +2489,7 @@ def _calculate_ichimoku(params: dict) -> dict:
     period = params.get("period", "6mo")
 
     if not _HAS_YF:
-        return {"success": False, "error": "yfinance not installed"}
+        return {"success": False, "error": "yfinance not installed: 运行 pip install yfinance 或 /install yfinance"}
 
     try:
         df = yf.Ticker(symbol).history(period=period)
@@ -2753,7 +2753,7 @@ def _walk_forward_backtest(params: dict) -> dict:
     period   = params.get("period", "5y")
 
     if not _HAS_YF:
-        return {"success": False, "error": "yfinance not installed"}
+        return {"success": False, "error": "yfinance not installed: 运行 pip install yfinance 或 /install yfinance"}
 
     try:
         import numpy as np
@@ -2898,7 +2898,7 @@ def _peer_comparison(params: dict) -> dict:
     all_symbols = [symbol] + [p for p in peers if p != symbol]
 
     if not _HAS_YF:
-        return {"success": False, "error": "yfinance not installed"}
+        return {"success": False, "error": "yfinance not installed: 运行 pip install yfinance 或 /install yfinance"}
 
     rows = []
     for sym in all_symbols[:8]:

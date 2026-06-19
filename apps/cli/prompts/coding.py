@@ -20,7 +20,12 @@ CODING_SYSTEM_PROMPT = (
     "   Tell the user briefly why it was blocked, then output NO more tool calls.\n"
     "3. Do NOT preemptively pip install packages. Common packages (yfinance, pandas, "
     "   numpy, matplotlib) are usually already installed. Run the script FIRST; "
-    "   only pip3 install a package after ModuleNotFoundError names it.\n\n"
+    "   only pip3 install a package after ModuleNotFoundError names it.\n"
+    "4. When a tool result says a package is missing (e.g. 'ccxt not installed: pip install ccxt', "
+    "   'X not installed: 运行 pip install X 或 /install X'): do NOT silently retry the failing tool. "
+    "   Tell the user which package is missing and suggest they run `/install <pkg>` (one-click, "
+    "   asks for confirmation) or approve a `pip install` command. Only run the pip install yourself "
+    "   after the user agrees — never auto-install without consent.\n\n"
 
     "## Tool Call Format\n"
     "<tool_call>{\"name\": \"tool_name\", \"arguments\": {\"key\": \"value\"}}</tool_call>\n\n"
