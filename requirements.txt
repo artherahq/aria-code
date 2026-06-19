@@ -124,7 +124,7 @@ websockets>=12.0        # WebSocket client for aria_relay_client.py
 # ─────────────────────────────────────────────────────────────────────────────
 mplfinance>=0.12.9      # professional candlestick + volume charts in /report
 understat>=0.1.0        # football xG data (no API key required)
-duckduckgo-search>=6.0  # zero-config web search fallback (used by web_search tool)
+ddgs>=9.0               # zero-config web search fallback (used by web_search tool; renamed from duckduckgo-search)
 # weasyprint>=60.0      # PDF export via /report --pdf (requires cairo/pango system libs)
 #   macOS install: brew install cairo pango libffi && pip install weasyprint
 
