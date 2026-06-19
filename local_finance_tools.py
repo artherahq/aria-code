@@ -71,6 +71,25 @@ try:
 except ImportError:
     _HAS_AK = False
 
+
+def _ak_retry(fn, *args, _tries: int = 3, _delay: float = 0.8, **kwargs):
+    """Call an akshare function with retries.
+
+    akshare internally hits numbered eastmoney hosts (NN.push2.eastmoney.com);
+    individual hosts go down transiently. Retrying usually lands on a healthy
+    host. Re-raises the last error if all attempts fail.
+    """
+    import time as _t
+    last_exc = None
+    for _i in range(_tries):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — akshare raises many types
+            last_exc = exc
+            if _i < _tries - 1:
+                _t.sleep(_delay)
+    raise last_exc
+
 try:
     import ccxt
     _HAS_CCXT = True
@@ -847,7 +866,7 @@ def _get_sector_performance(params: dict) -> dict:
 
     if market == "cn" and _HAS_AK:
         try:
-            df = ak.stock_board_industry_name_em()
+            df = _ak_retry(ak.stock_board_industry_name_em)
             if df is None or df.empty:
                 raise ValueError("empty sector data")
             df = df.rename(columns={
@@ -948,7 +967,7 @@ def _screen_ashare(params: dict) -> dict:
 
     try:
         # A股实时行情
-        df = ak.stock_zh_a_spot_em()
+        df = _ak_retry(ak.stock_zh_a_spot_em)
         if df is None or df.empty:
             return {"success": False, "error": "No spot data"}
 
