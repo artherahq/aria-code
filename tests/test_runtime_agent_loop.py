@@ -408,3 +408,62 @@ class RuntimeAgentLoopAsyncTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LoopGuardTests(unittest.TestCase):
+    def test_warns_at_soft_threshold_and_breaks_at_hard(self):
+        from runtime import LoopGuard
+        g = LoopGuard(soft_threshold=2, hard_threshold=4)
+        fail = {"success": False, "error": "File not found: /x.py"}
+        self.assertIsNone(g.record("read_file", {"path": "/x.py"}, fail))   # 1
+        warn = g.record("read_file", {"path": "/x.py"}, fail)              # 2
+        self.assertIn("read_file", warn)
+        self.assertFalse(g.should_break)
+        self.assertIsNone(g.record("read_file", {"path": "/x.py"}, fail))  # 3 (already warned)
+        hard = g.record("read_file", {"path": "/x.py"}, fail)             # 4
+        self.assertTrue(g.should_break)
+        self.assertIn("停止", hard)
+
+    def test_success_clears_counter(self):
+        from runtime import LoopGuard
+        g = LoopGuard(soft_threshold=2)
+        fail = {"success": False, "error": "error"}
+        g.record("t", {"a": 1}, fail)
+        g.record("t", {"a": 1}, {"success": True})
+        # counter cleared → next failure is the first again, no warning
+        self.assertIsNone(g.record("t", {"a": 1}, fail))
+
+    def test_distinct_params_tracked_separately(self):
+        from runtime import LoopGuard
+        g = LoopGuard(soft_threshold=2)
+        fail = {"success": False, "error": "error"}
+        self.assertIsNone(g.record("t", {"a": 1}, fail))
+        self.assertIsNone(g.record("t", {"a": 2}, fail))  # different params → not a repeat
+
+
+class TodoTrackerTests(unittest.TestCase):
+    def test_update_and_normalize(self):
+        from apps.cli.todo_tracker import update_todos, get_active_todos, clear_todos
+        clear_todos()
+        r = update_todos({"todos": [
+            {"content": "step 1", "status": "completed"},
+            {"content": "step 2", "status": "doing"},   # synonym → in_progress
+            {"content": "step 3", "status": "pending"},
+        ]})
+        self.assertTrue(r["success"])
+        self.assertEqual(r["data"]["completed"], 1)
+        self.assertEqual(r["data"]["in_progress"], 1)
+        self.assertEqual(get_active_todos()[1]["status"], "in_progress")
+
+    def test_only_one_in_progress(self):
+        from apps.cli.todo_tracker import update_todos, clear_todos
+        clear_todos()
+        r = update_todos({"todos": [
+            {"content": "a", "status": "in_progress"},
+            {"content": "b", "status": "in_progress"},
+        ]})
+        self.assertEqual(r["data"]["in_progress"], 1)
+
+    def test_empty_rejected(self):
+        from apps.cli.todo_tracker import update_todos
+        self.assertFalse(update_todos({"todos": []})["success"])

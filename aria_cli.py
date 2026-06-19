@@ -2105,6 +2105,12 @@ def _tool_edit_file(params: dict) -> dict:
     return _f(params)
 
 
+def _tool_update_todos(params: dict) -> dict:
+    """Thin shim — implementation in apps/cli/todo_tracker.py."""
+    from apps.cli.todo_tracker import update_todos as _f
+    return _f(params)
+
+
 def _tool_list_files(params: dict) -> dict:
     """List files in a directory, optionally matching a glob pattern."""
     path = params.get("path", ".")
@@ -2185,6 +2191,7 @@ LOCAL_TOOLS = {
     "edit_file":      (_tool_edit_file,      "Edit a file (find & replace)"),
     "list_files":     (_tool_list_files,     "List files in a directory"),
     "list_dir":       (_tool_list_files,     "List files in a directory (alias for list_files)"),
+    "update_todos":   (_tool_update_todos,   "Track multi-step task progress as a live checklist"),
     "search_code":    (_tool_search_code,    "Search for patterns in code (grep)"),
     "search":         (_tool_search_code,    "Search for patterns in code (alias for search_code)"),
     "run_command":    (_tool_run_command,    "Execute a shell command"),
@@ -2235,7 +2242,13 @@ if _HAS_PLUGIN:
         logger.debug("Plugin tool registration error: %s", _exc)
 
 # Ollama tool schemas (for function calling) — extend so finance schemas added above are kept
+def _todo_schema():
+    from apps.cli.todo_tracker import UPDATE_TODOS_SCHEMA
+    return UPDATE_TODOS_SCHEMA
+
+
 LOCAL_TOOL_SCHEMAS.extend([
+    _todo_schema(),
     {
         "type": "function",
         "function": {
@@ -3964,6 +3977,13 @@ def _format_tool_summary(tool_name: str, result: dict) -> str:
         if result.get("warning"):
             _base += f"\n\n{result['warning']}"
         return _base
+    if tool_name == "update_todos":
+        _todos = data.get("todos", [])
+        _lines = [f"任务进度 {data.get('completed', 0)}/{data.get('total', len(_todos))}:"]
+        _mark = {"completed": "[x]", "in_progress": "[>]", "pending": "[ ]"}
+        for _t in _todos:
+            _lines.append(f"  {_mark.get(_t.get('status'), '[ ]')} {_t.get('content', '')}")
+        return "\n".join(_lines)
     if tool_name == "read_file":
         content = data.get("content", "")
         return f"OK: {data.get('lines', 0)} lines\n{content[:2000]}"
@@ -9311,6 +9331,11 @@ class ArtheraTerminal:
         elapsed = 0.0
 
         _loop_guard = LoopGuard()  # detect repeated identical failing tool calls
+        try:
+            from apps.cli.todo_tracker import clear_todos as _clear_todos
+            _clear_todos()  # reset task checklist for this new turn
+        except Exception:
+            pass
 
         round_num = 0
         while round_num < hard_max_rounds:

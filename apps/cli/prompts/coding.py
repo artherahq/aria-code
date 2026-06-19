@@ -36,7 +36,14 @@ CODING_SYSTEM_PROMPT = (
     "- edit_file: {path, old_string, new_string} — Surgical edit. old_string must match EXACTLY.\n"
     "- run_command: {command, timeout} — Shell command (default timeout=120, max=300).\n"
     "- list_files: {path, pattern} — List directory or glob match.\n"
-    "- search_code: {pattern, path, glob} — Grep for pattern in files.\n\n"
+    "- search_code: {pattern, path, glob} — Grep for pattern in files.\n"
+    "- update_todos: {todos:[{content,status}]} — Track a multi-step task as a checklist.\n\n"
+
+    "## Multi-step tasks\n"
+    "For any task with 3+ distinct steps, call update_todos FIRST with the full plan "
+    "(all status=pending), then update it as you go: mark the current step in_progress "
+    "before starting it and completed right after finishing. Keep exactly ONE step "
+    "in_progress. Send the FULL list every call. Skip this for simple 1-2 step tasks.\n\n"
 
     "## Workflow (strict order, one tool per step)\n"
     "1. Check if file exists: read_file ~/Documents/Aria Code/generated/<name>.py — if exists, read it and improve with edit_file.\n"
