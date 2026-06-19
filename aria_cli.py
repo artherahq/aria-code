@@ -3955,9 +3955,15 @@ def _format_tool_summary(tool_name: str, result: dict) -> str:
                 pass
         return out
     if tool_name == "write_file":
-        return f"OK: {data.get('action', 'created')} {data.get('path', '')} ({data.get('lines', 0)} lines)"
+        _base = f"OK: {data.get('action', 'created')} {data.get('path', '')} ({data.get('lines', 0)} lines)"
+        if result.get("warning"):
+            _base += f"\n\n{result['warning']}"
+        return _base
     if tool_name == "edit_file":
-        return f"OK: edited {data.get('path', '')} ({data.get('replacements', 0)} replacements)"
+        _base = f"OK: edited {data.get('path', '')} ({data.get('replacements', 0)} replacements)"
+        if result.get("warning"):
+            _base += f"\n\n{result['warning']}"
+        return _base
     if tool_name == "read_file":
         content = data.get("content", "")
         return f"OK: {data.get('lines', 0)} lines\n{content[:2000]}"

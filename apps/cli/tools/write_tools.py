@@ -28,6 +28,39 @@ def _change_store():
     return _ac().GLOBAL_CHANGE_STORE
 
 
+def _verify_python_syntax(path: "pathlib.Path", content: str) -> "str | None":
+    """Compile-check a Python file after a write/edit.
+
+    Returns a short LLM-actionable error string if the file no longer parses,
+    or None if it is fine / not a Python file. This mirrors Claude Code's
+    edit→verify discipline so syntax breakage is caught immediately instead of
+    at the next run.
+    """
+    if path.suffix != ".py":
+        return None
+    try:
+        compile(content, str(path), "exec")
+        return None
+    except SyntaxError as exc:
+        line = exc.lineno or "?"
+        msg = exc.msg or "syntax error"
+        # Show the offending line for context
+        ctx = ""
+        try:
+            lines = content.splitlines()
+            if isinstance(exc.lineno, int) and 1 <= exc.lineno <= len(lines):
+                ctx = f"\n  → 第 {line} 行: {lines[exc.lineno - 1].strip()[:120]}"
+        except Exception:
+            pass
+        return (
+            f"⚠ 语法检查失败 (SyntaxError: {msg} @ line {line}){ctx}\n"
+            f"改动已写入，但文件无法编译。请用 read_file 查看该行附近，再用 edit_file 修复语法。"
+        )
+    except Exception:
+        # Non-syntax compile issues (e.g. null bytes) — don't block, just skip
+        return None
+
+
 def _write_policy():
     return _ac()._ACTIVE_WRITE_POLICY
 
@@ -378,7 +411,12 @@ def tool_write_file(params: dict) -> dict:
         except Exception:
             size_bytes = len(content.encode("utf-8"))
 
-        return {"success": True, "data": {
+        _syntax_warn = _verify_python_syntax(p, content)
+        _console2, _has_rich2 = _ui()
+        if _syntax_warn and _has_rich2 and _console2:
+            _console2.print(f"  [yellow]⚠ 语法检查未通过[/yellow]")
+
+        _wdata = {
             "path":           str(p),
             "absolute_path":  str(p),
             "action":         action.lower(),
@@ -391,7 +429,11 @@ def tool_write_file(params: dict) -> dict:
             "staged":         True,
             "applied":        True,
             "user_message":   f"文件已保存到: {p}  打开所在目录: {_reveal_hint}",
-        }}
+        }
+        if _syntax_warn:
+            _wdata["syntax_check"] = "failed"
+            return {"success": True, "data": _wdata, "warning": _syntax_warn}
+        return {"success": True, "data": _wdata}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
@@ -459,12 +501,20 @@ def tool_edit_file(params: dict) -> dict:
         else:
             print(f"  Applied (+{added}, -{removed} lines)")
 
-        return {"success": True, "data": {
+        _syntax_warn = _verify_python_syntax(p, new_content)
+        if _syntax_warn and has_rich and console:
+            console.print(f"  [yellow]⚠ 语法检查未通过[/yellow]")
+
+        _data = {
             "path": str(p), "replacements": 1,
             "lines": new_content.count("\n") + 1,
             "change_id": applied.change_id,
             "before_hash": applied.before_hash, "after_hash": applied.after_hash,
             "diff": applied.diff, "staged": True, "applied": True,
-        }}
+        }
+        if _syntax_warn:
+            _data["syntax_check"] = "failed"
+            return {"success": True, "data": _data, "warning": _syntax_warn}
+        return {"success": True, "data": _data}
     except Exception as e:
         return {"success": False, "error": str(e)}
