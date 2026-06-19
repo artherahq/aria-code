@@ -21,6 +21,7 @@ from apps.cli.utils.market_detect import (
     _has_unresolved_company_mention,
     _PRIVATE_COMPANY_PROFILES,
 )
+from apps.cli.market_metadata import enrich_market_quote, market_display_label
 
 _PROVIDERS_FILE = Path.home() / ".arthera" / "providers.json"
 
@@ -186,6 +187,7 @@ def _try_prefetch_market_data(message: str, history: list = None) -> str:
                 f"- 可用操作：运行 `/quote {symbol}` 重试。\n"
                 f"- 输出要求：不要输出示例价格、占位符、RSI、MACD 或支撑阻力位。\n"
             )
+        r = enrich_market_quote(symbol, r)
         price    = r.get("price", "N/A")
         chg      = r.get("change_pct", 0)
         name     = r.get("name", symbol)
@@ -197,14 +199,17 @@ def _try_prefetch_market_data(message: str, history: list = None) -> str:
         cap_str  = ""
         if mktcap and mktcap == mktcap:  # excludes NaN
             if mktcap >= 1e12:
-                cap_str = f"${mktcap/1e12:.2f}T"
+                cap_str = f"{currency} {mktcap/1e12:.2f}T"
             elif mktcap >= 1e9:
-                cap_str = f"${mktcap/1e9:.1f}B"
+                cap_str = f"{currency} {mktcap/1e9:.1f}B"
         sign = "+" if chg >= 0 else ""
         provider = r.get("provider", "API")
+        display_label = market_display_label(symbol, r)
+        exchange = r.get("exchange")
 
         block = (
-            f"\n## 📊 {symbol} 实时行情（来源：{provider}）\n"
+            f"\n## 📊 {display_label} 实时行情（来源：{provider}）\n"
+            f"- **交易代码**：{symbol}" + (f"（{exchange}）\n" if exchange else "\n") +
             f"- **名称**：{name}\n"
             f"- **最新价**：{currency} {price}\n"
             f"- **涨跌幅**：{sign}{chg:.2f}%\n"
@@ -299,13 +304,17 @@ def _try_prefetch_market_data(message: str, history: list = None) -> str:
             try:
                 _xr = mdc.quote(_xs)
                 if _xr.get("success"):
+                    _xr = enrich_market_quote(_xs, _xr)
                     _xp   = _xr.get("price", "N/A")
                     _xchg = _xr.get("change_pct", 0)
                     _xn   = _xr.get("name", _xs)
                     _xc   = _xr.get("currency", "USD")
                     _xsign = "+" if _xchg >= 0 else ""
+                    _x_label = market_display_label(_xs, _xr)
+                    _x_exchange = _xr.get("exchange")
                     block += (
-                        f"\n## 📊 {_xs} 实时行情（来源：{_xr.get('provider', 'API')}）\n"
+                        f"\n## 📊 {_x_label} 实时行情（来源：{_xr.get('provider', 'API')}）\n"
+                        f"- **交易代码**：{_xs}" + (f"（{_x_exchange}）\n" if _x_exchange else "\n") +
                         f"- **名称**：{_xn}\n"
                         f"- **最新价**：{_xc} {_xp}\n"
                         f"- **涨跌幅**：{_xsign}{_xchg:.2f}%\n"
@@ -372,6 +381,7 @@ def _fetch_snapshot_row_for_symbol(symbol: str, mdc) -> dict:
             "errors": [str(exc)],
         }
 
+    quote = enrich_market_quote(symbol, quote)
     currency = quote.get("currency") or fundamentals.get("currency") or "USD"
     market_cap = (
         quote.get("market_cap")

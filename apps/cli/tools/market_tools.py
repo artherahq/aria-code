@@ -16,6 +16,8 @@ _ROOT = Path(__file__).parent.parent.parent.parent  # aria-code/
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
+from apps.cli.market_metadata import enrich_market_quote
+
 logger = logging.getLogger(__name__)
 
 # ── Optional: market data client ────────────────────────────────────────────
@@ -144,6 +146,7 @@ def tool_get_market_data(params: dict) -> dict:
             "error": quote.get("error") or "行情数据源暂时不可用，请稍后重试。",
         }
 
+    quote = enrich_market_quote(symbol, quote)
     result = {
         "success":    True,
         "symbol":     symbol,

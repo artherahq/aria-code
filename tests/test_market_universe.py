@@ -16,6 +16,8 @@ def test_static_global_assets_resolve_common_classes():
     assert resolve_market_symbol("纳斯达克的走势和预测") == "^IXIC"
     assert resolve_market_symbol("欧元美元汇率") == "EURUSD=X"
     assert resolve_market_symbol("比特币行情") == "BTC-USD"
+    assert resolve_market_symbol("分析lvmh股票和成交量") == "MC.PA"
+    assert resolve_market_symbol("路易斯威登股价") == "MC.PA"
 
 
 def test_market_detect_prefers_universe_index_alias_over_old_etf_alias():

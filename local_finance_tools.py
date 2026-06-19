@@ -2955,6 +2955,35 @@ def _peer_comparison(params: dict) -> dict:
     }
 
 
+def _resolve_search_key(env_var: str, provider: str) -> str:
+    """Resolve a search-API key: env var first, then ~/.arthera/providers.json.
+
+    Keys added via `/apikey set <provider> <key>` are stored in providers.json
+    (data section), not exported as env vars — so a web search must check both
+    or it silently falls through to DuckDuckGo despite a configured key.
+    """
+    val = os.getenv(env_var, "")
+    if val:
+        return val
+    try:
+        import json as _json
+        import pathlib as _pl
+        for _loc in ("~/.arthera/providers.json", "~/.aria/providers.json"):
+            p = _pl.Path(_loc).expanduser()
+            if not p.exists():
+                continue
+            raw = _json.loads(p.read_text(encoding="utf-8"))
+            for section in ("data", "llm"):
+                entry = raw.get(section, {}).get(provider.lower(), {})
+                if isinstance(entry, dict) and entry.get("api_key"):
+                    return entry["api_key"]
+                if isinstance(entry, str) and entry:
+                    return entry
+    except Exception:
+        pass
+    return ""
+
+
 def _web_search(params: dict) -> dict:
     """Web search: Brave → Tavily → DuckDuckGo fallback chain."""
     query      = str(params.get("query", "")).strip()
@@ -2963,15 +2992,18 @@ def _web_search(params: dict) -> dict:
         return {"success": False, "error": "query is required"}
 
     # ── 1. Brave Search API ───────────────────────────────────────────────────
-    brave_key = os.getenv("BRAVE_SEARCH_API_KEY")
+    brave_key = _resolve_search_key("BRAVE_SEARCH_API_KEY", "brave")
     if brave_key:
         try:
             import urllib.request as _req
             import urllib.parse as _parse
             import gzip as _gzip
-            url = "https://api.search.brave.com/res/v1/web/search?" + _parse.urlencode({
-                "q": query, "count": num, "search_lang": "zh", "safesearch": "moderate",
-            })
+            # search_lang must be a valid Brave code. "zh" is INVALID (→ HTTP 422);
+            # use "zh-hans" for Chinese queries and omit it otherwise (auto-detect).
+            _q_params = {"q": query, "count": num, "safesearch": "moderate"}
+            if any("一" <= _c <= "鿿" for _c in query):
+                _q_params["search_lang"] = "zh-hans"
+            url = "https://api.search.brave.com/res/v1/web/search?" + _parse.urlencode(_q_params)
             req = _req.Request(url, headers={
                 "Accept":               "application/json",
                 "Accept-Encoding":      "gzip",
@@ -2989,12 +3021,28 @@ def _web_search(params: dict) -> dict:
                     "url":     item.get("url", ""),
                     "snippet": item.get("description", ""),
                 })
-            return {"success": True, "query": query, "results": results, "provider": "brave"}
+            if results:
+                return {"success": True, "query": query, "results": results, "provider": "brave"}
         except Exception as e:
-            logger.debug("Brave search failed: %s; trying duckduckgo_search", e)
+            # Decompress gzip error bodies so the log is readable, not garbage
+            _detail = str(e)
+            try:
+                import urllib.error as _uerr
+                if isinstance(e, _uerr.HTTPError):
+                    _body = e.read()
+                    try:
+                        import gzip as _gz2
+                        if e.headers.get("Content-Encoding") == "gzip":
+                            _body = _gz2.decompress(_body)
+                    except Exception:
+                        pass
+                    _detail = f"HTTP {e.code}: {_body.decode('utf-8', 'ignore')[:200]}"
+            except Exception:
+                pass
+            logger.debug("Brave search failed: %s; trying next provider", _detail)
 
     # ── 2. Tavily API (designed for AI agents, generous free tier) ───────────
-    tavily_key = os.getenv("TAVILY_API_KEY")
+    tavily_key = _resolve_search_key("TAVILY_API_KEY", "tavily")
     if tavily_key:
         try:
             import urllib.request as _req2

@@ -50,6 +50,14 @@ STATIC_MARKET_ALIASES: dict[str, MarketSymbol] = {
     "dax": MarketSymbol("DAX", "^GDAXI", "INDEX", "static"),
     "法国cac": MarketSymbol("CAC 40", "^FCHI", "INDEX", "static"),
     "日经225": MarketSymbol("Nikkei 225", "^N225", "INDEX", "static"),
+    # Europe equities / brands frequently asked by name rather than ticker.
+    "lvmh": MarketSymbol("LVMH Moet Hennessy Louis Vuitton SE", "MC.PA", "EU", "static"),
+    "路易威登": MarketSymbol("LVMH Moet Hennessy Louis Vuitton SE", "MC.PA", "EU", "static"),
+    "路易斯威登": MarketSymbol("LVMH Moet Hennessy Louis Vuitton SE", "MC.PA", "EU", "static"),
+    "louis vuitton": MarketSymbol("LVMH Moet Hennessy Louis Vuitton SE", "MC.PA", "EU", "static"),
+    "爱马仕": MarketSymbol("Hermes International SCA", "RMS.PA", "EU", "static"),
+    "开云集团": MarketSymbol("Kering SA", "KER.PA", "EU", "static"),
+    "古驰": MarketSymbol("Kering SA", "KER.PA", "EU", "static"),
     # Crypto
     "比特币": MarketSymbol("比特币", "BTC-USD", "CRYPTO", "static"),
     "btc": MarketSymbol("Bitcoin", "BTC-USD", "CRYPTO", "static"),
