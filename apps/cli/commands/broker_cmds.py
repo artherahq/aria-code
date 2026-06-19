@@ -151,7 +151,43 @@ class BrokerCommandsMixin:
             else:
                 print(f"已连接 {label}")
         except Exception as e:
-            _print_error(f"连接失败: {label}", str(e))
+            # If the failure is a missing broker SDK, give actionable guidance
+            # that ties into the dependency system (/install <pkg>).
+            _err = str(e)
+            _btype = ""
+            try:
+                _btype = next((c.get("type", "") for c in cfgs
+                               if c.get("id") == broker_id), "")
+            except Exception:
+                pass
+            _SDK_PKG = {
+                "longbridge": "longbridge", "ibkr": "ib_insync", "futu": "futu-api",
+                "tiger": "tigeropen", "alpaca": "alpaca-py", "webull": "webull",
+                "easytrader": "easytrader",
+            }
+            _pkg = _SDK_PKG.get(_btype, "")
+            # Primary signal: can we import the SDK module? If not, it's a
+            # missing-dependency failure regardless of the error message
+            # language (the SDK raises a localized "未安装" ImportError).
+            _is_missing_sdk = False
+            if _pkg:
+                _mod = {"longbridge": "longbridge", "ibkr": "ib_insync",
+                        "futu": "futu", "tiger": "tigeropen", "alpaca": "alpaca",
+                        "webull": "webull", "easytrader": "easytrader"}.get(_btype, _pkg)
+                try:
+                    import importlib as _il
+                    _il.import_module(_mod)
+                except Exception:
+                    _is_missing_sdk = True
+            if _is_missing_sdk:
+                # Put the actionable guidance in msg — _print_error's `context`
+                # arg is a category keyword, not free-text, so it won't render.
+                _print_error(
+                    f"连接失败: {label} — {_btype} SDK 未安装。"
+                    f"运行 /install {_pkg} 安装后重试（会先确认）。",
+                )
+            else:
+                _print_error(f"连接失败: {label}", _err or "未知错误（检查账户配置与网络）")
 
     async def _cmd_broker_disconnect(self, broker_id: str):
         from aria_cli import HAS_RICH, console, _get_broker_registry, _print_error

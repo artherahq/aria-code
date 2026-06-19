@@ -13,6 +13,7 @@ class _SnapshotMDC:
         prices = {
             "AAPL": {"name": "Apple", "price": 195.2, "change_pct": 0.8, "market_cap": 2_990_000_000_000, "high": 197.0, "low": 193.0},
             "NVDA": {"name": "NVIDIA", "price": 204.87, "change_pct": 2.22, "market_cap": 5_020_000_000_000, "high": 205.66, "low": 199.54},
+            "MC.PA": {"name": "MC.PA", "price": 508.8, "change_pct": 0.73, "market_cap": 250_000_000_000, "high": 510.0, "low": 507.8},
             "300806": {"name": "斯迪克", "price": 12.34, "change_pct": -1.2, "market_cap": 5_000_000_000, "high": 12.8, "low": 12.1},
         }
         row = prices.get(symbol, prices["AAPL"])
@@ -108,6 +109,21 @@ def test_market_snapshot_resolves_sidike_without_inheriting_previous_symbol(monk
     assert "`300806`" in text
     assert "601899" not in text
     assert "预测参考" in text
+
+
+def test_lvmh_prefetch_normalizes_symbol_name_and_currency(monkeypatch):
+    import aria_cli
+
+    monkeypatch.setattr(aria_cli, "_HAS_MDC", True)
+    monkeypatch.setattr(aria_cli, "_get_mdc", lambda: _SnapshotMDC())
+
+    block = aria_cli._try_prefetch_market_data("分析lvmh股票和成交量")
+
+    assert "LVMH/路易威登(MC.PA)" in block
+    assert "交易代码**：MC.PA（Euronext Paris）" in block
+    assert "LVMH Moet Hennessy Louis Vuitton SE" in block
+    assert "最新价**：EUR 508.8" in block
+    assert "USD 508.8" not in block
 
 
 def test_unresolved_market_name_does_not_inherit_history():
