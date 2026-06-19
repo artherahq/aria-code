@@ -6,12 +6,14 @@ import pytest
 
 from apps.cli.commands.catalog import DIRECT_COMMAND_MAP, VISIBLE_SLASH_COMMANDS
 from apps.cli.commands.market_context import build_analyze_context, build_analyze_prompt
+from apps.cli.message_processing import context_compaction_decision, estimate_message_tokens
 from apps.cli.commands.market import (
     parse_symbols,
     parse_technical_args,
     route_top_level_text,
     try_top_level_route,
 )
+from apps.cli.commands.market_cmds import _is_probable_football_query, _parse_nl_team_pair
 from apps.cli.commands.market_render import compact_quote_market_cap, render_quote_plain, render_ta_plain
 from apps.cli.commands.report import (
     all_agents_failed,
@@ -95,6 +97,56 @@ async def test_direct_dispatch_falls_back_to_prompt_for_unknown_command():
             },
         )
     ]
+
+
+def test_context_compaction_decision_uses_incoming_prompt_pressure():
+    messages = [{"role": "user", "content": "x" * 3000} for _ in range(8)]
+
+    assert estimate_message_tokens(messages) == 8000
+    decision = context_compaction_decision(
+        messages,
+        model_key="qwen2.5-coder:1.5b",
+        extra_content="y" * 1200,
+        threshold=0.78,
+    )
+
+    assert decision["should_compact"] is True
+    assert decision["fill_pct"] >= 78
+
+
+def test_context_compaction_decision_stays_quiet_for_small_sessions():
+    messages = [{"role": "user", "content": "x" * 500} for _ in range(3)]
+
+    decision = context_compaction_decision(
+        messages,
+        model_key="qwen2.5-coder:1.5b",
+        threshold=0.50,
+    )
+
+    assert decision["should_compact"] is False
+    assert decision["message_count"] == 3
+
+
+def test_football_intent_does_not_capture_stock_volume_query():
+    query = "分析lvmh股票和成交量"
+    pair = _parse_nl_team_pair(query)
+
+    assert _is_probable_football_query(query, pair) is False
+
+
+def test_football_intent_does_not_capture_ticker_vs_ticker_query():
+    query = "AAPL vs NVDA谁赢"
+    pair = _parse_nl_team_pair(query)
+
+    assert _is_probable_football_query(query, pair) is False
+
+
+def test_football_intent_still_accepts_real_match_query():
+    query = "葡萄牙和波兰的比赛比分预测"
+    pair = _parse_nl_team_pair(query)
+
+    assert pair is not None
+    assert _is_probable_football_query(query, pair) is True
 
 
 def test_cli_catalog_exposes_watchable_direct_commands_and_visible_help():
@@ -187,6 +239,24 @@ def test_top_level_market_router_maps_kline_artifacts_to_chart_service():
     assert routed is not None
     assert routed.command == "/chart"
     assert routed.text == "/chart MC.PA 1y"
+
+
+def test_top_level_market_router_maps_multi_symbol_chart_artifacts():
+    available = {"/chart", "/dashboard", "/report"}
+
+    routed = route_top_level_text("生成微软和英伟达对比图表", available)
+    assert routed is not None
+    assert routed.command == "/chart"
+    assert routed.text == "/chart MSFT NVDA 1y"
+
+
+def test_top_level_market_router_maps_news_language_to_news_command():
+    available = {"/news", "/chart", "/dashboard", "/report"}
+
+    routed = route_top_level_text("SpaceX最近的新闻", available)
+    assert routed is not None
+    assert routed.command == "/news"
+    assert routed.text == "/news SpaceX"
 
 
 def test_team_args_parser_and_symbol_resolution_are_ui_free():

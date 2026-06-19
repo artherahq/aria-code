@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Mapping
 
-from apps.cli.utils.market_detect import _extract_market_symbol
+from apps.cli.utils.market_detect import _extract_market_symbol, _extract_market_symbols
 
 
 TOP_LEVEL_ROUTES: Mapping[str, str] = {
@@ -67,6 +67,40 @@ _REPORT_TYPE_HINTS: tuple[tuple[tuple[str, ...], str], ...] = (
     (("研究报告", "投研报告", "研究", "report"), "standard"),
 )
 
+_ROUTE_SYMBOL_BLOCKLIST = {"K", "LINE", "CHART", "PLOT"}
+
+
+def _news_topic(text: str, symbols: list[str]) -> str:
+    low = text.lower()
+    if "spacex" in low:
+        return "SpaceX"
+    if "lvmh" in low or "路易威登" in text:
+        return "LVMH"
+    return symbols[0] if symbols else text
+
+
+def _route_symbols(text: str, *, limit: int = 6) -> list[str]:
+    """Resolve ticker/company mentions for natural-language command routing."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for source in (text, text.upper()):
+        for symbol in _extract_market_symbols(source, limit=limit):
+            normalized = str(symbol or "").upper()
+            if not normalized or normalized in _ROUTE_SYMBOL_BLOCKLIST:
+                continue
+            if len(normalized) == 1 and "." not in normalized:
+                continue
+            if normalized not in seen:
+                seen.add(normalized)
+                out.append(normalized)
+                if len(out) >= limit:
+                    return out
+    single = _extract_market_symbol(text) or _extract_market_symbol(text.upper())
+    normalized = str(single or "").upper()
+    if normalized and normalized not in seen and normalized not in _ROUTE_SYMBOL_BLOCKLIST:
+        out.append(normalized)
+    return out
+
 
 @dataclass(frozen=True)
 class RoutedCommand:
@@ -95,7 +129,8 @@ def route_top_level_text(user_input: str, available_commands: set[str]) -> Route
         if command not in available_commands:
             continue
         if any(k in low for k in keywords):
-            symbol = _extract_market_symbol(stripped) or _extract_market_symbol(stripped.upper())
+            symbols = _route_symbols(stripped)
+            symbol = symbols[0] if symbols else ""
             if command == "/dashboard":
                 mode = next(
                     (
@@ -115,7 +150,7 @@ def route_top_level_text(user_input: str, available_commands: set[str]) -> Route
                     ),
                     "1y",
                 )
-                rest = symbol or stripped
+                rest = " ".join(symbols) if symbols else stripped
                 return RoutedCommand(command=command, args=f"{rest} {period}".strip())
             if command == "/report":
                 report_type = next(
@@ -132,6 +167,11 @@ def route_top_level_text(user_input: str, available_commands: set[str]) -> Route
                 rest = symbol or stripped
                 args = " ".join(part for part in [rest, f"--type {report_type}" if report_type else "", f"--format {fmt}" if fmt else ""] if part)
                 return RoutedCommand(command=command, args=args)
+    if "/news" in available_commands and any(k in low for k in (
+        "新闻", "消息", "最新进展", "最近进展", "news", "latest", "recent",
+    )):
+        symbols = _route_symbols(stripped)
+        return RoutedCommand(command="/news", args=_news_topic(stripped, symbols))
     parts = stripped.split(maxsplit=1)
     keyword = parts[0].lower()
     rest = parts[1] if len(parts) > 1 else ""

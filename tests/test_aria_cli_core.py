@@ -39,6 +39,7 @@ from aria_cli import (
     _is_stock_chart_analysis_request,
     _chart_period_from_ta_days,
     _is_market_artifact_followup,
+    _is_artifact_location_followup,
     _natural_language_visual_artifact_route,
 )
 from apps.cli.utils.market_detect import _is_visual_market_artifact_request
@@ -83,6 +84,12 @@ class TestStripMarkdownFences(unittest.TestCase):
         self.assertTrue(_is_market_artifact_followup("那你直接运行"))
         self.assertTrue(_is_market_artifact_followup("继续以上任务"))
         self.assertFalse(_is_market_artifact_followup("/chart AAPL"))
+
+    def test_artifact_location_followup_detection(self):
+        self.assertTrue(_is_artifact_location_followup("那文件在哪"))
+        self.assertTrue(_is_artifact_location_followup("保存到哪里了"))
+        self.assertTrue(_is_artifact_location_followup("where is the file"))
+        self.assertFalse(_is_artifact_location_followup("/artifacts"))
 
 
 # ============================================================================

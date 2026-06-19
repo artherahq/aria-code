@@ -604,6 +604,20 @@ def _render_private_company_analysis(profile_key: str, message: str) -> dict:
     }
 
 
+def _resolve_etf_snapshot_symbols(message: str) -> list[str]:
+    text = message or ""
+    low = text.lower()
+    if not any(k in low or k in text for k in ("etf", "基金", "交易型开放式")):
+        return []
+    if any(k in low or k in text for k in ("标普500", "标普 500", "s&p 500", "s&p500", "sp500", "spy")):
+        return ["SPY", "VOO", "IVV"]
+    if any(k in low or k in text for k in ("纳斯达克100", "纳斯达克 100", "nasdaq 100", "qqq")):
+        return ["QQQ", "QQQM"]
+    if any(k in low or k in text for k in ("黄金", "gold", "gld")):
+        return ["GLD", "IAU"]
+    return []
+
+
 def _try_handle_market_snapshot_analysis(message: str, history: list = None) -> dict:
     """Deterministic path for simple market analysis.
 
@@ -612,6 +626,10 @@ def _try_handle_market_snapshot_analysis(message: str, history: list = None) -> 
     """
     if not _is_market_snapshot_request(message, history):
         return {"success": False, "error": "not_market_snapshot"}
+
+    _etf_symbols = _resolve_etf_snapshot_symbols(message)
+    if len(_etf_symbols) >= 2:
+        return _try_handle_multi_market_snapshot(message, _etf_symbols)
 
     _symbols = _extract_market_symbols(message)
     if len(_symbols) >= 2:
@@ -1153,6 +1171,10 @@ def _try_handle_market_snapshot_analysis(message: str, history: list = None) -> 
 
     _SIGNAL_LABELS: dict[str, dict[str, str]] = {
         "zh": {
+            "STRONG_BUY": "强势多头 — 趋势与动量共振",
+            "BUY":     "偏多 — 量化条件支持上行",
+            "SELL":    "偏空 — 量化条件提示下行",
+            "STRONG_SELL": "强势空头 — 趋势与动量共振下行",
             "CAUTION": "超买 — 等待回调确认",
             "WATCH":   "超卖 — 关注企稳信号",
             "HOLD+":   "短线偏强，控制仓位",
@@ -1161,6 +1183,10 @@ def _try_handle_market_snapshot_analysis(message: str, history: list = None) -> 
             "—":       "指标数据不足",
         },
         "en": {
+            "STRONG_BUY": "Strong bullish — trend and momentum aligned",
+            "BUY":     "Bullish — quantitative setup supports upside",
+            "SELL":    "Bearish — quantitative setup warns downside",
+            "STRONG_SELL": "Strong bearish — trend and momentum aligned lower",
             "CAUTION": "Overbought — wait for pullback",
             "WATCH":   "Oversold — watch for stabilization",
             "HOLD+":   "Short-term bias up, manage size",
@@ -1171,18 +1197,69 @@ def _try_handle_market_snapshot_analysis(message: str, history: list = None) -> 
     }
 
     if _enough_data:
-        if rsi is not None and rsi >= 75:
-            _sig_key = "CAUTION"
-        elif rsi is not None and rsi <= 28:
-            _sig_key = "WATCH"
-        elif mhist is not None and mhist > 0 and (chg or 0) >= 0:
+        _signal_score = 0
+        _signal_reasons = []
+        if ma20 is not None:
+            if price > ma20:
+                _signal_score += 1
+                _signal_reasons.append("price>MA20")
+            else:
+                _signal_score -= 1
+                _signal_reasons.append("price<MA20")
+        if ma60 is not None:
+            if price > ma60:
+                _signal_score += 1
+                _signal_reasons.append("price>MA60")
+            else:
+                _signal_score -= 1
+                _signal_reasons.append("price<MA60")
+        if mhist is not None:
+            if mhist > 0:
+                _signal_score += 1
+                _signal_reasons.append("MACD+")
+            elif mhist < 0:
+                _signal_score -= 1
+                _signal_reasons.append("MACD-")
+        if rsi is not None:
+            if rsi <= 30:
+                _signal_score += 2
+                _signal_reasons.append("RSI oversold")
+            elif rsi <= 40:
+                _signal_score += 1
+                _signal_reasons.append("RSI low")
+            elif rsi >= 75:
+                _signal_score -= 2
+                _signal_reasons.append("RSI very high")
+            elif rsi >= 65:
+                _signal_score -= 1
+                _signal_reasons.append("RSI high")
+        if chg is not None:
+            if chg >= 2:
+                _signal_score += 1
+                _signal_reasons.append("day momentum+")
+            elif chg <= -2:
+                _signal_score -= 1
+                _signal_reasons.append("day momentum-")
+
+        if _signal_score >= 4:
+            _sig_key = "STRONG_BUY"
+        elif _signal_score >= 2:
+            _sig_key = "BUY"
+        elif _signal_score <= -4:
+            _sig_key = "STRONG_SELL"
+        elif _signal_score <= -2:
+            _sig_key = "SELL"
+        elif _signal_score == 1:
             _sig_key = "HOLD+"
-        elif mhist is not None and mhist < 0 and (chg or 0) < 0:
+        elif _signal_score == -1:
             _sig_key = "HOLD−"
         else:
             _sig_key = "NEUTRAL"
     else:
         _sig_key = "—"
+        _signal_score = 0
+        _signal_reasons = []
+    _signal_confidence = min(0.82, 0.46 + abs(_signal_score) * 0.07) if _enough_data else 0.0
 
     signal = _sig_key
     signal_str = _SIGNAL_LABELS["zh"][_sig_key]  # will be overwritten after _lang is resolved below
@@ -1348,7 +1425,12 @@ def _try_handle_market_snapshot_analysis(message: str, history: list = None) -> 
     # ── Signal ──
     lines.append("")
     if _enough_data:
-        lines.append(f"{_L['signal_lbl']}：`{signal}` — {signal_str}")
+        _score_detail = (
+            f" · score {_signal_score:+d} · confidence {_signal_confidence:.0%}"
+            if _en else
+            f" · 量化分 {_signal_score:+d} · 置信度 {_signal_confidence:.0%}"
+        )
+        lines.append(f"{_L['signal_lbl']}：`{signal}` — {signal_str}{_score_detail}")
     else:
         lines.append(_L["pa_hdr"])
         for _pal in _pa_lines_l10n:

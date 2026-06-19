@@ -314,6 +314,12 @@ class UiCommandsMixin:
         thinking = cfg.get("thinking_mode", "auto")
         has_auth = bool(cfg.get("auth_token"))
         local_mode = cfg.get("local_mode", False)
+        auto_compact = bool(cfg.get("auto_compact_context", True))
+        try:
+            auto_compact_threshold = float(cfg.get("auto_compact_threshold", 0.78))
+        except Exception:
+            auto_compact_threshold = 0.78
+        auto_compact_count = int(getattr(self.terminal, "_auto_compact_count", 0) or 0)
 
         total_chars = sum(len(m.get("content", "")) for m in conv)
         est_tokens = total_chars // 3
@@ -331,6 +337,12 @@ class UiCommandsMixin:
             console.print(f"  [dim]{'Messages':<20s}[/dim]{conv_len}")
             console.print(f"  [dim]{'Est. tokens':<20s}[/dim][{ctx_color}]{est_tokens:,} / {max_ctx:,} ({ctx_pct}%)[/{ctx_color}]")
             console.print(f"  [dim]{'Authenticated':<20s}[/dim]{'yes' if has_auth else 'no'}")
+            console.print(
+                f"  [dim]{'Auto compact':<20s}[/dim]"
+                f"{'on' if auto_compact else 'off'}"
+                f" · threshold {int(auto_compact_threshold * 100)}%"
+                f" · runs {auto_compact_count}"
+            )
             console.print(f"  [dim]{'Session':<20s}[/dim]{self.terminal.session_id}")
             console.print(f"  [dim]{'Project context':<20s}[/dim]{'loaded' if _PROJECT_CONTEXT else 'none'}")
             wl = cfg.get("watchlist", [])
@@ -342,4 +354,5 @@ class UiCommandsMixin:
         else:
             print(f"  Model: {model_id}  ({'local' if local_mode else 'aws'})")
             print(f"  Messages: {conv_len}  Tokens: ~{est_tokens:,}/{max_ctx:,} ({ctx_pct}%)")
+            print(f"  Auto compact: {'on' if auto_compact else 'off'}  threshold={int(auto_compact_threshold * 100)}%  runs={auto_compact_count}")
             print(f"  Session: {self.terminal.session_id}")

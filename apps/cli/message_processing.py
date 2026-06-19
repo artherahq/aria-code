@@ -148,6 +148,41 @@ def strip_tool_call_tags(text: str) -> str:
 
 # ── History compaction ────────────────────────────────────────────────────────
 
+def estimate_message_tokens(messages: list, extra_content: str = "") -> int:
+    """Return a rough token estimate matching the terminal context meter."""
+    total_chars = sum(len(str(m.get("content", ""))) for m in messages)
+    total_chars += len(str(extra_content or ""))
+    return total_chars // 3
+
+
+def context_compaction_decision(
+    messages: list,
+    *,
+    model_key: str = "qwen7b",
+    extra_content: str = "",
+    threshold: float = 0.78,
+    min_messages: int = 8,
+) -> dict:
+    """Decide whether a conversation should be compacted before the next turn."""
+    try:
+        threshold = float(threshold)
+    except Exception:
+        threshold = 0.78
+    threshold = max(0.50, min(0.95, threshold))
+    max_ctx = int(_get_model_cfg(model_key).get("num_ctx", 16384) or 16384)
+    est_tokens = estimate_message_tokens(messages, extra_content=extra_content)
+    pct = est_tokens / max(max_ctx, 1)
+    return {
+        "should_compact": bool(len(messages) >= min_messages and pct >= threshold),
+        "estimated_tokens": est_tokens,
+        "max_tokens": max_ctx,
+        "fill_ratio": pct,
+        "fill_pct": min(100, int(pct * 100)),
+        "threshold": threshold,
+        "message_count": len(messages),
+    }
+
+
 def compact_messages(
     messages: list,
     max_chars: int = 0,

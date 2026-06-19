@@ -457,7 +457,7 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
     #   · 知识解释问题（"什么是X", "如何…"） → 1500 tokens（保证完整性）
     #   · 正常问题 → 模型 max_tokens 配置值
     _is_small_model = _HAS_MODEL_CAP and get_model_capability(model).context_window < 8192
-    _is_greeting    = _is_general and len(message.strip()) < 25
+    _is_greeting    = _is_simple_greeting(message)
     _wants_complete_output = any(k in message.lower() for k in (
         "完整", "完整输出", "完整给出", "全面", "详细", "不要中断", "不要截断",
         "complete", "full output", "comprehensive", "do not stop", "don't stop",
@@ -470,7 +470,7 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
         _complete_cap = max(2048, min(8192, int(_num_ctx * 0.45)))
         _effective_max_tokens = max(_max_tokens, _complete_cap)
     elif _is_general:
-        _effective_max_tokens = 1500   # 足够完整回答概念解释，不截断
+        _effective_max_tokens = max(1500, min(_max_tokens, 4096))   # 足够完整回答概念解释，不截断
     elif _use_lite_prompt:
         # Small/nano model: coding tasks need more room for complete scripts;
         # analysis/finance keep a tighter cap to prevent runaway echo generation.
@@ -554,10 +554,14 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
             payload["tools"] = _schemas_for_context
 
     full_response = ""
+    response_segments = []
     tools_used = []
     tool_calls_pending = []
     _tool_call_counts = {}
+    _tool_name_counts = {}
     max_tool_rounds = 25 if _wants_complete_output or _intent == "coding" else 12
+    _server_retry_budget = 2
+    _continuation_count = 0
     usage = {"prompt_tokens": 0, "completion_tokens": 0, "thinking_tokens": 0}
     _last_tool_had_error = False  # Track if previous tool failed
     _in_error_recovery = False    # Stays True until run_command succeeds (not reset by read_file)
@@ -582,6 +586,7 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
         sig = _tool_signature(tool_name, params)
         seen = _tool_call_counts.get(sig, 0)
         _tool_call_counts[sig] = seen + 1
+        _tool_name_counts[tool_name] = _tool_name_counts.get(tool_name, 0) + 1
         # Market data calls are expensive and usually deterministic for a turn.
         # One successful/attempted call is enough; repeated identical calls are
         # almost always model looping.
@@ -589,8 +594,17 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
             "get_market_data", "get_crypto_data", "get_forex_data",
             "get_technical_indicators",
         } else 2
+        total_limit = {
+            "web_search": 3,
+            "web_fetch": 4,
+            "search_news": 3,
+        }.get(tool_name)
         if seen >= limit:
             call["_aria_duplicate"] = True
+            call["_aria_limit_reason"] = "duplicate parameters"
+        elif total_limit is not None and _tool_name_counts[tool_name] > total_limit:
+            call["_aria_duplicate"] = True
+            call["_aria_limit_reason"] = f"turn budget exceeded ({total_limit})"
         return call
 
     def _check_repetition(text: str) -> bool:
@@ -659,6 +673,7 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
 
         full_response = ""
         tool_calls_this_round = []
+        _done_reason = ""
 
         try:
             async with aiohttp.ClientSession() as session:
@@ -677,6 +692,21 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
                             _model_cache.clear()
                         except Exception:
                             pass
+                        if resp.status >= 500 and _server_retry_budget > 0:
+                            _server_retry_budget -= 1
+                            if HAS_RICH:
+                                console.print("  [yellow]模型服务暂时错误，已压缩上下文并重试…[/yellow]")
+                            payload["messages"] = _compact_messages(payload["messages"], model_key=_mkey)
+                            payload["messages"].append({
+                                "role": "user",
+                                "content": (
+                                    "SYSTEM: The model server returned a transient 5xx error. "
+                                    "Continue the current task from the available tool results. "
+                                    "Do not restart or repeat completed work."
+                                ),
+                            })
+                            await asyncio.sleep(1.0)
+                            continue
                         return {"success": False, "error": f"Ollama {resp.status}: {_ollama_err}"}
                     async for line in resp.content:
                         if cancel_event and cancel_event.is_set():
@@ -713,6 +743,7 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
                             # Capture Ollama usage stats from final message
                             usage["prompt_tokens"] += data.get("prompt_eval_count", 0)
                             usage["completion_tokens"] += data.get("eval_count", 0)
+                            _done_reason = str(data.get("done_reason") or data.get("stop_reason") or "")
                             break
 
                         token = msg.get("content", "")
@@ -809,6 +840,21 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
         if not tool_calls_this_round:
             clean_text = full_response.strip().lower()
 
+            if _done_reason in {"length", "num_predict"} and _continuation_count < 3:
+                _continuation_count += 1
+                response_segments.append(full_response.rstrip())
+                payload["messages"].append({"role": "assistant", "content": full_response})
+                payload["messages"].append({
+                    "role": "user",
+                    "content": (
+                        "继续完成上一条回答，从刚才中断处接着写。"
+                        "不要重写已经输出的内容，不要总结，直到任务完整结束。"
+                    ),
+                })
+                if HAS_RICH:
+                    console.print("\n  [dim]继续输出未完成内容…[/dim]\n")
+                continue
+
             # Detect "intent without action" — model says it will do something
             # but didn't output a tool call
             _intent_words = [
@@ -881,10 +927,11 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
             # Note: _print_tool_call already called by on_tool_call during streaming
 
             if tc.get("_aria_duplicate"):
+                reason = tc.get("_aria_limit_reason") or "duplicate tool call"
                 summary = (
-                    f"SYSTEM: Duplicate tool call skipped: {tool_name} with the same parameters. "
+                    f"SYSTEM: Tool call skipped ({reason}): {tool_name}. "
                     "Use the existing tool result already available in this turn. "
-                    "Do not call the same tool again unless you change the parameters."
+                    "Do not call this tool again in this turn; finish the answer from available evidence."
                 )
                 payload["messages"].append({
                     "role": "tool",
@@ -996,6 +1043,9 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
             console.print()  # newline before next AI response
 
     # Write successful stateless response to cache for future reuse
+    if response_segments:
+        full_response = "\n".join(part for part in response_segments + [full_response] if part)
+
     if _should_cache and full_response and not tools_used:
         _cache_set(_ck, full_response)
 

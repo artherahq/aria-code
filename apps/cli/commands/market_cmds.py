@@ -8,6 +8,75 @@ from __future__ import annotations
 from typing import Optional, Tuple
 
 
+_FOOTBALL_CONNECTORS = (
+    "对阵", "对战", "对决", " vs ", " VS ", "vs", "VS", " v.s. ",
+    " versus ", "跟", "和", "与", "对", "pk", "PK",
+)
+
+_FOOTBALL_STRONG_INTENT_TERMS = (
+    "比分", "比赛预测", "比赛", "对阵", "交手", "胜负", "几比几",
+    "进球", "足球", "国家队", "世界杯", "欧洲杯", "欧冠", "英超",
+    "西甲", "德甲", "意甲", "法甲", "中超", "美职联",
+    "打败", "战胜", "击败", "打平", "晋级", "出线", "夺冠", "踢",
+    "score", "match", "football", "soccer", "beat",
+)
+
+_FOOTBALL_AMBIGUOUS_INTENT_TERMS = (
+    "预测", "谁赢", "谁能赢", "谁会赢", "结果预测",
+    "predict", "prediction", "win",
+)
+
+_MARKET_CONTEXT_TERMS = (
+    "股票", "股价", "成交量", "市值", "行情", "k线", "K线", "图表",
+    "技术指标", "均线", "支撑", "阻力", "涨跌", "涨幅", "跌幅",
+    "财报", "财务", "估值", "营收", "利润", "持仓", "风险", "基金",
+    "ETF", "etf", "期权", "债券", "外汇", "期货", "RSI", "MACD",
+    "买入", "卖出", "做多", "做空", "quote", "stock", "share",
+    "equity", "volume", "market cap", "earnings", "revenue", "price",
+)
+
+
+def _is_known_football_name(name: str) -> bool:
+    """Return True only when a fragment resolves to a known football team/country."""
+    n = (name or "").strip()
+    if not n:
+        return False
+    try:
+        from football_data_client import _CN_TEAM_MAP, _FIFA_RATINGS
+    except Exception:
+        return False
+    if n in _CN_TEAM_MAP:
+        return True
+    nl = n.lower()
+    for cn, en in _CN_TEAM_MAP.items():
+        if n == cn or nl == str(en).lower():
+            return True
+    for en_key, data in _FIFA_RATINGS.items():
+        if nl == str(en_key).lower() or n == str(data.get("name", "")):
+            return True
+    return False
+
+
+def _is_probable_football_query(text: str, pair: Optional[Tuple[str, str]] = None) -> bool:
+    """Guard the NL football route so finance queries do not enter Poisson mode."""
+    raw = text or ""
+    if not raw.strip() or raw.strip().startswith("/"):
+        return False
+    if any(term in raw for term in _MARKET_CONTEXT_TERMS):
+        return False
+    pair = pair or _parse_nl_team_pair(raw)
+    if not pair:
+        return False
+    known_pair = _is_known_football_name(pair[0]) and _is_known_football_name(pair[1])
+    if any(term in raw for term in _FOOTBALL_STRONG_INTENT_TERMS):
+        return True
+    if any(term in raw for term in _FOOTBALL_AMBIGUOUS_INTENT_TERMS):
+        return known_pair
+    if not any(conn.lower() in raw.lower() for conn in _FOOTBALL_CONNECTORS):
+        return False
+    return known_pair
+
+
 def _parse_nl_team_pair(text: str) -> Optional[Tuple[str, str]]:
     """
     Extract (home_cn, away_cn) from a natural-language football query.
@@ -35,10 +104,7 @@ def _parse_nl_team_pair(text: str) -> Optional[Tuple[str, str]]:
             _EN_TO_CN[en_key.lower()] = cn_name
 
     # Ordered connectors — longer ones first to avoid partial matches
-    _CONNECTORS = (
-        "对阵", "对战", "对决", " vs ", " VS ", "vs", "VS", " v.s. ",
-        " versus ", "跟", "和", "与", "对", "pk", "PK",
-    )
+    _CONNECTORS = _FOOTBALL_CONNECTORS
     # Words to strip from team-name fragments
     _STRIP_WORDS = (
         "预测", "分析", "比赛", "比分", "胜率", "结果", "谁赢", "谁会赢",
@@ -1073,4 +1139,3 @@ class MarketCommandsMixin:
             await self._run_local_tool(tool_name, params, "北向资金")
         else:
             await self.terminal.send_message("查询最近10天北向资金（沪深港通）净买入情况")
-

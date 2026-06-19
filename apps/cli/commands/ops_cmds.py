@@ -46,6 +46,36 @@ class OpsCommandsMixin:
 
     def cmd_services(self, args: str):
         """Show CLI service tiers and core workflows."""
+        provider_summary = None
+        try:
+            from packages.aria_services.provider_health import GLOBAL_PROVIDER_HEALTH
+            provider_summary = GLOBAL_PROVIDER_HEALTH.summary()
+        except Exception:
+            provider_summary = None
+
+        cfg = getattr(self.terminal, "config", {}) or {}
+        auto_compact = bool(cfg.get("auto_compact_context", True))
+        try:
+            auto_compact_threshold = int(float(cfg.get("auto_compact_threshold", 0.78)) * 100)
+        except Exception:
+            auto_compact_threshold = 78
+
+        def _key_status(provider: str) -> str:
+            try:
+                return "configured" if _get_provider_key(provider) else "not set"
+            except Exception:
+                return "unknown"
+
+        runtime_services = [
+            ("LLM runtime", cfg.get("model", "unknown"), "local/Ollama with cloud fallback"),
+            ("Context manager", f"auto compact {'on' if auto_compact else 'off'} @ {auto_compact_threshold}%", "preflight + post-turn guards"),
+            ("Market data", "DataService", "quote/history/fundamentals/TA + provider health"),
+            ("Charts/reports", "artifact services", "HTML/PNG charts, dashboards, Markdown/HTML reports"),
+            ("News/Web", f"finnhub:{_key_status('finnhub')} · newsapi:{_key_status('newsapi')} · brave:{_key_status('brave')}", "news command + web search fallback"),
+            ("Cloud AI/data", f"dashscope:{_key_status('dashscope')} · openai:{_key_status('openai')} · anthropic:{_key_status('anthropic')}", "optional external providers"),
+            ("MCP/tools", f"{len(LOCAL_TOOLS)} local tools", "tool loop with repeat-call guard"),
+        ]
+
         service_groups = [
             (
                 "CORE (Standard)",
@@ -86,7 +116,15 @@ class OpsCommandsMixin:
 
         if HAS_RICH:
             console.print()
-            console.print("[bold]CLI Services[/bold] [dim](tiers + workflow)[/dim]")
+            console.print("[bold]CLI Services[/bold] [dim](runtime boundaries + workflow)[/dim]")
+            console.print()
+            console.print("  [bold]Runtime Service Map[/bold]")
+            for name, status, detail in runtime_services:
+                console.print(f"    [dim]{name:<16}[/dim] [bold]{status}[/bold]  [dim]{detail}[/dim]")
+            if provider_summary is not None:
+                color = "green" if provider_summary.status == "ok" else ("red" if provider_summary.status == "err" else "yellow")
+                console.print(f"    [dim]{'Provider health':<16}[/dim] [{color}]{provider_summary.status}[/{color}]  [dim]{provider_summary.detail}[/dim]")
+                console.print(f"    [dim]{'Suggestion':<16}[/dim] [dim]{provider_summary.suggestion}[/dim]")
             console.print()
             for group_name, items in service_groups:
                 console.print(f"  [bold #C08050]{group_name}[/bold #C08050]")
@@ -99,7 +137,14 @@ class OpsCommandsMixin:
                 console.print(f"    [bold]{cmd}[/bold]")
             console.print()
         else:
-            print("\nCLI Services (tiers + workflow)\n")
+            print("\nCLI Services (runtime boundaries + workflow)\n")
+            print("  Runtime Service Map")
+            for name, status, detail in runtime_services:
+                print(f"    {name:<16} {status}  {detail}")
+            if provider_summary is not None:
+                print(f"    {'Provider health':<16} {provider_summary.status}  {provider_summary.detail}")
+                print(f"    {'Suggestion':<16} {provider_summary.suggestion}")
+            print()
             for group_name, items in service_groups:
                 print(f"  {group_name}")
                 for item in items:

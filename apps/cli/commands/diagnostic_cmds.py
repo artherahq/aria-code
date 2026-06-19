@@ -32,6 +32,18 @@ class DiagnosticCommandsMixin:
         est_tok = sum(len(m.get("content", "")) for m in conv) // 3
         max_ctx = get_model_cfg(model_id).get("num_ctx", 16384)
         ctx_pct = min(100, int(est_tok / max_ctx * 100))
+        auto_compact = bool(cfg.get("auto_compact_context", True))
+        try:
+            auto_compact_threshold = float(cfg.get("auto_compact_threshold", 0.78))
+        except Exception:
+            auto_compact_threshold = 0.78
+        auto_compact_runs = int(getattr(t, "_auto_compact_count", 0) or 0)
+        provider_summary = None
+        try:
+            from packages.aria_services.provider_health import GLOBAL_PROVIDER_HEALTH
+            provider_summary = GLOBAL_PROVIDER_HEALTH.summary()
+        except Exception:
+            provider_summary = None
 
         mk = next((k for k, v in MODELS.items() if v["id"] == model_id), None)
         model_display = MODELS[mk]["name"] if mk else model_id
@@ -47,7 +59,10 @@ class DiagnosticCommandsMixin:
                 ("tools", f"{tool_count} available  ·  {skill_count} skills"),
                 ("risk", "enabled"),
                 ("context", f"{est_tok:,} / {max_ctx:,} tokens  ({ctx_pct}%)"),
+                ("compact", f"{'on' if auto_compact else 'off'}  ·  {int(auto_compact_threshold * 100)}%  ·  {auto_compact_runs} runs"),
             ]
+            if provider_summary is not None:
+                rows.append(("providers", f"{provider_summary.status}  ·  {provider_summary.detail}"))
             if getattr(t, "_project_session", None):
                 rows.append(("project", f"{t._project_session.name}  ({t._project_session.stats.get('total_files',0)} files)"))
             if getattr(t, "_file_session", None) and t._file_session.get_active():
@@ -64,6 +79,9 @@ class DiagnosticCommandsMixin:
             print(f"  model    {model_display}")
             print(f"  tools    {tool_count}")
             print(f"  context  {est_tok}/{max_ctx}")
+            print(f"  compact  {'on' if auto_compact else 'off'} threshold={int(auto_compact_threshold * 100)}% runs={auto_compact_runs}")
+            if provider_summary is not None:
+                print(f"  providers {provider_summary.status} {provider_summary.detail}")
             print()
 
     def cmd_trace(self, args: str):

@@ -346,6 +346,185 @@ def _review_chart(symbol: str, last_close: float, high_52w: float, low_52w: floa
     return issues
 
 
+def handle_multi_stock_comparison_direct(symbols: list[str], period: str = "1y") -> dict:
+    """Generate a normalized multi-symbol performance comparison chart."""
+    try:
+        import pandas as _pd
+    except Exception as exc:
+        return {"success": False, "error": f"缺少依赖: {exc}"}
+
+    _PERIOD_MAP = {
+        "1m": "1mo", "3m": "3mo", "6m": "6mo",
+        "1y": "1y", "2y": "2y", "3y": "3y", "5y": "5y",
+        "ytd": "ytd", "max": "max",
+    }
+    period = _PERIOD_MAP.get(str(period or "1y").lower(), str(period or "1y").lower())
+    clean_symbols: list[str] = []
+    for sym in symbols or []:
+        normalized = _normalise_chart_symbol(str(sym or "").strip().upper())
+        if normalized and normalized not in clean_symbols:
+            clean_symbols.append(normalized)
+    if len(clean_symbols) < 2:
+        return {"success": False, "error": "至少需要两个标的才能生成对比图"}
+
+    series: dict[str, _pd.Series] = {}
+    raw_rows: dict[str, list[dict]] = {}
+    providers: dict[str, str] = {}
+    errors: dict[str, str] = {}
+
+    for symbol in clean_symbols:
+        hist = None
+        currency = None
+        provider = ""
+        err = ""
+        if _ashare_plain_symbol(symbol):
+            hist, currency, provider, err = _fetch_mdc_history_frame(symbol, period, "1d")
+        if hist is None or hist.empty:
+            hist, currency, err = _fetch_yahoo_chart_frame(symbol, period, "1d")
+            provider = "Yahoo Chart API" if hist is not None and not hist.empty else provider
+        hist = _normalise_history_frame(hist)
+        if hist is None or hist.empty or "Close" not in hist.columns:
+            errors[symbol] = err or "empty history"
+            continue
+        closes = _pd.to_numeric(hist["Close"], errors="coerce").dropna()
+        if len(closes) < 5:
+            errors[symbol] = "not enough close prices"
+            continue
+        series[symbol] = closes
+        providers[symbol] = provider or "market data"
+        rows = []
+        for idx, row in hist.tail(370).iterrows():
+            rows.append({
+                "date": idx.strftime("%Y-%m-%d") if hasattr(idx, "strftime") else str(idx),
+                "open": None if _pd.isna(row.get("Open")) else float(row.get("Open")),
+                "high": None if _pd.isna(row.get("High")) else float(row.get("High")),
+                "low": None if _pd.isna(row.get("Low")) else float(row.get("Low")),
+                "close": None if _pd.isna(row.get("Close")) else float(row.get("Close")),
+                "volume": None if _pd.isna(row.get("Volume")) else float(row.get("Volume")),
+                "currency": currency,
+            })
+        raw_rows[symbol] = rows
+
+    if len(series) < 2:
+        return {
+            "success": False,
+            "error": "可用历史数据不足，无法生成对比图",
+            "errors": errors,
+        }
+
+    closes_df = _pd.concat(series, axis=1).dropna(how="all").ffill().dropna()
+    normalized_df = closes_df.divide(closes_df.iloc[0]).multiply(100.0)
+    returns_df = closes_df.pct_change().dropna()
+
+    metrics = []
+    for symbol in normalized_df.columns:
+        norm = normalized_df[symbol].dropna()
+        rets = returns_df[symbol].dropna() if symbol in returns_df else _pd.Series(dtype=float)
+        drawdown = norm / norm.cummax() - 1.0
+        metrics.append({
+            "symbol": symbol,
+            "total_return_pct": round(float(norm.iloc[-1] - 100.0), 2),
+            "volatility_pct": round(float(rets.std() * (252 ** 0.5) * 100), 2) if len(rets) else 0.0,
+            "max_drawdown_pct": round(float(drawdown.min() * 100), 2) if len(drawdown) else 0.0,
+            "last_close": round(float(closes_df[symbol].dropna().iloc[-1]), 4),
+        })
+    metrics.sort(key=lambda row: row["total_return_pct"], reverse=True)
+
+    dates = [idx.strftime("%Y-%m-%d") if hasattr(idx, "strftime") else str(idx) for idx in normalized_df.index]
+    traces = []
+    for symbol in normalized_df.columns:
+        traces.append({
+            "x": dates,
+            "y": [None if _pd.isna(v) else round(float(v), 4) for v in normalized_df[symbol].tolist()],
+            "type": "scatter",
+            "mode": "lines",
+            "name": symbol,
+            "line": {"width": 2},
+        })
+
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", "_".join(normalized_df.columns))
+    from artifacts import create_user_artifact, write_artifact_metadata, write_artifact_raw_data
+    artifact = create_user_artifact("stock-charts", safe, f"{safe}_comparison", ".html")
+    out_file = artifact.path
+    metrics_rows = "".join(
+        "<tr>"
+        f"<td>{m['symbol']}</td>"
+        f"<td>{m['total_return_pct']:+.2f}%</td>"
+        f"<td>{m['volatility_pct']:.2f}%</td>"
+        f"<td>{m['max_drawdown_pct']:.2f}%</td>"
+        f"<td>{m['last_close']}</td>"
+        "</tr>"
+        for m in metrics
+    )
+    html_doc = f"""<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>{' vs '.join(normalized_df.columns)} comparison</title>
+  {plotly_script_tag()}
+  <style>
+    body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:24px;color:#111827}}
+    h1{{font-size:20px;margin:0 0 8px}}
+    .meta{{color:#6b7280;margin-bottom:18px}}
+    #chart{{height:620px}}
+    table{{border-collapse:collapse;margin-top:18px;font-size:13px}}
+    th,td{{border-bottom:1px solid #e5e7eb;padding:8px 12px;text-align:right}}
+    th:first-child,td:first-child{{text-align:left}}
+  </style>
+</head>
+<body>
+  <h1>{' / '.join(normalized_df.columns)} 标准化收益对比</h1>
+  <div class="meta">Period: {period} · base=100 · providers: {', '.join(sorted(set(providers.values())))}</div>
+  <div id="chart"></div>
+  <table>
+    <thead><tr><th>Symbol</th><th>Total Return</th><th>Ann. Vol</th><th>Max Drawdown</th><th>Last Close</th></tr></thead>
+    <tbody>{metrics_rows}</tbody>
+  </table>
+  <script>
+    const traces = {json.dumps(traces, ensure_ascii=False)};
+    Plotly.newPlot("chart", traces, {{
+      margin: {{l: 48, r: 24, t: 18, b: 42}},
+      hovermode: "x unified",
+      yaxis: {{title: "Normalized value (base=100)", gridcolor: "#eef2f7"}},
+      xaxis: {{type: "date", gridcolor: "#eef2f7"}},
+      legend: {{orientation: "h", y: 1.08}},
+      paper_bgcolor: "#fff",
+      plot_bgcolor: "#fff"
+    }}, {{responsive: true, displaylogo: false}});
+  </script>
+</body>
+</html>"""
+    out_file.write_text(html_doc, encoding="utf-8")
+    write_artifact_metadata(artifact, {
+        "kind": "stock_comparison_chart",
+        "status": "complete",
+        "symbols": list(normalized_df.columns),
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "data": {"period": period, "provider_chain": sorted(set(providers.values())), "errors": errors},
+        "metrics": metrics,
+        "outputs": {"html": str(out_file)},
+    })
+    write_artifact_raw_data(artifact, {
+        "symbols": list(normalized_df.columns),
+        "prices": raw_rows,
+        "normalized": {
+            symbol: [
+                {"date": date, "value": value}
+                for date, value in zip(dates, traces[idx]["y"])
+            ]
+            for idx, symbol in enumerate(normalized_df.columns)
+        },
+    })
+    return {
+        "success": True,
+        "chart_path": str(out_file),
+        "symbols": list(normalized_df.columns),
+        "metrics": metrics,
+        "provider": ", ".join(sorted(set(providers.values()))),
+        "errors": errors,
+    }
+
+
 def handle_stock_chart_analysis_direct(symbol: str, period: str = "1y") -> dict:
     """
     生成专业股票分析图表 (HTML)，并自审数据质量。
@@ -803,6 +982,7 @@ Plotly.newPlot("chart",traces,layout,{{responsive:true,displaylogo:false,
         "png_error":     png_error,
         "response":      f"图表已生成：{out_file.name}",
         "symbol":        symbol,
+        "name":          name,
         "last_close":    last_close,
         "trend":         trend,
         "rsi":           rsi14,

@@ -1021,6 +1021,8 @@ DEFAULT_CONFIG = {
     "user_id": None,
     "last_session_id": None,
     "auto_save_sessions": True,
+    "auto_compact_context": True,
+    "auto_compact_threshold": 0.78,
     "command_policy": "safe",   # safe | balanced | full
     "permission_mode": "workspace-write",  # read-only | workspace-write | full-access
     "network_enabled": True,
@@ -3635,6 +3637,33 @@ def _generate_chart_sync(symbol: str, period: str = "1y") -> dict:
     return _try_handle_stock_chart_analysis_direct(sym_yf, period=period)
 
 
+def _resolve_market_arg_symbol(raw: str) -> str:
+    """Resolve a command argument to a chart/quote-friendly market symbol."""
+    token = str(raw or "").strip().strip(",，")
+    upper = token.upper()
+    if not upper:
+        return ""
+    if re.match(r"^\^[A-Z0-9]{2,12}$", upper):
+        return upper
+    if re.match(r"^[A-Z0-9]{1,12}=F$", upper) or re.match(r"^[A-Z]{6}=X$", upper):
+        return upper
+    if re.match(r"^[A-Z0-9]{1,12}\.[A-Z]{1,4}$", upper):
+        return upper
+    return _extract_market_symbol(token) or _extract_market_symbol(upper) or upper
+
+
+def _chart_display_label(raw: str, resolved: str, result: dict | None = None) -> str:
+    result = result or {}
+    name = str(result.get("name") or result.get("display_name") or "").strip()
+    resolved = str(resolved or "").strip().upper()
+    raw_label = str(raw or "").strip().upper()
+    if name and name.upper() != resolved:
+        return f"{name} ({resolved})"
+    if raw_label and raw_label != resolved and not raw_label.startswith(resolved):
+        return f"{raw_label} ({resolved})"
+    return resolved or raw_label or "chart"
+
+
 def _chart_period_from_ta_days(days: int) -> str:
     try:
         d = int(days)
@@ -3663,6 +3692,89 @@ def _is_market_artifact_followup(message: str) -> bool:
         "执行", "生成吧", "开始生成", "直接生成", "跑一下",
         "continue", "run it", "execute", "go ahead",
     ))
+
+
+def _is_artifact_location_followup(message: str) -> bool:
+    text = (message or "").strip().lower()
+    if not text or text.startswith("/"):
+        return False
+    return any(k in text for k in (
+        "文件在哪", "文件在哪里", "保存在哪", "保存到哪", "保存到哪里",
+        "路径", "打开文件", "打开图表", "生成的文件", "刚才的文件",
+        "那文件在哪", "图在哪", "图表在哪",
+        "where is the file", "where did you save", "saved file",
+        "open it", "open chart", "file path",
+    ))
+
+
+def _print_pending_artifact_location(pending_artifact: dict) -> None:
+    kind = str(pending_artifact.get("kind") or "artifact")
+    symbol = str(pending_artifact.get("display") or pending_artifact.get("symbol") or "").strip()
+    period = str(pending_artifact.get("period") or "").strip()
+    command = str(pending_artifact.get("command") or "").strip()
+    paths: list[tuple[str, str]] = []
+
+    for label, key in (
+        ("HTML", "html_path"),
+        ("PNG", "png_path"),
+        ("图表", "chart_path"),
+        ("文件", "path"),
+        ("原始数据", "raw_path"),
+    ):
+        value = str(pending_artifact.get(key) or "").strip()
+        if value and value not in {p for _, p in paths}:
+            paths.append((label, value))
+
+    children = pending_artifact.get("children") or []
+    child_paths: list[tuple[str, str, str]] = []
+    if isinstance(children, list):
+        for child in children:
+            if not isinstance(child, dict):
+                continue
+            child_label = str(child.get("display") or child.get("symbol") or "子图表").strip()
+            child_path = str(child.get("html_path") or child.get("chart_path") or child.get("path") or "").strip()
+            if child_path:
+                child_paths.append((child_label, "HTML", child_path))
+
+    if HAS_RICH:
+        console.print("\n[bold]Aria[/bold]\n")
+        heading = "最近生成的文件"
+        if symbol:
+            heading += f"：{symbol}"
+        if period:
+            heading += f" · {period}"
+        console.print(f"  [bold]{heading}[/bold]")
+        console.print(f"  [dim]类型: {kind}[/dim]")
+        if paths:
+            for label, path in paths:
+                console.print(f"  [dim]{label}:[/dim] [link={path}]{_display_path(path, fallback=label)}[/link]")
+        elif command:
+            console.print("  [yellow]上一项任务只记录了命令，尚未记录具体文件路径。[/yellow]")
+        if child_paths:
+            console.print("  [dim]包含的单标的图表:[/dim]")
+            for child_label, label, path in child_paths:
+                console.print(f"    [dim]{child_label} {label}:[/dim] [link={path}]{_display_path(path, fallback=child_label)}[/link]")
+        if command:
+            console.print(f"  [dim]复现命令: {command}[/dim]")
+        console.print()
+    else:
+        title = "最近生成的文件"
+        if symbol:
+            title += f": {symbol}"
+        if period:
+            title += f" · {period}"
+        print(f"\nAria\n\n  {title}")
+        print(f"  类型: {kind}")
+        if paths:
+            for label, path in paths:
+                print(f"  {label}: {_display_path(path, fallback=label)}")
+        elif command:
+            print("  上一项任务只记录了命令，尚未记录具体文件路径。")
+        for child_label, label, path in child_paths:
+            print(f"  {child_label} {label}: {_display_path(path, fallback=child_label)}")
+        if command:
+            print(f"  复现命令: {command}")
+        print()
 
 
 def _natural_language_visual_artifact_route(message: str, available_commands: set[str]):
@@ -7891,10 +8003,25 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
             if p.lower() in _VALID_PERIODS:
                 period = p.lower()
             else:
-                symbol_parts.append(p.upper())
-        symbol = symbol_parts[0] if symbol_parts else "AAPL"
+                symbol_parts.append(p.strip(",，"))
+        raw_symbols = symbol_parts or ["AAPL"]
+        symbols = []
+        seen_symbols = set()
+        for raw_symbol in raw_symbols:
+            resolved = _resolve_market_arg_symbol(raw_symbol)
+            if resolved and resolved not in seen_symbols:
+                seen_symbols.add(resolved)
+                symbols.append((raw_symbol, resolved))
+        if not symbols:
+            symbols = [("AAPL", "AAPL")]
 
-        msg = f"chart {symbol} · {period}"
+        if len(symbols) > 1:
+            await self._cmd_chart_multi(symbols, period)
+            return
+
+        raw_symbol, symbol = symbols[0]
+
+        msg = f"chart {_chart_display_label(raw_symbol, symbol)} · {period}"
         chart_start = time.perf_counter()
         if HAS_RICH:
             console.print(f"\n  [bold]⏺[/bold] {msg}")
@@ -7917,11 +8044,29 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
             res3    = result.get("resistance") or []
             rsi_val = result.get("rsi")
             provider = result.get("provider") or "market data"
+            display_label = _chart_display_label(raw_symbol, symbol, result)
+            self.terminal._pending_market_artifact = {
+                "kind": "stock_chart",
+                "symbol": symbol,
+                "display": display_label,
+                "period": period,
+                "html_path": path,
+                "png_path": result.get("png_path") or "",
+                "command": f"/chart {symbol} {period}",
+                "provider": provider,
+                "metrics": {
+                    "trend": result.get("trend"),
+                    "rsi": rsi_val,
+                    "support": sup3,
+                    "resistance": res3,
+                },
+            }
             if HAS_RICH:
                 console.print(f"  [green]✓[/green] chart generated  [dim]({elapsed_ms}ms)[/dim]")
                 console.print(f"    saved: [link={path}]{path_label}[/link]")
                 console.print(
-                    f"    [dim]趋势: {result.get('trend','—')}  "
+                    f"    [dim]{display_label}  "
+                    f"趋势: {result.get('trend','—')}  "
                     f"RSI: {f'{rsi_val:.1f}' if rsi_val else '—'}  "
                     f"支撑: {'/'.join(str(v) for v in sup3) or '—'}  "
                     f"阻力: {'/'.join(str(v) for v in res3) or '—'}  "
@@ -7935,7 +8080,7 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
                     console.print("  [green dim]✓ 自审通过（数据质量正常）[/green dim]")
             else:
                 print(f"  OK chart generated ({elapsed_ms}ms): {path_label}")
-                print(f"  趋势: {result.get('trend','—')}  RSI: {f'{rsi_val:.1f}' if rsi_val else '—'}  数据: {provider}")
+                print(f"  {display_label}  趋势: {result.get('trend','—')}  RSI: {f'{rsi_val:.1f}' if rsi_val else '—'}  数据: {provider}")
                 if issues:
                     print(f"  ⚠ 自审发现 {len(issues)} 个问题:")
                     for iss in issues:
@@ -7948,6 +8093,71 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
         else:
             err = result.get("error") or result.get("response", "未知错误")
             _print_error(f"图表生成失败: {err[:120]}")
+
+    async def _cmd_chart_multi(self, symbols: list[tuple[str, str]], period: str):
+        """Generate a normalized comparison chart plus individual K-line charts."""
+        labels = [_chart_display_label(raw, resolved) for raw, resolved in symbols]
+        if HAS_RICH:
+            console.print(f"\n  [bold]⏺[/bold] compare {' · '.join(labels)} · {period}")
+        else:
+            print(f"  > compare {' '.join(labels)} · {period}")
+
+        compare_start = time.perf_counter()
+        try:
+            from apps.cli.handlers.chart_handlers import handle_multi_stock_comparison_direct as _multi_chart
+            result = await asyncio.get_event_loop().run_in_executor(
+                None, lambda: _multi_chart([resolved for _, resolved in symbols], period=period)
+            )
+        except Exception as exc:
+            result = {"success": False, "error": str(exc)}
+        elapsed_ms = int((time.perf_counter() - compare_start) * 1000)
+
+        if result.get("success"):
+            path = result.get("chart_path", "")
+            path_label = _display_path(path, fallback="comparison chart")
+            self.terminal._pending_market_artifact = {
+                "kind": "stock_comparison_chart",
+                "symbol": " ".join(resolved for _, resolved in symbols),
+                "display": " vs ".join(labels),
+                "period": period,
+                "html_path": path,
+                "command": f"/chart {' '.join(resolved for _, resolved in symbols)} {period}",
+                "metrics": result.get("metrics") or [],
+                "children": [],
+            }
+            if HAS_RICH:
+                console.print(f"  [green]✓[/green] comparison chart generated  [dim]({elapsed_ms}ms)[/dim]")
+                console.print(f"    saved: [link={path}]{path_label}[/link]")
+                rows = result.get("metrics") or []
+                for row in rows[:6]:
+                    console.print(
+                        f"    [dim]{row.get('symbol')}: "
+                        f"收益 {row.get('total_return_pct', 0):+.2f}%  "
+                        f"波动 {row.get('volatility_pct', 0):.2f}%  "
+                        f"最大回撤 {row.get('max_drawdown_pct', 0):.2f}%[/dim]"
+                    )
+            else:
+                print(f"  OK comparison chart generated ({elapsed_ms}ms): {path_label}")
+        else:
+            _print_error(f"对比图生成失败: {(result.get('error') or 'unknown')[:120]}")
+
+        child_artifacts = []
+        for raw_symbol, resolved in symbols:
+            await self.cmd_chart(f"{resolved} {period}")
+            child = dict(getattr(self.terminal, "_pending_market_artifact", {}) or {})
+            if child.get("html_path"):
+                child_artifacts.append(child)
+        if result.get("success"):
+            self.terminal._pending_market_artifact = {
+                "kind": "stock_comparison_chart",
+                "symbol": " ".join(resolved for _, resolved in symbols),
+                "display": " vs ".join(labels),
+                "period": period,
+                "html_path": result.get("chart_path", ""),
+                "command": f"/chart {' '.join(resolved for _, resolved in symbols)} {period}",
+                "metrics": result.get("metrics") or [],
+                "children": child_artifacts,
+            }
     async def cmd_shortterm(self, args: str):
         """
         运行 A股短线分析（日线级别，3-15交易日）并输出报告。
@@ -8815,6 +9025,7 @@ class ArtheraTerminal:
         self._pending_image: Optional[dict] = None  # pending vision content block
         self._pending_market_artifact: Optional[dict] = None
         self._last_preflight_key: str = ""
+        self._auto_compact_count: int = 0
         # ── Multi-file analysis session ──────────────────────────────────────
         try:
             from file_analysis_tools import FileSession
@@ -9192,6 +9403,16 @@ class ArtheraTerminal:
             user_content = message
             self._file_ctx_injected = False  # reset when no file loaded
             self._project_ctx_injected = False  # reset when no project loaded
+
+        try:
+            _incoming_for_compact = (
+                json.dumps(user_content, ensure_ascii=False)
+                if isinstance(user_content, (list, dict))
+                else str(user_content)
+            )
+            await self._maybe_auto_compact_before_turn(_incoming_for_compact)
+        except Exception:
+            pass
         self.conversation.append({"role": "user", "content": user_content})
 
         # ── 路由决策：支持工具调用的模型走 LLM+tool call，否则走确定性路由 ──
@@ -9218,6 +9439,25 @@ class ArtheraTerminal:
             await self.commands._cmd_broker_add(_btype)
             return
 
+        if _is_artifact_location_followup(message) and getattr(self, "_pending_market_artifact", None):
+            pending_artifact = dict(self._pending_market_artifact or {})
+            _print_pending_artifact_location(pending_artifact)
+            _paths = [
+                str(pending_artifact.get(key) or "").strip()
+                for key in ("html_path", "png_path", "chart_path", "path", "raw_path")
+                if str(pending_artifact.get(key) or "").strip()
+            ]
+            _children = pending_artifact.get("children") or []
+            if isinstance(_children, list):
+                for _child in _children:
+                    if isinstance(_child, dict):
+                        _child_path = str(_child.get("html_path") or _child.get("chart_path") or _child.get("path") or "").strip()
+                        if _child_path:
+                            _paths.append(_child_path)
+            _summary = "最近生成文件：\n" + "\n".join(f"- {p}" for p in _paths) if _paths else "最近任务尚未记录具体文件路径。"
+            self.conversation.append({"role": "assistant", "content": _summary})
+            return
+
         if _is_market_artifact_followup(message) and getattr(self, "_pending_market_artifact", None):
             pending_artifact = dict(self._pending_market_artifact or {})
             symbol = str(pending_artifact.get("symbol") or "").strip()
@@ -9233,19 +9473,17 @@ class ArtheraTerminal:
         # Prevents LLM from hallucinating match data — route to the real Poisson engine.
         if not message.startswith("/"):
             _fp_pair = None
+            _fp_ok = False
             try:
-                from apps.cli.commands.market_cmds import _parse_nl_team_pair as _pfnl
+                from apps.cli.commands.market_cmds import (
+                    _is_probable_football_query as _pfq,
+                    _parse_nl_team_pair as _pfnl,
+                )
                 _fp_pair = _pfnl(message)
+                _fp_ok = _pfq(message, _fp_pair)
             except Exception:
                 pass
-            if _fp_pair and any(k in message for k in (
-                "预测", "比分", "谁赢", "胜率", "谁能赢", "谁会赢", "结果预测",
-                "比赛预测", "分析", "比赛", "对阵", "交手", "胜负", "几比几",
-                "进球", "能赢", "会赢", "足球", "国家队", "世界杯", "欧洲杯",
-                "打败", "战胜", "击败", "打平", "晋级", "出线", "夺冠", "踢",
-                "predict", "prediction", "score", "match", "football", "vs",
-                "beat", "win", "soccer",
-            )):
+            if _fp_pair and _fp_ok:
                 _h_cn, _a_cn = _fp_pair
                 if HAS_RICH:
                     console.print(f"\n[dim]⚽ 识别足球对阵，调用 Poisson 引擎…[/dim]")
@@ -10644,6 +10882,69 @@ class ArtheraTerminal:
         from ui.banner import bottom_toolbar_parts as _btp
         return _btp(self.conversation, self.config, self._actual_model, get_model_cfg)
 
+    async def _maybe_auto_compact_before_turn(self, incoming_content: str = "") -> bool:
+        """Compact history before a request enters the model when context is hot."""
+        if not bool(self.config.get("auto_compact_context", True)):
+            return False
+        try:
+            threshold = float(self.config.get("auto_compact_threshold", 0.78))
+        except Exception:
+            threshold = 0.78
+        try:
+            from apps.cli.message_processing import context_compaction_decision
+            decision = context_compaction_decision(
+                self.conversation,
+                model_key=self.config.get("model", "qwen2.5:7b"),
+                extra_content=incoming_content,
+                threshold=threshold,
+            )
+        except Exception:
+            return False
+        if not decision.get("should_compact"):
+            return False
+
+        old_pct = int(decision.get("fill_pct") or 0)
+        old_count = len(self.conversation)
+        try:
+            await self.commands._smart_compact_async(silent=True)
+        except Exception:
+            try:
+                max_chars = int((decision.get("max_tokens") or 16384) * 3 * 0.55)
+                self.conversation = _compact_messages(
+                    self.conversation,
+                    max_chars=max_chars,
+                    model_key=self.config.get("model", "qwen2.5:7b"),
+                )
+            except Exception:
+                if len(self.conversation) > 10:
+                    self.conversation = self.conversation[-10:]
+
+        try:
+            new_decision = context_compaction_decision(
+                self.conversation,
+                model_key=self.config.get("model", "qwen2.5:7b"),
+                extra_content=incoming_content,
+                threshold=threshold,
+            )
+            new_pct = int(new_decision.get("fill_pct") or 0)
+        except Exception:
+            new_pct = 0
+        self._auto_compact_count += 1
+        _run_event_hook("compact", {
+            "ARIA_SESSION": self.session_id,
+            "ARIA_COMPACT_MODE": "auto-preflight",
+            "ARIA_CONTEXT_BEFORE": str(old_pct),
+            "ARIA_CONTEXT_AFTER": str(new_pct),
+            "ARIA_MESSAGES_BEFORE": str(old_count),
+            "ARIA_MESSAGES_AFTER": str(len(self.conversation)),
+        })
+        if HAS_RICH:
+            console.print(
+                f"  [dim]↩ Auto-compacted context before request "
+                f"({old_pct}% → {new_pct}%)[/dim]"
+            )
+        return True
+
     async def _startup_health_check(self):
         """Async Ollama + cloud connectivity probe displayed after the header."""
         if not HAS_RICH:
@@ -11013,6 +11314,28 @@ class ArtheraTerminal:
                 console.print(f"\n[bold]Aria[/bold]  [dim]{_label_p}[/dim]\n")
             await self.commands._cmd_broker_add(_btype_p)
             return
+
+        # ── Football prediction intercept (same as send_message) ──────────────
+        # Route NL football queries to the Poisson engine instead of letting the
+        # LLM hallucinate match data. Must mirror the REPL path for -p parity.
+        if not prompt.startswith("/"):
+            _fp_pair_p = None
+            _fp_ok_p = False
+            try:
+                from apps.cli.commands.market_cmds import (
+                    _is_probable_football_query as _pfq_p,
+                    _parse_nl_team_pair as _pfnl_p,
+                )
+                _fp_pair_p = _pfnl_p(prompt)
+                _fp_ok_p = _pfq_p(prompt, _fp_pair_p)
+            except Exception:
+                pass
+            if _fp_pair_p and _fp_ok_p:
+                _h_cn_p, _a_cn_p = _fp_pair_p
+                if HAS_RICH:
+                    console.print(f"\n[dim]⚽ 识别足球对阵，调用 Poisson 引擎…[/dim]")
+                await self.commands.cmd_football(f"{_h_cn_p} vs {_a_cn_p} wc")
+                return
 
         deterministic: dict = {"success": False}
         if not _model_has_tools_p:

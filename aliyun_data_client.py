@@ -226,7 +226,7 @@ class _CircuitBreaker:
         self._last_failure = time.monotonic()
         if self._failures >= self.failure_threshold:
             self._open = True
-            logger.warning("AliyunDataClient: circuit breaker OPEN for this endpoint")
+            logger.debug("AliyunDataClient: circuit breaker OPEN for this endpoint")
 
     @property
     def is_open(self) -> bool:
