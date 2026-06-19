@@ -4886,6 +4886,7 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
             "/setup":     (self.cmd_setup,    "First-run wizard: /setup [mcp|feishu|telegram]"),
             "/apikey":    (self.cmd_apikey,   "API key wizard: /apikey [list|test|remove]"),
             "/doctor":    (self.cmd_doctor,   "Diagnose install, models, API keys"),
+            "/install":   (self.cmd_install,  "Detect & install missing deps: /install [pkg|--auto|--required]"),
             "/mcp":       (self.cmd_mcp,      "MCP servers: /mcp status|tools|reload"),
             "/providers": (self.cmd_providers,"List local LLM backends and status"),
             "/ariarc":    (self.cmd_ariarc,   "Show .ariarc project config: /ariarc [reload]"),

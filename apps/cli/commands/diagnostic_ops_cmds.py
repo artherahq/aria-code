@@ -346,6 +346,148 @@ class DiagnosticOpsCommandsMixin:
         else:
             print("Diagnostics complete")
 
+    async def cmd_install(self, args: str):
+        """
+        检测并安装缺失的依赖包（环境补全）。
+
+          /install              扫描全部已知依赖，列出缺失并询问是否安装
+          /install <pkg> [pkg]  直接安装指定 Python 包
+          /install --auto       根据最近一次提问的意图检测缺失项
+          /install --required   仅安装"必需"包，跳过可选项
+        """
+        import shlex as _shlex
+        import subprocess as _sp
+        import sys as _sys
+        from apps.cli.preflight import (
+            build_full_dependency_report,
+            build_intent_preflight,
+            build_install_plan,
+            package_to_module,
+        )
+
+        raw = (args or "").strip()
+        tokens = raw.split()
+        flags = {t for t in tokens if t.startswith("--")}
+        explicit_pkgs = [t for t in tokens if not t.startswith("--")]
+
+        # ── Resolve what to install ───────────────────────────────────────────
+        report = None
+        if explicit_pkgs:
+            # Direct package install — no detection needed
+            pip_packages = explicit_pkgs
+            command_hints: tuple = ()
+            env_hints: tuple = ()
+        else:
+            if "--auto" in flags:
+                # Detect from the user's last real question
+                last_msg = ""
+                for m in reversed(self.terminal.conversation):
+                    if m.get("role") == "user" and m.get("content"):
+                        last_msg = m["content"] if isinstance(m["content"], str) else ""
+                        break
+                if not last_msg:
+                    console.print("[yellow]没有可分析的历史提问，改用全量扫描[/yellow]" if HAS_RICH
+                                  else "No history; full scan")
+                    report = build_full_dependency_report(include_optional="--required" not in flags)
+                else:
+                    report = build_intent_preflight(last_msg)
+            else:
+                report = build_full_dependency_report(include_optional="--required" not in flags)
+
+            plan = build_install_plan(report)
+            pip_packages = list(plan.pip_packages)
+            command_hints = plan.command_hints
+            env_hints = plan.env_hints
+
+        # ── Nothing missing ───────────────────────────────────────────────────
+        if not pip_packages and not (report and (report.missing_commands or report.missing_env)):
+            console.print("[green]✓ 环境完整，没有检测到缺失的 Python 包[/green]" if HAS_RICH
+                          else "All dependencies satisfied")
+            return
+
+        # ── Show findings ─────────────────────────────────────────────────────
+        if HAS_RICH:
+            console.print()
+            console.print("[bold]环境检测结果[/bold]")
+            if pip_packages:
+                console.print(f"  [yellow]缺少 {len(pip_packages)} 个 Python 包:[/yellow]")
+                for p in pip_packages:
+                    purpose = ""
+                    if report:
+                        for r in report.missing_python:
+                            if r.package == p:
+                                purpose = f"  [dim]— {r.purpose}{'（可选）' if not r.required else ''}[/dim]"
+                                break
+                    console.print(f"    • [cyan]{p}[/cyan]{purpose}")
+            if command_hints:
+                console.print("  [yellow]缺少命令行工具:[/yellow]")
+                for h in command_hints:
+                    console.print(f"    • [dim]{h}[/dim]")
+            if env_hints:
+                console.print("  [dim]未配置的环境变量（可选，不自动处理）:[/dim]")
+                for h in env_hints:
+                    console.print(f"    • [dim]{h}[/dim]")
+            console.print()
+        else:
+            print(f"Missing packages: {', '.join(pip_packages)}")
+            for h in command_hints:
+                print(f"  tool: {h}")
+
+        if not pip_packages:
+            if command_hints:
+                console.print("[dim]命令行工具需手动安装（见上方提示），Aria 不会自动执行系统级安装[/dim]"
+                              if HAS_RICH else "Install CLI tools manually (see hints above)")
+            return
+
+        # ── Confirm ───────────────────────────────────────────────────────────
+        pip_cmd = [_sys.executable, "-m", "pip", "install", *pip_packages]
+        pretty = " ".join(_shlex.quote(c) for c in pip_cmd)
+        prompt = f"将运行: {pretty}\n确认安装? [y/N]: "
+        try:
+            answer = console.input(prompt) if HAS_RICH else input(prompt)
+        except (EOFError, KeyboardInterrupt):
+            console.print("\n[dim]已取消[/dim]" if HAS_RICH else "Cancelled")
+            return
+        if answer.strip().lower() not in {"y", "yes"}:
+            console.print("[dim]已取消，未安装任何包[/dim]" if HAS_RICH else "Cancelled")
+            return
+
+        # ── Install ───────────────────────────────────────────────────────────
+        console.print(f"\n[dim]⏳ 安装中: {' '.join(pip_packages)}…[/dim]" if HAS_RICH
+                      else f"Installing {' '.join(pip_packages)}...")
+        try:
+            proc = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: _sp.run(pip_cmd, capture_output=True, text=True, timeout=300),
+            )
+        except Exception as exc:
+            console.print(f"[red]安装失败: {exc}[/red]" if HAS_RICH else f"Install failed: {exc}")
+            return
+
+        if proc.returncode == 0:
+            # Verify each package now imports
+            import importlib as _il
+            _il.invalidate_caches()
+            ok_list, fail_list = [], []
+            for p in pip_packages:
+                mod = package_to_module(p)
+                try:
+                    _il.import_module(mod)
+                    ok_list.append(p)
+                except Exception:
+                    fail_list.append(p)
+            if HAS_RICH:
+                console.print(f"  [green]✓ 安装完成: {', '.join(ok_list) or '—'}[/green]")
+                if fail_list:
+                    console.print(f"  [yellow]⚠ 已安装但当前会话需重启才能加载: {', '.join(fail_list)}[/yellow]")
+                console.print("  [dim]提示: 部分包需重启 Aria 才能被工具加载[/dim]")
+            else:
+                print(f"Installed: {', '.join(ok_list)}")
+        else:
+            err_tail = (proc.stderr or proc.stdout or "")[-400:]
+            console.print(f"[red]pip 安装失败 (code {proc.returncode}):[/red]\n[dim]{err_tail}[/dim]"
+                          if HAS_RICH else f"pip failed: {err_tail}")
+
     async def cmd_datasource(self, args: str):
         sub = args.strip().lower()
         if sub.startswith("test "):

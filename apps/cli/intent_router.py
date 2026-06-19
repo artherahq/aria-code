@@ -106,6 +106,12 @@ def detect_intents(message: str) -> tuple[str, ...]:
         _add_unique(intents, "local_model")
     if _contains_any(low, ("阿里云", "aliyun", "cloud service", "云端服务")):
         _add_unique(intents, "cloud")
+    if _contains_any(low, ("搜索", "联网", "上网查", "web search", "google", "查一下", "搜一下", "最新消息")):
+        _add_unique(intents, "web_search")
+    if _contains_any(low, ("加密货币", "比特币", "以太坊", "bitcoin", "btc", "eth", "crypto", "币安", "binance", "okx", "资金费率", "funding rate")):
+        _add_unique(intents, "crypto")
+    if _contains_any(low, ("足球", "球赛", "比分预测", "世界杯", "欧洲杯", "英超", "西甲", "football", "soccer", "world cup", "premier league")):
+        _add_unique(intents, "sports")
 
     return tuple(intents)
 
@@ -142,6 +148,12 @@ def _service_names(intents: tuple[str, ...]) -> tuple[str, ...]:
         service("local_llm")
     if "cloud" in intents:
         service("cloud_runtime")
+    if "web_search" in intents:
+        service("web_search")
+    if "crypto" in intents:
+        service("crypto_data")
+    if "sports" in intents:
+        service("sports_data")
     return tuple(services)
 
 

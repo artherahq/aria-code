@@ -118,6 +118,8 @@ _PY_REQS: Mapping[str, PythonRequirement] = {
     "futu": PythonRequirement("futu", "futu-api", "富途券商连接"),
     "webull": PythonRequirement("webull", "webull", "Webull 券商连接"),
     "easytrader": PythonRequirement("easytrader", "easytrader", "A 股交易客户端连接"),
+    "ddgs": PythonRequirement("ddgs", "ddgs", "零配置联网搜索 (web_search 工具)", required=False),
+    "ccxt": PythonRequirement("ccxt", "ccxt", "加密货币交易所行情/资金费率", required=False),
 }
 
 _CMD_REQS: Mapping[str, CommandRequirement] = {
@@ -136,6 +138,26 @@ _BROKER_MODULES = {
     "webull": ("webull", ("webull",)),
     "easytrader": ("easytrader", ("easytrader", "同花顺", "雪球")),
 }
+
+
+def package_to_module(package: str) -> str:
+    """Map a pip package name to its import module name (e.g. Pillow → PIL)."""
+    for req in _PY_REQS.values():
+        if req.package == package:
+            return req.module
+    # Common fallbacks for packages not in _PY_REQS
+    _COMMON = {
+        "duckduckgo-search": "duckduckgo_search",
+        "scikit-learn": "sklearn",
+        "beautifulsoup4": "bs4",
+        "python-docx": "docx",
+        "Pillow": "PIL",
+        "futu-api": "futu",
+        "alpaca-py": "alpaca",
+    }
+    if package in _COMMON:
+        return _COMMON[package]
+    return package.replace("-", "_")
 
 
 def _default_module_available(module: str) -> bool:
@@ -262,6 +284,19 @@ def build_intent_preflight(
         service("cloud_runtime")
         env_reqs.append(EnvRequirement("ALIYUN_ACCESS_KEY_ID", "阿里云访问密钥", required=False))
 
+    if "web_search" in intents:
+        service("web_search")
+        _add_req(python_reqs, "ddgs")
+        env_reqs.append(EnvRequirement("BRAVE_SEARCH_API_KEY", "Brave 搜索 (免费 2000 次/月，比 DuckDuckGo 更稳定)", required=False))
+
+    if "crypto" in intents:
+        service("crypto_data")
+        _add_req(python_reqs, "ccxt")
+
+    if "sports" in intents:
+        service("sports_data")
+        env_reqs.append(EnvRequirement("FOOTBALL_DATA_API_KEY", "football-data.org 实时赛程/积分榜 (免费注册)", required=False))
+
     missing_python = tuple(req for req in python_reqs if not module_available(req.module))
     missing_commands = tuple(req for req in command_reqs if not command_available(req.command))
     missing_env = tuple(req for req in env_reqs if not env_get(req.name))
@@ -272,6 +307,57 @@ def build_intent_preflight(
         python=tuple(python_reqs),
         commands=tuple(command_reqs),
         env=tuple(env_reqs),
+        missing_python=missing_python,
+        missing_commands=missing_commands,
+        missing_env=missing_env,
+    )
+
+
+def build_full_dependency_report(
+    *,
+    module_available: ModuleChecker | None = None,
+    command_available: CommandChecker | None = None,
+    env_get: EnvGetter | None = None,
+    include_optional: bool = True,
+) -> IntentPreflight:
+    """Scan every known requirement (intent-independent) for a full health check.
+
+    Used by `/install` with no arguments — reports all missing packages/tools
+    across the whole project, not just those implied by a single message.
+    """
+    module_available = module_available or _default_module_available
+    command_available = command_available or _default_command_available
+    env_get = env_get or os.environ.get
+
+    # Broker SDKs are intent-specific — a user only needs the one for their
+    # broker, so a generic full scan should not propose installing all of them.
+    _broker_modules = {module for module, _ in _BROKER_MODULES.values()}
+    python_reqs = tuple(
+        r for r in _PY_REQS.values() if r.module not in _broker_modules
+    )
+    command_reqs = tuple(_CMD_REQS.values())
+    env_reqs: tuple[EnvRequirement, ...] = (
+        EnvRequirement("BRAVE_SEARCH_API_KEY", "Brave 联网搜索 (免费 2000 次/月)", required=False),
+        EnvRequirement("FOOTBALL_DATA_API_KEY", "football-data.org 实时足球数据", required=False),
+    )
+
+    def _keep(req) -> bool:
+        return include_optional or getattr(req, "required", True)
+
+    missing_python = tuple(
+        r for r in python_reqs if _keep(r) and not module_available(r.module)
+    )
+    missing_commands = tuple(
+        r for r in command_reqs if _keep(r) and not command_available(r.command)
+    )
+    missing_env = tuple(r for r in env_reqs if not env_get(r.name))
+
+    return IntentPreflight(
+        intents=("full_scan",),
+        services=("all",),
+        python=python_reqs,
+        commands=command_reqs,
+        env=env_reqs,
         missing_python=missing_python,
         missing_commands=missing_commands,
         missing_env=missing_env,
@@ -331,5 +417,8 @@ def format_preflight_plain(report: IntentPreflight) -> str:
         envs = ", ".join(plan.env_hints)
         lines.append("可选环境变量未配置: " + envs)
     if plan.has_actions:
-        lines.append("Aria 不会自动安装；确认需要后再运行安装命令，或用 /setup 查看配置向导。")
+        if plan.pip_packages:
+            lines.append("一键安装: 运行 /install --auto （会先确认再安装），或 /install 扫描全部缺失。")
+        else:
+            lines.append("Aria 不会自动安装；按上方提示手动配置，或用 /setup 查看配置向导。")
     return "\n".join(lines)
