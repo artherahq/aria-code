@@ -9,6 +9,7 @@ from .provider_health import (
     summarize_provider_health,
 )
 from .registry import ServiceSpec, list_service_specs, required_service_names, service_map
+from .usage import ServiceUsageSpec, list_service_usage_specs, service_usage_map
 
 __all__ = [
     "DataBundle",
@@ -19,10 +20,13 @@ __all__ = [
     "ProviderIssue",
     "ProviderState",
     "ServiceSpec",
+    "ServiceUsageSpec",
     "classify_provider_error",
     "list_service_specs",
+    "list_service_usage_specs",
     "required_service_names",
     "service_map",
+    "service_usage_map",
     "summarize_provider_health",
 ]
 

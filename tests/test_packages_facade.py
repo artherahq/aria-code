@@ -70,6 +70,38 @@ def test_service_boundaries_are_registered():
     assert len(list_service_specs()) >= 8
 
 
+def test_service_usage_catalog_maps_cli_packages_and_mcp_tools():
+    from packages.aria_services import list_service_usage_specs, service_usage_map
+
+    usage = service_usage_map()
+
+    assert "broker_execution" in usage
+    assert "/broker" in usage["broker_execution"].cli_entrypoints
+    assert "broker_order" in usage["broker_execution"].mcp_tools
+    assert "mcp_bridge" in usage
+    assert "run_backtest" in usage["mcp_bridge"].mcp_tools
+    assert len(list_service_usage_specs()) >= 8
+
+
+def test_broker_capability_catalog_has_safe_trade_boundaries():
+    from brokers.capabilities import (
+        broker_connection_plan,
+        broker_service_playbook,
+        get_broker_capability,
+        list_broker_capabilities,
+    )
+
+    by_type = {spec.broker_type: spec for spec in list_broker_capabilities()}
+
+    assert {"futu", "ibkr", "alpaca", "webull"}.issubset(by_type)
+    assert by_type["webull"].can_trade is False
+    assert by_type["alpaca"].can_trade is True
+    assert "api_key" in by_type["alpaca"].credential_fields
+    assert any("/broker connect" in step for step in broker_connection_plan("alpaca"))
+    assert get_broker_capability("missing") is None
+    assert any(row["service"] == "TradingView 告警联动" for row in broker_service_playbook())
+
+
 def test_default_mcp_exposures_are_stable():
     from packages.aria_mcp import default_exposures
 

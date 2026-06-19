@@ -35,11 +35,16 @@ def tool_read_file(params: dict) -> dict:
     try:
         offset = int(params.get("offset", 0) or 0)
         limit  = int(params.get("limit",  0) or 0)
+        if not offset and not limit:
+            limit = 160
         result = WorkspaceFiles().read_file(path, offset=offset, limit=limit)
+        content = result.content
+        if limit and result.lines >= limit and "use offset/limit to read more" not in content:
+            content += "\n... [default read limit applied — use offset/limit to read more]"
         return {"success": True, "data": {
             "path":    result.path,
             "lines":   result.lines,
-            "content": result.content,
+            "content": content,
         }}
     except Exception as e:
         return {"success": False, "error": str(e)}

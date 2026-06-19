@@ -29,7 +29,11 @@ class WorkspaceCommandsMixin:
                 mcp_tools_to_specs,
                 write_mcp_config,
             )
-            from packages.aria_services import list_service_specs, required_service_names
+            from packages.aria_services import (
+                list_service_specs,
+                list_service_usage_specs,
+                required_service_names,
+            )
             from packages.aria_services.provider_health import GLOBAL_PROVIDER_HEALTH
             from packages.aria_skills import builtin_skill_specs
             from packages.aria_tools import build_registry_from_legacy
@@ -244,6 +248,44 @@ class WorkspaceCommandsMixin:
                     return
                 for spec in specs:
                     print(f"{spec.name}: {', '.join(spec.capabilities)}")
+            return
+
+        if sub in ("services", "service", "usage", "use", "map"):
+            usage_specs = list_service_usage_specs()
+            if HAS_RICH:
+                from rich.table import Table as _Table
+                console.print()
+                console.print(
+                    f"  [bold]{identity.product}[/bold] "
+                    f"[dim]· service usage map[/dim]\n"
+                )
+                tbl = _Table(
+                    title="[bold]Project Services[/bold]",
+                    box=rich_box.ROUNDED,
+                    border_style="dim",
+                    show_header=True,
+                    header_style="bold dim",
+                )
+                tbl.add_column("Service", width=22)
+                tbl.add_column("Purpose", width=34)
+                tbl.add_column("CLI", width=32)
+                tbl.add_column("Arthera / MCP", width=34)
+                tbl.add_column("Next")
+                for spec in usage_specs:
+                    mcp = ", ".join(spec.mcp_tools[:4]) if spec.mcp_tools else "—"
+                    packages = ", ".join(spec.package_sources[:2])
+                    tbl.add_row(
+                        spec.name,
+                        spec.purpose,
+                        ", ".join(spec.cli_entrypoints),
+                        f"{packages}\n[dim]{mcp}[/dim]",
+                        spec.next_step,
+                    )
+                console.print(tbl)
+                console.print("[dim]连接 Arthera MCP: /packages connect arthera --reload；券商接入: /broker guide[/dim]\n")
+            else:
+                for spec in usage_specs:
+                    print(f"{spec.name}: {spec.purpose} -> {', '.join(spec.cli_entrypoints)}")
             return
 
         if sub.startswith("connect arthera") or sub in ("connect", "connect-quant", "connect quant"):

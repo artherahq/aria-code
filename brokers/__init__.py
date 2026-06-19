@@ -42,6 +42,11 @@ from .planning import (
     snapshot_from_broker, infer_intent_from_backtest, plan_order,
     evaluate_risk, plans_from_strategy_results,
 )
+from .capabilities import (
+    BrokerCapability, broker_connection_plan, broker_dependency_state,
+    broker_service_playbook, filter_capabilities, get_broker_capability,
+    list_broker_capabilities,
+)
 
 __all__ = [
     "BrokerBase", "AccountInfo", "Position", "Order", "OrderResult", "PortfolioSummary",
@@ -53,4 +58,7 @@ __all__ = [
     "PortfolioSnapshot", "StrategyIntent", "RiskRuleSet", "PlannedOrder", "OrderPlan",
     "snapshot_from_broker", "infer_intent_from_backtest", "plan_order",
     "evaluate_risk", "plans_from_strategy_results",
+    "BrokerCapability", "broker_connection_plan", "broker_dependency_state",
+    "broker_service_playbook", "filter_capabilities", "get_broker_capability",
+    "list_broker_capabilities",
 ]

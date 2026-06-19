@@ -164,7 +164,7 @@ from apps.cli.utils.market_detect import (  # noqa: F401 — re-exported
     _re_sym, _STOCK_PATTERN,
     _CRYPTO_WORDS, _COMPANY_TO_TICKER,
     _BROKER_INTENT_KW, _is_broker_intent,
-    _is_broker_setup_intent, _detect_broker_type,
+    _is_broker_guide_intent, _is_broker_setup_intent, _detect_broker_type,
     _FINANCIAL_TERMS_BLOCKLIST,
     _extract_market_symbol, _extract_market_symbols, _extract_symbol_from_history,
     _is_stock_chart_analysis_request,
@@ -2069,10 +2069,15 @@ def _tool_read_file(params: dict) -> dict:
     try:
         offset = int(params.get("offset", 0) or 0)
         limit = int(params.get("limit", 0) or 0)
+        if not offset and not limit:
+            limit = 160
         result = WorkspaceFiles().read_file(path, offset=offset, limit=limit)
+        content = result.content
+        if limit and result.lines >= limit and "use offset/limit to read more" not in content:
+            content += "\n... [default read limit applied — use offset/limit to read more]"
         return {"success": True, "data": {
             "path": result.path, "lines": result.lines,
-            "content": result.content
+            "content": content
         }}
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -3706,11 +3711,127 @@ def _is_artifact_location_followup(message: str) -> bool:
         return False
     return any(k in text for k in (
         "文件在哪", "文件在哪里", "保存在哪", "保存到哪", "保存到哪里",
-        "路径", "打开文件", "打开图表", "生成的文件", "刚才的文件",
+        "路径", "生成的文件", "刚才的文件",
         "那文件在哪", "图在哪", "图表在哪",
-        "where is the file", "where did you save", "saved file",
-        "open it", "open chart", "file path",
+        "where is the file", "where did you save", "saved file", "file path",
     ))
+
+
+def _is_artifact_action_followup(message: str) -> bool:
+    text = (message or "").strip().lower()
+    if not text or text.startswith("/"):
+        return False
+    return any(k in text for k in (
+        "打不开", "打开不了", "无法打开", "怎么打开", "打开这文件", "打开这个文件",
+        "打开文件", "打开它", "打开图表", "在访达", "所在目录", "复制", "复制内容",
+        "粘贴", "剪贴板",
+        "can't open", "cannot open", "open it", "open file", "reveal",
+        "show in finder", "copy", "clipboard",
+    ))
+
+
+def _artifact_primary_path(pending_artifact: dict) -> str:
+    for key in ("pine_path", "path", "html_path", "png_path", "chart_path", "raw_path"):
+        value = str(pending_artifact.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _copy_text_to_clipboard(text: str) -> tuple[bool, str]:
+    try:
+        import subprocess as _sp
+        _sp.run(["pbcopy"], input=text.encode("utf-8"), check=True, timeout=3)
+        return True, ""
+    except Exception as exc:
+        return False, str(exc)
+
+
+def _reveal_path_in_finder(path: str) -> tuple[bool, str]:
+    try:
+        import subprocess as _sp
+        _sp.Popen(["open", "-R", path])
+        return True, ""
+    except Exception as exc:
+        return False, str(exc)
+
+
+def _open_path_or_url(target: str) -> tuple[bool, str]:
+    try:
+        import subprocess as _sp
+        _sp.Popen(["open", target])
+        return True, ""
+    except Exception as exc:
+        return False, str(exc)
+
+
+def _write_text_companion(path: str) -> str:
+    try:
+        p = pathlib.Path(path).expanduser()
+        if not p.exists() or not p.is_file():
+            return ""
+        companion = p.with_suffix(".txt")
+        companion.write_text(p.read_text(encoding="utf-8"), encoding="utf-8")
+        return str(companion)
+    except Exception:
+        return ""
+
+
+def _handle_pending_artifact_action(pending_artifact: dict, message: str) -> str:
+    kind = str(pending_artifact.get("kind") or "artifact")
+    path = _artifact_primary_path(pending_artifact)
+    url = str(pending_artifact.get("url") or "").strip()
+    text = (message or "").lower()
+    is_pine = kind == "tradingview_pine_strategy" or path.endswith(".pine")
+    lines: list[str] = []
+
+    if is_pine:
+        lines.append("TradingView Pine Script 是源码文件，TradingView 网页不能直接打开本地 `.pine` 文件。")
+        if path:
+            lines.append(f"文件路径: `{path}`")
+            companion = ""
+            if any(k in text for k in ("打不开", "打开不了", "无法打开", "can't open", "cannot open")):
+                companion = _write_text_companion(path)
+                if companion:
+                    lines.append(f"已生成可用文本副本: `{companion}`")
+            try:
+                pine_text = pathlib.Path(path).expanduser().read_text(encoding="utf-8")
+                copied, copy_err = _copy_text_to_clipboard(pine_text)
+                if copied:
+                    lines.append("已把 Pine Script 内容复制到剪贴板。")
+                else:
+                    lines.append(f"剪贴板不可用: {copy_err}")
+            except Exception as exc:
+                lines.append(f"读取 Pine 文件失败: {exc}")
+            revealed, reveal_err = _reveal_path_in_finder(path)
+            if revealed:
+                lines.append("已在 Finder 中定位该文件。")
+            else:
+                lines.append(f"Finder 定位失败: {reveal_err}")
+        if url:
+            opened, open_err = _open_path_or_url(url)
+            if opened:
+                lines.append("已打开 TradingView 图表页面。")
+            else:
+                lines.append(f"TradingView 打开失败: {open_err}")
+        lines.append("使用方式: 打开 TradingView 图表 -> 底部 Pine Editor -> 粘贴 -> Save -> Add to chart。")
+    elif path:
+        opened, open_err = _open_path_or_url(path)
+        if opened:
+            lines.append(f"已尝试打开: `{path}`")
+        else:
+            lines.append(f"打开失败: {open_err}")
+            revealed, reveal_err = _reveal_path_in_finder(path)
+            if revealed:
+                lines.append("已改为在 Finder 中定位该文件。")
+            else:
+                lines.append(f"Finder 定位也失败: {reveal_err}")
+    elif url:
+        opened, open_err = _open_path_or_url(url)
+        lines.append("已打开 TradingView 图表页面。" if opened else f"TradingView 打开失败: {open_err}")
+    else:
+        lines.append("最近任务没有记录可打开的文件或 URL。")
+    return "\n".join(lines)
 
 
 def _print_pending_artifact_location(pending_artifact: dict) -> None:
@@ -3721,11 +3842,13 @@ def _print_pending_artifact_location(pending_artifact: dict) -> None:
     paths: list[tuple[str, str]] = []
 
     for label, key in (
+        ("Pine", "pine_path"),
         ("HTML", "html_path"),
         ("PNG", "png_path"),
         ("图表", "chart_path"),
         ("文件", "path"),
         ("原始数据", "raw_path"),
+        ("URL", "url"),
     ):
         value = str(pending_artifact.get(key) or "").strip()
         if value and value not in {p for _, p in paths}:
@@ -5149,7 +5272,7 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
             "/memory":    (self.cmd_memory,   "Memory: /memory show|add <text>|clear|search|profile"),
             "/todo":      (self.cmd_todo,     "Tasks: /todo add|done|list|clear"),
             # ── Broker / account (direct reads/connects) ─────────────────────
-            "/broker":    (self.cmd_broker,   "Broker: /broker list|connect|disconnect|add|status"),
+            "/broker":    (self.cmd_broker,   "Broker: /broker guide|doctor|services|list|connect|add"),
             "/account":   (self.cmd_account,  "Account funds: /account [broker_id]"),
             "/positions": (self.cmd_positions,"Current positions: /positions [broker_id]"),
             "/orders":    (self.cmd_orders,   "Order history: /orders [open|filled|all]"),
@@ -5189,11 +5312,13 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
             "/auto-strategy":(self.cmd_auto_strategy,"Auto-optimize strategy: /auto-strategy momentum SPY"),
             "/execution": (self.cmd_execution,"Algo execution compare: /execution AAPL buy 100000"),
             "/chart":     (self.cmd_chart,    "Chart artifact: /chart AAPL [period]"),
+            "/tv":        (self.cmd_tv,       "TradingView chart/Pine: /tv AAPL [--open] [--pine --copy --reveal --txt]"),
             "/dashboard": (self.cmd_dashboard,"Dashboard artifact: /dashboard [brief|market|portfolio|full]"),
             "/report":    (self.cmd_report,   "Research report artifact: /report AAPL [--format html|md]"),
             # ── Market data / analysis (direct, no LLM loop) ────────────────
             "/quote":     (self.cmd_quote,    "Quote: /quote AAPL [MSFT...]"),
             "/analyze":   (self.cmd_analyze,  "Deep market analysis: /analyze AAPL"),
+            "/team":      (self.cmd_team,     "Multi-agent research team: /team AAPL [--full]"),
             "/ta":        (self.cmd_ta,       "Technical indicators: /ta AAPL [days=120]"),
             "/market":    (self.cmd_market,   "Market overview: /market [indices|sectors]"),
             "/macro":     (self.cmd_macro,    "Macro data: /macro [us|cn|rates|calendar]"),
@@ -5287,6 +5412,7 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
         "/backtest":  ("Usage: /backtest [strategy] [symbol] [start] [end] [--period 1y] [--fast 20 --slow 60] [--output ./aria-output]", ["/backtest momentum SPY --period 1y", "/backtest sma_cross AAPL --fast 20 --slow 60 --output ./reports"]),
         "/wf":        ("Usage: /wf [symbol] [strategy] [method]", ["/wf SPY momentum rolling", "/wf QQQ breakout anchored"]),
         "/compare":   ("Usage: /compare [symbol] [start] [end]", ["/compare SPY", "/compare AAPL 2022-01-01 2025-01-01"]),
+        "/tv":        ("Usage: /tv SYMBOL [--open] [--interval 60] [--pine] [--copy] [--reveal] [--txt]", ["/tv NVDA", "/tv NVDA --open", "/tv NVDA --pine --copy --reveal"]),
         "/watch":     ("Usage: /watch [add|remove|list] [SYMBOL]", ["/watch add AAPL", "/watch remove TSLA", "/watch list"]),
         "/crypto":    ("Usage: /crypto [SYMBOL...]", ["/crypto BTC", "/crypto ETH SOL"]),
         "/forex":     ("Usage: /forex [PAIR...]", ["/forex EUR/USD", "/forex GBP/USD JPY/USD"]),
@@ -5368,7 +5494,7 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
         # ── Real estate ─────────────────────────────────────────────────────
         "/realty":    ("Usage: /realty [market CITY] [calc buy|rent|roi] [compare] [trend CITY]", ["/realty market 北京", "/realty calc buy", "/realty compare", "/realty trend 上海"]),
         # ── Brokers ─────────────────────────────────────────────────────────
-        "/broker":    ("Usage: /broker [list|connect NAME|disconnect|status]", ["/broker list", "/broker connect futu", "/broker status"]),
+        "/broker":    ("Usage: /broker [guide|doctor|services|list|connect NAME|disconnect|status]", ["/broker guide", "/broker doctor", "/broker connect alpaca_paper"]),
         "/account":   ("Usage: /account", ["/account"]),
         "/positions": ("Usage: /positions", ["/positions"]),
         "/orders":    ("Usage: /orders [pending|all]", ["/orders", "/orders pending"]),
@@ -7992,6 +8118,119 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
     # ════════════════════════════════════════════════════════════════════════
     # 金融 Agent 团队命令
     # ════════════════════════════════════════════════════════════════════════
+    async def cmd_tv(self, args: str):
+        """Print a TradingView chart URL or export a Pine Script strategy."""
+        parts = [p.strip() for p in args.strip().split() if p.strip()]
+        open_browser = any(p in {"--open", "-o", "open"} for p in parts)
+        export_pine = any(p in {"--pine", "pine", "--strategy", "strategy", "策略"} for p in parts)
+        copy_pine = any(p in {"--copy", "copy", "复制"} for p in parts)
+        reveal_file = any(p in {"--reveal", "reveal", "finder", "访达", "目录"} for p in parts)
+        txt_copy = any(p in {"--txt", "txt", "文本"} for p in parts)
+        interval = None
+        symbol_parts = []
+        skip_next = False
+        for idx, part in enumerate(parts):
+            if skip_next:
+                skip_next = False
+                continue
+            low = part.lower()
+            if low in {
+                "--open", "-o", "open", "--pine", "pine", "--strategy", "strategy", "策略",
+                "--copy", "copy", "复制", "--reveal", "reveal", "finder", "访达", "目录",
+                "--txt", "txt", "文本",
+            }:
+                continue
+            if low.startswith("--interval="):
+                interval = part.split("=", 1)[1]
+                continue
+            if low == "--interval" and idx + 1 < len(parts):
+                interval = parts[idx + 1]
+                skip_next = True
+                continue
+            symbol_parts.append(part.strip(",，"))
+
+        raw_symbol = symbol_parts[0] if symbol_parts else "AAPL"
+        symbol = _resolve_market_arg_symbol(raw_symbol)
+        try:
+            from apps.cli.tradingview_bridge import (
+                export_pine_strategy,
+                tradingview_symbol,
+                tradingview_url,
+            )
+            tv_symbol = tradingview_symbol(symbol)
+            url = tradingview_url(symbol, interval=interval)
+        except Exception as exc:
+            _print_error(f"TradingView URL 生成失败: {exc}")
+            return
+
+        if HAS_RICH:
+            console.print(f"\n  [bold]TradingView[/bold]  {_chart_display_label(raw_symbol, symbol)}")
+            console.print(f"  [dim]symbol:[/dim] {symbol}  [dim]tv:[/dim] {tv_symbol}")
+            console.print(f"  [link={url}]{url}[/link]")
+        else:
+            print(f"TradingView {symbol} -> {tv_symbol}")
+            print(url)
+        self.terminal._pending_market_artifact = {
+            "kind": "tradingview_chart",
+            "symbol": symbol,
+            "display": _chart_display_label(raw_symbol, symbol),
+            "tv_symbol": tv_symbol,
+            "url": url,
+            "command": f"/tv {symbol}",
+        }
+
+        if export_pine:
+            try:
+                pine_path = export_pine_strategy(symbol)
+                self.terminal._pending_market_artifact = {
+                    "kind": "tradingview_pine_strategy",
+                    "symbol": symbol,
+                    "display": _chart_display_label(raw_symbol, symbol),
+                    "tv_symbol": tv_symbol,
+                    "url": url,
+                    "pine_path": str(pine_path),
+                    "path": str(pine_path),
+                    "command": f"/tv {symbol} --pine",
+                }
+                if HAS_RICH:
+                    console.print(f"  [green]✓[/green] Pine strategy saved: [link={pine_path}]{pine_path}[/link]")
+                    console.print(f"  [dim]Use: TradingView → Pine Editor → paste script → Save → Add to chart[/dim]")
+                else:
+                    print(f"Pine strategy saved: {pine_path}")
+                    print("Use: TradingView -> Pine Editor -> paste script -> Save -> Add to chart")
+                if txt_copy:
+                    companion = _write_text_companion(str(pine_path))
+                    if companion:
+                        if HAS_RICH:
+                            console.print(f"  [green]✓[/green] Text copy saved: [link={companion}]{companion}[/link]")
+                        else:
+                            print(f"Text copy saved: {companion}")
+                if copy_pine:
+                    try:
+                        copied, copy_err = _copy_text_to_clipboard(pine_path.read_text(encoding="utf-8"))
+                    except Exception as exc:
+                        copied, copy_err = False, str(exc)
+                    if HAS_RICH:
+                        console.print("  [green]✓[/green] Pine script copied to clipboard" if copied else f"  [yellow]copy failed:[/yellow] {copy_err}")
+                    else:
+                        print("Pine script copied to clipboard" if copied else f"copy failed: {copy_err}")
+                if reveal_file:
+                    revealed, reveal_err = _reveal_path_in_finder(str(pine_path))
+                    if HAS_RICH:
+                        console.print("  [green]✓[/green] Revealed in Finder" if revealed else f"  [yellow]reveal failed:[/yellow] {reveal_err}")
+                    else:
+                        print("Revealed in Finder" if revealed else f"reveal failed: {reveal_err}")
+            except Exception as exc:
+                _print_error(f"Pine Script 导出失败: {exc}")
+                return
+
+        if open_browser and url:
+            opened, open_err = _open_path_or_url(url)
+            if HAS_RICH:
+                console.print("  [green]✓[/green] opened in browser" if opened else f"  [yellow]open failed:[/yellow] {open_err}")
+            else:
+                print("opened in browser" if opened else f"open failed: {open_err}")
+
     async def cmd_chart(self, args: str):
         """
         生成股票分析图表（HTML，含K线/均线/RSI/MACD）。
@@ -9434,6 +9673,15 @@ class ArtheraTerminal:
             except Exception:
                 pass
 
+        # ── Broker guide intent: broad discovery should not start an add wizard ──
+        if _is_broker_guide_intent(message):
+            if HAS_RICH:
+                console.print("\n[bold]Aria[/bold]  [dim]  正在打开券商与服务指南…[/dim]\n")
+            await self.commands.cmd_broker("guide")
+            await self.commands.cmd_broker("services")
+            await self.commands.cmd_packages("services")
+            return
+
         # ── Broker setup intent: intercept before LLM / deterministic routing ──
         if _is_broker_setup_intent(message):
             _btype = _detect_broker_type(message)
@@ -9445,12 +9693,25 @@ class ArtheraTerminal:
             await self.commands._cmd_broker_add(_btype)
             return
 
+        if _is_artifact_action_followup(message) and getattr(self, "_pending_market_artifact", None):
+            pending_artifact = dict(self._pending_market_artifact or {})
+            action_summary = _handle_pending_artifact_action(pending_artifact, message)
+            if HAS_RICH:
+                console.print("\n[bold]Aria[/bold]\n")
+                console.print(Markdown(_strip_latex(action_summary)))
+                console.print()
+            else:
+                print("\nAria\n")
+                print(action_summary)
+            self.conversation.append({"role": "assistant", "content": action_summary})
+            return
+
         if _is_artifact_location_followup(message) and getattr(self, "_pending_market_artifact", None):
             pending_artifact = dict(self._pending_market_artifact or {})
             _print_pending_artifact_location(pending_artifact)
             _paths = [
                 str(pending_artifact.get(key) or "").strip()
-                for key in ("html_path", "png_path", "chart_path", "path", "raw_path")
+                for key in ("pine_path", "html_path", "png_path", "chart_path", "path", "raw_path", "url")
                 if str(pending_artifact.get(key) or "").strip()
             ]
             _children = pending_artifact.get("children") or []
@@ -11313,6 +11574,15 @@ class ArtheraTerminal:
                 _model_has_tools_p = bool(_mc_p.tool_calls and _mc_p.context_window >= 8192)
             except Exception:
                 pass
+
+        # ── Broker guide intent: broad discovery should not start an add wizard ──
+        if _is_broker_guide_intent(prompt):
+            if HAS_RICH:
+                console.print("\n[bold]Aria[/bold]  [dim]  正在打开券商与服务指南…[/dim]\n")
+            await self.commands.cmd_broker("guide")
+            await self.commands.cmd_broker("services")
+            await self.commands.cmd_packages("services")
+            return
 
         # ── Broker setup intent: intercept before LLM / deterministic routing ──
         if _is_broker_setup_intent(prompt):

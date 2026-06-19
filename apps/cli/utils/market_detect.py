@@ -1114,6 +1114,31 @@ _BROKER_SETUP_VERBS = (
     "guide", "tutorial", "凭证", "api key", "申请", "开发者",
 )
 
+_BROKER_GUIDE_INTENT_KW = (
+    "支持哪些券商", "有哪些券商", "券商列表", "券商能力", "能力矩阵",
+    "所有券商", "各个券商", "券商服务", "券商联动", "怎么连接各个券商",
+    "如何连接各个券商", "如何和各个券商连接", "怎么和各个券商连接",
+    "分析如何和各个券商连接", "使用这个项目的各个服务", "项目的各个服务",
+    "broker guide", "broker matrix", "supported brokers", "broker capabilities",
+    "broker services",
+)
+
+
+def _is_broker_guide_intent(message: str) -> bool:
+    """Return True for broad broker/service discovery requests.
+
+    These should show a capability guide instead of jumping straight into an
+    interactive broker-add wizard.
+    """
+    low = message.lower()
+    compact = low.replace(" ", "")
+    if any(kw in low or kw.replace(" ", "") in compact for kw in _BROKER_GUIDE_INTENT_KW):
+        return True
+    has_broker_word = any(k in low for k in ("券商", "证券", "broker"))
+    wants_overview = any(k in low for k in ("哪些", "列表", "支持", "能力", "矩阵", "各个", "所有", "服务"))
+    asks_connection = any(k in low for k in ("怎么", "如何", "怎样", "连接", "接入", "使用"))
+    return bool(has_broker_word and wants_overview and asks_connection)
+
 
 def _is_broker_setup_intent(message: str) -> bool:
     """Return True if the user is asking to set up / configure a broker."""

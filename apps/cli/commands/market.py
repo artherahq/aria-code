@@ -67,6 +67,9 @@ _REPORT_TYPE_HINTS: tuple[tuple[tuple[str, ...], str], ...] = (
     (("研究报告", "投研报告", "研究", "report"), "standard"),
 )
 
+_TRADINGVIEW_HINTS = ("tradingview", "trading view", "pine")
+_TRADINGVIEW_ZH_HINTS = ("用tradingview", "打开tradingview", "tradingview打开", "用 tv", "tv打开", "pine脚本")
+
 _ROUTE_SYMBOL_BLOCKLIST = {"K", "LINE", "CHART", "PLOT"}
 
 
@@ -125,6 +128,29 @@ def route_top_level_text(user_input: str, available_commands: set[str]) -> Route
     if not stripped or stripped.startswith("/"):
         return None
     low = stripped.lower()
+    compact_low = low.replace(" ", "")
+    low_words = {part.strip(".,，。:：;；") for part in low.split()}
+    if "/tv" in available_commands and (
+        any(k in low for k in _TRADINGVIEW_HINTS)
+        or "tv" in low_words
+        or any(k in compact_low for k in _TRADINGVIEW_ZH_HINTS)
+        or ("tradingview" in compact_low)
+    ):
+        symbols = _route_symbols(stripped)
+        symbol = symbols[0] if symbols else ""
+        if symbol:
+            opts: list[str] = []
+            if any(k in low for k in ("pine", "strategy", "策略")):
+                opts.append("--pine")
+            if any(k in low for k in ("copy", "clipboard", "复制", "剪贴板")):
+                opts.append("--copy")
+            if any(k in low for k in ("reveal", "finder", "所在目录", "访达", "目录")):
+                opts.append("--reveal")
+            if any(k in low for k in ("txt", "text file", "文本副本", "文本")):
+                opts.append("--txt")
+            if any(k in low for k in ("打开", "open")) and "--pine" not in opts:
+                opts.append("--open")
+            return RoutedCommand(command="/tv", args=" ".join([symbol, *opts]).strip())
     for keywords, command in _VISUAL_ROUTE_PATTERNS:
         if command not in available_commands:
             continue

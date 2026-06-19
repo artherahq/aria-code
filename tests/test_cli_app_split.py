@@ -15,6 +15,11 @@ from apps.cli.commands.market import (
 )
 from apps.cli.commands.market_cmds import _is_probable_football_query, _parse_nl_team_pair
 from apps.cli.commands.market_render import compact_quote_market_cap, render_quote_plain, render_ta_plain
+from apps.cli.utils.market_detect import (
+    _detect_broker_type,
+    _is_broker_guide_intent,
+    _is_broker_setup_intent,
+)
 from apps.cli.commands.report import (
     all_agents_failed,
     build_markdown_report_prompt,
@@ -151,11 +156,13 @@ def test_football_intent_still_accepts_real_match_query():
 
 def test_cli_catalog_exposes_watchable_direct_commands_and_visible_help():
     assert DIRECT_COMMAND_MAP["watchlist"].method_name == "cmd_watch"
+    assert DIRECT_COMMAND_MAP["tv"].method_name == "cmd_tv"
     assert is_watchable_direct_command("quote") is True
     assert is_watchable_direct_command("backtest") is False
     assert "/packages" in VISIBLE_SLASH_COMMANDS
     assert "/positions" in VISIBLE_SLASH_COMMANDS
     assert "/upload-image" in VISIBLE_SLASH_COMMANDS
+    assert "/tv" in VISIBLE_SLASH_COMMANDS
 
 
 @pytest.mark.asyncio
@@ -239,6 +246,45 @@ def test_top_level_market_router_maps_kline_artifacts_to_chart_service():
     assert routed is not None
     assert routed.command == "/chart"
     assert routed.text == "/chart MC.PA 1y"
+
+
+def test_top_level_market_router_maps_tradingview_open_to_tv_command():
+    routed = route_top_level_text("用 TradingView 打开英伟达", {"/tv", "/chart"})
+
+    assert routed is not None
+    assert routed.command == "/tv"
+    assert routed.text == "/tv NVDA --open"
+
+
+def test_top_level_market_router_maps_tradingview_strategy_to_pine_export():
+    routed = route_top_level_text("生成英伟达 TradingView 策略", {"/tv", "/chart"})
+
+    assert routed is not None
+    assert routed.command == "/tv"
+    assert routed.text == "/tv NVDA --pine"
+
+
+def test_broad_broker_discovery_is_guide_intent_not_specific_setup():
+    assert _is_broker_guide_intent("分析如何和各个券商连接并且使用这个项目的各个服务")
+    assert _detect_broker_type("分析如何和各个券商连接并且使用这个项目的各个服务") == ""
+
+    assert _is_broker_setup_intent("帮我配置富途 OpenAPI")
+    assert _detect_broker_type("帮我配置富途 OpenAPI") == "futu"
+
+
+def test_top_level_market_router_maps_tradingview_pine_followup_options():
+    routed = route_top_level_text("生成英伟达 TradingView 策略并复制到剪贴板打开所在目录生成文本副本", {"/tv", "/chart"})
+
+    assert routed is not None
+    assert routed.command == "/tv"
+    assert routed.text == "/tv NVDA --pine --copy --reveal --txt"
+
+
+def test_top_level_market_router_does_not_treat_atvi_as_tv_command():
+    routed = route_top_level_text("分析 ATVI 股票", {"/tv", "/analyze"})
+
+    assert routed is not None
+    assert routed.command == "/analyze"
 
 
 def test_top_level_market_router_maps_multi_symbol_chart_artifacts():

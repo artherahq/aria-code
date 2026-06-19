@@ -10,7 +10,7 @@ class BrokerCommandsMixin:
     """Mixin providing broker/account/positions/orders commands."""
 
     async def cmd_broker(self, args: str):
-        """券商账户管理: /broker list | connect <id> | disconnect <id> | add <type> | status | init"""
+        """券商账户管理: /broker list | guide | doctor | services | connect <id> | add <type>"""
         from aria_cli import HAS_RICH, console, Panel, rich_box, _HAS_BROKERS, _print_error
         if not _HAS_BROKERS:
             _print_error("brokers 模块未加载", "请确认 brokers/ 目录存在")
@@ -24,6 +24,12 @@ class BrokerCommandsMixin:
             await self._cmd_broker_list()
         elif sub == "status":
             await self._cmd_broker_status()
+        elif sub in ("guide", "matrix", "capabilities", "capability", "help"):
+            await self._cmd_broker_guide(rest)
+        elif sub in ("doctor", "check", "preflight"):
+            await self._cmd_broker_doctor(rest)
+        elif sub in ("services", "service", "usage"):
+            await self._cmd_broker_services()
         elif sub == "connect":
             await self._cmd_broker_connect(rest)
         elif sub == "disconnect":
@@ -41,6 +47,9 @@ class BrokerCommandsMixin:
                 console.print(Panel(
                     "[dim]用法:[/dim]\n"
                     "  [bold]/broker list[/bold]              — 显示所有已配置券商\n"
+                    "  [bold]/broker guide[/bold] [type]      — 查看券商能力矩阵和连接步骤\n"
+                    "  [bold]/broker doctor[/bold]            — 检查配置字段、SDK 和连接状态\n"
+                    "  [bold]/broker services[/bold]          — 查看券商数据如何进入分析/报告/交易计划\n"
                     "  [bold]/broker connect[/bold] [id]     — 连接券商\n"
                     "  [bold]/broker disconnect[/bold] [id]  — 断开连接\n"
                     "  [bold]/broker status[/bold]           — 查看连接状态\n"
@@ -118,6 +127,219 @@ class BrokerCommandsMixin:
                 console.print(line)
             else:
                 print(line)
+
+    async def _cmd_broker_guide(self, broker_type: str = ""):
+        """Show broker capability matrix or a single broker setup plan."""
+        from aria_cli import HAS_RICH, console, Panel, rich_box, _print_error
+        from brokers.capabilities import (
+            broker_connection_plan, broker_dependency_state,
+            get_broker_capability, list_broker_capabilities,
+        )
+        from brokers.config import get_broker_config
+
+        query = (broker_type or "").strip().split(maxsplit=1)[0].lower()
+        spec = get_broker_capability(query) if query else None
+        if query and not spec:
+            cfg = get_broker_config(query)
+            if cfg:
+                spec = get_broker_capability(str(cfg.get("type", "")))
+        if query and not spec:
+            _print_error(f"未知券商类型或配置 id: {query}", "运行 /broker guide 查看支持列表")
+            return
+
+        if spec:
+            dep = broker_dependency_state(spec)
+            lines = [
+                f"类型: {spec.broker_type}",
+                f"市场: {', '.join(spec.markets)}",
+                f"读取能力: {', '.join(spec.read_capabilities)}",
+                f"交易能力: {spec.trade_capability}",
+                f"SDK: {spec.sdk_module} / {spec.pip_package} "
+                f"({'已安装' if dep['installed'] else '未安装'})",
+                f"本地运行时: {spec.local_runtime}",
+                f"配置字段: {', '.join(spec.credential_fields)}",
+                "",
+                "接入步骤:",
+                *[f"  {idx}. {step}" for idx, step in enumerate(broker_connection_plan(spec.broker_type), 1)],
+                "",
+                "安全边界:",
+                *[f"  - {note}" for note in spec.safety_notes],
+            ]
+            if HAS_RICH:
+                console.print(Panel(
+                    "\n".join(lines),
+                    title=f"[bold]{spec.display_name}[/bold] 连接指南",
+                    border_style="blue",
+                    box=rich_box.ROUNDED,
+                    padding=(0, 1),
+                ))
+            else:
+                print("\n".join(lines))
+            return
+
+        specs = list_broker_capabilities()
+        if HAS_RICH:
+            from rich.table import Table
+            tbl = Table(
+                title="[bold]券商能力矩阵[/bold]",
+                show_header=True,
+                header_style="bold dim",
+                box=rich_box.ROUNDED,
+                border_style="dim",
+            )
+            tbl.add_column("Type", style="bold")
+            tbl.add_column("券商")
+            tbl.add_column("市场")
+            tbl.add_column("SDK")
+            tbl.add_column("交易")
+            tbl.add_column("运行时 / 凭证")
+            tbl.add_column("下一步")
+            for item in specs:
+                dep = broker_dependency_state(item)
+                sdk = f"{item.sdk_module} " + ("[green]✓[/green]" if dep["installed"] else "[yellow]未装[/yellow]")
+                trade = "[green]可交易[/green]" if item.can_trade else "[dim]只读[/dim]"
+                runtime = item.local_runtime.split("；", 1)[0]
+                tbl.add_row(
+                    item.broker_type,
+                    item.display_name,
+                    "/".join(item.markets),
+                    sdk,
+                    trade,
+                    runtime,
+                    f"/broker guide {item.broker_type}",
+                )
+            console.print(tbl)
+            console.print("[dim]配置路径: brokers.json；添加: /broker add <type>；体检: /broker doctor[/dim]")
+        else:
+            for item in specs:
+                print(
+                    f"{item.broker_type:<12} {item.display_name:<28} "
+                    f"{'/'.join(item.markets):<12} {item.pip_package:<14} {item.trade_capability}"
+                )
+
+    async def _cmd_broker_doctor(self, args: str = ""):
+        """Check configured broker fields, SDK availability, and connection state."""
+        from aria_cli import HAS_RICH, console, Panel, rich_box
+        from brokers.capabilities import broker_dependency_state, get_broker_capability
+        from brokers.config import BROKERS_CONFIG_PATH, list_broker_configs, validate_broker_config
+        from aria_cli import _get_broker_registry
+
+        cfgs = list_broker_configs()
+        reg = _get_broker_registry()
+        if not cfgs:
+            if HAS_RICH:
+                console.print(Panel(
+                    "尚未配置券商。\n\n"
+                    "先运行 /broker guide 选择券商类型，再运行 /broker add <type>。\n"
+                    f"配置文件: {BROKERS_CONFIG_PATH}",
+                    title="[bold]Broker Doctor[/bold]",
+                    border_style="yellow",
+                    box=rich_box.ROUNDED,
+                    padding=(0, 1),
+                ))
+            else:
+                print(f"尚未配置券商。配置文件: {BROKERS_CONFIG_PATH}")
+            return
+
+        rows = []
+        for cfg in cfgs:
+            broker_id = str(cfg.get("id", ""))
+            btype = str(cfg.get("type", ""))
+            spec = get_broker_capability(btype)
+            errors = validate_broker_config(cfg)
+            fatal = [err for err in errors if not str(err).startswith("⚠")]
+            warnings = [err for err in errors if str(err).startswith("⚠")]
+            dep = broker_dependency_state(spec) if spec else {
+                "installed": False,
+                "install_hint": "",
+                "module": "",
+                "package": "",
+            }
+            broker = reg.get(broker_id) if reg and broker_id else None
+            connected = bool(broker and broker.is_connected)
+            if fatal:
+                status = "fail"
+                next_step = fatal[0]
+            elif not dep["installed"]:
+                status = "warn"
+                next_step = str(dep["install_hint"] or f"安装 {dep['package']}")
+            elif warnings:
+                status = "warn"
+                next_step = warnings[0]
+            elif not connected:
+                status = "ready"
+                next_step = f"/broker connect {broker_id}"
+            else:
+                status = "ok"
+                next_step = "/account /positions"
+            rows.append({
+                "id": broker_id,
+                "type": btype,
+                "label": str(cfg.get("label", broker_id)),
+                "sdk": str(dep.get("module") or "—"),
+                "sdk_ok": bool(dep.get("installed")),
+                "connected": connected,
+                "status": status,
+                "next": next_step,
+            })
+
+        if HAS_RICH:
+            from rich.table import Table
+            tbl = Table(
+                title="[bold]Broker Doctor[/bold]",
+                show_header=True,
+                header_style="bold dim",
+                box=rich_box.ROUNDED,
+                border_style="dim",
+            )
+            tbl.add_column("ID", style="bold")
+            tbl.add_column("Type")
+            tbl.add_column("SDK")
+            tbl.add_column("连接")
+            tbl.add_column("状态")
+            tbl.add_column("下一步")
+            colors = {"ok": "green", "ready": "cyan", "warn": "yellow", "fail": "red"}
+            for row in rows:
+                color = colors.get(row["status"], "dim")
+                tbl.add_row(
+                    row["id"],
+                    row["type"],
+                    f"{row['sdk']} {'✓' if row['sdk_ok'] else '未装'}",
+                    "已连接" if row["connected"] else "未连接",
+                    f"[{color}]{row['status']}[/{color}]",
+                    row["next"],
+                )
+            console.print(tbl)
+            console.print(f"[dim]配置文件: {BROKERS_CONFIG_PATH}[/dim]")
+        else:
+            for row in rows:
+                print(f"{row['id']} {row['type']} {row['status']} next={row['next']}")
+
+    async def _cmd_broker_services(self):
+        """Show how broker data flows into Aria services."""
+        from aria_cli import HAS_RICH, console, rich_box
+        from brokers.capabilities import broker_service_playbook
+
+        rows = broker_service_playbook()
+        if HAS_RICH:
+            from rich.table import Table
+            tbl = Table(
+                title="[bold]券商数据与项目服务联动[/bold]",
+                show_header=True,
+                header_style="bold dim",
+                box=rich_box.ROUNDED,
+                border_style="dim",
+            )
+            tbl.add_column("服务", width=18)
+            tbl.add_column("命令 / 流程", width=42)
+            tbl.add_column("被哪些能力使用", width=34)
+            tbl.add_column("安全边界")
+            for row in rows:
+                tbl.add_row(row["service"], row["commands"], row["used_by"], row["guardrail"])
+            console.print(tbl)
+        else:
+            for row in rows:
+                print(f"{row['service']}: {row['commands']} | {row['guardrail']}")
 
     async def _cmd_broker_connect(self, broker_id: str):
         from aria_cli import (HAS_RICH, console, _list_broker_configs,

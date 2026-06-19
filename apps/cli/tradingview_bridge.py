@@ -139,6 +139,7 @@ def parse_tradingview_alert(payload: dict[str, Any] | str) -> dict[str, Any]:
         "price": data.get("price") or data.get("close") or data.get("last"),
         "time": data.get("time") or data.get("timestamp") or data.get("t"),
         "message": data.get("message") or data.get("alert_message") or "",
+        "channels": data.get("channels"),
         "raw": data,
     }
 
@@ -233,8 +234,8 @@ if exitCondition
 
 plot(fast, "Fast EMA", color=color.teal)
 plot(slow, "Slow EMA", color=color.orange)
-alertcondition(longCondition, "Aria BUY {sym}", "{{\\"symbol\\":\\"{sym}\\",\\"action\\":\\"BUY\\",\\"price\\":{{close}}}}")
-alertcondition(exitCondition, "Aria EXIT {sym}", "{{\\"symbol\\":\\"{sym}\\",\\"action\\":\\"EXIT\\",\\"price\\":{{close}}}}")
+alertcondition(longCondition, "Aria BUY {sym}", "{{\\"symbol\\":\\"{sym}\\",\\"action\\":\\"BUY\\",\\"price\\":{{{{close}}}}}}")
+alertcondition(exitCondition, "Aria EXIT {sym}", "{{\\"symbol\\":\\"{sym}\\",\\"action\\":\\"EXIT\\",\\"price\\":{{{{close}}}}}}")
 """
 
 

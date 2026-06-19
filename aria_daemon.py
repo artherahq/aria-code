@@ -22,6 +22,8 @@ Config via env vars (or ~/.aria/.env):
   APNS_SANDBOX              — "true" for sandbox / TestFlight (default: true)
   APNS_AUTH_KEY_P8          — .p8 key content, or place file at ~/.aria/apns.p8
   WEBHOOK_TOKEN             — Static token for /api/v1/webhook/trigger
+  ARIA_WEBHOOK_HOST         — Daemon webhook host (default: 127.0.0.1)
+  ARIA_WEBHOOK_PORT         — Daemon webhook port (default: 8765)
   ARIA_API_BASE             — FastAPI backend URL (default: http://localhost:8000)
   ARIA_CODE_DIR             — Path to aria-code directory
 """
@@ -445,6 +447,34 @@ async def _run_report(symbol: str) -> str:
         return f"⚠️ 分析 {symbol} 时出错: {exc}"
 
 
+async def _run_tradingview_alert(payload: dict) -> str:
+    """Handle a TradingView alert webhook job."""
+    try:
+        from apps.cli.tradingview_bridge import parse_tradingview_alert
+        alert = parse_tradingview_alert(payload)
+    except Exception as exc:
+        raise ValueError(f"TradingView alert 解析失败: {exc}") from exc
+
+    symbol = str(alert.get("symbol") or "").upper()
+    if not symbol:
+        raise ValueError("TradingView alert 缺少 symbol/ticker")
+
+    action = str(alert.get("action") or "ALERT").upper()
+    price = alert.get("price")
+    price_line = f"Price: `{price}`" if price not in (None, "") else "Price: `N/A`"
+    msg = str(alert.get("message") or "").strip()
+    header = [
+        f"*TradingView Alert* `{symbol}`",
+        f"Action: *{action}*",
+        price_line,
+    ]
+    if msg:
+        header.append(f"Message: {msg[:300]}")
+
+    analysis = await _run_report(symbol)
+    return "\n".join(header) + "\n\n" + analysis
+
+
 async def _run_morning_brief() -> str:
     """Enriched morning market brief — A-share + US + crypto + FX."""
     try:
@@ -791,6 +821,63 @@ async def _webhook_executor() -> None:
         await asyncio.sleep(2)
 
 
+async def _webhook_http_server() -> None:
+    """Small local HTTP endpoint for TradingView webhooks."""
+    try:
+        from aiohttp import web
+        from apps.cli.tradingview_bridge import enqueue_tradingview_alert
+    except ImportError as exc:
+        logger.warning("Webhook HTTP server disabled: %s", exc)
+        return
+
+    token = os.environ.get("WEBHOOK_TOKEN", "")
+    host = os.environ.get("ARIA_WEBHOOK_HOST", "127.0.0.1")
+    port = int(os.environ.get("ARIA_WEBHOOK_PORT", "8765"))
+
+    def _authorized(request) -> bool:
+        if not token:
+            return True
+        supplied = (
+            request.headers.get("X-Aria-Token")
+            or request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+            or request.query.get("token")
+        )
+        return supplied == token
+
+    async def _handle_tradingview(request):
+        if not _authorized(request):
+            return web.json_response({"success": False, "error": "unauthorized"}, status=401)
+        text = await request.text()
+        try:
+            import json as _json
+            payload = _json.loads(text) if text.strip() else {}
+        except Exception:
+            payload = {"message": text}
+        if request.query.get("channels") and isinstance(payload, dict):
+            import json as _json
+            payload["channels"] = _json.dumps(
+                [item.strip() for item in request.query["channels"].split(",") if item.strip()]
+            )
+        result = enqueue_tradingview_alert(payload, db_path=_DB_PATH)
+        status = 202 if result.get("success") else 400
+        return web.json_response(result, status=status)
+
+    app = web.Application()
+    app.router.add_post("/api/v1/webhook/tradingview", _handle_tradingview)
+    app.router.add_post("/api/v1/tradingview/webhook", _handle_tradingview)
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, host, port)
+    await site.start()
+    logger.info("TradingView webhook listening on http://%s:%d/api/v1/webhook/tradingview", host, port)
+    try:
+        while True:
+            await asyncio.sleep(3600)
+    finally:
+        await runner.cleanup()
+
+
 async def _execute_job(job: dict) -> None:
     job_id  = job["id"]
     command = job["command"]
@@ -813,6 +900,8 @@ async def _execute_job(job: dict) -> None:
         elif command.startswith("report ") or command.startswith("/report "):
             sym = command.split()[-1].upper()
             result = await _run_report(sym)
+        elif command == "tradingview_alert":
+            result = await _run_tradingview_alert(payload)
         elif command in ("morning-brief", "/morning-brief", "brief"):
             result = await _run_morning_brief()
         elif command in ("screen", "/screen"):
@@ -831,9 +920,15 @@ async def _execute_job(job: dict) -> None:
         channels = []
         try:
             import json as _j
-            channels = _j.loads(payload.get("channels", "[]") or "[]")
+            raw_channels = payload.get("channels", "[]")
+            if isinstance(raw_channels, list):
+                channels = raw_channels
+            else:
+                channels = _j.loads(raw_channels or "[]")
         except Exception:
             pass
+        if command == "tradingview_alert" and not channels:
+            channels = ["telegram", "feishu"]
         if "telegram" in channels:
             await _telegram_push(result)
         if "feishu" in channels:
@@ -1089,6 +1184,7 @@ async def main() -> None:
     tasks = [
         asyncio.create_task(_alert_watchdog(), name="alert_watchdog"),
         asyncio.create_task(_webhook_executor(), name="webhook_executor"),
+        asyncio.create_task(_webhook_http_server(), name="webhook_http_server"),
         asyncio.create_task(_portfolio_loss_watchdog(), name="portfolio_watchdog"),
     ]
 

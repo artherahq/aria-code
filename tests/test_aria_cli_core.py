@@ -244,6 +244,17 @@ class TestFileTools(unittest.TestCase):
         self.assertIn("line 5", content)
         self.assertNotIn("line 0", content)
 
+    def test_read_file_default_limit_caps_large_context_reads(self):
+        lines = "\n".join(f"line {i}" for i in range(220))
+        _tool_write_file({"path": self.test_file, "content": lines})
+        result = _tool_read_file({"path": self.test_file})
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["data"]["lines"], 160)
+        self.assertIn("line 159", result["data"]["content"])
+        self.assertNotIn("line 200", result["data"]["content"])
+        self.assertIn("use offset/limit to read more", result["data"]["content"])
+
     def test_list_files(self):
         for name in ["a.py", "b.py", "c.txt"]:
             open(os.path.join(self.tmpdir, name), "w").close()
