@@ -2595,6 +2595,25 @@ if _HAS_COMPUTER_USE:
     LOCAL_TOOL_SCHEMAS.extend(_CU_SCHEMAS)
 
 
+def _dedup_tool_schemas() -> None:
+    """Drop duplicate tool schemas, keeping the LAST occurrence by name.
+
+    Some tools (e.g. web_fetch, get_market_data) are declared both by the
+    finance-tools registry and the static schema block. The static block runs
+    after and carries the richer description, so keeping the last copy wins.
+    """
+    seen: dict = {}
+    for schema in LOCAL_TOOL_SCHEMAS:
+        name = schema.get("function", {}).get("name", "")
+        if name:
+            seen[name] = schema  # later overwrites earlier
+    if len(seen) != len(LOCAL_TOOL_SCHEMAS):
+        LOCAL_TOOL_SCHEMAS[:] = list(seen.values())
+
+
+_dedup_tool_schemas()
+
+
 # Tools that require user confirmation before execution
 _CONFIRM_TOOLS = {"write_file", "edit_file", "run_command"}
 # In bot mode (ARIA_BOT_MODE=1): auto-approve all tools and suppress visual output
