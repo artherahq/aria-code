@@ -298,14 +298,31 @@ def _get_crypto_data(params: dict) -> dict:
             return _get_market_data({"symbol": yf_sym, "period": "3mo"})
         return {"success": False, "error": "ccxt not installed: pip install ccxt"}
 
+    def _yf_crypto_fallback(reason: str) -> dict:
+        """Fall back to yfinance when the exchange is unreachable (region block, etc.)."""
+        if not _HAS_YF:
+            return {"success": False, "error": reason}
+        # BTC/USDT → BTC-USD ; strip stablecoin quote to USD for yfinance
+        base = symbol.split("/")[0]
+        yf_sym = f"{base}-USD"
+        res = _get_market_data({"symbol": yf_sym, "period": "3mo"})
+        if res.get("success"):
+            res["provider"] = "yfinance (ccxt fallback)"
+            res["note"] = f"{exchange} 不可用，已回退 yfinance: {reason[:60]}"
+        return res
+
     try:
         ex_class = getattr(ccxt, exchange.lower(), None)
         if ex_class is None:
             return {"success": False, "error": f"Unknown exchange: {exchange}"}
         ex = ex_class({"enableRateLimit": True})
-        ohlcv = ex.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
+        try:
+            ohlcv = ex.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
+        except Exception as net_exc:
+            # Network / region block (e.g. Binance 451) → yfinance fallback
+            return _yf_crypto_fallback(str(net_exc))
         if not ohlcv:
-            return {"success": False, "error": "Empty OHLCV data"}
+            return _yf_crypto_fallback("Empty OHLCV data")
 
         df = pd.DataFrame(ohlcv, columns=["ts", "open", "high", "low", "close", "volume"])
         df["date"] = pd.to_datetime(df["ts"], unit="ms")
@@ -334,7 +351,7 @@ def _get_crypto_data(params: dict) -> dict:
             "provider":      "ccxt",
         }
     except Exception as exc:
-        return {"success": False, "error": str(exc)}
+        return _yf_crypto_fallback(str(exc))
 
 
 # ---------------------------------------------------------------------------
