@@ -135,6 +135,24 @@ def test_console_script_points_to_apps_cli_entrypoint():
     assert "apps*" in data["tool"]["setuptools"]["packages"]["find"]["include"]
 
 
+def test_market_slash_commands_are_registered_for_interactive_routing():
+    import aria_cli
+
+    commands = aria_cli.SlashCommands(SimpleNamespace(config={}))
+
+    for text in (
+        "/chart MC.PA 1y",
+        "/dashboard brief",
+        "/report AAPL",
+        "/quote SPCX",
+        "/analyze SPCX",
+        "/ta SPCX",
+        "/market",
+        "/news SPCX",
+    ):
+        assert commands.is_command(text), text
+
+
 def test_market_command_parsers_are_ui_free_and_stable():
     assert parse_symbols("", ["aapl", "nvda"]) == ["AAPL", "NVDA"]
     assert parse_symbols("aapl msft", ["NVDA"]) == ["AAPL", "MSFT"]
@@ -160,6 +178,15 @@ def test_top_level_market_router_maps_bare_text_to_slash_commands():
 
     assert route_top_level_text("/analyze AAPL", available) is None
     assert route_top_level_text("market", available) is None
+
+
+def test_top_level_market_router_maps_kline_artifacts_to_chart_service():
+    available = {"/chart", "/dashboard", "/report"}
+
+    routed = route_top_level_text("生成lvmh的k线和分析数据", available)
+    assert routed is not None
+    assert routed.command == "/chart"
+    assert routed.text == "/chart MC.PA 1y"
 
 
 def test_team_args_parser_and_symbol_resolution_are_ui_free():
@@ -476,7 +503,8 @@ def test_team_report_builder_and_save_write_quality_metadata(monkeypatch, tmp_pa
     from agents.base import AgentResult
     from agents.team import TeamResult
 
-    monkeypatch.setenv("ARIA_ARTIFACT_ROOT", str(tmp_path))
+    monkeypatch.setenv("ARIA_ARTIFACT_ROOT", str(tmp_path / "project-artifacts"))
+    monkeypatch.setenv("ARIA_USER_OUTPUT_ROOT", str(tmp_path / "user-output"))
     team_result = TeamResult(
         symbol="NVDA",
         agents_run=["technical"],
@@ -527,6 +555,8 @@ def test_team_report_builder_and_save_write_quality_metadata(monkeypatch, tmp_pa
     )
 
     assert saved.path.exists()
+    assert str(tmp_path / "user-output" / "generated" / "reports" / "team") in str(saved.path)
+    assert str(tmp_path / "project-artifacts") not in str(saved.path)
     assert saved.metadata_path is not None
     text = saved.path.read_text(encoding="utf-8")
     metadata = json.loads(saved.metadata_path.read_text(encoding="utf-8"))
@@ -586,7 +616,8 @@ def test_save_markdown_report_writes_output_dir_without_metadata(tmp_path):
 
 
 def test_save_markdown_report_writes_artifact_metadata(monkeypatch, tmp_path):
-    monkeypatch.setenv("ARIA_ARTIFACT_ROOT", str(tmp_path / "artifacts"))
+    monkeypatch.setenv("ARIA_ARTIFACT_ROOT", str(tmp_path / "project-artifacts"))
+    monkeypatch.setenv("ARIA_USER_OUTPUT_ROOT", str(tmp_path / "user-output"))
 
     class _Bundle:
         quote = {"price": 100}
@@ -610,6 +641,8 @@ def test_save_markdown_report_writes_artifact_metadata(monkeypatch, tmp_path):
     )
 
     assert saved.path.exists()
+    assert str(tmp_path / "user-output" / "generated" / "reports" / "market") in str(saved.path)
+    assert str(tmp_path / "project-artifacts") not in str(saved.path)
     assert saved.metadata_path is not None
     metadata = json.loads(saved.metadata_path.read_text(encoding="utf-8"))
     assert metadata["kind"] == "market_report"

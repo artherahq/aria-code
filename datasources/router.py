@@ -146,12 +146,18 @@ class DataRouter:
     def quote(self, symbol: str) -> Optional[QuoteResult]:
         market = _detect_market(symbol)
         for src_name in self._get_chain(market):
+            if src_name == "edgar":
+                continue
             src = self._get_source(src_name)
             if not src or not src.supports(symbol):
                 continue
             try:
                 result = src.quote(symbol)
-                if result:
+                try:
+                    valid_price = result is not None and float(getattr(result, "price", 0) or 0) > 0
+                except Exception:
+                    valid_price = False
+                if result and valid_price:
                     logger.debug(f"quote({symbol}) ← {src_name}")
                     return result
             except Exception as e:

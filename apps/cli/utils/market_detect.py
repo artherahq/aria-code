@@ -3,6 +3,20 @@
 
 import re as _re_sym
 
+try:
+    from apps.cli.market_universe import (
+        looks_like_unresolved_market_name as _looks_like_unresolved_market_name,
+        resolve_market_mentions as _resolve_market_mentions,
+        resolve_market_symbol as _resolve_market_symbol,
+    )
+except Exception:
+    def _resolve_market_symbol(_message: str) -> str:
+        return ""
+    def _resolve_market_mentions(_message: str, limit: int = 6):
+        return []
+    def _looks_like_unresolved_market_name(_message: str) -> bool:
+        return False
+
 # Regex to find stock symbols in a message: e.g. "AAPL", "苹果AAPL", "TSLA股票", "BTC"
 _STOCK_PATTERN = _re_sym.compile(
     r'\b([A-Z]{1,5}(?:\.(?:HK|SH|SZ))?)(?:\s*(?:股票|股价|价格|现在|今天|行情|涨跌))?\b'
@@ -1141,6 +1155,9 @@ _FINANCIAL_TERMS_BLOCKLIST: frozenset = frozenset({
 
 def _extract_market_symbol(message: str) -> str:
     """Extract a likely market symbol from Chinese company names or tickers."""
+    resolved = _resolve_market_symbol(message)
+    if resolved:
+        return resolved
     # 最长名称优先（避免"美的"抢先匹配"美的集团"）
     for cn, tick in sorted(_COMPANY_TO_TICKER.items(), key=lambda x: -len(x[0])):
         if cn in message:
@@ -1149,6 +1166,10 @@ def _extract_market_symbol(message: str) -> str:
     m = _re_sym.search(r'(?<!\d)(?:[sS][hHzZ])?([036]\d{5}|68\d{4})(?:\.(?:SH|SZ|SS))?(?!\d)', message)
     if m:
         return m.group(1)
+    # Yahoo-compatible index / futures / FX tickers: ^GSPC, GC=F, EURUSD=X
+    m = _re_sym.search(r'(?<![A-Za-z0-9])(\^[A-Z0-9]{2,10}|[A-Z]{2,8}=F|[A-Z]{6}=X|DX-Y\.NYB)(?![A-Za-z0-9])', message, _re_sym.I)
+    if m:
+        return m.group(1).upper()
     m = _re_sym.search(r'\b([A-Z]{1,5}(?:\.(?:HK|SH|SZ))?)\b', message)
     if m and m.group(1) not in _FINANCIAL_TERMS_BLOCKLIST:
         return m.group(1)
@@ -1162,25 +1183,41 @@ def _extract_market_symbol(message: str) -> str:
 def _extract_market_symbols(message: str, limit: int = 6) -> list[str]:
     """Extract all likely market symbols, preserving mention order."""
     hits: list[tuple[int, str]] = []
+
+    def add_hit(start: int, symbol: str) -> None:
+        if start < 0 or not symbol:
+            return
+        # Higher-priority resolvers win at the same text position. This avoids
+        # old aliases like "纳斯达克" -> QQQ duplicating the universe resolver's
+        # "纳斯达克" -> ^IXIC result.
+        if any(existing_start == start for existing_start, _ in hits):
+            return
+        hits.append((start, symbol))
+
+    for start, item in _resolve_market_mentions(message, limit=limit):
+        add_hit(start, item.symbol)
+
     for name, ticker in sorted(_COMPANY_TO_TICKER.items(), key=lambda x: -len(x[0])):
         if ticker.startswith("PRIVATE:") or ticker in ("未上市", "未独立"):
             continue
         start = message.find(name)
-        if start >= 0:
-            hits.append((start, ticker))
+        add_hit(start, ticker)
 
     for match in _re_sym.finditer(r'(?<!\d)(?:[sS][hHzZ])?([036]\d{5}|68\d{4})(?:\.(?:SH|SZ|SS))?(?!\d)', message):
-        hits.append((match.start(), match.group(1)))
+        add_hit(match.start(), match.group(1))
+
+    for match in _re_sym.finditer(r'(?<![A-Za-z0-9])(\^[A-Z0-9]{2,10}|[A-Z]{2,8}=F|[A-Z]{6}=X|DX-Y\.NYB)(?![A-Za-z0-9])', message, _re_sym.I):
+        add_hit(match.start(), match.group(1).upper())
 
     for match in _re_sym.finditer(r'\b([A-Z]{1,5}(?:\.(?:HK|SH|SZ))?)\b', message):
         symbol = match.group(1)
         if symbol not in _FINANCIAL_TERMS_BLOCKLIST:
-            hits.append((match.start(), symbol))
+            add_hit(match.start(), symbol)
 
     for match in _re_sym.finditer(r'(?<![A-Za-z])([A-Z]{1,5}(?:\.(?:HK|SH|SZ))?)(?![A-Za-z])', message):
         symbol = match.group(1)
         if symbol not in _FINANCIAL_TERMS_BLOCKLIST:
-            hits.append((match.start(), symbol))
+            add_hit(match.start(), symbol)
 
     ordered: list[str] = []
     for _, symbol in sorted(hits, key=lambda item: item[0]):
@@ -1222,12 +1259,38 @@ def _extract_symbol_from_history(history: list, max_lookback: int = 8) -> str:
     return ""
 
 def _is_stock_chart_analysis_request(message: str) -> bool:
-    """Return True for clear stock analysis requests that also ask for a chart."""
+    """Return True for clear stock chart requests on stock-like symbols.
+
+    This intentionally catches both:
+    - "分析 AAPL 的 K 线图"
+    - "生成 Apple 公司近一年的股票图表"
+    so callers can route chart requests before generic market snapshot logic.
+    """
     low = message.lower()
-    has_chart = any(k in low for k in ("图表", "走势图", "k线", "k-line", "kline", "chart", "plot"))
-    has_analysis = any(k in low for k in ("分析", "研究", "走势", "技术面", "analyze", "analysis"))
+    has_chart = any(k in low for k in (
+        "图表", "走势图", "k线", "k线图", "k-line", "kline", "chart", "plot",
+        "蜡烛图", "candlestick", "生成", "绘制", "画", "制作", "生成一个", "生成近",
+    ))
     has_stock = any(k in low for k in ("股票", "stock", "股价")) or bool(_extract_market_symbol(message))
-    return has_chart and has_analysis and has_stock
+    return has_chart and has_stock
+
+
+def _is_visual_market_artifact_request(message: str) -> bool:
+    """Return True for chart/dashboard/report requests tied to market data."""
+    low = message.lower()
+    has_visual = any(k in low for k in (
+        "图表", "走势图", "k线", "k线图", "k-line", "kline", "candlestick",
+        "chart", "plot", "dashboard", "看板", "晨报", "日报", "周报", "月报",
+        "report", "热力图", "heatmap",
+    ))
+    if not has_visual:
+        return False
+    has_market = any(k in low for k in (
+        "股票", "股价", "行情", "市场", "美股", "港股", "a股", "指数",
+        "持仓", "portfolio", "回测", "财报", "earnings", "基金", "etf",
+        "资产", "组合", "市场数据", "market data",
+    ))
+    return has_market or bool(_extract_market_symbol(message))
 
 
 _UNRESOLVED_CO_INDICATORS = (
@@ -1250,7 +1313,7 @@ def _has_unresolved_company_mention(message: str) -> bool:
     """
     if _extract_market_symbol(message):
         return False  # already resolved — no problem
-    return any(kw in message for kw in _UNRESOLVED_CO_INDICATORS)
+    return any(kw in message for kw in _UNRESOLVED_CO_INDICATORS) or _looks_like_unresolved_market_name(message)
 
 
 # These keywords signal the user is asking about property markets, NOT stocks.
@@ -1347,7 +1410,7 @@ def _is_market_snapshot_request(message: str, history: list = None) -> bool:
                   "backtest", "策略", "代码", "回测", "编写", "生成", "k线",
                   "k-line", "kline", "python", "dashboard", "写一个", "写代码")
     _is_coding = any(k in message.lower() for k in _coding_kw)
-    if _is_coding or _is_stock_chart_analysis_request(message):
+    if _is_coding or _is_stock_chart_analysis_request(message) or _is_visual_market_artifact_request(message):
         return False
     low = message.lower()
     has_market_word = any(k in low for k in (
@@ -1402,5 +1465,3 @@ def _market_snapshot_trend(price, high, low, change_pct) -> str:
         return ", ".join(parts) or "flat"
     except Exception:
         return "—"
-
-

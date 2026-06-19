@@ -78,7 +78,8 @@ def test_generate_backtest_report_uses_injected_market_client(tmp_path: Path):
 
 
 def test_generate_backtest_report_writes_data_provenance_sidecars(monkeypatch, tmp_path: Path):
-    monkeypatch.setenv("ARIA_ARTIFACT_ROOT", str(tmp_path / "artifacts"))
+    monkeypatch.setenv("ARIA_ARTIFACT_ROOT", str(tmp_path / "project-artifacts"))
+    monkeypatch.setenv("ARIA_USER_OUTPUT_ROOT", str(tmp_path / "user-output"))
 
     result = generate_backtest_report(
         BacktestConfig(symbol="MSFT", strategy="buy_hold"),
@@ -86,6 +87,8 @@ def test_generate_backtest_report_writes_data_provenance_sidecars(monkeypatch, t
     )
 
     report_path = Path(result["report_path"])
+    assert str(tmp_path / "user-output" / "generated" / "strategies" / "backtests") in str(report_path)
+    assert str(tmp_path / "project-artifacts") not in str(report_path)
     metadata_path = report_path.with_suffix(".metadata.json")
     raw_path = report_path.with_suffix(".raw_data.json")
 

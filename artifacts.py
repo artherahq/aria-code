@@ -32,6 +32,81 @@ class ArtifactRecord:
     raw_data_path: Path
 
 
+@dataclass(frozen=True)
+class ArtifactEntry:
+    """Parsed artifact metadata with resolved paths and file state."""
+
+    metadata_path: Path
+    path: Path
+    raw_data_path: Path
+    kind: str
+    status: str
+    topic: str
+    created_at: str
+    mtime: float
+    size_bytes: int
+
+
+def _safe_stat(path: Path) -> Optional[os.stat_result]:
+    try:
+        return path.stat()
+    except Exception:
+        return None
+
+
+def _artifact_entry_from_metadata(path: Path) -> Optional[ArtifactEntry]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        artifact = data.get("artifact") or {}
+        output_path = Path(str(artifact.get("path") or ""))
+        metadata_path = Path(str(artifact.get("metadata_path") or path))
+        raw_path = Path(str(artifact.get("raw_data_path") or path.with_suffix(".raw_data.json")))
+        output_stat = _safe_stat(output_path)
+        meta_stat = _safe_stat(metadata_path)
+        raw_stat = _safe_stat(raw_path)
+        mtime = 0.0
+        for stat in (output_stat, meta_stat, raw_stat):
+            if stat is not None:
+                mtime = max(mtime, float(stat.st_mtime))
+        size_bytes = 0
+        for stat in (output_stat, meta_stat, raw_stat):
+            if stat is not None:
+                size_bytes += int(stat.st_size)
+        return ArtifactEntry(
+            metadata_path=metadata_path,
+            path=output_path,
+            raw_data_path=raw_path,
+            kind=str(data.get("kind") or artifact.get("category") or "artifact"),
+            status=str(data.get("status") or "unknown"),
+            topic=str(artifact.get("topic") or data.get("symbol") or ""),
+            created_at=str(data.get("created_at") or ""),
+            mtime=mtime or float(meta_stat.st_mtime if meta_stat else 0),
+            size_bytes=size_bytes,
+        )
+    except Exception:
+        return None
+
+
+def _cleanup_empty_dirs(start: Path, stop: Path) -> None:
+    current = start
+    try:
+        stop = stop.resolve()
+    except Exception:
+        return
+    while True:
+        try:
+            current = current.resolve()
+        except Exception:
+            break
+        if current == stop or stop not in current.parents:
+            break
+        try:
+            current.rmdir()
+        except Exception:
+            break
+        current = current.parent
+
+
 def _project_artifact_root() -> Optional[Path]:
     """Return project-level artifact root from .ariarc when configured."""
     try:
@@ -104,6 +179,21 @@ def user_generated_dir(create: bool = True) -> Path:
     return path
 
 
+def artifact_roots(*, include_user_generated: bool = True) -> list[Path]:
+    """Return unique artifact roots that should be visible to users."""
+    roots: list[Path] = []
+    for root in (artifact_root(), user_generated_dir(create=False) if include_user_generated else None):
+        if root is None:
+            continue
+        try:
+            resolved = root.expanduser().resolve()
+        except Exception:
+            resolved = root.expanduser()
+        if not any(existing == resolved for existing in roots):
+            roots.append(resolved)
+    return roots
+
+
 def artifact_dir(category: str, topic: Optional[str] = None, create: bool = True) -> Path:
     parts = [slugify_topic(part) for part in str(category or "artifacts").split("/") if part]
     base = artifact_root().joinpath(*parts)
@@ -151,6 +241,42 @@ def create_artifact(
     )
 
 
+def create_user_artifact(
+    category: str,
+    topic: Optional[str],
+    stem: str,
+    suffix: str,
+    *,
+    timestamp: Optional[datetime] = None,
+    create: bool = True,
+) -> ArtifactRecord:
+    """Create an artifact under the user-owned output root.
+
+    Unlike `create_artifact`, this intentionally ignores project `.ariarc`
+    output settings. Use it for charts, scripts, and generated assets the user
+    expects to find in their local Aria output folder rather than the source
+    checkout.
+    """
+    ts = timestamp or datetime.now()
+    parts = [slugify_topic(part) for part in str(category or "generated").split("/") if part]
+    topic_slug = slugify_topic(topic)
+    stem_slug = slugify_topic(stem, fallback="artifact")
+    suffix = suffix if suffix.startswith(".") else f".{suffix}"
+    directory = user_generated_dir(create=False).joinpath(*parts, topic_slug, ts.strftime("%Y-%m-%d"))
+    prefix = ts.strftime("%H%M%S")
+    base_name = f"{prefix}_{stem_slug}"
+    if create:
+        directory.mkdir(parents=True, exist_ok=True)
+    return ArtifactRecord(
+        category=f"generated/{'/'.join(parts)}" if parts else "generated",
+        topic=topic_slug,
+        directory=directory,
+        path=directory / f"{base_name}{suffix}",
+        metadata_path=directory / f"{base_name}.metadata.json",
+        raw_data_path=directory / f"{base_name}.raw_data.json",
+    )
+
+
 def write_artifact_metadata(record: ArtifactRecord, metadata: Dict[str, Any]) -> Path:
     payload = {
         "artifact": {
@@ -184,21 +310,182 @@ def recent_artifacts(limit: int = 20, root: Optional[Path] = None) -> list[Dict[
         return []
     items: list[Dict[str, Any]] = []
     for path in base.rglob("*.metadata.json"):
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            artifact = data.get("artifact") or {}
-            output_path = Path(str(artifact.get("path") or ""))
-            mtime = output_path.stat().st_mtime if output_path.exists() else path.stat().st_mtime
-            items.append({
-                "kind": data.get("kind") or artifact.get("category") or "artifact",
-                "status": data.get("status") or "unknown",
-                "topic": artifact.get("topic") or data.get("symbol") or "",
-                "path": str(output_path) if str(output_path) else "",
-                "metadata_path": str(path),
-                "created_at": data.get("created_at") or "",
-                "mtime": mtime,
-            })
-        except Exception:
+        entry = _artifact_entry_from_metadata(path)
+        if entry is None:
             continue
+        items.append({
+            "kind": entry.kind,
+            "status": entry.status,
+            "topic": entry.topic,
+            "path": str(entry.path) if str(entry.path) else "",
+            "metadata_path": str(entry.metadata_path),
+            "raw_data_path": str(entry.raw_data_path),
+            "created_at": entry.created_at,
+            "mtime": entry.mtime,
+            "size_bytes": entry.size_bytes,
+        })
     items.sort(key=lambda item: item.get("mtime") or 0, reverse=True)
     return items[: max(0, int(limit))]
+
+
+def recent_artifacts_all(limit: int = 20) -> list[Dict[str, Any]]:
+    """Return recent artifacts across project and user-generated roots."""
+    items: list[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for root in artifact_roots(include_user_generated=True):
+        for item in recent_artifacts(limit=max(limit, 20), root=root):
+            marker = str(item.get("metadata_path") or item.get("path") or "")
+            if marker and marker in seen:
+                continue
+            if marker:
+                seen.add(marker)
+            item = dict(item)
+            item["root"] = str(root)
+            items.append(item)
+    items.sort(key=lambda item: item.get("mtime") or 0, reverse=True)
+    return items[: max(0, int(limit))]
+
+
+def artifact_summary(root: Optional[Path] = None) -> Dict[str, Any]:
+    """Return a lightweight inventory of artifacts under root."""
+    base = root or artifact_root()
+    if not base.exists():
+        return {
+            "root": str(base),
+            "total": 0,
+            "total_size_bytes": 0,
+            "by_kind": {},
+            "newest_mtime": 0.0,
+            "oldest_mtime": 0.0,
+        }
+    entries: list[ArtifactEntry] = []
+    for path in base.rglob("*.metadata.json"):
+        entry = _artifact_entry_from_metadata(path)
+        if entry is not None:
+            entries.append(entry)
+    by_kind: Dict[str, int] = {}
+    newest = 0.0
+    oldest = 0.0
+    total_size = 0
+    for entry in entries:
+        by_kind[entry.kind] = by_kind.get(entry.kind, 0) + 1
+        total_size += entry.size_bytes
+        if entry.mtime:
+            newest = max(newest, entry.mtime)
+            oldest = entry.mtime if not oldest else min(oldest, entry.mtime)
+    return {
+        "root": str(base),
+        "total": len(entries),
+        "total_size_bytes": total_size,
+        "by_kind": dict(sorted(by_kind.items(), key=lambda item: (-item[1], item[0]))),
+        "newest_mtime": newest,
+        "oldest_mtime": oldest,
+    }
+
+
+def artifact_summary_all() -> Dict[str, Any]:
+    """Return artifact inventory across project and user-generated roots."""
+    roots = artifact_roots(include_user_generated=True)
+    summaries = [artifact_summary(root) for root in roots]
+    by_kind: Dict[str, int] = {}
+    total = 0
+    total_size = 0
+    newest = 0.0
+    oldest = 0.0
+    for summary in summaries:
+        total += int(summary.get("total") or 0)
+        total_size += int(summary.get("total_size_bytes") or 0)
+        newest = max(newest, float(summary.get("newest_mtime") or 0))
+        old = float(summary.get("oldest_mtime") or 0)
+        if old:
+            oldest = old if not oldest else min(oldest, old)
+        for kind, count in (summary.get("by_kind") or {}).items():
+            by_kind[str(kind)] = by_kind.get(str(kind), 0) + int(count)
+    return {
+        "roots": [str(root) for root in roots],
+        "total": total,
+        "total_size_bytes": total_size,
+        "by_kind": dict(sorted(by_kind.items(), key=lambda item: (-item[1], item[0]))),
+        "newest_mtime": newest,
+        "oldest_mtime": oldest,
+        "summaries": summaries,
+    }
+
+
+def prune_artifacts(keep: int = 20, root: Optional[Path] = None, dry_run: bool = False) -> Dict[str, Any]:
+    """Delete artifact bundles older than the newest `keep` entries."""
+    base = root or artifact_root()
+    keep = max(0, int(keep))
+    if not base.exists():
+        return {
+            "root": str(base),
+            "keep": keep,
+            "scanned": 0,
+            "removed": 0,
+            "dry_run": dry_run,
+            "deleted": [],
+        }
+    entries: list[ArtifactEntry] = []
+    for path in base.rglob("*.metadata.json"):
+        entry = _artifact_entry_from_metadata(path)
+        if entry is not None:
+            entries.append(entry)
+    entries.sort(key=lambda entry: entry.mtime, reverse=True)
+    to_remove = entries[keep:]
+    deleted: list[Dict[str, Any]] = []
+    for entry in to_remove:
+        targets = [entry.path, entry.metadata_path, entry.raw_data_path]
+        removed_files: list[str] = []
+        if not dry_run:
+            for target in targets:
+                try:
+                    if target.exists():
+                        target.unlink()
+                        removed_files.append(str(target))
+                except Exception:
+                    continue
+            for target in targets:
+                if target.exists():
+                    continue
+                _cleanup_empty_dirs(target.parent, base)
+        else:
+            removed_files = [str(target) for target in targets if target.exists()]
+        deleted.append(
+            {
+                "kind": entry.kind,
+                "status": entry.status,
+                "topic": entry.topic,
+                "metadata_path": str(entry.metadata_path),
+                "path": str(entry.path) if str(entry.path) else "",
+                "removed_files": removed_files,
+            }
+        )
+    return {
+        "root": str(base),
+        "keep": keep,
+        "scanned": len(entries),
+        "removed": len(deleted),
+        "dry_run": dry_run,
+        "deleted": deleted,
+    }
+
+
+def prune_artifacts_all(keep: int = 20, dry_run: bool = False) -> Dict[str, Any]:
+    """Prune artifact bundles in every visible artifact root."""
+    results = [prune_artifacts(keep=keep, root=root, dry_run=dry_run) for root in artifact_roots(include_user_generated=True)]
+    deleted: list[Dict[str, Any]] = []
+    for result in results:
+        root = result.get("root") or ""
+        for item in result.get("deleted") or []:
+            item = dict(item)
+            item["root"] = root
+            deleted.append(item)
+    return {
+        "roots": [result.get("root") for result in results],
+        "keep": max(0, int(keep)),
+        "scanned": sum(int(result.get("scanned") or 0) for result in results),
+        "removed": sum(int(result.get("removed") or 0) for result in results),
+        "dry_run": dry_run,
+        "deleted": deleted,
+        "results": results,
+    }

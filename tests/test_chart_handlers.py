@@ -1,5 +1,6 @@
 import pathlib
 import sys
+from types import SimpleNamespace
 
 
 _CLI_DIR = str(pathlib.Path(__file__).parents[1])
@@ -57,3 +58,119 @@ def test_normalise_history_frame_rejects_missing_close():
 
     assert chart_handlers._normalise_history_frame(hist) is None
 
+
+def test_ashare_chart_uses_akshare_when_yfinance_unavailable(monkeypatch, tmp_path):
+    import pandas as pd
+    import apps.cli.handlers.chart_handlers as chart_handlers
+
+    monkeypatch.setenv("ARIA_ARTIFACT_ROOT", str(tmp_path / "artifacts"))
+    monkeypatch.setenv("ARIA_USER_OUTPUT_ROOT", str(tmp_path / "user-output"))
+    monkeypatch.setitem(sys.modules, "yfinance", None)
+    monkeypatch.setitem(
+        sys.modules,
+        "market_data_client",
+        SimpleNamespace(get_mdc=lambda: SimpleNamespace(history=lambda *_a, **_k: {"success": False, "error": "mdc unavailable"})),
+    )
+
+    class FakeAkshare:
+        @staticmethod
+        def stock_zh_a_hist(*_args, **_kwargs):
+            dates = pd.date_range("2025-01-01", periods=80, freq="D")
+            base = [10 + i * 0.05 for i in range(len(dates))]
+            return pd.DataFrame({
+                "日期": dates.strftime("%Y-%m-%d"),
+                "开盘": base,
+                "最高": [v + 0.2 for v in base],
+                "最低": [v - 0.2 for v in base],
+                "收盘": [v + 0.1 for v in base],
+                "成交量": [100000 + i for i in range(len(dates))],
+            })
+
+    monkeypatch.setitem(sys.modules, "akshare", FakeAkshare)
+
+    result = chart_handlers.handle_stock_chart_analysis_direct("601899.SS", "1y")
+
+    assert result["success"] is True
+    assert result["symbol"] == "601899.SS"
+    assert result["provider"] == "akshare"
+    assert str(tmp_path / "user-output" / "generated") in result["chart_path"]
+
+
+def test_natural_language_ashare_chart_analysis_uses_akshare(monkeypatch, tmp_path):
+    import pandas as pd
+    import apps.cli.handlers.chart_handlers as chart_handlers
+    from apps.cli.utils.market_detect import _extract_market_symbol, _is_stock_chart_analysis_request
+
+    monkeypatch.setenv("ARIA_ARTIFACT_ROOT", str(tmp_path / "artifacts"))
+    monkeypatch.setenv("ARIA_USER_OUTPUT_ROOT", str(tmp_path / "user-output"))
+    monkeypatch.setitem(sys.modules, "yfinance", None)
+    monkeypatch.setitem(
+        sys.modules,
+        "market_data_client",
+        SimpleNamespace(get_mdc=lambda: SimpleNamespace(history=lambda *_a, **_k: {"success": False, "error": "mdc unavailable"})),
+    )
+
+    class FakeAkshare:
+        @staticmethod
+        def stock_zh_a_hist(*_args, **_kwargs):
+            dates = pd.date_range("2025-01-01", periods=260, freq="D")
+            base = [12 + i * 0.03 for i in range(len(dates))]
+            return pd.DataFrame({
+                "日期": dates.strftime("%Y-%m-%d"),
+                "开盘": base,
+                "最高": [v + 0.3 for v in base],
+                "最低": [v - 0.3 for v in base],
+                "收盘": [v + 0.12 for v in base],
+                "成交量": [200000 + i for i in range(len(dates))],
+            })
+
+    monkeypatch.setitem(sys.modules, "akshare", FakeAkshare)
+
+    result = chart_handlers.handle_stock_chart_analysis(
+        "生成紫金矿业近一年K线图和技术指标",
+        is_chart_request=_is_stock_chart_analysis_request,
+        extract_symbol=_extract_market_symbol,
+    )
+
+    assert result["success"] is True
+    assert "601899.SS" in result["response"]
+    assert result["tools_used"] == ["stock_chart", "akshare", "html_chart"]
+
+
+def test_ashare_chart_prefers_market_data_client(monkeypatch, tmp_path):
+    import apps.cli.handlers.chart_handlers as chart_handlers
+
+    monkeypatch.setenv("ARIA_ARTIFACT_ROOT", str(tmp_path / "artifacts"))
+    monkeypatch.setenv("ARIA_USER_OUTPUT_ROOT", str(tmp_path / "user-output"))
+    records = [
+        {
+            "date": f"2025-01-{(i % 28) + 1:02d}",
+            "open": 10 + i * 0.05,
+            "high": 10.3 + i * 0.05,
+            "low": 9.8 + i * 0.05,
+            "close": 10.1 + i * 0.05,
+            "volume": 100000 + i,
+        }
+        for i in range(80)
+    ]
+    monkeypatch.setitem(
+        sys.modules,
+        "market_data_client",
+        SimpleNamespace(
+            get_mdc=lambda: SimpleNamespace(
+                history=lambda *_a, **_k: {
+                    "success": True,
+                    "data": records,
+                    "provider": "eastmoney",
+                    "provider_chain": ["eastmoney"],
+                }
+            )
+        ),
+    )
+
+    result = chart_handlers.handle_stock_chart_analysis_direct("601899", "1y")
+
+    assert result["success"] is True
+    assert result["symbol"] == "601899.SS"
+    assert result["provider"] == "eastmoney"
+    assert str(tmp_path / "user-output" / "generated") in result["chart_path"]

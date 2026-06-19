@@ -32,6 +32,127 @@ def _normalise_history_frame(hist):
         return None
 
 
+def _normalise_chart_symbol(symbol: str) -> str:
+    """Normalize common A-share inputs for chart providers."""
+    raw = (symbol or "").strip().upper()
+    if not raw:
+        return raw
+    if re.match(r"^\d{6}$", raw):
+        return f"{raw}.SS" if raw.startswith(("6", "9")) else f"{raw}.SZ"
+    m = re.match(r"^(?:SH|SZ)([036]\d{5}|68\d{4})$", raw)
+    if m:
+        code = m.group(1)
+        return f"{code}.SS" if raw.startswith("SH") else f"{code}.SZ"
+    if raw.endswith(".SH"):
+        return raw[:-3] + ".SS"
+    return raw
+
+
+def _ashare_plain_symbol(symbol: str) -> str:
+    """Return 6-digit A-share code for akshare, or empty string."""
+    raw = (symbol or "").strip().upper()
+    m = re.match(r"^(?:SH|SZ)?([036]\d{5}|68\d{4})(?:\.(?:SS|SH|SZ))?$", raw)
+    return m.group(1) if m else ""
+
+
+def _days_for_period(period: str) -> int:
+    return {
+        "1mo": 35, "1m": 35,
+        "3mo": 100, "3m": 100,
+        "6mo": 185, "6m": 185,
+        "ytd": 370,
+        "1y": 370,
+        "2y": 740,
+        "3y": 1100,
+        "5y": 1830,
+        "max": 7300,
+    }.get((period or "1y").lower(), 370)
+
+
+def _fetch_akshare_history_frame(symbol: str, period: str):
+    """Fetch A-share history via akshare; returns (frame, currency, error)."""
+    code = _ashare_plain_symbol(symbol)
+    if not code:
+        return None, None, "not an A-share symbol"
+    try:
+        import pandas as _pd
+        import akshare as _ak
+        from datetime import datetime as _dt, timedelta as _td
+
+        end_date = _dt.now().strftime("%Y%m%d")
+        start_date = (_dt.now() - _td(days=_days_for_period(period))).strftime("%Y%m%d")
+        frame = _ak.stock_zh_a_hist(
+            symbol=code,
+            period="daily",
+            start_date=start_date,
+            end_date=end_date,
+            adjust="qfq",
+        )
+        if frame is None or frame.empty:
+            return None, None, "empty akshare result"
+        frame = frame.rename(columns={
+            "日期": "Date",
+            "开盘": "Open",
+            "最高": "High",
+            "最低": "Low",
+            "收盘": "Close",
+            "成交量": "Volume",
+            "成交额": "Turnover",
+            "振幅": "Amplitude",
+            "涨跌幅": "ChangePct",
+            "涨跌额": "Change",
+            "换手率": "TurnoverRate",
+        })
+        if "Date" in frame.columns:
+            frame["Date"] = _pd.to_datetime(frame["Date"])
+            frame = frame.set_index("Date")
+        frame = frame.sort_index()
+        for col in ("Open", "High", "Low", "Close", "Volume"):
+            if col in frame.columns:
+                frame[col] = _pd.to_numeric(frame[col], errors="coerce")
+        frame = _normalise_history_frame(frame)
+        return frame, "CNY", "" if frame is not None else "akshare frame missing Close"
+    except Exception as exc:
+        return None, None, str(exc)
+
+
+def _fetch_mdc_history_frame(symbol: str, period: str, interval: str = "1d"):
+    """Fetch history through the unified MarketDataClient provider chain."""
+    code = _ashare_plain_symbol(symbol)
+    if not code:
+        return None, None, "", "not an A-share symbol"
+    try:
+        import pandas as _pd
+        from market_data_client import get_mdc
+
+        result = get_mdc().history(code, days=_days_for_period(period), interval=interval)
+        if not result or not result.get("success"):
+            return None, None, "", str((result or {}).get("error") or "empty MarketDataClient result")
+        records = result.get("data") or []
+        if not records:
+            return None, None, "", "MarketDataClient returned no bars"
+        frame = _pd.DataFrame(records).rename(columns={
+            "date": "Date",
+            "open": "Open",
+            "high": "High",
+            "low": "Low",
+            "close": "Close",
+            "volume": "Volume",
+        })
+        if "Date" in frame.columns:
+            frame["Date"] = _pd.to_datetime(frame["Date"])
+            frame = frame.set_index("Date")
+        for col in ("Open", "High", "Low", "Close", "Volume"):
+            if col in frame.columns:
+                frame[col] = _pd.to_numeric(frame[col], errors="coerce")
+        frame = _normalise_history_frame(frame)
+        provider_chain = result.get("provider_chain") or [result.get("provider", "market_data_client")]
+        provider = " → ".join(str(item) for item in provider_chain if item) or "market_data_client"
+        return frame, "CNY", provider, "" if frame is not None else "MarketDataClient frame missing Close"
+    except Exception as exc:
+        return None, None, "", str(exc)
+
+
 def _fetch_yahoo_chart_frame(symbol: str, period: str, interval: str = "1d"):
     """Fetch Yahoo chart API data without yfinance; returns (frame, currency, error)."""
     try:
@@ -85,6 +206,116 @@ def _fmt_int(value) -> str:
         return "N/A"
 
 
+def _write_ta_png_artifact(record, hist, symbol: str, name: str, currency: str,
+                           is_ashare: bool, ma20, ma60, rsi14, macd_v, macd_s_val) -> tuple[str, str]:
+    """Write a compact PNG TA chart next to the HTML artifact when possible."""
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from matplotlib.patches import Rectangle
+        import pandas as _pd
+        import math as _math
+    except Exception as exc:
+        return "", f"PNG 依赖不可用: {exc}"
+
+    try:
+        png_path = record.path.with_suffix(".png")
+        plot_df = hist.tail(180).copy()
+        x = list(range(len(plot_df)))
+        inc_color = "#dc2626" if is_ashare else "#16a34a"
+        dec_color = "#16a34a" if is_ashare else "#dc2626"
+
+        fig = plt.figure(figsize=(14, 9), dpi=150)
+        gs = fig.add_gridspec(4, 1, height_ratios=[4.2, 1.0, 1.2, 1.2], hspace=0.08)
+        ax_price = fig.add_subplot(gs[0])
+        ax_vol = fig.add_subplot(gs[1], sharex=ax_price)
+        ax_rsi = fig.add_subplot(gs[2], sharex=ax_price)
+        ax_macd = fig.add_subplot(gs[3], sharex=ax_price)
+
+        for i, row in enumerate(plot_df.itertuples()):
+            open_v = float(getattr(row, "Open", getattr(row, "Close")))
+            high_v = float(getattr(row, "High", getattr(row, "Close")))
+            low_v = float(getattr(row, "Low", getattr(row, "Close")))
+            close_v = float(getattr(row, "Close"))
+            color = inc_color if close_v >= open_v else dec_color
+            ax_price.vlines(i, low_v, high_v, color=color, linewidth=0.8)
+            body_low = min(open_v, close_v)
+            body_h = max(abs(close_v - open_v), max(close_v * 0.001, 0.01))
+            ax_price.add_patch(Rectangle((i - 0.32, body_low), 0.64, body_h,
+                                         facecolor=color, edgecolor=color, linewidth=0.6))
+
+        for col, color, label, lw in (
+            ("MA20", "#f59e0b", "MA20", 1.2),
+            ("MA60", "#ef4444", "MA60", 1.2),
+            ("BB_UP", "#6366f1", "BB upper", 0.8),
+            ("BB_LO", "#6366f1", "BB lower", 0.8),
+        ):
+            if col in plot_df.columns:
+                ax_price.plot(x, plot_df[col].astype(float), color=color, linewidth=lw,
+                              linestyle="--" if col.startswith("BB_") else "-", label=label)
+
+        if "Volume" in plot_df.columns:
+            closes = plot_df["Close"].astype(float).tolist()
+            vols = plot_df["Volume"].fillna(0).astype(float).tolist()
+            colors = [inc_color if i == 0 or closes[i] >= closes[i - 1] else dec_color for i in range(len(closes))]
+            ax_vol.bar(x, vols, color=colors, width=0.75, alpha=0.65)
+
+        if "RSI14" in plot_df.columns:
+            ax_rsi.plot(x, plot_df["RSI14"].astype(float), color="#8b5cf6", linewidth=1.1)
+            ax_rsi.axhline(70, color=dec_color, linestyle=":", linewidth=0.8)
+            ax_rsi.axhline(30, color=inc_color, linestyle=":", linewidth=0.8)
+            ax_rsi.set_ylim(0, 100)
+
+        if "MACD_HIS" in plot_df.columns:
+            hist_vals = plot_df["MACD_HIS"].astype(float).tolist()
+            colors = [inc_color if v >= 0 else dec_color for v in hist_vals]
+            ax_macd.bar(x, hist_vals, color=colors, width=0.75, alpha=0.65)
+        if "MACD" in plot_df.columns:
+            ax_macd.plot(x, plot_df["MACD"].astype(float), color="#2563eb", linewidth=1.0, label="MACD")
+        if "MACD_SIG" in plot_df.columns:
+            ax_macd.plot(x, plot_df["MACD_SIG"].astype(float), color="#f59e0b", linewidth=1.0, linestyle="--", label="Signal")
+        ax_macd.axhline(0, color="#94a3b8", linewidth=0.7)
+
+        tick_step = max(1, len(plot_df) // 8)
+        tick_pos = list(range(0, len(plot_df), tick_step))
+        tick_labels = []
+        for idx in tick_pos:
+            raw = plot_df.index[idx]
+            tick_labels.append(raw.strftime("%Y-%m-%d") if hasattr(raw, "strftime") else str(raw)[:10])
+        ax_macd.set_xticks(tick_pos)
+        ax_macd.set_xticklabels(tick_labels, rotation=25, ha="right", fontsize=8)
+        for ax in (ax_price, ax_vol, ax_rsi, ax_macd):
+            ax.grid(True, color="#e5e7eb", linewidth=0.6, alpha=0.7)
+            ax.spines["top"].set_visible(False)
+            ax.spines["right"].set_visible(False)
+        ax_price.legend(loc="upper left", fontsize=8, ncols=4)
+        ax_price.set_ylabel(currency)
+        ax_vol.set_ylabel("Volume")
+        ax_rsi.set_ylabel("RSI")
+        ax_macd.set_ylabel("MACD")
+        title = f"{name} ({symbol}) TA"
+        subtitle = f"MA20={ma20:.2f}" if ma20 else "MA20=—"
+        if ma60:
+            subtitle += f"  MA60={ma60:.2f}"
+        if rsi14:
+            subtitle += f"  RSI={rsi14:.1f}"
+        if macd_v is not None and macd_s_val is not None:
+            subtitle += f"  MACD={macd_v:.3f}/{macd_s_val:.3f}"
+        fig.suptitle(f"{title}\n{subtitle}", fontsize=12)
+        fig.savefig(png_path, bbox_inches="tight", facecolor="white")
+        plt.close(fig)
+        if not png_path.exists() or png_path.stat().st_size <= 0:
+            return "", "PNG 文件未生成"
+        return str(png_path), ""
+    except Exception as exc:
+        try:
+            plt.close("all")
+        except Exception:
+            pass
+        return "", str(exc)
+
+
 def _review_chart(symbol: str, last_close: float, high_52w: float, low_52w: float,
                   rsi14, ma20, ma60, bb_up, bb_lo, sup3, res3, n_bars: int) -> list[str]:
     """
@@ -125,9 +356,12 @@ def handle_stock_chart_analysis_direct(symbol: str, period: str = "1y") -> dict:
     import math
     try:
         import pandas as _pd
-        import yfinance as _yf
     except Exception as exc:
         return {"success": False, "error": f"缺少依赖: {exc}"}
+    try:
+        import yfinance as _yf
+    except Exception:
+        _yf = None
 
     _PERIOD_MAP = {
         "1m": "1mo", "3m": "3mo", "6m": "6mo",
@@ -135,27 +369,55 @@ def handle_stock_chart_analysis_direct(symbol: str, period: str = "1y") -> dict:
         "ytd": "ytd", "max": "max",
     }
     period = _PERIOD_MAP.get(period.lower(), period)
+    symbol = _normalise_chart_symbol(symbol)
 
     # A股判断（影响K线颜色惯例）
-    is_ashare = symbol.upper().endswith((".SS", ".SZ"))
+    is_ashare = bool(_ashare_plain_symbol(symbol))
 
     # ── 获取历史数据 ────────────────────────────────────────────────────────────
-    ticker = _yf.Ticker(symbol)
     hist   = None
+    provider = "Yahoo Finance"
+    provider_currency = None
     err1   = ""
-    try:
-        hist = ticker.history(period=period, interval="1d", auto_adjust=True)
-        hist = _normalise_history_frame(hist)
-    except Exception as exc:
-        err1 = str(exc)
+    mdc_err = ""
+    ak_err = ""
+    chart_err = ""
+    ticker = None
+
+    if is_ashare:
+        hist, provider_currency, mdc_provider, mdc_err = _fetch_mdc_history_frame(symbol, period, "1d")
+        if hist is not None and not hist.empty:
+            provider = mdc_provider or "market_data_client"
+
+    if is_ashare and (hist is None or hist.empty):
+        hist, provider_currency, ak_err = _fetch_akshare_history_frame(symbol, period)
+        if hist is not None and not hist.empty:
+            provider = "akshare"
+
+    if (hist is None or hist.empty) and _yf is not None:
+        try:
+            ticker = _yf.Ticker(symbol)
+            hist = ticker.history(period=period, interval="1d", auto_adjust=True)
+            hist = _normalise_history_frame(hist)
+            if hist is not None and not hist.empty:
+                provider = "Yahoo Finance"
+        except Exception as exc:
+            err1 = str(exc)
 
     if hist is None or hist.empty:
-        hist, _provider_currency, chart_err = _fetch_yahoo_chart_frame(symbol, period, "1d")
+        hist, provider_currency, chart_err = _fetch_yahoo_chart_frame(symbol, period, "1d")
         if hist is None or hist.empty:
             return {
                 "success": False,
-                "error": f"无法获取 {symbol} 数据: yfinance={err1 or 'empty'}; YahooChart={chart_err or 'empty'}",
+                "error": (
+                    f"无法获取 {symbol} 数据: "
+                    f"MarketDataClient={mdc_err or 'skipped'}; "
+                    f"akshare={ak_err or 'skipped'}; "
+                    f"yfinance={err1 or ('missing' if _yf is None else 'empty')}; "
+                    f"YahooChart={chart_err or 'empty'}"
+                ),
             }
+        provider = "Yahoo Chart API"
 
     if hist is None or hist.empty:
         return {"success": False, "error": f"无法获取 {symbol} 历史数据"}
@@ -217,12 +479,17 @@ def handle_stock_chart_analysis_direct(symbol: str, period: str = "1y") -> dict:
 
     # ── 基本面 ──────────────────────────────────────────────────────────────────
     info = {}
+    if ticker is None and _yf is not None:
+        try:
+            ticker = _yf.Ticker(symbol)
+        except Exception:
+            ticker = None
     try:
-        info = ticker.get_info() or {}
+        info = ticker.get_info() or {} if ticker is not None else {}
     except Exception:
         pass
     name       = info.get("longName") or info.get("shortName") or symbol
-    currency   = info.get("currency") or ("CNY" if is_ashare else "USD")
+    currency   = info.get("currency") or provider_currency or ("CNY" if is_ashare else "USD")
     pe         = info.get("trailingPE")
     pb         = info.get("priceToBook")
     roe        = info.get("returnOnEquity")
@@ -338,8 +605,8 @@ def handle_stock_chart_analysis_direct(symbol: str, period: str = "1y") -> dict:
 
     # ── 生成 HTML ────────────────────────────────────────────────────────────────
     safe_sym  = re.sub(r"[^A-Za-z0-9_.-]+", "_", symbol)
-    from artifacts import create_artifact, write_artifact_metadata, write_artifact_raw_data
-    _artifact = create_artifact("reports/stock-charts", symbol, f"{safe_sym}_chart", ".html")
+    from artifacts import create_user_artifact, write_artifact_metadata, write_artifact_raw_data
+    _artifact = create_user_artifact("stock-charts", symbol, f"{safe_sym}_chart", ".html")
     out_file  = _artifact.path
 
     # 配色标注
@@ -493,6 +760,11 @@ Plotly.newPlot("chart",traces,layout,{{responsive:true,displaylogo:false,
 
     out_file.write_text(html_doc, encoding="utf-8")
 
+    png_path, png_error = _write_ta_png_artifact(
+        _artifact, hist, symbol, name, currency, is_ashare,
+        ma20, ma60, rsi14, macd_v, macd_s_val,
+    )
+
     _raw_prices = []
     try:
         _raw_prices = hist.reset_index().tail(370).to_dict(orient="records")
@@ -504,12 +776,17 @@ Plotly.newPlot("chart",traces,layout,{{responsive:true,displaylogo:false,
         "symbol": symbol,
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "data": {
-            "provider_chain": ["yfinance"],
+            "provider_chain": [provider],
             "rows": int(len(hist)),
             "panels": ["candlestick", "bollinger", "ma20", "ma60", "volume", "rsi14", "macd"],
             "color_convention": "ashare_red_up" if is_ashare else "western_green_up",
         },
         "review": {"issues": review_issues, "passed": len(review_issues) == 0},
+        "outputs": {
+            "html": str(out_file),
+            "png": png_path,
+            "png_error": png_error,
+        },
         "metrics": {
             "last_close": last_close, "high_52w": high_52w, "low_52w": low_52w,
             "trend": trend, "rsi14": rsi14, "momentum": momentum,
@@ -517,11 +794,13 @@ Plotly.newPlot("chart",traces,layout,{{responsive:true,displaylogo:false,
         },
     })
     write_artifact_raw_data(_artifact, {
-        "symbol": symbol, "provider": "yfinance", "info": info, "prices": _raw_prices,
+        "symbol": symbol, "provider": provider, "info": info, "prices": _raw_prices,
     })
     return {
         "success":       True,
         "chart_path":    str(out_file),
+        "png_path":      png_path,
+        "png_error":     png_error,
         "response":      f"图表已生成：{out_file.name}",
         "symbol":        symbol,
         "last_close":    last_close,
@@ -531,6 +810,7 @@ Plotly.newPlot("chart",traces,layout,{{responsive:true,displaylogo:false,
         "support":       sup3,
         "resistance":    res3,
         "review_issues": review_issues,
+        "provider":      provider,
     }
 
 
@@ -556,25 +836,49 @@ def handle_stock_chart_analysis(
     try:
         import html as _html
         import pandas as _pd
-        import yfinance as _yf
     except Exception as exc:
         return {
             "success": False,
             "error": f"缺少图表分析依赖：{exc}",
-            "response": "当前环境缺少 `yfinance` 或 `pandas`，无法生成股票图表。",
+            "response": "当前环境缺少 `pandas`，无法生成股票图表。",
         }
-
-    provider = "Yahoo Finance"
-    ticker = None
     try:
-        ticker = _yf.Ticker(symbol)
-        hist = ticker.history(period=period, interval=interval, auto_adjust=False)
-        hist = _normalise_history_frame(hist)
-    except Exception as exc:
-        hist = None
-        yahoo_error = str(exc)
-    else:
-        yahoo_error = ""
+        import yfinance as _yf
+    except Exception:
+        _yf = None
+
+    symbol = _normalise_chart_symbol(symbol)
+    provider = "Yahoo Finance"
+    provider_currency = None
+    ticker = None
+    hist = None
+    yahoo_error = ""
+    chart_error = ""
+    mdc_error = ""
+    ak_error = ""
+
+    if _ashare_plain_symbol(symbol):
+        hist, provider_currency, mdc_provider, mdc_error = _fetch_mdc_history_frame(symbol, period, interval)
+        if hist is not None and not hist.empty:
+            provider = mdc_provider or "market_data_client"
+
+    if _ashare_plain_symbol(symbol) and (hist is None or hist.empty):
+        hist, provider_currency, ak_error = _fetch_akshare_history_frame(symbol, period)
+        if hist is not None and not hist.empty:
+            provider = "akshare"
+
+    if (hist is None or hist.empty) and _yf is not None:
+        try:
+            ticker = _yf.Ticker(symbol)
+            hist = ticker.history(period=period, interval=interval, auto_adjust=False)
+            hist = _normalise_history_frame(hist)
+            if hist is not None and not hist.empty:
+                provider = "Yahoo Finance"
+        except Exception as exc:
+            hist = None
+            yahoo_error = str(exc)
+    elif _yf is None:
+        yahoo_error = "yfinance missing"
 
     if hist is None or hist.empty:
         hist, provider_currency, chart_error = _fetch_yahoo_chart_frame(symbol, period, interval)
@@ -596,14 +900,27 @@ def handle_stock_chart_analysis(
         except Exception as exc:
             return {
                 "success": False,
-                "error": f"获取 {symbol} 历史行情失败：Yahoo={yahoo_error or 'empty'}; YahooChart={chart_error or 'empty'}; Stooq={exc}",
+                "error": (
+                    f"获取 {symbol} 历史行情失败："
+                    f"MarketDataClient={mdc_error or 'skipped'}; "
+                    f"akshare={ak_error or 'skipped'}; "
+                    f"Yahoo={yahoo_error or 'empty'}; "
+                    f"YahooChart={chart_error or 'empty'}; "
+                    f"Stooq={exc}"
+                ),
                 "response": f"无法获取 {symbol} 历史行情，图表未生成。请稍后重试，或检查网络/数据源访问。",
             }
 
     if hist is None or hist.empty or "Close" not in hist.columns:
         return {
             "success": False,
-            "error": f"{symbol} 历史行情为空：Yahoo={yahoo_error or 'empty'}",
+            "error": (
+                f"{symbol} 历史行情为空："
+                f"MarketDataClient={mdc_error or 'skipped'}; "
+                f"akshare={ak_error or 'skipped'}; "
+                f"Yahoo={yahoo_error or 'empty'}; "
+                f"YahooChart={chart_error or 'empty'}"
+            ),
             "response": f"没有拿到 {symbol} 的可用历史行情，图表未生成。请稍后重试，或检查网络/数据源访问。",
         }
 
@@ -636,15 +953,15 @@ def handle_stock_chart_analysis(
 
     info = {}
     try:
-        if ticker is None:
+        if ticker is None and _yf is not None:
             ticker = _yf.Ticker(symbol)
-        info = ticker.get_info() or {}
+        info = ticker.get_info() or {} if ticker is not None else {}
     except Exception:
         info = {}
     name = info.get("longName") or info.get("shortName") or symbol
     pe = info.get("trailingPE")
     market_cap = info.get("marketCap")
-    currency = info.get("currency") or locals().get("provider_currency") or "USD"
+    currency = info.get("currency") or provider_currency or ("CNY" if _ashare_plain_symbol(symbol) else "USD")
 
     if ma20 and ma50 and last_close > ma20 > ma50:
         trend = "偏多"
@@ -656,8 +973,8 @@ def handle_stock_chart_analysis(
     rsi_view = "超买" if rsi14 is not None and rsi14 >= 70 else ("超卖" if rsi14 is not None and rsi14 <= 30 else "中性")
 
     safe_symbol = re.sub(r"[^A-Za-z0-9_.-]+", "_", symbol)
-    from artifacts import create_artifact, write_artifact_metadata, write_artifact_raw_data
-    _artifact = create_artifact("reports/stock-charts", symbol, f"{safe_symbol}_analysis_chart", ".html")
+    from artifacts import create_user_artifact, write_artifact_metadata, write_artifact_raw_data
+    _artifact = create_user_artifact("stock-charts", symbol, f"{safe_symbol}_analysis_chart", ".html")
     out_file = _artifact.path
 
     x = [idx.strftime("%Y-%m-%d") for idx in hist.index]
@@ -806,6 +1123,7 @@ Plotly.newPlot("chart", data, layout, {{responsive: true, displaylogo: false}});
         "success": True,
         "response": response,
         "provider": "deterministic",
-        "tools_used": ["yfinance", "html_chart"],
+        "tools_used": ["stock_chart", provider, "html_chart"],
         "chart_path": str(out_file),
+        "symbol": symbol,
     }

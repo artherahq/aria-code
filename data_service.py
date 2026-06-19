@@ -62,6 +62,15 @@ def _provider_from_call(method: str, data: Dict[str, Any] | None = None) -> str:
     return "market_data_client" if method in {"quote", "history", "fundamentals", "technical_indicators"} else method
 
 
+def _data_with_success(data: Dict[str, Any], success: bool) -> Dict[str, Any]:
+    """Return payload with its embedded success flag matching DataServiceResult."""
+    if not data:
+        return {}
+    out = dict(data)
+    out["success"] = bool(success)
+    return out
+
+
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -133,12 +142,16 @@ class DataService:
         if market_client is None:
             from market_data_client import MarketDataClient
             market_client = MarketDataClient()
+        self._router_disabled = router is False
+        if self._router_disabled:
+            router = None
         if router is None:
-            try:
-                from datasources.router import get_router
-                router = get_router()
-            except Exception:
-                router = None
+            if not self._router_disabled:
+                try:
+                    from datasources.router import get_router
+                    router = get_router()
+                except Exception:
+                    router = None
         self.market_client = market_client
         self.router = router
         self.ttl_seconds = ttl_seconds
@@ -212,8 +225,10 @@ class DataService:
         warnings: List[str] = []
         data = self._call_market("quote", symbol, warnings)
         if not self._valid_quote(data):
-            data = self._call_router("quote", symbol, warnings)
-        return self._result("quote", symbol, data, warnings, required=["price"])
+            primary = data
+            fallback = self._call_router("quote", symbol, warnings)
+            data = fallback or primary
+        return self._result("quote", symbol, data, warnings, required=["price"], validator=self._valid_quote)
 
     def _history_uncached(self, symbol: str, days: int, interval: str) -> DataServiceResult:
         warnings: List[str] = []
@@ -333,6 +348,8 @@ class DataService:
             return {}
 
     def _call_router(self, method: str, symbol: str, warnings: List[str], **kwargs: Any) -> Dict[str, Any]:
+        if self._router_disabled:
+            return {}
         if self.router is None:
             issue = classify_provider_error("data_router", "router unavailable")
             self.provider_health.mark_issue(issue)
@@ -369,8 +386,12 @@ class DataService:
         validator = validator or self._valid_payload
         success = validator(data)
         missing = [key for key in required if not _is_present(data.get(key))]
+        if kind == "quote" and "price" in required and not self._valid_quote(data):
+            if "price" not in missing:
+                missing.append("price")
         if data.get("success") is False:
             success = False
+        payload = _data_with_success(data, success)
         source = str(data.get("provider") or data.get("source") or "")
         payload_ts = data.get("timestamp") or data.get("asof") or data.get("as_of")
         timestamp = str(payload_ts or _utc_timestamp())
@@ -385,7 +406,7 @@ class DataService:
             kind=kind,
             symbol=symbol,
             success=success,
-            data=data if success or data else {},
+            data=payload if payload else {},
             provider_chain=_provider_chain(data, kind) if data else [],
             warnings=warnings[:5],
             errors=errors[:5],

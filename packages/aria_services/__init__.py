@@ -6,6 +6,7 @@ from .provider_health import (
     ProviderIssue,
     ProviderState,
     classify_provider_error,
+    summarize_provider_health,
 )
 from .registry import ServiceSpec, list_service_specs, required_service_names, service_map
 
@@ -22,6 +23,7 @@ __all__ = [
     "list_service_specs",
     "required_service_names",
     "service_map",
+    "summarize_provider_health",
 ]
 
 

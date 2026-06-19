@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from packages.aria_core import build_session_diagnostic_bundle
 from apps.cli.session_export import build_session_export_payload
+from apps.cli.commands.market import route_top_level_text
 from aria_cli import (
     _strip_markdown_fences,
     _is_safe_path,
@@ -35,7 +36,12 @@ from aria_cli import (
     _ACTIVE_PERMISSION_MODE,
     _ACTIVE_NETWORK_ENABLED,
     _sync_write_policy,
+    _is_stock_chart_analysis_request,
+    _chart_period_from_ta_days,
+    _is_market_artifact_followup,
+    _natural_language_visual_artifact_route,
 )
+from apps.cli.utils.market_detect import _is_visual_market_artifact_request
 from change_store import ChangeConflictError, GLOBAL_CHANGE_STORE
 from runtime import AgentTurnState, RuntimeTrace
 
@@ -66,6 +72,17 @@ class TestStripMarkdownFences(unittest.TestCase):
         code = "```python\nfoo()\n```"
         result = _strip_markdown_fences(code)
         self.assertTrue(result.endswith("\n"))
+
+    def test_ta_days_map_to_chart_period(self):
+        self.assertEqual(_chart_period_from_ta_days(30), "1mo")
+        self.assertEqual(_chart_period_from_ta_days(90), "3mo")
+        self.assertEqual(_chart_period_from_ta_days(120), "6mo")
+        self.assertEqual(_chart_period_from_ta_days(365), "1y")
+
+    def test_market_artifact_followup_detection(self):
+        self.assertTrue(_is_market_artifact_followup("那你直接运行"))
+        self.assertTrue(_is_market_artifact_followup("继续以上任务"))
+        self.assertFalse(_is_market_artifact_followup("/chart AAPL"))
 
 
 # ============================================================================
@@ -273,6 +290,57 @@ class TestPromptRouting(unittest.TestCase):
         """'生成一个动量策略回测代码' 应被识别为编码请求。"""
         self.assertTrue(_is_coding_request("生成一个动量策略回测代码"))
 
+    def test_visual_artifact_is_coding(self):
+        self.assertTrue(_is_coding_request("生成今日A股晨报看板"))
+        self.assertTrue(_is_coding_request("生成市场热力图报告"))
+
+    def test_chart_generation_request_is_chart_intent(self):
+        self.assertTrue(_is_stock_chart_analysis_request("生成Apple公司的股票k线图要近一年的图表"))
+        self.assertTrue(_is_stock_chart_analysis_request("画 AAPL 的近一年走势图"))
+
+    def test_visual_market_artifact_request_routes_away_from_snapshot(self):
+        self.assertTrue(_is_visual_market_artifact_request("生成Apple公司的股票K线图"))
+        self.assertTrue(_is_visual_market_artifact_request("生成今日A股晨报看板"))
+        self.assertFalse(_is_visual_market_artifact_request("分析苹果股票基本面"))
+
+    def test_top_level_visual_route(self):
+        routed = route_top_level_text("生成Apple公司的股票K线图", {"/chart", "/dashboard", "/report"})
+        self.assertIsNotNone(routed)
+        self.assertEqual(routed.command, "/chart")
+        self.assertIn("AAPL", routed.text)
+        self.assertIn("1y", routed.text)
+
+        routed_dash = route_top_level_text("生成今日A股晨报看板", {"/chart", "/dashboard", "/report"})
+        self.assertIsNotNone(routed_dash)
+        self.assertEqual(routed_dash.command, "/dashboard")
+
+        routed_report = route_top_level_text("生成AAPL研究报告", {"/chart", "/dashboard", "/report"})
+        self.assertIsNotNone(routed_report)
+        self.assertEqual(routed_report.command, "/report")
+        self.assertIn("--type standard", routed_report.text)
+        self.assertIn("--format html", routed_report.text)
+
+    def test_send_message_visual_route_helper(self):
+        routed = _natural_language_visual_artifact_route(
+            "生成Apple公司的股票K线图要近一年的图表",
+            {"/chart", "/dashboard", "/report"},
+        )
+        self.assertIsNotNone(routed)
+        self.assertEqual(routed.command, "/chart")
+        self.assertIn("AAPL", routed.text)
+
+        dashboard = _natural_language_visual_artifact_route(
+            "生成今日A股晨报看板",
+            {"/chart", "/dashboard", "/report"},
+        )
+        self.assertIsNotNone(dashboard)
+        self.assertEqual(dashboard.command, "/dashboard")
+
+        self.assertIsNone(_natural_language_visual_artifact_route(
+            "分析苹果股票基本面",
+            {"/chart", "/dashboard", "/report"},
+        ))
+
 
 class TestConfig(unittest.TestCase):
     def test_default_config_has_required_keys(self):
@@ -382,6 +450,9 @@ class TestSessionManager(unittest.TestCase):
         self.assertIn("runtime_trace", bundle)
         self.assertIn("turn_results", bundle["runtime_trace"])
         self.assertEqual(bundle["provider_health"][0]["provider"], "yfinance")
+        self.assertEqual(bundle["provider_health_summary"]["schema"], "aria.provider_health_summary.v1")
+        self.assertEqual(bundle["provider_health_summary"]["total"], 1)
+        self.assertIn("artifact_summary", bundle)
 
     def test_build_session_export_payload_supports_bundle_and_sft(self):
         conversation = [
@@ -408,6 +479,8 @@ class TestSessionManager(unittest.TestCase):
         self.assertEqual(bundle["config"]["api_token"], "***")
         self.assertEqual(bundle["paths"]["config_dir"], "/tmp/aria")
         self.assertIn("runtime_trace", bundle)
+        self.assertEqual(bundle["provider_health_summary"]["status"], "ok")
+        self.assertIn("artifact_summary", bundle)
 
         sft_content, sft_ext, sft_prefix = build_session_export_payload("sft", conversation)
         pairs = json.loads(sft_content)

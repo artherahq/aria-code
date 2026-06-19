@@ -332,7 +332,7 @@ def _fetch_snapshot_row_for_symbol(symbol: str, mdc) -> dict:
     stale = False
     try:
         from packages.aria_services.data import DataService
-        service = DataService(market_client=mdc, router=None)
+        service = DataService(market_client=mdc, router=False)
         quote_result = service.quote(symbol)
         fund_result = service.fundamentals(symbol)
         tech_result = service.technical_indicators(symbol, days=120)
@@ -679,25 +679,30 @@ def _try_handle_market_snapshot_analysis(message: str, history: list = None) -> 
 
     quote = {"success": False, "error": "未初始化"}
     _snapshot_quality = {}
+    import contextlib as _ctxlib_snapshot
+    import io as _io_snapshot
     for _attempt in range(3):
         try:
             mdc = _get_mdc_lazy()
             try:
                 from packages.aria_services.data import DataService as _SnapshotDataService
-                _quote_result = _SnapshotDataService(market_client=mdc, router=None).quote(symbol)
+                with _ctxlib_snapshot.redirect_stdout(_io_snapshot.StringIO()), _ctxlib_snapshot.redirect_stderr(_io_snapshot.StringIO()):
+                    _quote_result = _SnapshotDataService(market_client=mdc, router=False).quote(symbol)
                 quote = _quote_result.data or {}
                 _snapshot_quality = _quote_result.quality or {}
                 if _quote_result.provider_chain:
                     quote.setdefault("provider_chain", _quote_result.provider_chain)
                 quote.setdefault("success", bool(_quote_result.success))
                 if not quote.get("success"):
-                    raw_quote = mdc.quote(symbol)
+                    with _ctxlib_snapshot.redirect_stdout(_io_snapshot.StringIO()), _ctxlib_snapshot.redirect_stderr(_io_snapshot.StringIO()):
+                        raw_quote = mdc.quote(symbol)
                     if raw_quote:
                         quote = raw_quote if isinstance(raw_quote, dict) else (
                             raw_quote.to_dict() if hasattr(raw_quote, "to_dict") else vars(raw_quote)
                         )
             except Exception:
-                quote = mdc.quote(symbol)
+                with _ctxlib_snapshot.redirect_stdout(_io_snapshot.StringIO()), _ctxlib_snapshot.redirect_stderr(_io_snapshot.StringIO()):
+                    quote = mdc.quote(symbol)
             if quote.get("success"):
                 break
             _err_str = str(quote.get("error", ""))
@@ -887,7 +892,8 @@ def _try_handle_market_snapshot_analysis(message: str, history: list = None) -> 
     # ── Technical indicators: mdc → akshare(A股) → yfinance → Finnhub ────────
     ti = {}
     try:
-        ti = mdc.technical_indicators(symbol, days=120)
+        with _ctxlib_snapshot.redirect_stdout(_io_snapshot.StringIO()), _ctxlib_snapshot.redirect_stderr(_io_snapshot.StringIO()):
+            ti = mdc.technical_indicators(symbol, days=120)
     except Exception:
         ti = {}
 
@@ -1362,6 +1368,58 @@ def _try_handle_market_snapshot_analysis(message: str, history: list = None) -> 
             lines.append(_L["ta_hint_fh"])
         else:
             lines.append(_L["ta_unavail"])
+
+    # ── Prediction hint when the user explicitly asks for forecast/outlook ──
+    if any(k in message.lower() for k in ("预测", "预判", "forecast", "predict", "prediction", "outlook")):
+        try:
+            pred_symbol = symbol
+            if _is_a_share and _ashare_code:
+                pred_symbol = ("sh" if _ashare_code.startswith(("6", "9")) else "sz") + _ashare_code
+            from local_finance_tools import _get_predictions
+            import contextlib as _ctxlib_pred
+            import io as _io_pred
+            with _ctxlib_pred.redirect_stdout(_io_pred.StringIO()), _ctxlib_pred.redirect_stderr(_io_pred.StringIO()):
+                pred = _get_predictions({"symbols": [pred_symbol], "prediction_days": 5})
+            preds = pred.get("predictions") or []
+            if preds:
+                p0 = preds[0]
+                direction = str(p0.get("direction") or p0.get("signal") or "neutral")
+                ret = p0.get("predicted_return")
+                conf = p0.get("confidence")
+                lines.append("")
+                lines.append("### 预测参考")
+                bits = [f"方向：`{direction}`"]
+                try:
+                    bits.append(f"5日预期收益：{float(ret):+.2%}")
+                except Exception:
+                    pass
+                try:
+                    bits.append(f"置信度：{float(conf):.0%}")
+                except Exception:
+                    pass
+                lines.append("- " + " · ".join(bits))
+                lines.append("- 该预测由本地动量/技术因子模型生成，只作为风险参考，不构成投资建议。")
+            elif _enough_data:
+                score = 0
+                if ma20 is not None:
+                    score += 1 if price > ma20 else -1
+                if ma60 is not None:
+                    score += 1 if price > ma60 else -1
+                if mhist is not None:
+                    score += 1 if mhist > 0 else -1
+                if rsi is not None:
+                    if rsi >= 75:
+                        score -= 1
+                    elif rsi <= 30:
+                        score += 1
+                direction = "偏强" if score >= 2 else ("偏弱" if score <= -2 else "震荡")
+                confidence = min(0.7, 0.45 + abs(score) * 0.06)
+                lines.append("")
+                lines.append("### 预测参考")
+                lines.append(f"- 规则型方向：`{direction}` · 置信度：{confidence:.0%}")
+                lines.append("- 预测工具当前未返回该标的数据，以上仅由 RSI、MACD 和均线结构推导。")
+        except Exception:
+            pass
 
     # ── Data quality — only show when actionable ──
     _quality_missing = _snapshot_quality.get("missing_fields") or []

@@ -981,7 +981,7 @@ class ModelCommandsMixin:
           /cloud reset               — reset circuit breakers
         """
         try:
-            from aliyun_data_client import AliyunDataClient, save_cloud_config
+            from aliyun_data_client import AliyunDataClient, save_cloud_config, summarize_cloud_health
         except ImportError:
             if HAS_RICH:
                 console.print("  [red]aliyun_data_client.py not found[/red]")
@@ -1033,6 +1033,7 @@ class ModelCommandsMixin:
                 cloud_h = await client.health_cloud()
                 data_h  = await client.health_data()
                 st = client.status()
+                summary = summarize_cloud_health(cloud_h, data_h, st)
 
             def _svc_label(name: str, health: dict) -> str:
                 status = str(health.get("status", "?"))
@@ -1070,17 +1071,19 @@ class ModelCommandsMixin:
 
             if HAS_RICH:
                 console.print()
-                cloud_ok = cloud_h.get("status") in ("healthy", "ok", "ready", "online")
-                data_ok = data_h.get("status") in ("healthy", "ok", "ready", "online")
-                summary = f"cloud={'ok' if cloud_ok else 'err'}  data={'ok' if data_ok else 'err'}"
-                console.print(f"  [bold]Summary[/bold]  {summary}")
+                color = "green" if summary.status == "ok" else "yellow" if summary.status == "warn" else "red"
+                console.print(f"  [bold]Summary[/bold]  [{color}]{summary.detail}[/{color}]")
+                console.print(f"  [dim]breaker_open={summary.breaker_open}  token_set={summary.token_set}[/dim]")
+                console.print(f"  [dim]suggestion: {summary.suggestion}[/dim]")
                 console.print(f"  [dim]cloud_api_server: {client.cloud_url}[/dim]")
                 console.print(f"  [dim]akshare_data_server: {client.data_url}[/dim]")
                 _print_health_detail("cloud_api_server", cloud_h)
                 _print_health_detail("akshare_data_server", data_h)
                 console.print()
             else:
-                print(f"  Summary: cloud={cloud_h.get('status')} | data={data_h.get('status')}")
+                print(f"  Summary: {summary.detail} ({summary.status})")
+                print(f"  breaker_open={summary.breaker_open} token_set={summary.token_set}")
+                print(f"  suggestion: {summary.suggestion}")
                 _print_health_detail("cloud_api_server", cloud_h)
                 _print_health_detail("akshare_data_server", data_h)
             return
@@ -1091,6 +1094,11 @@ class ModelCommandsMixin:
             console.print()
             console.print("  [bold]Alibaba Cloud Data Services[/bold]")
             console.print()
+            health_summary = st.get("health_summary") or {}
+            color = "green" if health_summary.get("status") == "ok" else "yellow" if health_summary.get("status") == "warn" else "red"
+            if health_summary:
+                console.print(f"  [bold]Health[/bold]  [{color}]{health_summary.get('detail', '')}[/{color}]")
+                console.print(f"  [dim]breaker_open={health_summary.get('breaker_open', 0)}  token_set={health_summary.get('token_set', False)}[/dim]")
             _c = "green" if st["cloud_cb"] == "closed" else "red"
             _d = "green" if st["data_cb"]  == "closed" else "red"
             console.print(f"  [{_c}]●[/{_c}] cloud_api_server   [dim]{st['cloud_url']}[/dim]"
@@ -1104,6 +1112,9 @@ class ModelCommandsMixin:
             console.print("  [dim]Health:    /cloud health[/dim]")
             console.print()
         else:
+            health_summary = st.get("health_summary") or {}
+            if health_summary:
+                print(f"  Health: {health_summary.get('detail', '')} ({health_summary.get('status', '')})")
             print(f"  Cloud: {st['cloud_url']} ({st['cloud_cb']})")
             print(f"  Data:  {st['data_url']} ({st['data_cb']})")
             print(f"  Token: {'set' if st['has_token'] else 'not set'}")

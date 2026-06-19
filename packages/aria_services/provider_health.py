@@ -37,6 +37,24 @@ class ProviderState:
         return data
 
 
+@dataclass(frozen=True)
+class ProviderHealthSummary:
+    schema: str
+    total: int
+    ok: int
+    warn: int
+    err: int
+    cooldown: int
+    auth_errors: int
+    providers: List[str]
+    status: str
+    detail: str
+    suggestion: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
 def classify_provider_error(provider: str, error: Any) -> ProviderIssue:
     text = str(error or "").strip()
     low = text.lower()
@@ -94,5 +112,78 @@ class ProviderHealthRegistry:
     def snapshot(self) -> List[Dict[str, Any]]:
         return [self._states[name].to_dict() for name in sorted(self._states)]
 
+    def summary(self) -> ProviderHealthSummary:
+        return summarize_provider_health(self.snapshot())
+
 
 GLOBAL_PROVIDER_HEALTH = ProviderHealthRegistry()
+
+
+def summarize_provider_health(snapshot: List[Dict[str, Any]] | None = None) -> ProviderHealthSummary:
+    rows = list(snapshot or [])
+    if not rows:
+        return ProviderHealthSummary(
+            schema="aria.provider_health_summary.v1",
+            total=0,
+            ok=0,
+            warn=0,
+            err=0,
+            cooldown=0,
+            auth_errors=0,
+            providers=[],
+            status="warn",
+            detail="no provider calls recorded in this session",
+            suggestion="Run /quote, /ta, /analyze, or /report to populate provider health.",
+        )
+
+    ok = warn = err = cooldown = auth_errors = 0
+    providers: list[str] = []
+    for row in rows:
+        provider = str(row.get("provider") or "provider")
+        providers.append(provider)
+        status = str(row.get("status") or "unknown")
+        error_category = str(row.get("last_error_category") or "")
+        if status == "ok":
+            ok += 1
+        elif error_category == "auth":
+            err += 1
+            auth_errors += 1
+        else:
+            warn += 1
+        if row.get("cooldown_active"):
+            cooldown += 1
+
+    if err:
+        status = "err"
+    elif warn or cooldown:
+        status = "warn"
+    else:
+        status = "ok"
+
+    parts = [f"{len(rows)} providers"]
+    if ok:
+        parts.append(f"{ok} ok")
+    if warn:
+        parts.append(f"{warn} warn")
+    if err:
+        parts.append(f"{err} err")
+    if cooldown:
+        parts.append(f"{cooldown} cooldown")
+
+    suggestion = "Run /doctor --network or inspect /apikey." if status != "ok" else "All providers healthy."
+    if auth_errors:
+        suggestion = "Fix API keys first, then retry /doctor or /cloud health."
+
+    return ProviderHealthSummary(
+        schema="aria.provider_health_summary.v1",
+        total=len(rows),
+        ok=ok,
+        warn=warn,
+        err=err,
+        cooldown=cooldown,
+        auth_errors=auth_errors,
+        providers=providers,
+        status=status,
+        detail=", ".join(parts),
+        suggestion=suggestion,
+    )

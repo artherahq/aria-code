@@ -10,7 +10,7 @@ Data sources (all local, embedded at generation time — no runtime API calls):
   - ~/.arthera/portfolio.db  -> positions, trades, realized P&L
   - ~/.aria/daemon.db        -> active price alerts
   - aria_cli config          -> watchlist
-  - yfinance / akshare       -> market prices (fetched once at generation)
+  - MarketDataClient         -> market prices with provider fallback
   - artifacts.py             -> recently generated files
 """
 
@@ -28,7 +28,6 @@ from typing import Any, Dict, List, Optional, Tuple
 
 _PORTFOLIO_DB = Path.home() / ".arthera" / "portfolio.db"
 _DAEMON_DB    = Path.home() / ".aria"    / "daemon.db"
-_OUTPUT_DIR   = Path.home() / "Desktop"
 
 
 # ── Data collection ────────────────────────────────────────────────────────────
@@ -38,26 +37,28 @@ def _fetch_prices(symbols: List[str]) -> Dict[str, Dict]:
         return {}
     result: Dict[str, Dict] = {}
     try:
-        import yfinance as yf
-        tickers = yf.Tickers(" ".join(symbols))
-        for sym in symbols:
-            try:
-                t = tickers.tickers.get(sym)
-                if t is None:
-                    continue
-                info  = t.fast_info
-                price = float(info.last_price or 0)
-                prev  = float(info.previous_close or 0)
-                pct   = round((price / prev - 1) * 100, 2) if prev else 0
-                result[sym] = {
-                    "price":      round(price, 4),
-                    "prev_close": round(prev, 4),
-                    "pct_change": pct,
-                    "name":       sym,
-                }
-            except Exception:
-                pass
-    except ImportError:
+        from market_data_client import MarketDataClient
+
+        quotes = MarketDataClient().multi_quote(symbols).get("quotes") or {}
+        for sym, quote in quotes.items():
+            if not quote or not quote.get("success"):
+                continue
+            price = quote.get("price")
+            prev = quote.get("prev_close") or quote.get("previous_close")
+            pct = quote.get("change_percent")
+            if pct is None and price is not None and prev:
+                try:
+                    pct = round((float(price) / float(prev) - 1) * 100, 2)
+                except Exception:
+                    pct = None
+            result[sym] = {
+                "price": round(float(price), 4) if price is not None else None,
+                "prev_close": round(float(prev), 4) if prev is not None else None,
+                "pct_change": pct,
+                "name": quote.get("name") or sym,
+                "provider": quote.get("provider") or quote.get("source") or "",
+            }
+    except Exception:
         pass
     return result
 
@@ -95,30 +96,19 @@ def _load_recent_artifacts(limit: int = 10) -> List[Dict]:
     items: List[Dict] = []
     try:
         sys.path.insert(0, str(Path(__file__).parent))
-        from artifacts import recent_artifacts
-        for art in recent_artifacts(limit=limit):
-            p = art.path
+        from artifacts import recent_artifacts_all
+        for art in recent_artifacts_all(limit=limit):
+            p = Path(str(art.get("path") or art.get("metadata_path") or "")).expanduser()
             if p.exists():
                 items.append({
                     "name":     p.name,
                     "path":     str(p),
-                    "category": art.category,
+                    "category": str(art.get("kind") or art.get("category") or "artifact"),
                     "size_kb":  round(p.stat().st_size / 1024, 1),
                     "mtime":    datetime.fromtimestamp(p.stat().st_mtime).strftime("%Y-%m-%d %H:%M"),
                 })
     except Exception:
-        desktop = Path.home() / "Desktop"
-        cutoff  = datetime.now() - timedelta(days=7)
-        for ext in ("*.html", "*.py", "*.png", "*.csv"):
-            for f in sorted(desktop.glob(ext), key=lambda x: x.stat().st_mtime, reverse=True)[:3]:
-                if datetime.fromtimestamp(f.stat().st_mtime) > cutoff:
-                    items.append({
-                        "name":     f.name,
-                        "path":     str(f),
-                        "category": ext.strip("*."),
-                        "size_kb":  round(f.stat().st_size / 1024, 1),
-                        "mtime":    datetime.fromtimestamp(f.stat().st_mtime).strftime("%Y-%m-%d %H:%M"),
-                    })
+        return []
     items.sort(key=lambda x: x["mtime"], reverse=True)
     return items[:limit]
 
@@ -260,6 +250,38 @@ def _alerts_table(alerts: List[Dict]) -> str:
     )
 
 
+def _movers_table(items: List[Dict], limit: int = 8) -> str:
+    ranked = sorted(
+        [d for d in items if d.get("pct") is not None],
+        key=lambda d: d.get("pct") or 0,
+        reverse=True,
+    )[:limit]
+    rows = []
+    for d in ranked:
+        pct = d.get("pct")
+        cls = _pct_cls(pct)
+        rows.append(
+            f"<tr>"
+            f'<td class="sym">{d.get("symbol", "")}</td>'
+            f'<td>{d.get("label", d.get("symbol", ""))}</td>'
+            f'<td class="num">{_price_str(d.get("price"), d.get("symbol", ""))}</td>'
+            f'<td class="num {cls}">{_pct_str(pct)}</td>'
+            f"</tr>"
+        )
+    if not rows:
+        return '<div style="color:var(--text-muted);font-size:12px;padding:14px 0">NO MOVERS</div>'
+    return (
+        '<table class="data-table">'
+        "<thead><tr>"
+        "<th>SYMBOL</th><th>NAME</th>"
+        '<th class="r">PRICE</th>'
+        '<th class="r">CHG%</th>'
+        "</tr></thead>"
+        f"<tbody>{''.join(rows)}</tbody>"
+        "</table>"
+    )
+
+
 def _artifacts_list(artifacts: List[Dict]) -> str:
     rows = []
     for a in artifacts:
@@ -301,6 +323,7 @@ def _metric_card(label: str, value: str, sub: str = "", cls: str = "") -> str:
 def generate(
     watchlist:   Optional[List[str]] = None,
     config:      Optional[Dict]      = None,
+    mode:        str                 = "full",
     output_path: Optional[Path]      = None,
 ) -> Path:
     now_str   = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -339,6 +362,15 @@ def generate(
         {"symbol": s, "label": s, "price": (prices.get(s) or {}).get("price"), "pct": (prices.get(s) or {}).get("pct_change")}
         for s in watchlist
     ]
+    _seen_symbols = set()
+    movers_data = []
+    for item in market_data + watchlist_data:
+        sym = item.get("symbol")
+        if sym and sym in _seen_symbols:
+            continue
+        if sym:
+            _seen_symbols.add(sym)
+        movers_data.append(item)
 
     # ── Portfolio metrics ──────────────────────────────────────────────────────
     mktv_str    = f"{total_mktv:,.0f}" if total_mktv else "--"
@@ -365,6 +397,23 @@ def generate(
         '</div>'
     )
 
+    mode = (mode or "full").lower().strip()
+    if mode not in {"full", "brief", "market", "portfolio"}:
+        mode = "full"
+
+    include_portfolio = mode in {"full", "portfolio"}
+    include_market = mode in {"full", "market", "brief", "portfolio"}
+    include_watchlist = mode in {"full", "market", "brief"}
+    include_alerts = mode in {"full", "portfolio"}
+    include_artifacts = mode in {"full", "portfolio"}
+    include_movers = mode in {"brief", "market", "full"}
+    mode_blurb = {
+        "brief": "MORNING BRIEF — INDEXES, MOVERS, WATCHLIST",
+        "market": "MARKET DASHBOARD — OVERVIEW, MOVERS, WATCHLIST",
+        "portfolio": "PORTFOLIO DASHBOARD — POSITIONS, ALERTS, FILES",
+        "full": "FULL TERMINAL — PORTFOLIO + MARKET + ALERTS + FILES",
+    }.get(mode, "FULL TERMINAL")
+
     from apps.cli.prompts.ui import get_ui_css_base
     css = get_ui_css_base()
 
@@ -389,11 +438,16 @@ def generate(
 <!-- ── Header ── -->
 <div class="topbar">
   <div class="topbar-brand">ARIA <span>TERMINAL</span></div>
-  <div class="topbar-meta">GENERATED {now_str.upper()} &nbsp;·&nbsp; DATA: YFINANCE + LOCAL DB &nbsp;·&nbsp; NOT REAL-TIME</div>
+  <div class="topbar-meta">GENERATED {now_str.upper()} &nbsp;·&nbsp; MODE: {mode.upper()} &nbsp;·&nbsp; DATA: MARKET DATA SERVICE + LOCAL DB &nbsp;·&nbsp; DELAYED/PROVIDER DEPENDENT</div>
+</div>
+
+<div class="section">
+  <div class="sh">{mode_blurb}</div>
+  <div class="metric-sub">Mode-specific layout keeps morning brief, market view, and portfolio view distinct.</div>
 </div>
 
 <!-- ── Portfolio Summary ── -->
-<div class="section">
+{f'''<div class="section">
   <div class="sh">PORTFOLIO SUMMARY</div>
   <div class="grid g4" style="margin-bottom:1px">
     {_metric_card("MARKET VALUE", mktv_str)}
@@ -401,47 +455,52 @@ def generate(
     {_metric_card("UNREALIZED P&L", unreal_str, sub="mark-to-market", cls=unreal_cls)}
     {_metric_card("REALIZED P&L", real_str, sub="all closed trades", cls=real_cls)}
   </div>
-</div>
+</div>''' if include_portfolio else ''}
 
 <!-- ── Positions Table ── -->
-<div class="section">
+{f'''<div class="section">
   <div class="sh">OPEN POSITIONS ({len(positions)})</div>
   {positions_html}
-</div>
+</div>''' if include_portfolio else ''}
 
 <!-- ── Market Overview ── -->
-<div class="section">
+{f'''<div class="section">
+  <div class="sh">TOP MOVERS</div>
+  {_movers_table(movers_data, limit=8)}
+</div>''' if include_movers else ''}
+
+{f'''<div class="section">
   <div class="sh">MARKET OVERVIEW — A-SHARE</div>
   <div class="grid g4" style="margin-bottom:1px">
     {_quote_tiles(market_data[:4])}
   </div>
-</div>
+</div>''' if include_market else ''}
 
-<div class="section">
+{f'''<div class="section">
   <div class="sh">MARKET OVERVIEW — US EQUITY</div>
   <div class="grid g4" style="margin-bottom:1px">
     {_quote_tiles(market_data[4:8])}
   </div>
-</div>
+</div>''' if include_market else ''}
 
-<div class="section">
+{f'''<div class="section">
   <div class="sh">CRYPTO / COMMODITY / FX</div>
   <div class="grid g4" style="margin-bottom:1px">
     {_quote_tiles(market_data[8:])}
   </div>
-  <div class="data-source">PRICES VIA YFINANCE — DELAYED 15MIN — NOT FOR TRADING</div>
-</div>
+  <div class="data-source">PRICES VIA ARIA MARKET DATA ROUTER — PROVIDER ATTRIBUTED — NOT FOR TRADING</div>
+</div>''' if include_market else ''}
 
 <!-- ── Watchlist ── -->
-<div class="section">
+{f'''<div class="section">
   <div class="sh">WATCHLIST ({len(watchlist)} SYMBOLS)</div>
   <div class="grid g{'6' if len(watchlist_data) > 4 else '4'}" style="margin-bottom:1px">
     {_quote_tiles(watchlist_data)}
   </div>
-</div>
+</div>''' if include_watchlist else ''}
 
 <!-- ── Alerts + Artifacts ── -->
-<div class="two-col">
+{f'''<div class="two-col">
   <div class="col-inner">
     <div class="sh">PRICE ALERTS ({active_alerts} ACTIVE)</div>
     {alerts_html}
@@ -450,13 +509,44 @@ def generate(
     <div class="sh">RECENT GENERATED FILES</div>
     {artifacts_html}
   </div>
-</div>
+</div>''' if (include_alerts or include_artifacts) else ''}
 
 </body></html>"""
 
-    out = output_path or (_OUTPUT_DIR / f"aria_dashboard_{stamp}.html")
+    artifact = None
+    if output_path is None:
+        from artifacts import create_user_artifact
+
+        artifact = create_user_artifact("dashboards", mode, f"aria_dashboard_{mode}", ".html")
+        out = artifact.path
+    else:
+        out = output_path
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(html, encoding="utf-8")
+    if artifact is not None:
+        try:
+            from artifacts import write_artifact_metadata, write_artifact_raw_data
+
+            write_artifact_metadata(artifact, {
+                "kind": "dashboard",
+                "status": "complete",
+                "mode": mode,
+                "created_at": datetime.now().isoformat(timespec="seconds"),
+                "data": {
+                    "watchlist": watchlist,
+                    "market_symbols": _market_overview_symbols(),
+                    "position_count": len(positions),
+                    "alert_count": len(alerts),
+                },
+            })
+            write_artifact_raw_data(artifact, {
+                "market": market_data,
+                "watchlist": watchlist_data,
+                "positions": positions,
+                "alerts": alerts,
+            })
+        except Exception:
+            pass
     return out
 
 
@@ -476,8 +566,9 @@ def _open_in_browser(path: Path) -> None:
 def generate_and_open(
     watchlist: Optional[List[str]] = None,
     config:    Optional[Dict]      = None,
+    mode:      str                 = "full",
 ) -> Path:
-    out = generate(watchlist=watchlist, config=config)
+    out = generate(watchlist=watchlist, config=config, mode=mode)
     _open_in_browser(out)
     return out
 

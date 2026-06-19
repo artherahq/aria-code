@@ -73,6 +73,40 @@ class _SinaHistorySession:
         )
 
 
+class _StooqHistorySession:
+    def get(self, url, *_args, **_kwargs):
+        rows = ["Date,Open,High,Low,Close,Volume"]
+        for i in range(80):
+            day = (i % 28) + 1
+            price = 100 + i * 0.5
+            rows.append(
+                f"2026-01-{day:02d},{price:.2f},{price + 1:.2f},{price - 1:.2f},{price + 0.25:.2f},{100000 + i}"
+            )
+        return _SinaTextResponse("\n".join(rows))
+
+
+class _YahooChartSession:
+    def get(self, url, *_args, **_kwargs):
+        if "query1.finance.yahoo.com" in url:
+            return _FakeResponse({
+                "chart": {
+                    "result": [{
+                        "timestamp": [1781222400 + i * 86400 for i in range(80)],
+                        "indicators": {
+                            "quote": [{
+                                "open": [100 + i * 0.5 for i in range(80)],
+                                "high": [101 + i * 0.5 for i in range(80)],
+                                "low": [99 + i * 0.5 for i in range(80)],
+                                "close": [100.25 + i * 0.5 for i in range(80)],
+                                "volume": [100000 + i for i in range(80)],
+                            }]
+                        },
+                    }]
+                }
+            })
+        raise TimeoutError("other provider unavailable")
+
+
 def test_ashare_quote_prefers_eastmoney():
     from market_data_client import MarketDataClient
 
@@ -158,3 +192,122 @@ def test_ashare_history_failure_returns_friendly_error(monkeypatch):
     assert hist["provider_chain"] == ["eastmoney", "sina", "akshare", "yfinance"]
     assert "已尝试 Eastmoney -> 新浪 -> AKShare -> Yahoo Finance" in hist["error"]
     assert "curl" not in hist["error"].lower()
+
+
+def test_global_history_falls_back_to_stooq(monkeypatch):
+    from market_data_client import MarketDataClient
+
+    original_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "yfinance":
+            raise ImportError("yfinance unavailable")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    client = MarketDataClient()
+    client._fh_key = ""
+    client._sess = _StooqHistorySession()
+
+    hist = client._history_yfinance("MSFT", days=60, interval="1d")
+
+    assert hist["success"] is True
+    assert hist["provider"] == "stooq"
+    assert hist["data"][-1]["close"] > 100
+
+
+def test_global_quote_falls_back_to_stooq_when_yfinance_unavailable(monkeypatch):
+    from market_data_client import MarketDataClient
+
+    original_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "yfinance":
+            raise ImportError("yfinance unavailable")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    client = MarketDataClient()
+    client._fh_key = ""
+    client._sess = _StooqHistorySession()
+
+    quote = client._quote_yfinance("MSFT")
+
+    assert quote["success"] is True
+    assert quote["provider"] == "stooq"
+    assert quote["price"] > 100
+
+
+def test_global_history_uses_yahoo_chart_before_stooq(monkeypatch):
+    from market_data_client import MarketDataClient
+
+    original_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "yfinance":
+            raise ImportError("yfinance unavailable")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    client = MarketDataClient()
+    client._fh_key = ""
+    client._sess = _YahooChartSession()
+
+    hist = client._history_yfinance("MSFT", days=60, interval="1d")
+
+    assert hist["success"] is True
+    assert hist["provider"] == "yahoo_chart"
+    assert hist["data"][-1]["close"] > 100
+
+
+def test_global_quote_uses_yahoo_chart_for_index_when_yfinance_unavailable(monkeypatch):
+    from market_data_client import MarketDataClient
+
+    original_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "yfinance":
+            raise ImportError("yfinance unavailable")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    client = MarketDataClient()
+    client._fh_key = ""
+    client._sess = _YahooChartSession()
+
+    quote = client._quote_yfinance("^IXIC")
+
+    assert quote["success"] is True
+    assert quote["provider"] == "yahoo_chart"
+    assert quote["price"] > 100
+    assert quote["change_pct"] > 0
+
+
+def test_global_ta_uses_stooq_history_when_yfinance_unavailable(monkeypatch):
+    from market_data_client import MarketDataClient
+
+    original_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "yfinance":
+            raise ImportError("yfinance unavailable")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    client = MarketDataClient()
+    client._fh_key = ""
+    client._sess = _StooqHistorySession()
+
+    ta = client.technical_indicators("MSFT", days=60)
+
+    assert ta["success"] is True
+    assert ta["data_provider"] == "stooq"
+    assert ta["rsi"] is not None
+    assert ta["macd_hist"] is not None
+
+
+def test_crypto_yahoo_style_symbol_normalizes_to_ccxt_pair():
+    from market_data_client import _norm_crypto
+
+    assert _norm_crypto("BTC-USD") == "BTC/USDT"
+    assert _norm_crypto("ETH-USD") == "ETH/USDT"

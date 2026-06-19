@@ -2,18 +2,18 @@
 
 States
 ------
-  IDLE       ▣ ▣  blinking, waiting for input
-  THINKING   ◌ ◌  spinner eyes, processing
+  IDLE       • •  blinking, waiting for input
+  THINKING   ◐ ◑  spinner eyes, processing
   STREAMING  ▶ ▶  arrow eyes, generating output
-  ERROR      ✕ ✕  X eyes
+  ERROR      × ×  X eyes
   DONE       ✓ ✓  check eyes, brief flash then back to IDLE
 
-Robot shape (4 rows, copper #C08050 brand colour):
+Robot shape (4 rows, flat pixel mark with copper state accents):
 
-  ╭─ ▣  ▣ ─╮
-  │  ─────  │
-  ╰─────────╯
-  ╌╌╌╌╌╌╌╌╌╌  ← status line (dim, 1 row)
+   ▄▄▄▄▄
+  ▐ • • ▌
+  ▐  ─  ▌
+   ▀▀▀▀▀
 """
 
 from __future__ import annotations
@@ -53,25 +53,22 @@ def get_robot_state() -> RobotState:
         return _state
 
 
-# ── Animation frames ───────────────────────────────────────────────────────────
-_SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-
-# Eye symbols per state — char that fills the eye socket
+# Eye symbols per state.
 _EYES = {
-    RobotState.IDLE:      ("▣", "▣"),
-    RobotState.THINKING:  ("◌", "◌"),
+    RobotState.IDLE:      ("•", "•"),
+    RobotState.THINKING:  ("◐", "◑"),
     RobotState.STREAMING: ("▸", "▸"),
-    RobotState.ERROR:     ("✕", "✕"),
+    RobotState.ERROR:     ("×", "×"),
     RobotState.DONE:      ("✓", "✓"),
 }
 
-# Mouth bar per state — 10 chars wide (fits ║  MMMMMMMMMM  ║)
+# Mouth bar per state — two chars wide.
 _MOUTH = {
-    RobotState.IDLE:      "──────────",
-    RobotState.THINKING:  "──────────",
-    RobotState.STREAMING: "══════════",
-    RobotState.ERROR:     "╌╌╌╌╌╌╌╌╌╌",
-    RobotState.DONE:      "──────────",
+    RobotState.IDLE:      "─",
+    RobotState.THINKING:  "·",
+    RobotState.STREAMING: "━",
+    RobotState.ERROR:     "!",
+    RobotState.DONE:      "─",
 }
 
 # Accent colour per state
@@ -92,62 +89,52 @@ _STATUS = {
     RobotState.DONE:      "done",
 }
 
-_SK = "#7A4E2A"   # eye socket lines (darker copper)
+_BODY = "dim #a8b0b8"
+_MOUTH_STYLE = "dim #C08050"
+ROBOT_ROW_COUNT = 4
 
 
 def _resolve_eyes(state: RobotState, tick: int) -> tuple[str, str]:
     el, er = _EYES[state]
     if state is RobotState.IDLE:
-        if tick % 20 in (0, 1):
-            el = er = " "
+        if tick % 24 in (0, 1):
+            el = er = "·"
     elif state is RobotState.THINKING:
-        ch = _SPIN[tick % len(_SPIN)]
-        el = er = ch
+        frames = (("◐", "◑"), ("◓", "◒"), ("◑", "◐"), ("◒", "◓"))
+        el, er = frames[tick % len(frames)]
     elif state is RobotState.STREAMING:
         el = er = "▸" if (tick % 4) < 2 else "▹"
     return el, er
 
 
 def get_robot_row(tick: int, row: int) -> list:
-    """Return FormattedText fragments for a single robot row (new 6-row design).
+    """Return FormattedText fragments for a single robot row.
 
     Rows:
-      0 → ╔══════════════╗   outer top frame
-      1 → ║  ┌──┐  ┌──┐  ║  eye socket top
-      2 → ║  │EL│  │ER│  ║  animated eyes
-      3 → ║  └──┘  └──┘  ║  eye socket bottom
-      4 → ║  MMMMMMMMMM  ║  state mouth
-      5 → ╚══════════════╝   outer bottom frame
+      0 →   ▄▄▄▄▄
+      1 →  ▐ EL ER ▌
+      2 →  ▐  MM  ▌
+      3 →   ▀▀▀▀▀
     """
     state = get_robot_state()
     col   = _COLOUR[state]
-    bf    = f"bold {col}"
-    mt    = f"dim {col}"
+    eye   = f"bold {col}"
     el, er = _resolve_eyes(state, tick)
     mouth  = _MOUTH[state]
 
     if row == 0:
-        return [(bf, "╔══════════════╗")]
+        return [(_BODY, "  ▄▄▄▄▄  ")]
     if row == 1:
-        return [(bf, "║  "), (_SK, "┌──┐"), (bf, "  "), (_SK, "┌──┐"), (bf, "  ║")]
+        return [(_BODY, " ▐ "), (eye, el), (_BODY, " "), (eye, er), (_BODY, " ▌ ")]
     if row == 2:
-        return [
-            (bf, "║  "), (_SK, "│"), (bf, el + " "), (_SK, "│"),
-            (bf, "  "), (_SK, "│"), (bf, er + " "), (_SK, "│"),
-            (bf, "  ║"),
-        ]
-    if row == 3:
-        return [(bf, "║  "), (_SK, "└──┘"), (bf, "  "), (_SK, "└──┘"), (bf, "  ║")]
-    if row == 4:
-        return [(mt, f"║  {mouth}  ║")]
-    # row == 5
-    return [(bf, "╚══════════════╝")]
+        return [(_BODY, " ▐  "), (_MOUTH_STYLE, mouth), (_BODY, "  ▌ ")]
+    return [(_BODY, "  ▀▀▀▀▀  ")]
 
 
 def get_robot_frame(tick: int) -> list:
     """Legacy single-fragment list (not split by row). Use get_robot_row() instead."""
     out = []
-    for r in range(3):
+    for r in range(ROBOT_ROW_COUNT):
         out += get_robot_row(tick, r)
     return out
 
@@ -155,8 +142,8 @@ def get_robot_frame(tick: int) -> list:
 def get_status_dot(tick: int) -> list:
     """Compact inline indicator for the status bar — one animated glyph + state label.
 
-    IDLE:      ▣               (copper, slow blink)
-    THINKING:  ⠹  thinking…   (yellow spinner)
+    IDLE:      •               (copper, slow blink)
+    THINKING:  ◐  thinking…   (yellow spinner)
     STREAMING: ▶  generating… (green pulse)
     ERROR:     ✕  error        (red)
     DONE:      ✓  done         (green, brief)
@@ -164,6 +151,8 @@ def get_status_dot(tick: int) -> list:
     state = get_robot_state()
     col   = _COLOUR[state]
     el, _ = _resolve_eyes(state, tick)
+    if state is RobotState.IDLE:
+        el = "•"
     label = _STATUS[state]
 
     frags: list = [(f"bold {col}", el)]

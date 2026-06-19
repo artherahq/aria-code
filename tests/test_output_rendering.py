@@ -13,6 +13,7 @@ class _SnapshotMDC:
         prices = {
             "AAPL": {"name": "Apple", "price": 195.2, "change_pct": 0.8, "market_cap": 2_990_000_000_000, "high": 197.0, "low": 193.0},
             "NVDA": {"name": "NVIDIA", "price": 204.87, "change_pct": 2.22, "market_cap": 5_020_000_000_000, "high": 205.66, "low": 199.54},
+            "300806": {"name": "斯迪克", "price": 12.34, "change_pct": -1.2, "market_cap": 5_000_000_000, "high": 12.8, "low": 12.1},
         }
         row = prices.get(symbol, prices["AAPL"])
         return {
@@ -33,6 +34,18 @@ class _SnapshotMDC:
         return {"success": True, "provider": "fundamentals", "market_cap": 1_000_000_000_000}
 
     def technical_indicators(self, *_args, **_kwargs):
+        symbol = _args[0] if _args else ""
+        if symbol == "300806":
+            return {
+                "success": True,
+                "provider": "local_pandas",
+                "rsi": 66.0,
+                "macd_hist": 0.25,
+                "ma20": 11.8,
+                "ma60": 10.7,
+                "bb_upper": 13.0,
+                "bb_lower": 10.4,
+            }
         return {"success": False, "error": "history unavailable"}
 
 
@@ -75,6 +88,35 @@ def test_market_snapshot_handles_multi_symbol_company_names(monkeypatch):
     assert "- stale: none" in text
     assert "/ta AAPL" in text
     assert "/ta NVDA" in text
+
+
+def test_market_snapshot_resolves_sidike_without_inheriting_previous_symbol(monkeypatch):
+    import aria_cli
+    from apps.cli.utils.market_detect import _extract_market_symbol
+
+    monkeypatch.setattr(aria_cli, "_HAS_MDC", True)
+    monkeypatch.setattr(aria_cli, "_get_mdc", lambda: _SnapshotMDC())
+    monkeypatch.setattr(aria_cli, "_get_provider_key", lambda _provider: "")
+
+    assert _extract_market_symbol("斯迪克的走势和预测") == "300806"
+    history = [{"role": "user", "content": "紫金矿业走势"}]
+    result = aria_cli._try_handle_market_snapshot_analysis("斯迪克的走势和预测", history=history)
+
+    assert result["success"] is True
+    text = result["response"]
+    assert "斯迪克" in text
+    assert "`300806`" in text
+    assert "601899" not in text
+    assert "预测参考" in text
+
+
+def test_unresolved_market_name_does_not_inherit_history():
+    import aria_cli
+
+    history = [{"role": "user", "content": "紫金矿业走势"}]
+    result = aria_cli._try_handle_market_snapshot_analysis("不存在公司走势", history=history)
+
+    assert result["success"] is False or "无法识别" in result.get("response", "")
 
 
 def test_tool_error_summary_hides_curl_details():
@@ -306,7 +348,8 @@ def test_team_report_includes_data_quality_section(monkeypatch, tmp_path):
     from agents.team import TeamResult
     from data_service import DataBundle
 
-    monkeypatch.setenv("ARIA_ARTIFACT_ROOT", str(tmp_path))
+    monkeypatch.setenv("ARIA_ARTIFACT_ROOT", str(tmp_path / "project-artifacts"))
+    monkeypatch.setenv("ARIA_USER_OUTPUT_ROOT", str(tmp_path / "user-output"))
     team_result = TeamResult(
         symbol="NVDA",
         agents_run=["technical"],
@@ -344,7 +387,7 @@ def test_team_report_includes_data_quality_section(monkeypatch, tmp_path):
         )
     )
 
-    reports = list(tmp_path.rglob("*_NVDA_team_report.md"))
+    reports = list((tmp_path / "user-output").rglob("*_NVDA_team_report.md"))
     assert reports
     text = reports[0].read_text(encoding="utf-8")
     assert "## 数据质量" in text

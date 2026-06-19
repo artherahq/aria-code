@@ -53,6 +53,93 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
+
+@dataclass(frozen=True)
+class CloudHealthSummary:
+    schema: str
+    total: int
+    ok: int
+    warn: int
+    err: int
+    breaker_open: int
+    token_set: bool
+    status: str
+    detail: str
+    suggestion: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "schema": self.schema,
+            "total": self.total,
+            "ok": self.ok,
+            "warn": self.warn,
+            "err": self.err,
+            "breaker_open": self.breaker_open,
+            "token_set": self.token_set,
+            "status": self.status,
+            "detail": self.detail,
+            "suggestion": self.suggestion,
+        }
+
+
+def summarize_cloud_health(
+    cloud_health: Optional[Dict[str, Any]] = None,
+    data_health: Optional[Dict[str, Any]] = None,
+    status: Optional[Dict[str, Any]] = None,
+) -> CloudHealthSummary:
+    cloud_health = dict(cloud_health or {})
+    data_health = dict(data_health or {})
+    status = dict(status or {})
+
+    checks = [
+        ("cloud_api_server", cloud_health),
+        ("akshare_data_server", data_health),
+    ]
+    ok = warn = err = breaker_open = 0
+    detail_bits: list[str] = []
+    for name, health in checks:
+        svc_status = str(health.get("status") or "unknown")
+        breaker_value = status.get("cloud_cb") if name == "cloud_api_server" else status.get("data_cb")
+        breaker = str(breaker_value or "closed")
+        breaker_is_open = breaker == "open"
+        if breaker_is_open:
+            breaker_open += 1
+        if svc_status in ("healthy", "ok", "ready", "online"):
+            ok += 1
+        elif svc_status == "unreachable" or breaker_is_open:
+            err += 1
+        else:
+            warn += 1
+        detail_bits.append(f"{name}={svc_status}")
+
+    if err:
+        overall = "err"
+    elif warn or breaker_open:
+        overall = "warn"
+    else:
+        overall = "ok"
+
+    token_set = bool(status.get("has_token"))
+    if overall == "ok":
+        suggestion = "All cloud services healthy."
+    elif token_set:
+        suggestion = "Retry /cloud health or /doctor --network after cooldown."
+    else:
+        suggestion = "Check /cloud set, /cloud data, and /cloud token."
+
+    return CloudHealthSummary(
+        schema="aria.cloud_health_summary.v1",
+        total=2,
+        ok=ok,
+        warn=warn,
+        err=err,
+        breaker_open=breaker_open,
+        token_set=token_set,
+        status=overall,
+        detail=", ".join(detail_bits),
+        suggestion=suggestion,
+    )
+
 # ---------------------------------------------------------------------------
 # Configuration helpers
 # ---------------------------------------------------------------------------
@@ -493,13 +580,18 @@ class AliyunDataClient:
 
     def status(self) -> Dict[str, Any]:
         """Return current circuit breaker status for /cloud status."""
-        return {
+        payload = {
             "cloud_url":  self.cloud_url,
             "data_url":   self.data_url,
             "has_token":  bool(self.api_token),
             "cloud_cb":   "open" if self._cb_cloud.is_open else "closed",
             "data_cb":    "open" if self._cb_data.is_open  else "closed",
         }
+        try:
+            payload["health_summary"] = summarize_cloud_health(status=payload).to_dict()
+        except Exception:
+            pass
+        return payload
 
 
 # ---------------------------------------------------------------------------
@@ -513,17 +605,32 @@ def run_async(coro) -> Any:
     Uses the running event loop's run_in_executor pattern so we never
     accidentally create nested event loops.
     """
+    if not hasattr(coro, "__await__"):
+        close = getattr(coro, "close", None)
+        if callable(close):
+            close()
+        return None
+
+    async def _run_and_close():
+        try:
+            return await coro
+        finally:
+            try:
+                await AliyunDataClient.get().close()
+            except Exception:
+                pass
+
     try:
         try:
             asyncio.get_running_loop()
         except RuntimeError:
-            return asyncio.run(coro)
+            return asyncio.run(_run_and_close())
 
         # We're already inside an async context — run the coroutine on a fresh
         # event loop in a worker thread to avoid nested-loop errors.
         import concurrent.futures
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            future = pool.submit(asyncio.run, coro)
+            future = pool.submit(asyncio.run, _run_and_close())
             return future.result(timeout=15)
     except Exception as exc:
         logger.debug("run_async failed: %s", exc)

@@ -64,6 +64,7 @@ def build_session_diagnostic_bundle(
     paths: Optional[dict] = None,
     trace: Any = None,
     provider_health: Optional[list] = None,
+    artifact_summary: Optional[dict] = None,
 ) -> Dict[str, Any]:
     """Build a stable export bundle for debugging and replay."""
     config = dict(config or {})
@@ -91,7 +92,23 @@ def build_session_diagnostic_bundle(
         except Exception:
             bundle["runtime_trace"] = {}
     if provider_health is not None:
-        bundle["provider_health"] = list(provider_health)
+        provider_rows = list(provider_health)
+        bundle["provider_health"] = provider_rows
+        try:
+            from packages.aria_services.provider_health import summarize_provider_health
+
+            bundle["provider_health_summary"] = summarize_provider_health(provider_rows).to_dict()
+        except Exception:
+            pass
+    if artifact_summary is not None:
+        bundle["artifact_summary"] = dict(artifact_summary)
+    else:
+        try:
+            from artifacts import artifact_summary as _artifact_summary
+
+            bundle["artifact_summary"] = _artifact_summary()
+        except Exception:
+            pass
     return bundle
 
 

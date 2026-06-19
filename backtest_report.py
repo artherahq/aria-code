@@ -10,7 +10,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
-from artifacts import create_artifact, write_artifact_metadata, write_artifact_raw_data
+from artifacts import create_user_artifact, write_artifact_metadata, write_artifact_raw_data
 from data_service import DataService
 
 
@@ -414,7 +414,7 @@ def generate_backtest_report(
         output_path = root / f"{safe_symbol}_{safe_strategy}_{ts_dt.strftime('%Y%m%d_%H%M%S')}.html"
         artifact = None
     else:
-        artifact = create_artifact(
+        artifact = create_user_artifact(
             "strategies/backtests",
             config.symbol,
             f"{safe_symbol}_{safe_strategy}_backtest",

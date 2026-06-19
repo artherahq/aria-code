@@ -570,6 +570,24 @@ class TestAliyunDataClient:
         assert "has_token" in st
         assert st["cloud_cb"] in ("open", "closed")
         assert st["data_cb"]  in ("open", "closed")
+        assert st["health_summary"]["schema"] == "aria.cloud_health_summary.v1"
+        assert st["health_summary"]["total"] == 2
+
+    def test_summarize_cloud_health_builds_structured_snapshot(self):
+        from aliyun_data_client import summarize_cloud_health
+
+        summary = summarize_cloud_health(
+            {"status": "healthy"},
+            {"status": "unreachable"},
+            {"has_token": True, "cloud_cb": "closed", "data_cb": "open"},
+        )
+
+        payload = summary.to_dict()
+        assert payload["schema"] == "aria.cloud_health_summary.v1"
+        assert payload["status"] == "err"
+        assert payload["breaker_open"] == 1
+        assert "cloud_api_server=healthy" in payload["detail"]
+        assert "akshare_data_server=unreachable" in payload["detail"]
 
     def test_save_and_reload_config(self):
         """save_cloud_config + reset should pick up the new URL."""

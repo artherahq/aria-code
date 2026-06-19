@@ -298,11 +298,11 @@ def save_team_report(
     quality_notes: list[str] | None = None,
     created_at: datetime | None = None,
 ) -> SavedTeamReport:
-    from artifacts import create_artifact, write_artifact_metadata, write_artifact_raw_data
+    from artifacts import create_user_artifact, write_artifact_metadata, write_artifact_raw_data
 
     created = created_at or datetime.now()
     quality_notes = quality_notes or []
-    artifact = create_artifact("reports/team", symbol, f"{symbol}_team_report", ".md")
+    artifact = create_user_artifact("reports/team", symbol, f"{symbol}_team_report", ".md")
     markdown = build_team_report_markdown(
         symbol=symbol,
         team_result=team_result,

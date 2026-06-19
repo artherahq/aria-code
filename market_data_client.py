@@ -143,7 +143,8 @@ def _is_ashare(symbol: str) -> bool:
     )
 
 def _is_crypto(symbol: str) -> bool:
-    return "/" in symbol or symbol.upper().endswith(("USDT","BTC","ETH","BNB"))
+    s = symbol.upper()
+    return "/" in s or s.endswith(("USDT","BTC","ETH","BNB","-USD","-USDT"))
 
 def _norm_crypto(symbol: str, quote: str = "USDT") -> str:
     """Normalise a crypto symbol to ccxt 'BASE/QUOTE' form.
@@ -154,6 +155,10 @@ def _norm_crypto(symbol: str, quote: str = "USDT") -> str:
     s = symbol.upper().strip()
     if "/" in s:
         return s
+    if "-" in s:
+        base, quote_part = s.split("-", 1)
+        quote_norm = "USDT" if quote_part == "USD" else quote_part
+        return f"{base}/{quote_norm}"
     for q in ("USDT", "USDC", "BUSD", "USD", "BTC", "ETH", "BNB"):
         if s.endswith(q) and len(s) > len(q):
             return f"{s[:-len(q)]}/{q if q != 'USD' else 'USDT'}"
@@ -572,7 +577,16 @@ class MarketDataClient:
     # ── US / Global (yfinance) ───────────────────────────────────────────────
 
     def _quote_yfinance(self, symbol: str) -> Dict[str, Any]:
-        import yfinance as yf
+        try:
+            import yfinance as yf
+        except Exception:
+            yc = self._quote_yahoo_chart(symbol)
+            if yc.get("success"):
+                return yc
+            stooq = self._quote_stooq(symbol)
+            if stooq.get("success"):
+                return stooq
+            return {"success": False, "error": "yfinance unavailable", "symbol": symbol}
 
         def _attempt_fast_info():
             t  = yf.Ticker(symbol)
@@ -612,6 +626,12 @@ class MarketDataClient:
             err_text = str(e).lower()
             is_rate_limit = any(t in err_text for t in ("too many", "rate", "429", "429"))
             if not is_rate_limit:
+                yc = self._quote_yahoo_chart(symbol)
+                if yc.get("success"):
+                    return yc
+                stooq = self._quote_stooq(symbol)
+                if stooq.get("success"):
+                    return stooq
                 return {"success": False, "error": str(e), "symbol": symbol}
 
         # Rate-limited: wait 3s then retry once
@@ -667,10 +687,229 @@ class MarketDataClient:
             if fh.get("success"):
                 return fh
 
+        yc = self._quote_yahoo_chart(symbol)
+        if yc.get("success"):
+            return yc
+
+        stooq = self._quote_stooq(symbol)
+        if stooq.get("success"):
+            return stooq
+
         return {"success": False, "error": "yfinance rate-limited or no data", "symbol": symbol}
 
+    @staticmethod
+    def _stooq_symbol(symbol: str) -> str:
+        """Best-effort conversion from Yahoo-style tickers to Stooq tickers."""
+        s = (symbol or "").strip().lower()
+        if not s:
+            return s
+        if s.startswith("^") or "=" in s:
+            return ""
+        if "." not in s:
+            return f"{s}.us"
+        suffix_map = {
+            "de": "de",
+            "pa": "fr",
+            "as": "nl",
+            "mi": "it",
+            "mc": "es",
+            "ls": "pt",
+            "sw": "ch",
+            "l": "uk",
+            "hk": "hk",
+        }
+        base, suffix = s.rsplit(".", 1)
+        return f"{base}.{suffix_map.get(suffix, suffix)}"
+
+    def _history_stooq(self, symbol: str, days: int, interval: str = "1d") -> Dict[str, Any]:
+        if interval not in ("1d", "day", "daily"):
+            return {"success": False, "error": "stooq only supports daily history", "symbol": symbol}
+        stooq_symbol = self._stooq_symbol(symbol)
+        if not stooq_symbol:
+            return {"success": False, "error": "unsupported stooq symbol", "symbol": symbol}
+        try:
+            r = self._sess.get(
+                "https://stooq.com/q/d/l/",
+                params={"s": stooq_symbol, "i": "d"},
+                headers={"User-Agent": "Mozilla/5.0"},
+                timeout=10,
+            )
+            text = getattr(r, "text", "")
+            if not text and hasattr(r, "content"):
+                text = r.content.decode("utf-8", errors="ignore")
+            if not text or "No data" in text:
+                raise ValueError("empty Stooq response")
+            from io import StringIO
+            df = pd.read_csv(StringIO(text))
+            if df.empty or "Close" not in df.columns:
+                raise ValueError("empty Stooq dataframe")
+            df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+            df = df.dropna(subset=["Date", "Close"]).sort_values("Date").tail(days + 5)
+            records = []
+            for _, row in df.iterrows():
+                records.append({
+                    "date":   str(row["Date"].date()),
+                    "open":   round(float(row.get("Open", row.get("Close", 0))), 4),
+                    "high":   round(float(row.get("High", row.get("Close", 0))), 4),
+                    "low":    round(float(row.get("Low", row.get("Close", 0))), 4),
+                    "close":  round(float(row.get("Close", 0)), 4),
+                    "volume": int(float(row.get("Volume", 0) or 0)),
+                })
+            if not records:
+                raise ValueError("empty Stooq records")
+            return {
+                "success": True,
+                "symbol": symbol.upper(),
+                "data": records,
+                "provider": "stooq",
+                "provider_chain": ["yfinance", "finnhub", "stooq"],
+                "count": len(records),
+            }
+        except Exception as exc:
+            return {"success": False, "error": str(exc), "symbol": symbol}
+
+    def _history_yahoo_chart(self, symbol: str, days: int, interval: str = "1d") -> Dict[str, Any]:
+        """Direct Yahoo chart endpoint fallback independent of yfinance objects."""
+        iv_map = {"1d": "1d", "1h": "1h", "15m": "15m", "5m": "5m"}
+        iv = iv_map.get(interval, "1d")
+        p2 = int(time.time())
+        p1 = p2 - max(days + 5, 30) * 86400
+        try:
+            r = self._sess.get(
+                f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}",
+                params={
+                    "period1": p1,
+                    "period2": p2,
+                    "interval": iv,
+                    "events": "history",
+                    "includeAdjustedClose": "true",
+                },
+                headers={"User-Agent": "Mozilla/5.0", "Referer": "https://finance.yahoo.com/"},
+                timeout=12,
+            )
+            data = r.json()
+            result = (data.get("chart", {}).get("result") or [None])[0]
+            if not result:
+                raise ValueError("empty Yahoo chart result")
+            quote = ((result.get("indicators") or {}).get("quote") or [{}])[0]
+            timestamps = result.get("timestamp") or []
+            closes = quote.get("close") or []
+            def _q_at(name: str, idx: int, fallback=0):
+                values = quote.get(name) or []
+                try:
+                    value = values[idx]
+                    return fallback if value is None else value
+                except Exception:
+                    return fallback
+            records = []
+            for idx, ts in enumerate(timestamps):
+                try:
+                    close = closes[idx]
+                    if close is None:
+                        continue
+                    records.append({
+                        "date": datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d"),
+                        "open": round(float(_q_at("open", idx, close) or close), 4),
+                        "high": round(float(_q_at("high", idx, close) or close), 4),
+                        "low": round(float(_q_at("low", idx, close) or close), 4),
+                        "close": round(float(close), 4),
+                        "volume": int(float(_q_at("volume", idx, 0) or 0)),
+                    })
+                except Exception:
+                    continue
+            if not records:
+                raise ValueError("empty Yahoo chart records")
+            return {
+                "success": True,
+                "symbol": symbol.upper(),
+                "data": records,
+                "provider": "yahoo_chart",
+                "provider_chain": ["yfinance", "yahoo_chart"],
+                "count": len(records),
+            }
+        except Exception as exc:
+            return {"success": False, "error": str(exc), "symbol": symbol}
+
+    def _quote_stooq(self, symbol: str) -> Dict[str, Any]:
+        hist = self._history_stooq(symbol, days=7, interval="1d")
+        if not hist.get("success"):
+            return hist
+        records = hist.get("data") or []
+        if not records:
+            return {"success": False, "error": "empty Stooq quote records", "symbol": symbol}
+        last = records[-1]
+        prev = records[-2] if len(records) >= 2 else last
+        price = float(last.get("close") or 0)
+        prev_close = float(prev.get("close") or price)
+        change = price - prev_close
+        change_pct = change / prev_close * 100 if prev_close else 0
+        return {
+            "success": True,
+            "symbol": symbol.upper(),
+            "name": symbol.upper(),
+            "price": round(price, 4),
+            "change": round(change, 4),
+            "change_pct": round(change_pct, 2),
+            "volume": int(last.get("volume") or 0),
+            "market_cap": None,
+            "high": round(float(last.get("high") or price), 2),
+            "low": round(float(last.get("low") or price), 2),
+            "open": round(float(last.get("open") or price), 4),
+            "prev_close": round(prev_close, 4),
+            "currency": "USD",
+            "market": "GLOBAL",
+            "provider": "stooq",
+            "provider_chain": ["yfinance", "finnhub", "stooq"],
+            "timestamp": datetime.now().isoformat(),
+        }
+
+    def _quote_yahoo_chart(self, symbol: str) -> Dict[str, Any]:
+        hist = self._history_yahoo_chart(symbol, days=7, interval="1d")
+        if not hist.get("success"):
+            return hist
+        records = hist.get("data") or []
+        if not records:
+            return {"success": False, "error": "empty Yahoo chart quote records", "symbol": symbol}
+        last = records[-1]
+        prev = records[-2] if len(records) >= 2 else last
+        price = float(last.get("close") or 0)
+        prev_close = float(prev.get("close") or price)
+        if price <= 0:
+            return {"success": False, "error": "price=0 from Yahoo chart", "symbol": symbol}
+        change = price - prev_close
+        change_pct = change / prev_close * 100 if prev_close else 0
+        meta_currency = ""
+        return {
+            "success": True,
+            "symbol": symbol.upper(),
+            "name": symbol.upper(),
+            "price": round(price, 4),
+            "change": round(change, 4),
+            "change_pct": round(change_pct, 2),
+            "volume": int(last.get("volume") or 0),
+            "market_cap": None,
+            "high": round(float(last.get("high") or price), 2),
+            "low": round(float(last.get("low") or price), 2),
+            "open": round(float(last.get("open") or price), 4),
+            "prev_close": round(prev_close, 4),
+            "currency": meta_currency or "USD",
+            "market": "GLOBAL",
+            "provider": "yahoo_chart",
+            "provider_chain": ["yfinance", "yahoo_chart"],
+            "timestamp": datetime.now().isoformat(),
+        }
+
     def _history_yfinance(self, symbol: str, days: int, interval: str) -> Dict[str, Any]:
-        import yfinance as yf
+        try:
+            import yfinance as yf
+        except Exception:
+            yc = self._history_yahoo_chart(symbol, days, interval)
+            if yc.get("success"):
+                return yc
+            stooq = self._history_stooq(symbol, days, interval)
+            if stooq.get("success"):
+                return stooq
+            return {"success": False, "error": "yfinance unavailable", "symbol": symbol}
         period_map = {1: "5d", 5: "5d", 30: "1mo", 60: "3mo",
                       90: "3mo", 120: "6mo", 180: "6mo",
                       252: "1y", 365: "1y", 730: "2y", 1260: "5y"}
@@ -732,12 +971,29 @@ class MarketDataClient:
             logger.debug("yfinance download fallback also failed for %s: %s", symbol, _e)
 
         # Finnhub candle fallback
+        yc = self._history_yahoo_chart(symbol, days, interval)
+        if yc.get("success"):
+            return yc
+
         if self._fh_key:
             fh = self._history_finnhub(symbol, days, interval)
             if fh.get("success"):
                 return fh
 
-        return {"success": False, "error": "yfinance rate-limited or no data", "symbol": symbol}
+        stooq = self._history_stooq(symbol, days, interval)
+        if stooq.get("success"):
+            return stooq
+
+        return {
+            "success": False,
+            "error": (
+                "global history unavailable: "
+                f"yfinance/yahoo_chart/finnhub/stooq failed; "
+                f"yahoo_chart={yc.get('error')}; stooq={stooq.get('error')}"
+            ),
+            "symbol": symbol,
+            "provider_chain": ["yfinance", "yahoo_chart", "finnhub", "stooq"],
+        }
 
     # ── A-share (Eastmoney push2 API) ────────────────────────────────────────
 

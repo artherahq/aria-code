@@ -8,31 +8,19 @@ class BusinessWorkflowCommandsMixin:
 
     async def cmd_research(self, args: str):
         sym = args.strip().upper() or "AAPL"
-        prompt = (
-            f"请对 {sym} 进行完整的 Market Researcher 分析：\n"
-            f"1. 获取实时行情并显示报价卡片\n"
-            f"2. 生成 6 个月技术图表（含 SMA20、SMA50、BB、RSI）\n"
-            f"3. 抓取最新 5 条相关新闻\n"
-            f"4. 分析主要技术信号（趋势、超买/超卖、关键支撑/阻力）\n"
-            f"5. 输出一份简明研究报告（结论 + 风险提示）\n\n"
-            f"标的代码：{sym}"
-        )
-        await self.terminal.handle_user_input(prompt)
+        # Route research through the deterministic team workflow so data
+        # fetching, rendering, and artifact saving happen in one service path.
+        await self.cmd_team(f"{sym} --full")
 
     async def cmd_earnings_workflow(self, args: str):
         parts = args.strip().split()
         sym = parts[0].upper() if parts else "AAPL"
         period = " ".join(parts[1:]) if len(parts) > 1 else "最近一个季度"
-        prompt = (
-            f"请对 {sym} 进行 Earnings Reviewer 财报分析（{period}）：\n"
-            f"1. 获取最新季报关键指标（EPS、营收、毛利率、同比增速）\n"
-            f"2. 对比市场预期与实际结果（beat/miss 分析）\n"
-            f"3. 提取管理层展望与主要风险因素\n"
-            f"4. 以结构化 table card 呈现核心财务数据\n"
-            f"5. 输出一份简明财报评论（3-5 段）\n\n"
-            f"标的：{sym}，报告期：{period}"
-        )
-        await self.terminal.handle_user_input(prompt)
+        report_type = "deep" if any(k in period.lower() for k in ("deep", "深度", "全年", "年报", "10-k")) else "standard"
+        # Earnings review is a report workflow, not a code-generation prompt.
+        # The report command already fetches market data, records provenance,
+        # asks the model for the narrative, and saves the Markdown artifact.
+        await self.cmd_report(f"{sym} --format md --type {report_type}")
 
     async def cmd_asset_diag(self, args: str):
         asset_id = args.strip()

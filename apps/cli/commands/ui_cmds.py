@@ -109,7 +109,7 @@ class UiCommandsMixin:
 
         path_str = args.strip().strip("\"'")
         if not path_str:
-            msg = "Usage: /vision <image_path|image_url|clipboard>  (e.g. /vision ~/Desktop/chart.png)"
+            msg = "Usage: /vision <image_path|image_url|clipboard>  (e.g. /vision ~/Pictures/chart.png)"
             console.print(f"[dim]{msg}[/dim]" if HAS_RICH else msg)
             return
 

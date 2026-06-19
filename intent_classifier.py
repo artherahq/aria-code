@@ -65,6 +65,18 @@ _CODING_KW = (
     "python", "dashboard", "写一个", "生成代码", "写代码", "编写代码",
     "analyze and save", "analysis script",
 )
+
+_VISUAL_ARTIFACT_KW = (
+    "图表", "走势图", "k线图", "k线", "k-line", "kline", "candlestick",
+    "chart", "plot", "dashboard", "看板", "晨报", "日报", "周报", "月报",
+    "report", "热力图", "heatmap",
+)
+
+_VISUAL_MARKET_CONTEXT_KW = (
+    "股票", "股价", "行情", "市场", "美股", "港股", "a股", "指数",
+    "持仓", "portfolio", "回测", "财报", "earnings", "基金", "etf",
+    "资产", "组合", "市场数据", "market data",
+)
 _ANALYSIS_KW = (
     "analyze", "analysis", "分析", "研究", "评估", "研判",
     "技术面", "基本面", "走势", "趋势", "行情",
@@ -168,6 +180,26 @@ _FINANCE_CONCEPT_KW = (
 )
 
 
+def is_visual_market_artifact_request(message: str) -> bool:
+    """Return True for finance-adjacent visual artifact requests.
+
+    These should prefer chart/dashboard/report workflows instead of generic
+    market-data prefetch.
+    """
+    low = message.lower().strip()
+    if low.startswith(("/chart", "/dashboard", "/report")):
+        return True
+    if not any(k in low for k in _VISUAL_ARTIFACT_KW):
+        return False
+    if any(k in low for k in _VISUAL_MARKET_CONTEXT_KW):
+        return True
+    if any(k in low for k in _MARKET_GENERAL_KW):
+        return True
+    if any(e in low for e in _FIN_ENTITY_KW):
+        return True
+    return any(k in low for k in ("公司", "集团", "股份", "科技", "银行", "证券", "能源", "汽车"))
+
+
 def classify_intent_sync(message: str) -> str:
     """
     Tier-2 keyword-based classification (synchronous, always available).
@@ -175,6 +207,9 @@ def classify_intent_sync(message: str) -> str:
     """
     import re as _re
     low = message.lower().strip()
+
+    if is_visual_market_artifact_request(message):
+        return INTENT_CODING
 
     # Bug ⑥ — file path present → document/code task, never stock analysis template
     if _re.search(_FILE_EXT_RE, low):
@@ -271,6 +306,9 @@ async def classify_intent_async(
     except ImportError:
         return classify_intent_sync(message)
 
+    if is_visual_market_artifact_request(message):
+        return INTENT_CODING
+
     if not _prelude_available(ollama_url):
         return classify_intent_sync(message)
 
@@ -298,6 +336,8 @@ async def classify_intent_async(
         for label in (INTENT_CODING, INTENT_ANALYSIS, INTENT_REALTIME,
                       INTENT_GENERAL, INTENT_FINANCE):
             if label in raw:
+                if is_visual_market_artifact_request(message):
+                    return INTENT_CODING
                 # Post-override: even if the prelude model says "analysis" or "finance",
                 # non-stock topics must not get the stock-analysis template.
                 if label == INTENT_ANALYSIS:

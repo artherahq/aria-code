@@ -9,6 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Mapping
 
+from apps.cli.utils.market_detect import _extract_market_symbol
+
 
 TOP_LEVEL_ROUTES: Mapping[str, str] = {
     # quant workflow keywords -> slash command name
@@ -37,6 +39,34 @@ TOP_LEVEL_ROUTES: Mapping[str, str] = {
     "预测": "/predict",
 }
 
+_VISUAL_ROUTE_PATTERNS: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("晨报", "日报", "周报", "月报", "看板", "dashboard", "heatmap"), "/dashboard"),
+    (("报告", "report", "研报"), "/report"),
+    (("图表", "走势图", "k线图", "k线", "k-line", "kline", "candlestick", "chart", "plot"), "/chart"),
+)
+
+_DASHBOARD_MODE_HINTS: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("持仓", "portfolio", "仓位", "组合", "资产"), "portfolio"),
+    (("市场", "行情", "quote", "prices", "watchlist", "热力图", "heatmap"), "market"),
+    (("晨报", "日报", "brief"), "brief"),
+)
+
+_CHART_PERIOD_HINTS: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("近一年", "一年", "1y", "1年"), "1y"),
+    (("近三个月", "三个月", "3m", "3个月"), "3m"),
+    (("近六个月", "六个月", "6m", "6个月"), "6m"),
+    (("年初至今", "ytd"), "ytd"),
+    (("两年", "2y"), "2y"),
+    (("三年", "3y"), "3y"),
+    (("五年", "5y"), "5y"),
+)
+
+_REPORT_TYPE_HINTS: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("深度", "详细", "deep"), "deep"),
+    (("简评", "简报", "brief"), "brief"),
+    (("研究报告", "投研报告", "研究", "report"), "standard"),
+)
+
 
 @dataclass(frozen=True)
 class RoutedCommand:
@@ -60,6 +90,48 @@ def route_top_level_text(user_input: str, available_commands: set[str]) -> Route
     stripped = user_input.strip()
     if not stripped or stripped.startswith("/"):
         return None
+    low = stripped.lower()
+    for keywords, command in _VISUAL_ROUTE_PATTERNS:
+        if command not in available_commands:
+            continue
+        if any(k in low for k in keywords):
+            symbol = _extract_market_symbol(stripped) or _extract_market_symbol(stripped.upper())
+            if command == "/dashboard":
+                mode = next(
+                    (
+                        dashboard_mode
+                        for mode_kw, dashboard_mode in _DASHBOARD_MODE_HINTS
+                        if any(k in low for k in mode_kw)
+                    ),
+                    "brief",
+                )
+                return RoutedCommand(command=command, args=mode)
+            if command == "/chart":
+                period = next(
+                    (
+                        period
+                        for period_kw, period in _CHART_PERIOD_HINTS
+                        if any(k in low for k in period_kw)
+                    ),
+                    "1y",
+                )
+                rest = symbol or stripped
+                return RoutedCommand(command=command, args=f"{rest} {period}".strip())
+            if command == "/report":
+                report_type = next(
+                    (
+                        report_type
+                        for type_kw, report_type in _REPORT_TYPE_HINTS
+                        if any(k in low for k in type_kw)
+                    ),
+                    "standard",
+                )
+                fmt = "html"
+                if any(k in low for k in ("markdown", "md")):
+                    fmt = "md"
+                rest = symbol or stripped
+                args = " ".join(part for part in [rest, f"--type {report_type}" if report_type else "", f"--format {fmt}" if fmt else ""] if part)
+                return RoutedCommand(command=command, args=args)
     parts = stripped.split(maxsplit=1)
     keyword = parts[0].lower()
     rest = parts[1] if len(parts) > 1 else ""
@@ -119,4 +191,3 @@ async def try_top_level_route(user_input: str, commands) -> bool:
         return False
     await commands.execute(routed.text)
     return True
-

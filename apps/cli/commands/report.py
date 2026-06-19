@@ -338,9 +338,9 @@ def save_markdown_report(
         out_file.write_text(clean_markdown_report_response(markdown_text), encoding="utf-8")
         return SavedMarkdownReport(path=out_file)
 
-    from artifacts import create_artifact, write_artifact_metadata, write_artifact_raw_data
+    from artifacts import create_user_artifact, write_artifact_metadata, write_artifact_raw_data
 
-    artifact = create_artifact("reports/market", symbol, f"{symbol}_market_report", ".md")
+    artifact = create_user_artifact("reports/market", symbol, f"{symbol}_market_report", ".md")
     out_file = artifact.path
     out_file.write_text(clean_markdown_report_response(markdown_text), encoding="utf-8")
 

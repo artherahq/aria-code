@@ -118,7 +118,7 @@ def bottom_toolbar_parts(
 
 # ── Banner renderers ───────────────────────────────────────────────────────────
 
-_MASCOT = "[bold #C08050]▣[/bold #C08050]"
+_MASCOT = "[bold #C08050]◉[/bold #C08050]"
 
 
 def render_compact_banner(
@@ -173,11 +173,7 @@ def render_full_banner(
     _lfa    = _t("local_first_agent", lang)
     _model  = _t("model", lang)
     _ws     = _t("workspace", lang)
-    _mode   = _t("mode", lang)
-    _stat   = _t("status", lang)
     _tools  = _t("tools", lang)
-    _skills = _t("skills", lang)
-    _quant  = _t("quant", lang)
     _tip    = _t("tip", lang)
     _amatch = _t("auto_matched", lang)
 
@@ -193,44 +189,23 @@ def render_full_banner(
     from rich.table import Table
     from rich.text import Text
 
-    # Left column: robot face — copper-frame display with eye sockets
-    _BF  = "bold #C08050"   # outer frame
-    _SK  = "#7A4E2A"        # eye socket lines (darker copper)
-    _EY  = "bold #D4904A"   # eye symbol highlight
-    _MT  = "dim #C08050"    # mouth & brand
-    _face = Text()
-    _face.append(" ▸ A R I A\n", style=_MT)
-    _face.append("╔══════════════╗\n", style=_BF)
-    _face.append("║  ", style=_BF)
-    _face.append("┌──┐", style=_SK)
-    _face.append("  ", style=_BF)
-    _face.append("┌──┐", style=_SK)
-    _face.append("  ║\n", style=_BF)
-    _face.append("║  ", style=_BF)
-    _face.append("│", style=_SK)
-    _face.append("▣ ", style=_EY)
-    _face.append("│", style=_SK)
-    _face.append("  ", style=_BF)
-    _face.append("│", style=_SK)
-    _face.append("▣ ", style=_EY)
-    _face.append("│", style=_SK)
-    _face.append("  ║\n", style=_BF)
-    _face.append("║  ", style=_BF)
-    _face.append("└──┘", style=_SK)
-    _face.append("  ", style=_BF)
-    _face.append("└──┘", style=_SK)
-    _face.append("  ║\n", style=_BF)
-    _face.append("║  ──────────  ║\n", style=_MT)
-    _face.append("╚══════════════╝",   style=_BF)
+    # Left column: flat pixel mascot. Keep it quiet; copper is reserved for
+    # the state accents and important text.
+    from .robot import get_robot_row
 
-    # Right column: status info
+    _face = Text()
+    for _idx in range(4):
+        for _style, _text in get_robot_row(2, _idx):
+            _face.append(_text, style=_style)
+        if _idx < 3:
+            _face.append("\n")
+
+    # Right column: Claude Code-like essentials only. Operational detail is
+    # available in the bottom toolbar and slash commands, so startup stays calm.
     _info_lines = [
-        f"[bold]Aria Code[/bold]  [dim]v{version}[/dim]  [dim]{_lfa}[/dim]",
-        f"[dim]{_model:<10}[/dim]{rt_label}",
-        f"[dim]{_ws:<10}[/dim][dim]{cwd}[/dim]",
-        f"[dim]{_mode:<10}[/dim]{control_status_rich}",
-        f"[dim]{_stat:<10}[/dim]{ollama_status_rich}",
-        f"[dim]{'':10}{_quant} · {tool_count} {_tools} · {skill_count} {_skills}[/dim]",
+        f"[bold]Aria Code[/bold]  [dim]v{version} · {_lfa}[/dim]",
+        f"{rt_label}",
+        f"[dim]{cwd}[/dim]",
     ]
     if auto_healed_from:
         _info_lines.append(
@@ -248,13 +223,12 @@ def render_full_banner(
 
     _info = Text.from_markup("\n".join(_info_lines))
 
-    _grid = Table.grid(padding=(0, 2))
+    _grid = Table.grid(padding=(0, 3))
     _grid.add_column(no_wrap=True, vertical="top")
     _grid.add_column(vertical="top")
     _grid.add_row(_face, _info)
 
-    from rich.panel import Panel
-    console.print(Panel(_grid, box=rich_box.SQUARE, border_style="dim", padding=(0, 1)))
+    console.print(_grid)
 
 
 def render_try_hints(console, has_rich: bool, lang: str = "en") -> None:

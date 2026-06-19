@@ -98,9 +98,30 @@ def test_zero_price_is_not_accepted_as_real_quote():
     quote = service.quote("AAPL")
 
     assert quote.success is False
-    assert quote.data == {}
+    assert quote.data["success"] is False
+    assert quote.data["provider"] == "bad"
     assert "price" in quote.missing_fields
     assert quote.quality["status"] == "unavailable"
+
+
+def test_invalid_payload_success_flag_is_normalized_false():
+    class _BadMarket(_MarketClient):
+        def quote(self, symbol):
+            return {
+                "success": True,
+                "symbol": symbol,
+                "provider": "edgar",
+                "name": f"EDGAR:{symbol}",
+                "price": 0,
+            }
+
+    service = DataService(market_client=_BadMarket(), router=False)
+    quote = service.quote("^IXIC")
+
+    assert quote.success is False
+    assert quote.data["success"] is False
+    assert quote.data["price"] == 0
+    assert "price" in quote.missing_fields
 
 
 def test_quote_marks_old_payload_as_stale():

@@ -1,6 +1,7 @@
 import tomllib
 
 from doctor import format_doctor_plain, provider_health_checks, provider_health_summary, run_doctor
+from packages.aria_services.provider_health import summarize_provider_health
 
 
 def test_run_doctor_reports_core_checks(monkeypatch, tmp_path):
@@ -11,6 +12,8 @@ def test_run_doctor_reports_core_checks(monkeypatch, tmp_path):
     names = {check.name: check for check in report.checks}
     assert names["python"].status == "ok"
     assert names["artifact_root"].status == "ok"
+    assert names["artifact_inventory"].status == "warn"
+    assert "0 artifacts" in names["artifact_inventory"].detail
     assert names["privacy"].detail == "data_sharing=False, feedback_upload=False"
     assert names["ollama"].status == "warn"
     assert "network check skipped" in names["ollama"].detail
@@ -83,6 +86,20 @@ def test_provider_health_summary_compacts_state():
     assert "1 ok" in summary.detail
     assert "1 cooldown" in summary.detail
     assert "Fix API keys first" in summary.suggestion
+
+
+def test_summarize_provider_health_builds_structured_snapshot():
+    summary = summarize_provider_health([
+        {"provider": "yfinance", "status": "ok", "cooldown_active": False},
+        {"provider": "finnhub", "status": "rate_limited", "cooldown_active": True, "last_error_category": "rate_limited"},
+    ])
+
+    payload = summary.to_dict()
+    assert payload["schema"] == "aria.provider_health_summary.v1"
+    assert payload["total"] == 2
+    assert payload["cooldown"] == 1
+    assert payload["status"] == "warn"
+    assert payload["providers"] == ["yfinance", "finnhub"]
 
 
 def test_pyproject_includes_top_level_modules():

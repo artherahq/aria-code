@@ -13,7 +13,8 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
                         on_tool_call=None, on_tool_result=None,
                         cancel_event: asyncio.Event = None,
                         enable_tools: bool = True,
-                        system_override: str = None) -> dict:
+                        system_override: str = None,
+                        show_market_prefetch_status: bool = True) -> dict:
     """Stream chat via local Ollama with tool calling support (native + text-based)."""
     import aiohttp
 
@@ -111,6 +112,11 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
             _intent = "finance"
 
     _is_general = (_intent == "general")
+    try:
+        from apps.cli.intent_router import build_intent_route
+        _route = build_intent_route(message)
+    except Exception:
+        _route = None
 
     # ── Context-aware tool schema filtering ───────────────────────────────────
     # Intent drives tool exposure, but cross-intent requests (e.g. "分析AAPL然后
@@ -123,17 +129,31 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
                         "glob", "notebook_read", "notebook_edit"}
 
     _msg_low = message.lower()
-    _has_coding_signal = any(k in _msg_low for k in (
-        "写", "代码", "脚本", "策略", "回测", "生成", "plot", "chart",
-        "python", "write", "script", "code", "backtest", "save", "file",
+    _explicit_code_signal = bool(getattr(_route, "explicit_code", False)) if _route else any(k in _msg_low for k in (
+        "代码", "脚本", "python", "程序", "实现", "开发", "修改文件",
+        "写代码", "编写代码", "策略代码", "保存为.py", ".py",
+        "script", "code", "program", "implement", "edit file", "write file",
     ))
+    _is_visual_artifact_request = bool(getattr(_route, "visual_artifact", False)) if _route else any(k in _msg_low for k in (
+        "图表", "走势图", "k线图", "k线", "chart", "plot", "dashboard", "看板", "report", "报告",
+    ))
+    _has_coding_signal = _explicit_code_signal or (
+        not _is_visual_artifact_request
+        and any(k in _msg_low for k in ("写", "回测", "backtest", "save", "file"))
+    )
     _has_finance_signal = any(k in _msg_low for k in (
         "分析", "股票", "行情", "股价", "市场", "quantitative", "stock",
         "price", "market", "analyze", "analysis", "ticker",
     ))
     _is_cross_intent = _has_coding_signal and _has_finance_signal
 
-    if _intent in ("finance", "analysis", "realtime") and not _is_cross_intent:
+    if _is_visual_artifact_request and not _explicit_code_signal:
+        _excluded = _CU_TOOL_NAMES | _CODE_TOOL_NAMES
+        _schemas_for_context = [
+            s for s in LOCAL_TOOL_SCHEMAS
+            if s.get("function", {}).get("name") not in _excluded
+        ]
+    elif _intent in ("finance", "analysis", "realtime") and not _is_cross_intent:
         # Pure finance: market data + broker + web_fetch (for news), no coding/CU tools.
         # Excluding coding tools prevents the LLM from calling run_command instead of
         # get_market_data when answering a stock question.
@@ -334,7 +354,8 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
     # 策略：
     #   1. system prompt 替换为"数据已预取"专用 prompt
     #   2. 数据同时注入到用户消息开头（本地模型对最近的 user message 最敏感）
-    if _HAS_MDC and not _is_general:
+    _skip_market_prefetch = _is_general or _is_visual_artifact_request
+    if _HAS_MDC and not _skip_market_prefetch:
         import time as _t_inj
         _t_inj_start = _t_inj.time()
         _market_inject = _try_prefetch_market_data(message, history)
@@ -343,7 +364,7 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
             # 过程可见化：⏺/✓ 格式，与工具调用步骤保持一致
             import re as _re_inj
             _inj_m = _re_inj.search(r'## 📊 (\S+) 实时行情（来源：(\S+)）', _market_inject)
-            if HAS_RICH:
+            if HAS_RICH and show_market_prefetch_status:
                 _sym_label = _inj_m.group(1) if _inj_m else "market_data"
                 _src_label = _inj_m.group(2) if _inj_m else "local"
                 console.print(
@@ -535,6 +556,7 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
     full_response = ""
     tools_used = []
     tool_calls_pending = []
+    _tool_call_counts = {}
     max_tool_rounds = 25 if _wants_complete_output or _intent == "coding" else 12
     usage = {"prompt_tokens": 0, "completion_tokens": 0, "thinking_tokens": 0}
     _last_tool_had_error = False  # Track if previous tool failed
@@ -547,6 +569,29 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
     _rep_check_interval = 80
     _rep_token_count = [0]     # mutable for closure
     _rep_cancelled = [False]   # signals loop to stop
+
+    def _tool_signature(tool_name: str, params: dict) -> tuple[str, str]:
+        try:
+            payload = json.dumps(params or {}, sort_keys=True, ensure_ascii=False, default=str)
+        except Exception:
+            payload = str(params or {})
+        return tool_name, payload
+
+    def _register_tool_call(tool_name: str, params: dict) -> dict:
+        call = {"tool": tool_name, "params": params}
+        sig = _tool_signature(tool_name, params)
+        seen = _tool_call_counts.get(sig, 0)
+        _tool_call_counts[sig] = seen + 1
+        # Market data calls are expensive and usually deterministic for a turn.
+        # One successful/attempted call is enough; repeated identical calls are
+        # almost always model looping.
+        limit = 1 if tool_name in {
+            "get_market_data", "get_crypto_data", "get_forex_data",
+            "get_technical_indicators",
+        } else 2
+        if seen >= limit:
+            call["_aria_duplicate"] = True
+        return call
 
     def _check_repetition(text: str) -> bool:
         """Return True if the response is looping.
@@ -657,9 +702,11 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
                                         tool_args = json.loads(tool_args)
                                     except json.JSONDecodeError:
                                         tool_args = {}
-                                tool_calls_this_round.append({"tool": tool_name, "params": tool_args})
-                                tools_used.append(tool_name)
-                                if on_tool_call:
+                                call = _register_tool_call(tool_name, tool_args)
+                                tool_calls_this_round.append(call)
+                                if not call.get("_aria_duplicate"):
+                                    tools_used.append(tool_name)
+                                if on_tool_call and not call.get("_aria_duplicate"):
                                     on_tool_call(tool_name, tool_args)
 
                         if data.get("done"):
@@ -723,10 +770,14 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
         if not tool_calls_this_round and full_response.strip():
             text_calls = _parse_text_tool_calls(full_response)
             if text_calls:
-                tool_calls_this_round = text_calls
-                for tc in text_calls:
-                    tools_used.append(tc["tool"])
-                    if on_tool_call:
+                tool_calls_this_round = [
+                    _register_tool_call(tc["tool"], tc["params"])
+                    for tc in text_calls
+                ]
+                for tc in tool_calls_this_round:
+                    if not tc.get("_aria_duplicate"):
+                        tools_used.append(tc["tool"])
+                    if on_tool_call and not tc.get("_aria_duplicate"):
                         on_tool_call(tc["tool"], tc["params"])
 
         # If repetition was detected, truncate and return cleanly
@@ -828,6 +879,18 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
 
             tool_name = tc["tool"]
             # Note: _print_tool_call already called by on_tool_call during streaming
+
+            if tc.get("_aria_duplicate"):
+                summary = (
+                    f"SYSTEM: Duplicate tool call skipped: {tool_name} with the same parameters. "
+                    "Use the existing tool result already available in this turn. "
+                    "Do not call the same tool again unless you change the parameters."
+                )
+                payload["messages"].append({
+                    "role": "tool",
+                    "content": summary,
+                })
+                continue
 
             # Ask user confirmation for destructive tools
             if tool_name in _CONFIRM_TOOLS:
@@ -942,7 +1005,12 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
     # Python block but zero tool calls, auto-extract the code and queue
     # write_file + run_command so the outer agentic loop executes it.
     _auto_tool_calls: list = []
-    if _intent == "coding" and not tools_used and full_response:
+    _allow_code_block_autorun = (
+        _intent == "coding"
+        and _has_coding_signal
+        and (_explicit_code_signal or not _is_visual_artifact_request)
+    )
+    if _allow_code_block_autorun and not tools_used and full_response:
         import re as _re
         # Accept both complete (``` closed) and truncated (unclosed) code blocks
         _py_blocks = _re.findall(r"```python\n(.*?)```", full_response, _re.DOTALL)

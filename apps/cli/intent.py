@@ -13,6 +13,12 @@ CODING_KEYWORDS = (
     "写一个", "生成代码", "写代码", "编写代码",
 )
 
+VISUAL_ARTIFACT_KEYWORDS = (
+    "图表", "走势图", "k线图", "k线", "k-line", "kline", "candlestick",
+    "chart", "plot", "dashboard", "看板", "晨报", "日报", "周报", "月报",
+    "report", "热力图", "heatmap",
+)
+
 ANALYSIS_KEYWORDS = (
     "analyze", "analysis", "分析", "研究", "评估", "研判",
     "技术面", "基本面", "走势", "趋势", "行情",
@@ -70,6 +76,8 @@ SPORTS_KEYWORDS = (
 def is_coding_request(message: str) -> bool:
     """Return True if message looks like a coding/file-generation task."""
     low = message.lower()
+    if any(k in low for k in VISUAL_ARTIFACT_KEYWORDS):
+        return True
     if any(k in low for k in CODING_KEYWORDS):
         return True
     if low.startswith("/code") or low.startswith("/gen-"):

@@ -27,7 +27,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from artifacts import create_artifact, write_artifact_metadata, write_artifact_raw_data
+from artifacts import create_user_artifact, write_artifact_metadata, write_artifact_raw_data
 
 try:
     import pandas as pd
@@ -790,7 +790,7 @@ async def generate_report(
         out_dir.mkdir(parents=True, exist_ok=True)
         artifact = None
     else:
-        artifact = create_artifact("reports/market", symbol, f"{symbol}_market_report", ".html", timestamp=ts_dt)
+        artifact = create_user_artifact("reports/market", symbol, f"{symbol}_market_report", ".html", timestamp=ts_dt)
         out_dir = artifact.directory
 
     logger.info("[report] generating %s", symbol)

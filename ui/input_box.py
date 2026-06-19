@@ -1,10 +1,10 @@
-"""Prompt-toolkit input panel — Claude Code-style rounded box layout.
+"""Prompt-toolkit input panel — lightweight Claude Code-style input block.
 
-Four-row layout:
-  ╭──────────────────────────────────────────────╮  ← rounded box top
-  │ › cursor_                                      │  ← input row (bordered)
-  ╰──────────────────────────────────────────────╯  ← rounded box bottom
-  model  ·  ~/workspace                              ← dim status bar
+Layout:
+  ──────────────────────────────────────────────  ← subtle top rule
+   › cursor_                                      ← padded input row
+  ──────────────────────────────────────────────  ← subtle bottom rule
+  model  ·  ~/workspace                          ← dim status bar
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ from typing import Callable, Optional
 from prompt_toolkit.application import Application
 from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.layout import Float, FloatContainer, HSplit, Layout, VSplit, Window
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.layout.menus import CompletionsMenu
@@ -159,6 +160,9 @@ class PromptAndPlaceholderProcessor(Processor):
 PlaceholderProcessor = PromptAndPlaceholderProcessor
 
 
+INPUT_MAX_HEIGHT = 6
+
+
 # ── Style ──────────────────────────────────────────────────────────────────────
 
 def _build_style(cfg: PanelInputConfig) -> Style:
@@ -199,19 +203,13 @@ def _build_style(cfg: PanelInputConfig) -> Style:
 
 # ── Row builders ───────────────────────────────────────────────────────────────
 
-def _divider(cfg: PanelInputConfig) -> list:
+def _input_rule(cfg: PanelInputConfig) -> list:
     w = shutil.get_terminal_size((80, 24)).columns
     return [("class:divider", "─" * w)]
 
 
-def _box_top(cfg: PanelInputConfig) -> list:
-    w = shutil.get_terminal_size((80, 24)).columns
-    return [("class:box", "┌" + "─" * (w - 2) + "┐")]
-
-
-def _box_bottom(cfg: PanelInputConfig) -> list:
-    w = shutil.get_terminal_size((80, 24)).columns
-    return [("class:box", "└" + "─" * (w - 2) + "┘")]
+def _input_pad() -> list:
+    return [("", " ")]
 
 
 def _mode_prefix(cfg: PanelInputConfig, text_getter: Callable[[], str]) -> list:
@@ -281,9 +279,10 @@ def run_panel_input(
             return ""
 
     text_area = TextArea(
-        height=1,
-        multiline=False,
-        wrap_lines=False,
+        height=Dimension(min=1, max=INPUT_MAX_HEIGHT),
+        multiline=True,
+        wrap_lines=True,
+        dont_extend_height=True,
         completer=completer,
         complete_while_typing=True,
         history=history,
@@ -305,26 +304,26 @@ def run_panel_input(
     def _cancel(event) -> None:
         event.app.exit(result="")
 
+    @kb.add("enter", eager=True)
+    def _submit(event) -> None:
+        event.app.exit(result=text_area.text)
+
     @kb.add("s-tab")
     def _shift_tab(event) -> None:
         event.app.current_buffer.complete_previous()
 
     root = FloatContainer(
         content=HSplit([
-            # Rounded box top: ╭──────╮
+            # Lightweight terminal-native input section.
             Window(height=1,
-                   content=FormattedTextControl(lambda: _box_top(cfg), focusable=False)),
-            # Input row, bordered left + right by │
+                   content=FormattedTextControl(lambda: _input_rule(cfg), focusable=False)),
             VSplit([
-                Window(width=2, content=FormattedTextControl(
-                    lambda: [("class:box", "│ ")], focusable=False)),
+                Window(width=1, content=FormattedTextControl(_input_pad, focusable=False)),
                 text_area,
-                Window(width=2, content=FormattedTextControl(
-                    lambda: [("class:box", " │")], focusable=False)),
+                Window(width=1, content=FormattedTextControl(_input_pad, focusable=False)),
             ]),
-            # Rounded box bottom: ╰──────╯
             Window(height=1,
-                   content=FormattedTextControl(lambda: _box_bottom(cfg), focusable=False)),
+                   content=FormattedTextControl(lambda: _input_rule(cfg), focusable=False)),
             # Status bar: transparent bg, dim model · cwd
             Window(height=1,
                    content=FormattedTextControl(lambda: _status_bar(cfg), focusable=False)),

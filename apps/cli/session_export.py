@@ -6,6 +6,7 @@ import json
 from datetime import datetime
 from typing import Any, Optional, Sequence
 
+from artifacts import artifact_summary as build_artifact_summary
 from apps.cli.config_paths import config_snapshot
 from packages.aria_core import build_session_diagnostic_bundle
 
@@ -79,6 +80,7 @@ def build_session_export_payload(
             paths=paths or config_snapshot(),
             trace=trace,
             provider_health=provider_health,
+            artifact_summary=build_artifact_summary(),
         )
         return json.dumps(bundle, indent=2, ensure_ascii=False), "json", "aria_bundle"
 

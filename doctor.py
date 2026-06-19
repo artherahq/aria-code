@@ -155,53 +155,26 @@ def provider_health_summary(snapshot: Optional[List[Dict[str, Any]]] = None) -> 
             snapshot = GLOBAL_PROVIDER_HEALTH.snapshot()
         except Exception:
             snapshot = []
+    try:
+        from packages.aria_services.provider_health import summarize_provider_health
 
-    if not snapshot:
+        summary = summarize_provider_health(snapshot)
+        return _check("provider_health_summary", summary.status, summary.detail, summary.suggestion)
+    except Exception:
+        if not snapshot:
+            return _check(
+                "provider_health_summary",
+                "warn",
+                "no provider calls recorded in this session",
+                "Run /quote, /ta, /analyze, or /report to populate provider health.",
+            )
+        total = len(snapshot)
         return _check(
             "provider_health_summary",
             "warn",
-            "no provider calls recorded in this session",
-            "Run /quote, /ta, /analyze, or /report to populate provider health.",
+            f"{total} providers",
+            "Run /doctor --network or inspect /apikey.",
         )
-
-    ok = warn = err = cooldown = 0
-    auth_err = 0
-    names: list[str] = []
-    for row in snapshot:
-        names.append(str(row.get("provider") or "provider"))
-        status = str(row.get("status") or "unknown")
-        if status == "ok":
-            ok += 1
-        elif row.get("last_error_category") == "auth":
-            err += 1
-            auth_err += 1
-        else:
-            warn += 1
-        if row.get("cooldown_active"):
-            cooldown += 1
-
-    total = len(snapshot)
-    if err:
-        level = "err"
-    elif warn or cooldown:
-        level = "warn"
-    else:
-        level = "ok"
-
-    parts = [f"{total} providers"]
-    if ok:
-        parts.append(f"{ok} ok")
-    if warn:
-        parts.append(f"{warn} warn")
-    if err:
-        parts.append(f"{err} err")
-    if cooldown:
-        parts.append(f"{cooldown} cooldown")
-
-    suggestion = "Run /doctor --network or inspect /apikey." if level != "ok" else "All providers healthy."
-    if auth_err:
-        suggestion = "Fix API keys first, then retry /doctor or /cloud health."
-    return _check("provider_health_summary", level, ", ".join(parts), suggestion)
 
 
 def _iter_required_modules() -> Iterable[tuple[str, str]]:
@@ -245,11 +218,26 @@ def run_doctor(
         )
 
     try:
-        from artifacts import artifact_root
+        from artifacts import artifact_root, artifact_summary
 
         root = artifact_root()
         writable, detail = _is_writable(root)
         checks.append(_check("artifact_root", "ok" if writable else "err", detail, "Set ARIA_ARTIFACT_ROOT to a writable folder."))
+        summary = artifact_summary(root)
+        total = int(summary.get("total") or 0)
+        total_size = int(summary.get("total_size_bytes") or 0)
+        by_kind = summary.get("by_kind") or {}
+        detail_bits = [f"{total} artifacts", f"{total_size} bytes"]
+        if by_kind:
+            detail_bits.extend(f"{kind}={count}" for kind, count in list(by_kind.items())[:4])
+        checks.append(
+            _check(
+                "artifact_inventory",
+                "ok" if total else "warn",
+                ", ".join(detail_bits),
+                "Run /artifacts stats or generate a report to populate local outputs.",
+            )
+        )
     except Exception as exc:
         checks.append(_check("artifact_root", "err", str(exc)))
 

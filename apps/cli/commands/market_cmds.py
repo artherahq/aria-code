@@ -80,36 +80,31 @@ def _parse_nl_team_pair(text: str) -> Optional[Tuple[str, str]]:
     for conn in _CONNECTORS:
         if conn.lower() in text.lower():
             idx = text.lower().index(conn.lower())
-            left  = _clean(text[:idx])
-            right = _clean(text[idx + len(conn):])
-            if left in _CN_TEAM_MAP and right in _CN_TEAM_MAP:
+            left  = _resolve(_clean(text[:idx]))
+            right = _resolve(_clean(text[idx + len(conn):]))
+            if left and right and left != right:
                 return left, right
-            # Try partial: if left is known, right might have extra suffix
-            if left in _CN_TEAM_MAP and right:
-                for cn in _CN_TEAM_MAP:
-                    if right.startswith(cn):
-                        return left, cn
-                # right as-is might be an English name or abbreviation
-                if len(right) >= 2:
-                    return left, right
-            if right in _CN_TEAM_MAP and left:
-                for cn in _CN_TEAM_MAP:
-                    if left.endswith(cn):
-                        return cn, right
-                if len(left) >= 2:
-                    return left, right
 
     # ── Approach 2: scan for all known Chinese team names in text order ──────
     found: list = []
     for cn in _CN_TEAM_MAP:
         if cn in text:
             found.append((text.index(cn), cn))
+    # Also scan English names (word-boundary, case-insensitive)
+    import re as _re
+    tl = text.lower()
+    for en_key, cn_n in _EN_TO_CN.items():
+        if len(en_key) < 3:
+            continue
+        m = _re.search(r'\b' + _re.escape(en_key) + r'\b', tl)
+        if m:
+            found.append((m.start(), cn_n))
     found.sort()
     # Remove duplicates keeping earlier occurrence
     seen_en: set = set()
     unique: list = []
     for pos, cn in found:
-        en = _CN_TEAM_MAP[cn]
+        en = _CN_TEAM_MAP.get(cn, cn)
         if en not in seen_en:
             seen_en.add(en)
             unique.append((pos, cn))

@@ -41,7 +41,8 @@ def test_stock_chart_html_uses_inline_plotly_js(monkeypatch, tmp_path):
         Ticker = FakeTicker
 
     monkeypatch.setitem(sys.modules, "yfinance", FakeYF())
-    monkeypatch.setenv("ARIA_ARTIFACT_ROOT", str(tmp_path / "artifacts"))
+    monkeypatch.setenv("ARIA_ARTIFACT_ROOT", str(tmp_path / "project-artifacts"))
+    monkeypatch.setenv("ARIA_USER_OUTPUT_ROOT", str(tmp_path / "user-output"))
 
     result = handle_stock_chart_analysis_direct("AAPL", "1y")
     html = Path(result["chart_path"]).read_text(encoding="utf-8")
@@ -71,12 +72,13 @@ def test_stat_arb_chart_html_uses_inline_plotly_js(monkeypatch, tmp_path):
             return raw
 
     monkeypatch.setitem(sys.modules, "yfinance", FakeYF())
-    monkeypatch.setenv("ARIA_ARTIFACT_ROOT", str(tmp_path / "artifacts"))
+    monkeypatch.setenv("ARIA_ARTIFACT_ROOT", str(tmp_path / "project-artifacts"))
+    monkeypatch.setenv("ARIA_USER_OUTPUT_ROOT", str(tmp_path / "user-output"))
     monkeypatch.setattr("subprocess.Popen", lambda *args, **kwargs: None)
 
     aria_cli._generate_stat_arb_chart(sym_a, sym_b, period="2y")
 
-    generated = list((tmp_path / "artifacts").rglob("*_zscore.html"))
+    generated = list((tmp_path / "user-output").rglob("*_zscore.html"))
     assert generated, "expected a z-score HTML artifact"
     html = generated[0].read_text(encoding="utf-8")
 

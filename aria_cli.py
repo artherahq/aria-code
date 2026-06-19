@@ -30,6 +30,7 @@ __version__ = "4.1.0"
 
 import sys
 import os
+os.environ.setdefault("TQDM_DISABLE", "1")
 import asyncio
 import json
 import argparse
@@ -84,7 +85,8 @@ from runtime import (
 from workspace import VerificationPlanner, WorkspaceFiles, WorkspaceSecurity
 from apps.cli.commands.catalog import VISIBLE_SLASH_COMMANDS
 from apps.cli.commands.market_context import build_analyze_context, build_analyze_prompt
-from apps.cli.commands.market import parse_symbols, parse_technical_args, try_top_level_route
+from apps.cli.commands.market import parse_symbols, parse_technical_args, route_top_level_text, try_top_level_route
+from apps.cli.preflight import build_intent_preflight, format_preflight_plain
 from ui.render.market import print_quote_result, print_ta_result
 from apps.cli.commands.report import (
     all_agents_failed,
@@ -3528,6 +3530,57 @@ def _generate_chart_sync(symbol: str, period: str = "1y") -> dict:
     return _try_handle_stock_chart_analysis_direct(sym_yf, period=period)
 
 
+def _chart_period_from_ta_days(days: int) -> str:
+    try:
+        d = int(days)
+    except Exception:
+        return "1y"
+    if d <= 45:
+        return "1mo"
+    if d <= 110:
+        return "3mo"
+    if d <= 220:
+        return "6mo"
+    if d <= 430:
+        return "1y"
+    if d <= 800:
+        return "2y"
+    return "3y"
+
+
+def _is_market_artifact_followup(message: str) -> bool:
+    text = (message or "").strip().lower()
+    if not text or text.startswith("/"):
+        return False
+    return any(k in text for k in (
+        "继续以上", "继续上面", "继续这个", "继续任务", "继续",
+        "直接运行", "那你直接运行", "开始运行", "帮我运行",
+        "执行", "生成吧", "开始生成", "直接生成", "跑一下",
+        "continue", "run it", "execute", "go ahead",
+    ))
+
+
+def _natural_language_visual_artifact_route(message: str, available_commands: set[str]):
+    """Return a deterministic visual-artifact route for natural language input."""
+    text = (message or "").strip()
+    if not text or text.startswith("/"):
+        return None
+    try:
+        from apps.cli.intent_router import build_intent_route
+
+        route = build_intent_route(text)
+        if not route.visual_artifact:
+            return None
+        if route.primary not in {"chart", "dashboard", "report", "ui_artifact"}:
+            return None
+    except Exception:
+        if not any(k in text.lower() for k in (
+            "图表", "走势图", "k线图", "k线", "chart", "dashboard", "看板", "报告", "report",
+        )):
+            return None
+    return route_top_level_text(text, available_commands)
+
+
 def _fetch_macro_data(indicator: str, country: str = "WLD", days: int = 365):
     """Fetch macro data from FRED or World Bank, return list of (date, value) tuples."""
     try:
@@ -3619,9 +3672,11 @@ def _generate_stat_arb_chart(sym_a: str, sym_b: str, period: str = "2y") -> None
 
         x     = [d.strftime("%Y-%m-%d") for d in z.index]
         z_val = [round(float(v), 3) for v in z.values]
+        z_rows = [{"date": d, "z": v} for d, v in zip(x, z_val)]
 
         entry_lo, entry_hi = -2.0, 2.0
         stop_lo, stop_hi   = -3.5, 3.5
+        last_z_value = z_val[-1] if z_val else None
 
         html = f"""<!DOCTYPE html><html><head><meta charset="utf-8">
 <title>{sym_a}/{sym_b} Z-Score</title>
@@ -3662,9 +3717,25 @@ Plotly.newPlot('chart', [
 </script></body></html>"""
 
         safe = _re.sub(r"[^A-Za-z0-9_.-]+", "_", f"{sym_a}_{sym_b}")
-        from artifacts import create_artifact
-        art = create_artifact("reports/stat-arb", f"{sym_a}_{sym_b}", f"{safe}_zscore", ".html")
+        from artifacts import create_user_artifact, write_artifact_metadata, write_artifact_raw_data
+        art = create_user_artifact("reports/stat-arb", f"{sym_a}_{sym_b}", f"{safe}_zscore", ".html")
         art.path.write_text(html, encoding="utf-8")
+        write_artifact_metadata(art, {
+            "kind": "stat_arb_chart",
+            "status": "complete",
+            "symbols": [sym_a, sym_b],
+            "created_at": datetime.now().isoformat(timespec="seconds"),
+            "data": {
+                "points": len(z_rows),
+                "entry_threshold": abs(entry_hi),
+                "stop_threshold": abs(stop_hi),
+                "last_z": last_z_value,
+            },
+        })
+        write_artifact_raw_data(art, {
+            "symbols": [sym_a, sym_b],
+            "rows": z_rows,
+        })
         if HAS_RICH:
             console.print(f"  [dim]Z-Score 图表: [link={art.path}]{_display_path(art.path)}[/link][/dim]")
             import subprocess
@@ -3848,12 +3919,13 @@ def _format_tool_summary(tool_name: str, result: dict) -> str:
             else:
                 out += "\n\nHINT: Script failed. Use read_file to inspect the code, find the error, edit_file to fix it, then run_command to retry. Do NOT give up."
         else:
-            # Script succeeded — auto-verify and auto-open output files (Claude Code verify phase)
-            desktop = pathlib.Path.home() / "Desktop"
+            # Script succeeded — auto-verify and auto-open output files.
+            from artifacts import user_generated_dir as _aria_user_generated_dir
+            output_dir = _aria_user_generated_dir()
             try:
                 recent_files = []
                 for ext in ("*.png", "*.html", "*.csv", "*.pdf", "*.xlsx"):
-                    for f in desktop.glob(ext):
+                    for f in output_dir.rglob(ext):
                         if (time.time() - f.stat().st_mtime) < 30:
                             recent_files.append(f)
                 # Also detect files mentioned in stdout (e.g., "Saved to /path/to/file.png")
@@ -3876,8 +3948,8 @@ def _format_tool_summary(tool_name: str, result: dict) -> str:
                 else:
                     combined_check = (stdout + " " + stderr).lower()
                     if any(kw in combined_check for kw in ("chart", "plot", "figure", "savefig", "save")):
-                        out += ("\n\nWARNING: Script ran but no output files detected on Desktop. "
-                                "Check the save path uses os.path.expanduser('~/Desktop/filename.png').")
+                        out += ("\n\nWARNING: Script ran but no output files detected in the Aria generated output directory. "
+                                "Check the save path uses ~/Documents/Aria Code/generated.")
             except Exception:
                 pass
         return out
@@ -4212,6 +4284,36 @@ def _print_broker_orders(orders: list, broker_label: str, status_filter: str = "
 def _print_error(msg: str, context: str = ""):
     from ui.render.output import print_error as _pe
     _pe(msg, context, console=console, has_rich=HAS_RICH, rich_box=rich_box)
+
+
+def _print_preflight_notice(message: str, *, quiet: bool = False) -> bool:
+    """Show missing dependency/tool guidance for the likely user intent."""
+    if quiet:
+        return False
+    try:
+        report = build_intent_preflight(message)
+    except Exception as exc:
+        logger.debug("intent preflight failed: %s", exc)
+        return False
+    if not report.has_findings:
+        return False
+
+    text = format_preflight_plain(report)
+    if not text:
+        return False
+    if HAS_RICH:
+        style = "yellow" if report.has_required_findings else "dim"
+        title = "[yellow]依赖预检[/yellow]" if report.has_required_findings else "[dim]依赖预检[/dim]"
+        console.print(Panel(
+            text,
+            title=title,
+            border_style=style,
+            box=rich_box.ROUNDED,
+            padding=(0, 1),
+        ))
+    else:
+        print(text)
+    return True
 
 
 from contextlib import contextmanager as _contextmanager
@@ -4811,7 +4913,7 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
             "/orders":    (self.cmd_orders,   "Order history: /orders [open|filled|all]"),
             "/strategy":  (self.cmd_strategy, "Strategy vault: /strategy save|list|diff|load|review"),
             "/accuracy":  (self.cmd_accuracy, "Prediction track record vs live prices"),
-            "/artifacts": (self.cmd_artifacts,"List generated files: /artifacts [limit]"),
+            "/artifacts": (self.cmd_artifacts,"List or prune generated files: /artifacts [limit|stats|prune [keep] [--dry-run]]"),
             # ── Code & project ────────────────────────────────────────────────
             "/project":   (self.cmd_project,  "Project: /project load|tree|grep|ask|task|status"),
             "/init":      (self.cmd_init,     "Generate ARIA.md for current project: /init [--force]"),
@@ -4844,6 +4946,25 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
             "/exit-calc": (self.cmd_exit_calc, "Exit settlement workflow: /exit-calc proj_001"),
             "/auto-strategy":(self.cmd_auto_strategy,"Auto-optimize strategy: /auto-strategy momentum SPY"),
             "/execution": (self.cmd_execution,"Algo execution compare: /execution AAPL buy 100000"),
+            "/chart":     (self.cmd_chart,    "Chart artifact: /chart AAPL [period]"),
+            "/dashboard": (self.cmd_dashboard,"Dashboard artifact: /dashboard [brief|market|portfolio|full]"),
+            "/report":    (self.cmd_report,   "Research report artifact: /report AAPL [--format html|md]"),
+            # ── Market data / analysis (direct, no LLM loop) ────────────────
+            "/quote":     (self.cmd_quote,    "Quote: /quote AAPL [MSFT...]"),
+            "/analyze":   (self.cmd_analyze,  "Deep market analysis: /analyze AAPL"),
+            "/ta":        (self.cmd_ta,       "Technical indicators: /ta AAPL [days=120]"),
+            "/market":    (self.cmd_market,   "Market overview: /market [indices|sectors]"),
+            "/macro":     (self.cmd_macro,    "Macro data: /macro [us|cn|rates|calendar]"),
+            "/options":   (self.cmd_options,  "Options chain: /options AAPL [calls|puts]"),
+            "/quality":   (self.cmd_quality,  "Quality scores: /quality AAPL"),
+            "/ichimoku":  (self.cmd_ichimoku, "Ichimoku analysis: /ichimoku AAPL"),
+            "/feargreed": (self.cmd_fear_greed, "Crypto fear & greed index"),
+            "/football":  (self.cmd_football, "Football prediction: /football home vs away"),
+            "/screen":    (self.cmd_screen,   "Stock screener: /screen ..."),
+            "/screen-cn": (self.cmd_screen_cn, "A-share screener: /screen-cn ..."),
+            "/limitup":   (self.cmd_limitup,  "A-share limit-up pool: /limitup [date]"),
+            "/north":     (self.cmd_north,    "Northbound flow: /north"),
+            "/news":      (self.cmd_news,     "Market news: /news AAPL"),
             # ── UI generation (sets Bloomberg design context) ─────────────────
             "/ui":        (self.cmd_ui,       "Generate Bloomberg-style HTML: /ui <description>"),
             "/cloud":     (self.cmd_cloud,    "Aliyun config: /cloud status|set|data|token|health"),
@@ -4985,7 +5106,7 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
         "/report":    ("Usage: /report [SYMBOL] [--format html|md] [--output ./aria-output]", ["/report AAPL", "/report SPY --format md --output ./reports"]),
         "/dashboard": ("Usage: /dashboard  — 生成含持仓/行情/预警的个人化 HTML Dashboard，自动在浏览器打开", ["/dashboard"]),
         "/ui":        ("Usage: /ui <描述>  — 生成 Bloomberg Terminal 风格 HTML (自动暗色/亮色模式)", ["/ui 今日A股热力图", "/ui 持仓组合报告", "/ui 市场晨报看板"]),
-        "/artifacts": ("Usage: /artifacts [limit]", ["/artifacts", "/artifacts 50"]),
+        "/artifacts": ("Usage: /artifacts [limit|stats|prune [keep] [--dry-run]]", ["/artifacts", "/artifacts 50", "/artifacts stats", "/artifacts prune 20"]),
         "/shortterm": ("Usage: /shortterm [SYMBOL]", ["/shortterm AAPL", "/shortterm sh600519"]),
         "/longterm":  ("Usage: /longterm [SYMBOL]", ["/longterm AAPL", "/longterm sh600519"]),
         # ── China market ────────────────────────────────────────────────────
@@ -5010,8 +5131,8 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
         "/positions": ("Usage: /positions", ["/positions"]),
         "/orders":    ("Usage: /orders [pending|all]", ["/orders", "/orders pending"]),
         # ── Utilities ───────────────────────────────────────────────────────
-        "/vision":      ("Usage: /vision <image_path|image_url|clipboard>", ["/vision ~/Desktop/chart.png", "/vision https://example.com/chart.png", "/vision clipboard"]),
-        "/upload-image": ("Usage: /upload-image <image_path|image_url|clipboard>", ["/upload-image ~/Desktop/chart.png", "/upload-image clipboard"]),
+        "/vision":      ("Usage: /vision <image_path|image_url|clipboard>", ["/vision ~/Pictures/chart.png", "/vision https://example.com/chart.png", "/vision clipboard"]),
+        "/upload-image": ("Usage: /upload-image <image_path|image_url|clipboard>", ["/upload-image ~/Pictures/chart.png", "/upload-image clipboard"]),
         "/browser":     ("Usage: /browser <url>  or  /browser screenshot <url>", ["/browser https://example.com", "/browser screenshot https://github.com"]),
         "/screenshot":  ("Usage: /screenshot [monitor]", ["/screenshot", "/screenshot 1"]),
         "/memory":    ("Usage: /memory [show|add|clear|search]", ["/memory show", "/memory add 我偏好技术分析", "/memory search 风险偏好"]),
@@ -5061,7 +5182,7 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
         "/logout":          ("Usage: /logout", ["/logout"]),
         "/status":          ("Usage: /status", ["/status"]),
         "/health":          ("Usage: /health", ["/health"]),
-        "/artifacts":       ("Usage: /artifacts [limit]", ["/artifacts", "/artifacts 50"]),
+        "/artifacts":       ("Usage: /artifacts [limit|stats|prune [keep] [--dry-run]]", ["/artifacts", "/artifacts 50", "/artifacts stats", "/artifacts prune 20"]),
     }
 
     def cmd_help(self, args: str):
@@ -5174,14 +5295,81 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
                 print(f"  {s['command']:20s} {s['description']}")
 
     async def cmd_artifacts(self, args: str):
-        try:
-            limit = int(args.strip()) if args.strip() else 20
-        except Exception:
-            limit = 20
-        from artifacts import artifact_root, recent_artifacts
+        tokens = [part for part in args.split() if part]
+        mode = "list"
+        limit = 20
+        keep = 20
+        dry_run = False
+        if tokens:
+            head = tokens[0].lower()
+            if head in {"prune", "cleanup", "gc", "purge"}:
+                mode = "prune"
+                for token in tokens[1:]:
+                    if token == "--dry-run":
+                        dry_run = True
+                        continue
+                    try:
+                        keep = int(token)
+                    except Exception:
+                        continue
+            elif head in {"stats", "summary"}:
+                mode = "stats"
+            else:
+                try:
+                    limit = int(head)
+                except Exception:
+                    limit = 20
+        from artifacts import artifact_summary_all, prune_artifacts_all, recent_artifacts_all
 
-        root = artifact_root()
-        items = recent_artifacts(limit=limit, root=root)
+        if mode == "stats":
+            summary = artifact_summary_all()
+            roots = [pathlib.Path(str(r)) for r in summary.get("roots") or []]
+            total = int(summary.get("total") or 0)
+            total_size = int(summary.get("total_size_bytes") or 0)
+            by_kind = summary.get("by_kind") or {}
+            if HAS_RICH:
+                console.print("[bold]Artifact inventory[/bold]")
+                for r in roots:
+                    console.print(f"  [dim]root[/dim]: {_display_path(r, fallback=r.name)}")
+                console.print(f"  total: [bold]{total}[/bold]  size: [bold]{total_size:,} bytes[/bold]")
+                if by_kind:
+                    for kind, count in by_kind.items():
+                        console.print(f"  [dim]{kind}[/dim]: {count}")
+            else:
+                print("Artifact inventory")
+                print(f"  total: {total}")
+                print(f"  size: {total_size} bytes")
+                for kind, count in by_kind.items():
+                    print(f"  {kind}: {count}")
+            return
+
+        if mode == "prune":
+            result = prune_artifacts_all(keep=keep, dry_run=dry_run)
+            removed = int(result.get("removed") or 0)
+            scanned = int(result.get("scanned") or 0)
+            action = "Would remove" if dry_run else "Removed"
+            if HAS_RICH:
+                console.print("[bold]Artifact prune[/bold]")
+                for r in result.get("roots") or []:
+                    console.print(f"  [dim]root[/dim]: {_display_path(r, fallback=pathlib.Path(str(r)).name)}")
+                console.print(f"  keep: [bold]{result.get('keep', keep)}[/bold]  scanned: [bold]{scanned}[/bold]  removed: [bold]{removed}[/bold]")
+                if removed:
+                    for entry in result.get("deleted") or []:
+                        name = pathlib.Path(str(entry.get("path") or entry.get("metadata_path") or "")).name
+                        root_name = pathlib.Path(str(entry.get("root") or "")).name
+                        console.print(f"  [dim]{action}[/dim] {name} [dim]({root_name})[/dim]")
+            else:
+                print("Artifact prune")
+                print(f"  keep: {result.get('keep', keep)}")
+                print(f"  scanned: {scanned}")
+                print(f"  removed: {removed}")
+                for entry in result.get("deleted") or []:
+                    name = pathlib.Path(str(entry.get("path") or entry.get("metadata_path") or "")).name
+                    root_name = pathlib.Path(str(entry.get("root") or "")).name
+                    print(f"  {action}: {name} ({root_name})")
+            return
+
+        items = recent_artifacts_all(limit=limit)
         if not items:
             msg = "No artifacts found"
             console.print(f"[dim]{msg}[/dim]") if HAS_RICH else print(msg)
@@ -5194,6 +5382,7 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
             table.add_column("Status")
             table.add_column("Topic")
             table.add_column("File", overflow="fold")
+            table.add_column("Root", style="dim")
             for item in items:
                 _path = item.get("path") or item.get("metadata_path") or ""
                 table.add_row(
@@ -5201,6 +5390,7 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
                     str(item.get("status") or "unknown"),
                     str(item.get("topic") or ""),
                     pathlib.Path(str(_path)).name if _path else "",
+                    pathlib.Path(str(item.get("root") or "")).name if item.get("root") else "",
                 )
             console.print(table)
         else:
@@ -5208,7 +5398,8 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
             for item in items:
                 _path = item.get("path") or item.get("metadata_path") or ""
                 _name = pathlib.Path(str(_path)).name if _path else ""
-                print(f"- {item.get('kind')} [{item.get('status')}] {item.get('topic')}: {_name}")
+                _root_name = pathlib.Path(str(item.get("root") or "")).name if item.get("root") else ""
+                print(f"- {item.get('kind')} [{item.get('status')}] {item.get('topic')}: {_name} ({_root_name})")
     async def cmd_analyze(self, args: str):
         return await super().cmd_analyze(args)
 
@@ -7482,6 +7673,11 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
             from apps.cli.prompts.ui import UI_SYSTEM_PROMPT
         except ImportError:
             UI_SYSTEM_PROMPT = ""
+        try:
+            from artifacts import user_generated_dir
+            generated_dir = user_generated_dir()
+        except Exception:
+            generated_dir = pathlib.Path.home() / "Documents" / "Aria Code" / "generated"
 
         prompt = (
             f"{UI_SYSTEM_PROMPT}\n\n"
@@ -7490,11 +7686,11 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
             "Generate a Bloomberg Terminal-style HTML dashboard for this request.\n"
             "Follow the workflow:\n"
             "1. Identify what data you need (symbols, metrics, time range).\n"
-            "2. Write a Python generator script to ~/Desktop using write_file:\n"
+            f"2. Write a Python generator script under {generated_dir} using write_file:\n"
             "   - Fetch all data with yfinance / akshare\n"
             "   - Embed data as JS/HTML constants\n"
             "   - Apply the full Bloomberg CSS design system (dark/light via prefers-color-scheme)\n"
-            "   - Save timestamped HTML to ~/Desktop/\n"
+            f"   - Save timestamped HTML under {generated_dir}\n"
             "3. Run the script with run_command.\n"
             "4. Open the output HTML in the browser.\n\n"
             "Design requirements (non-negotiable):\n"
@@ -7516,7 +7712,7 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
     async def cmd_dashboard(self, args: str):
         """
         生成个人化 Dashboard HTML，自动在浏览器打开。
-        Usage: /dashboard
+        Usage: /dashboard [brief|market|portfolio|full]
         数据来源: 本地持仓DB + 价格预警DB + yfinance 实时行情 + 最近生成文件
         """
         try:
@@ -7528,14 +7724,16 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
                 print("dashboard_generator.py 未找到")
             return
 
+        parts = args.strip().split()
+        mode = parts[0].lower() if parts and parts[0].lower() in {"brief", "market", "portfolio", "full"} else "brief"
         watchlist = self.terminal.config.get("watchlist", [])
         if HAS_RICH:
-            self.console.print("[dim]正在抓取数据并生成 Dashboard…[/dim]")
+            self.console.print(f"[dim]正在抓取数据并生成 Dashboard（{mode}）…[/dim]")
         else:
-            print("正在生成 Dashboard…")
+            print(f"正在生成 Dashboard（{mode}）…")
 
         try:
-            out = generate_and_open(watchlist=watchlist, config=self.terminal.config)
+            out = generate_and_open(watchlist=watchlist, config=self.terminal.config, mode=mode)
             if HAS_RICH:
                 self.console.print(
                     f"  [green]✓[/green] Dashboard 已生成并在浏览器打开\n"
@@ -7572,17 +7770,20 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
                 symbol_parts.append(p.upper())
         symbol = symbol_parts[0] if symbol_parts else "AAPL"
 
-        msg = f"生成 {symbol} 分析图表 ({period})..."
+        msg = f"chart {symbol} · {period}"
+        chart_start = time.perf_counter()
         if HAS_RICH:
-            with console.status(f"[dim]{msg}[/dim]", spinner="dots"):
+            console.print(f"\n  [bold]⏺[/bold] {msg}")
+            with console.status("[dim]fetching OHLCV and calculating indicators…[/dim]", spinner="dots"):
                 result = await asyncio.get_event_loop().run_in_executor(
                     None, lambda: _generate_chart_sync(symbol, period=period)
                 )
         else:
-            print(f"  {msg}")
+            print(f"  > {msg}")
             result = await asyncio.get_event_loop().run_in_executor(
                 None, lambda: _generate_chart_sync(symbol, period=period)
             )
+        elapsed_ms = int((time.perf_counter() - chart_start) * 1000)
 
         if result.get("success"):
             path    = result.get("chart_path", "")
@@ -7591,13 +7792,16 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
             sup3    = result.get("support") or []
             res3    = result.get("resistance") or []
             rsi_val = result.get("rsi")
+            provider = result.get("provider") or "market data"
             if HAS_RICH:
-                console.print(f"\n  ✅ 图表已生成: [link={path}]{path_label}[/link]")
+                console.print(f"  [green]✓[/green] chart generated  [dim]({elapsed_ms}ms)[/dim]")
+                console.print(f"    saved: [link={path}]{path_label}[/link]")
                 console.print(
-                    f"  [dim]趋势: {result.get('trend','—')}  "
+                    f"    [dim]趋势: {result.get('trend','—')}  "
                     f"RSI: {f'{rsi_val:.1f}' if rsi_val else '—'}  "
                     f"支撑: {'/'.join(str(v) for v in sup3) or '—'}  "
-                    f"阻力: {'/'.join(str(v) for v in res3) or '—'}[/dim]"
+                    f"阻力: {'/'.join(str(v) for v in res3) or '—'}  "
+                    f"数据: {provider}[/dim]"
                 )
                 if issues:
                     console.print(f"  [yellow]⚠ 自审发现 {len(issues)} 个问题:[/yellow]")
@@ -7606,8 +7810,8 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
                 else:
                     console.print("  [green dim]✓ 自审通过（数据质量正常）[/green dim]")
             else:
-                print(f"\n  ✅ 图表已生成: {path_label}")
-                print(f"  趋势: {result.get('trend','—')}  RSI: {f'{rsi_val:.1f}' if rsi_val else '—'}")
+                print(f"  OK chart generated ({elapsed_ms}ms): {path_label}")
+                print(f"  趋势: {result.get('trend','—')}  RSI: {f'{rsi_val:.1f}' if rsi_val else '—'}  数据: {provider}")
                 if issues:
                     print(f"  ⚠ 自审发现 {len(issues)} 个问题:")
                     for iss in issues:
@@ -7813,6 +8017,61 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
             formatter=_display_value,
         )
 
+        period = _chart_period_from_ta_days(days)
+        self.terminal._pending_market_artifact = {
+            "kind": "ta_chart",
+            "symbol": symbol,
+            "period": period,
+            "command": f"/chart {symbol} {period}",
+        }
+        chart_result = None
+        if HAS_RICH:
+            with console.status(f"[dim]生成 {symbol} 技术图表 HTML/PNG...[/dim]", spinner="dots"):
+                chart_result = await asyncio.get_event_loop().run_in_executor(
+                    None, lambda: _generate_chart_sync(symbol, period=period)
+                )
+        else:
+            print(f"  生成 {symbol} 技术图表 HTML/PNG...")
+            chart_result = await asyncio.get_event_loop().run_in_executor(
+                None, lambda: _generate_chart_sync(symbol, period=period)
+            )
+
+        if chart_result and chart_result.get("success"):
+            html_path = chart_result.get("chart_path") or ""
+            png_path = chart_result.get("png_path") or ""
+            png_error = chart_result.get("png_error") or ""
+            self.terminal._pending_market_artifact = {
+                "kind": "ta_chart",
+                "symbol": symbol,
+                "period": period,
+                "html_path": html_path,
+                "png_path": png_path,
+                "command": f"/chart {symbol} {period}",
+            }
+            if HAS_RICH:
+                console.print()
+                console.print(f"  [green]✓[/green] 技术图表已生成")
+                if html_path:
+                    console.print(f"  [dim]HTML:[/dim] [link={html_path}]{_display_path(html_path)}[/link]")
+                if png_path:
+                    console.print(f"  [dim]PNG :[/dim] [link={png_path}]{_display_path(png_path)}[/link]")
+                elif png_error:
+                    console.print(f"  [yellow]PNG 跳过:[/yellow] {png_error[:90]}")
+            else:
+                print("\n  技术图表已生成")
+                if html_path:
+                    print(f"  HTML: {_display_path(html_path)}")
+                if png_path:
+                    print(f"  PNG : {_display_path(png_path)}")
+                elif png_error:
+                    print(f"  PNG 跳过: {png_error[:90]}")
+        elif chart_result:
+            err = chart_result.get("error") or "图表生成失败"
+            if HAS_RICH:
+                console.print(f"  [yellow]图表生成跳过:[/yellow] {err[:120]}")
+            else:
+                print(f"  图表生成跳过: {err[:120]}")
+
     # ════════════════════════════════════════════════════════════════════════
     # 策略金库命令
     # ════════════════════════════════════════════════════════════════════════
@@ -7943,7 +8202,7 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
 
         path_str = args.strip().strip("\"'")
         if not path_str:
-            msg = "Usage: /vision <image_path>  (e.g. /vision ~/Desktop/chart.png)"
+            msg = "Usage: /vision <image_path>  (e.g. /vision ~/Pictures/chart.png)"
             console.print(f"[dim]{msg}[/dim]" if HAS_RICH else msg)
             return
 
@@ -8430,6 +8689,8 @@ class ArtheraTerminal:
         self._last_turn_envelope: Optional[AgentTurnEnvelope] = None
         self._forks: List[dict] = []           # forked conversation snapshots
         self._pending_image: Optional[dict] = None  # pending vision content block
+        self._pending_market_artifact: Optional[dict] = None
+        self._last_preflight_key: str = ""
         # ── Multi-file analysis session ──────────────────────────────────────
         try:
             from file_analysis_tools import FileSession
@@ -8454,6 +8715,7 @@ class ArtheraTerminal:
         # ── MCP registry placeholder (started async in run_interactive) ──
         self._mcp_registry: Optional[Any] = None
         self._mcp_started = False
+        self._mcp_connection_notice_shown = False
         self._pending_notifications: list = []  # printed before next input cycle to avoid corrupting pt UI
 
         # ── Global user memory ────────────────────────────────────────────
@@ -8734,8 +8996,34 @@ class ArtheraTerminal:
         permission = self.config.get("permission_mode", "workspace-write")
         return f"aria  ·  {runtime}  ·  {permission}  ·  {privacy}{_ctx}"
 
+    def _maybe_show_intent_preflight(self, message: str, *, quiet: bool = False) -> bool:
+        key = message.strip()
+        if not key or key == self._last_preflight_key:
+            return False
+        shown = _print_preflight_notice(key, quiet=quiet)
+        if shown:
+            self._last_preflight_key = key
+        return shown
+
     async def send_message(self, message: str, system_override: Optional[str] = None):
         """Send message to Aria AI with agentic tool loop, smart fallback, markdown."""
+        if (
+            not system_override
+            and self._pending_image is None
+            and not (self._file_session is not None and self._file_session.get_active() is not None)
+            and self._project_session is None
+            and not getattr(self, "_send_message_route_active", False)
+        ):
+            routed = _natural_language_visual_artifact_route(message, set(self.commands.commands))
+            if routed is not None:
+                self._send_message_route_active = True
+                try:
+                    self._maybe_show_intent_preflight(routed.text)
+                    await self.commands.execute(routed.text)
+                finally:
+                    self._send_message_route_active = False
+                return
+        self._maybe_show_intent_preflight(message)
         # Store optional system prompt override (used by /file analyze)
         self._system_override = system_override
         # Fire prompt_submit hook (Claude Code: UserPromptSubmit)
@@ -8806,6 +9094,17 @@ class ArtheraTerminal:
             await self.commands._cmd_broker_add(_btype)
             return
 
+        if _is_market_artifact_followup(message) and getattr(self, "_pending_market_artifact", None):
+            pending_artifact = dict(self._pending_market_artifact or {})
+            symbol = str(pending_artifact.get("symbol") or "").strip()
+            period = str(pending_artifact.get("period") or "1y").strip() or "1y"
+            if symbol:
+                if HAS_RICH:
+                    console.print(f"\n[bold]Aria[/bold]\n")
+                    console.print(f"  [dim]继续上一项市场图表任务：{symbol} {period}[/dim]")
+                await self.commands.cmd_chart(f"{symbol} {period}")
+                return
+
         # ── Football prediction intercept: NL chat queries → built-in Poisson handler ──
         # Prevents LLM from hallucinating match data — route to the real Poisson engine.
         if not message.startswith("/"):
@@ -8819,7 +9118,9 @@ class ArtheraTerminal:
                 "预测", "比分", "谁赢", "胜率", "谁能赢", "谁会赢", "结果预测",
                 "比赛预测", "分析", "比赛", "对阵", "交手", "胜负", "几比几",
                 "进球", "能赢", "会赢", "足球", "国家队", "世界杯", "欧洲杯",
+                "打败", "战胜", "击败", "打平", "晋级", "出线", "夺冠", "踢",
                 "predict", "prediction", "score", "match", "football", "vs",
+                "beat", "win", "soccer",
             )):
                 _h_cn, _a_cn = _fp_pair
                 if HAS_RICH:
@@ -8837,12 +9138,13 @@ class ArtheraTerminal:
             # never accidentally inherit a stock ticker from session history.
             deterministic = _try_handle_realty_query(message)
         if not deterministic.get("success"):
+            # Chart requests should be handled before generic market snapshots.
+            deterministic = _try_handle_stock_chart_analysis(message)
+        if not deterministic.get("success"):
             # Market snapshot always uses deterministic renderer — even tool-capable models
             # produce N/A when they try to parse injected data themselves.
             deterministic = _try_handle_market_snapshot_analysis(
                 message, history=self.conversation[:-1])
-        if not deterministic.get("success"):
-            deterministic = _try_handle_stock_chart_analysis(message)
         if deterministic.get("success") or _is_stock_chart_analysis_request(message):
             final_text = deterministic.get("response", "")
             if not final_text:
@@ -8856,6 +9158,15 @@ class ArtheraTerminal:
             }.get(_tools[0], _tools[0]) if _tools else "本地分析"
             _rate_limited = deterministic.get("rate_limited", False)
             _rl_note = "  [yellow]⚠ 数据源限流[/yellow]" if _rate_limited else ""
+            if _tools and _tools[0] == "stock_chart":
+                _chart_symbol = deterministic.get("symbol") or _extract_market_symbol(message)
+                self._pending_market_artifact = {
+                    "kind": "stock_chart",
+                    "symbol": _chart_symbol,
+                    "period": "1y",
+                    "html_path": deterministic.get("chart_path", ""),
+                    "command": f"/chart {_chart_symbol or 'AAPL'} 1y",
+                }
             # For snapshot + "分析" queries: show data then continue to LLM for deep analysis
             _det_wants_analysis = (
                 any(k in message for k in ("分析", "analyze", "analysis", "对比", "比较", "compare"))
@@ -8867,12 +9178,8 @@ class ArtheraTerminal:
                 console.print(f"\n  [#C08050]⏺[/#C08050]  [bold]{_t_icon}[/bold]")
                 console.print(f"  [green]✓[/green]  [dim]{_tool_label} 数据已获取[/dim]")
                 console.print()
-                console.print("[bold]Aria[/bold]")
-                console.print()
                 console.print(Markdown(_strip_latex(final_text)))
                 console.print(f"\n[dim]{_tool_label} · 本内容不构成投资建议[/dim]{_rl_note}\n")
-                if not _det_wants_analysis:
-                    console.print(Rule(style="dim"))
             else:
                 print("\nAria\n")
                 print(final_text)
@@ -8993,6 +9300,7 @@ class ArtheraTerminal:
         provider = turn_state.provider
         token_count = 0
         thinking_tokens = 0
+        elapsed = 0.0
 
         round_num = 0
         while round_num < hard_max_rounds:
@@ -9007,7 +9315,9 @@ class ArtheraTerminal:
 
             if round_num == 0:
                 if HAS_RICH:
-                    console.print("\n[bold]Aria[/bold]")
+                    _answer_model = self._actual_model or self.config.get("model", "")
+                    _answer_meta = f"  [dim]· {_answer_model}[/dim]" if _answer_model else ""
+                    console.print(f"\n[bold]Aria[/bold]{_answer_meta}")
                 else:
                     print("\nAria")
 
@@ -9350,6 +9660,7 @@ class ArtheraTerminal:
                     cancel_event=self.cancel_event,
                     enable_tools=True,
                     system_override=_sys_ov,
+                    show_market_prefetch_status=not _det_wants_analysis,
                 )
                 provider = "ollama"
                 self._last_provider = "ollama"
@@ -9466,10 +9777,6 @@ class ArtheraTerminal:
                                 ))
                             else:
                                 print(f"  ⚠ 配置模型 {model} 未安装，已切换至 {_ollama_model}")
-                        else:
-                            # 含 "cloud" 字样说明是通过 Ollama 运行的云端命名模型
-                            if "cloud" in _ollama_model.lower() and HAS_RICH:
-                                console.print(f"  [dim]Ollama · {_ollama_model}[/dim]")
                         _use_plain_print[0]  = True   # disable Live for Ollama
                         _use_batch_render[0] = True   # accumulate silently → Rich render at end
                         _sys_ov = getattr(self, "_system_override", None)
@@ -9481,6 +9788,7 @@ class ArtheraTerminal:
                             on_tool_call=on_tool_call, on_tool_result=on_tool_result,
                             cancel_event=self.cancel_event, enable_tools=True,
                             system_override=_sys_ov,
+                            show_market_prefetch_status=not _det_wants_analysis,
                         )
                         provider = "ollama"
                         self._last_provider = "ollama"
@@ -9880,7 +10188,6 @@ class ArtheraTerminal:
                             f"{'上下文已接近满载！' if _ctx_fill_pct >= 0.85 else '对话历史较长。'}"
                             f" 可用 /compact 压缩历史，或 /clear 重置。[/{_ctx_color}]"
                         )
-                console.print(Rule(style="dim"))
             else:
                 print(f"\n{' · '.join(metadata.parts)}\n")
 
@@ -10292,8 +10599,12 @@ class ArtheraTerminal:
                     if results:
                         n = self._mcp_registry.register_into(LOCAL_TOOLS, LOCAL_TOOL_SCHEMAS)
                         _mcp_registry = self._mcp_registry
-                        if n:
-                            self._pending_notifications.append(f"  [dim]MCP: {n} tools from {len(results)} server(s)[/dim]")
+                        if n and not self._mcp_connection_notice_shown:
+                            self._mcp_connection_notice_shown = True
+                            server_word = "server" if len(results) == 1 else "servers"
+                            self._pending_notifications.append(
+                                f"  [dim]MCP connected · {n} tools · {len(results)} {server_word}[/dim]"
+                            )
                 except Exception as _exc:
                     logger.debug("MCP startup error: %s", _exc)
             asyncio.create_task(_start_mcp())
@@ -10463,12 +10774,14 @@ class ArtheraTerminal:
                     break
 
                 if self.commands.is_command(user_input):
+                    self._maybe_show_intent_preflight(user_input)
                     await self.commands.execute(user_input)
                     continue
 
                 # ── Top-level command router (quant CLI style) ─────────────────
                 # Intercepts bare keywords like "analyze AAPL" → /analyze AAPL
                 # so users don't need to type the slash for common quant workflows.
+                self._maybe_show_intent_preflight(user_input)
                 _routed = await try_top_level_route(user_input, self.commands)
                 if _routed:
                     continue
@@ -10513,6 +10826,7 @@ class ArtheraTerminal:
         # Without this, /memory /note /init /review are sent to the LLM as plain text.
         _stripped_prompt = prompt.strip()
         if self.commands.is_command(_stripped_prompt):
+            self._maybe_show_intent_preflight(_stripped_prompt, quiet=quiet)
             await self.commands.execute(_stripped_prompt)
             return
 
@@ -10520,6 +10834,7 @@ class ArtheraTerminal:
         _file_inject = _try_inject_file_paths(prompt)
         if _file_inject:
             prompt = _file_inject + prompt
+        self._maybe_show_intent_preflight(prompt, quiet=quiet)
 
         _curr_model_id_p = self.config.get("model", "")
         _model_has_tools_p = False
@@ -10545,9 +10860,9 @@ class ArtheraTerminal:
         if not _model_has_tools_p:
             deterministic = _try_handle_broker_query(prompt)
         if not deterministic.get("success"):
-            deterministic = _try_handle_market_snapshot_analysis(prompt)
-        if not deterministic.get("success"):
             deterministic = _try_handle_stock_chart_analysis(prompt)
+        if not deterministic.get("success"):
+            deterministic = _try_handle_market_snapshot_analysis(prompt)
         if deterministic.get("success") or _is_stock_chart_analysis_request(prompt):
             result = deterministic
         else:
