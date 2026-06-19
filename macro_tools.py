@@ -64,8 +64,13 @@ def _get_fred_key() -> str:
     return key
 
 
-def _fred_series(series_id: str, limit: int = 24) -> List[Dict]:
-    """Fetch a FRED data series. Returns list of {date, value} dicts."""
+def _fred_series(series_id: str, limit: int = 24, units: str = "") -> List[Dict]:
+    """Fetch a FRED data series. Returns list of {date, value} dicts.
+
+    ``units`` maps to FRED's units transformation, e.g. "pc1" = percent change
+    from a year ago (used for YoY rates like CPI inflation, so we don't show
+    the raw index level mislabelled as a percentage).
+    """
     if not _HAS_REQUESTS:
         return []
     key = _get_fred_key()
@@ -76,6 +81,8 @@ def _fred_series(series_id: str, limit: int = 24) -> List[Dict]:
             "sort_order": "desc",
             "file_type": "json",
         }
+        if units:
+            params["units"] = units
         if key:
             params["api_key"] = key
             url = f"{FRED_API_BASE}/series/observations"
@@ -87,8 +94,11 @@ def _fred_series(series_id: str, limit: int = 24) -> List[Dict]:
                 for o in reversed(obs)
             ]
         else:
-            # Public CSV endpoint (no key needed, slower)
+            # Public CSV endpoint (no key needed, slower). fredgraph supports
+            # transformation codes via the `transformation` query param.
             obs_url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
+            if units:
+                obs_url += f"&transformation={units}"
             r = _req.get(obs_url, timeout=10)
             r.raise_for_status()
             lines = r.text.strip().split("\n")[1:]  # skip header
@@ -112,7 +122,8 @@ _FRED_SERIES_MAP = {
     "gdp":          ("GDP",     "GDP 实际值 (十亿美元, 季度)", "B"),
     "gdp_growth":   ("A191RL1Q225SBEA", "GDP 同比增速 (%)", "%"),
     "cpi":          ("CPIAUCSL", "CPI 城市消费者价格指数", "idx"),
-    "cpi_yoy":      ("CPIAUCSL", "CPI 同比 (%)", "%"),
+    "cpi_yoy":      ("CPIAUCSL", "CPI 同比 (%)", "%", "pc1"),       # pc1 = YoY %
+    "core_cpi_yoy": ("CPILFESL", "核心 CPI 同比 (%)", "%", "pc1"),
     "core_cpi":     ("CPILFESL", "核心 CPI (剔除食品能源)", "idx"),
     "pce":          ("PCEPI",    "PCE 通胀指数", "idx"),
     "fed_rate":     ("FEDFUNDS", "联邦基金利率 (%)", "%"),
@@ -146,8 +157,12 @@ def get_us_macro(indicator: str = "all", periods: int = 12) -> dict:
 
     results = {}
     for key in keys:
-        series_id, label, unit = _FRED_SERIES_MAP[key]
-        data = _fred_series(series_id, limit=periods)
+        _spec = _FRED_SERIES_MAP[key]
+        series_id, label, unit = _spec[0], _spec[1], _spec[2]
+        _units = _spec[3] if len(_spec) > 3 else ""
+        # pc1 (YoY) needs ~13 months of monthly data to compute the first point
+        _lim = max(periods, 14) if _units == "pc1" else periods
+        data = _fred_series(series_id, limit=_lim, units=_units)
         if data:
             latest = data[-1]
             prev   = data[-2] if len(data) >= 2 else None
