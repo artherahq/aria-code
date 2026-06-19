@@ -2105,6 +2105,12 @@ def _tool_edit_file(params: dict) -> dict:
     return _f(params)
 
 
+def _tool_multi_edit(params: dict) -> dict:
+    """Thin shim — implementation in apps/cli/tools/write_tools.py."""
+    from apps.cli.tools.write_tools import tool_multi_edit as _f
+    return _f(params)
+
+
 def _tool_update_todos(params: dict) -> dict:
     """Thin shim — implementation in apps/cli/todo_tracker.py."""
     from apps.cli.todo_tracker import update_todos as _f
@@ -2189,6 +2195,7 @@ LOCAL_TOOLS = {
     "read_file":      (_tool_read_file,      "Read a file's contents"),
     "write_file":     (_tool_write_file,     "Create or overwrite a file"),
     "edit_file":      (_tool_edit_file,      "Edit a file (find & replace)"),
+    "multi_edit":     (_tool_multi_edit,     "Apply multiple find/replace edits to one file atomically"),
     "list_files":     (_tool_list_files,     "List files in a directory"),
     "list_dir":       (_tool_list_files,     "List files in a directory (alias for list_files)"),
     "update_todos":   (_tool_update_todos,   "Track multi-step task progress as a live checklist"),
@@ -2293,6 +2300,38 @@ LOCAL_TOOL_SCHEMAS.extend([
                     "new_string": {"type": "string", "description": "Replacement text"},
                 },
                 "required": ["path", "old_string", "new_string"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "multi_edit",
+            "description": (
+                "Apply several edits to ONE file in a single atomic operation — all succeed or "
+                "none are applied. Use this instead of multiple edit_file calls when changing "
+                "several spots in the same file. Edits apply in order; a later edit can match "
+                "text a previous edit produced."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "File path to edit"},
+                    "edits": {
+                        "type": "array",
+                        "description": "Ordered list of edits to apply",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "old_string": {"type": "string", "description": "Exact text to find (must match exactly)"},
+                                "new_string": {"type": "string", "description": "Replacement text"},
+                                "replace_all": {"type": "boolean", "description": "Replace all occurrences (default false)"},
+                            },
+                            "required": ["old_string", "new_string"],
+                        },
+                    },
+                },
+                "required": ["path", "edits"],
             },
         },
     },
@@ -2615,7 +2654,7 @@ _dedup_tool_schemas()
 
 
 # Tools that require user confirmation before execution
-_CONFIRM_TOOLS = {"write_file", "edit_file", "run_command"}
+_CONFIRM_TOOLS = {"write_file", "edit_file", "multi_edit", "run_command"}
 # In bot mode (ARIA_BOT_MODE=1): auto-approve all tools and suppress visual output
 _ARIA_BOT_MODE: bool = bool(os.environ.get("ARIA_BOT_MODE"))
 _auto_approve_session: bool = _ARIA_BOT_MODE  # Set True when user chooses "Yes, allow all"
@@ -2696,6 +2735,37 @@ def _show_edit_preview(params: dict):
     console.print(Panel(
         "\n".join(body_parts) if body_parts else "[dim](no preview)[/dim]",
         title=f"[yellow]Edit file[/yellow] [dim]{short}[/dim]",
+        title_align="left",
+        border_style="yellow",
+        box=rich_box.ROUNDED,
+        padding=(0, 1),
+    ))
+
+
+def _show_multi_edit_preview(params: dict):
+    """Show a compact preview of all edits in a multi_edit call."""
+    if _ARIA_BOT_MODE:
+        return
+    path = params.get("path", "")
+    edits = params.get("edits", [])
+    if not path or not edits:
+        return
+    if not HAS_RICH:
+        print(f"\n  Multi-edit {path}  ({len(edits)} edits)")
+        return
+    body_parts: list = []
+    for i, ed in enumerate(edits):
+        old_s = ed.get("old_string", ed.get("old_str", "")) if isinstance(ed, dict) else ""
+        new_s = ed.get("new_string", ed.get("new_str", "")) if isinstance(ed, dict) else ""
+        body_parts.append(f"[bold]#{i+1}[/bold]")
+        for ol in old_s.splitlines()[:3]:
+            body_parts.append(f"[red]  -  {ol[:96]}[/red]")
+        for nl in new_s.splitlines()[:3]:
+            body_parts.append(f"[green]  +  {nl[:96]}[/green]")
+    console.print()
+    console.print(Panel(
+        "\n".join(body_parts) if body_parts else "[dim](no preview)[/dim]",
+        title=f"[yellow]Multi-edit[/yellow] [dim]{pathlib.Path(path).name} · {len(edits)} edits[/dim]",
         title_align="left",
         border_style="yellow",
         box=rich_box.ROUNDED,
@@ -2847,13 +2917,15 @@ def _confirm_tool_execution_decision(tool_name: str, params: dict,
     # ── Default confirmation for write_file / edit_file / low-risk run ────────
     if tool_name == "edit_file":
         _show_edit_preview(params)
+    elif tool_name == "multi_edit":
+        _show_multi_edit_preview(params)
     elif tool_name == "write_file":
         _show_write_preview(params)
     elif tool_name == "run_command":
         # Header already printed by on_tool_call — just pass through policy
         pass
 
-    _tool_label = {"write_file": "写文件", "edit_file": "编辑文件", "run_command": "运行命令"}.get(tool_name, tool_name)
+    _tool_label = {"write_file": "写文件", "edit_file": "编辑文件", "multi_edit": "批量编辑", "run_command": "运行命令"}.get(tool_name, tool_name)
     options = [
         ("Yes",                              ""),
         (f"Always allow {_tool_label}",      f"本会话内自动允许所有 {_tool_label}"),
@@ -3993,6 +4065,11 @@ def _format_tool_summary(tool_name: str, result: dict) -> str:
         return _base
     if tool_name == "edit_file":
         _base = f"OK: edited {data.get('path', '')} ({data.get('replacements', 0)} replacements)"
+        if result.get("warning"):
+            _base += f"\n\n{result['warning']}"
+        return _base
+    if tool_name == "multi_edit":
+        _base = f"OK: {data.get('edits_applied', 0)} edits applied to {data.get('path', '')}"
         if result.get("warning"):
             _base += f"\n\n{result['warning']}"
         return _base
@@ -10041,7 +10118,7 @@ class ArtheraTerminal:
                         )
 
                     progress_label = task.progress_label(len(pending))
-                    _slow_local = {"write_file", "edit_file", "run_command", "search_code"}
+                    _slow_local = {"write_file", "edit_file", "multi_edit", "run_command", "search_code"}
                     if HAS_RICH and (tool_name not in LOCAL_TOOLS or tool_name in _slow_local):
                         spinner_label = "" if tool_name in LOCAL_TOOLS else f"[dim]{progress_label}[/dim]"
                         with console.status(spinner_label, spinner="dots", spinner_style="dim"):

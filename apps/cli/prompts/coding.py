@@ -34,6 +34,8 @@ CODING_SYSTEM_PROMPT = (
     "- write_file: {path, content} — Create/overwrite file. PURE code only, NO markdown fences.\n"
     "- read_file: {path} — Read file content to inspect/debug.\n"
     "- edit_file: {path, old_string, new_string} — Surgical edit. old_string must match EXACTLY.\n"
+    "- multi_edit: {path, edits:[{old_string,new_string}]} — Several edits to ONE file, atomic. "
+    "Prefer this over multiple edit_file calls on the same file.\n"
     "- run_command: {command, timeout} — Shell command (default timeout=120, max=300).\n"
     "- list_files: {path, pattern} — List directory or glob match.\n"
     "- search_code: {pattern, path, glob} — Grep for pattern in files.\n"

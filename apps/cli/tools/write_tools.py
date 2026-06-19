@@ -518,3 +518,105 @@ def tool_edit_file(params: dict) -> dict:
         return {"success": True, "data": _data}
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
+def tool_multi_edit(params: dict) -> dict:
+    """Apply multiple find/replace edits to a single file atomically.
+
+    All edits must succeed or none are applied (the file is only written once,
+    after every edit has been validated against the in-memory content). Edits
+    are applied in order, so a later edit can match text introduced by an
+    earlier one.
+    """
+    path = params.get("path", "")
+    edits = params.get("edits", [])
+    stage_only = bool(params.get("stage_only", False))
+
+    if not path:
+        return {"success": False, "error": "Missing 'path' parameter"}
+    if not isinstance(edits, list) or not edits:
+        return {"success": False, "error": "Missing 'edits' — expected a non-empty array of "
+                                            "{old_string, new_string, replace_all?}"}
+
+    try:
+        p = pathlib.Path(path).expanduser().resolve()
+        if not p.exists():
+            return {"success": False, "error": f"File not found: {p}"}
+        if not _is_safe(p):
+            return {"success": False, "error": f"Access denied: path '{p}' is outside allowed directories"}
+
+        content = p.read_text(errors="replace")
+        working = content
+        applied_count = 0
+        total_added = 0
+        total_removed = 0
+
+        # ── Phase 1: validate + apply every edit in memory (atomic) ───────────
+        for i, ed in enumerate(edits):
+            if not isinstance(ed, dict):
+                return {"success": False, "error": f"edit #{i + 1} is not an object"}
+            old_s = ed.get("old_string", ed.get("old_str", ""))
+            new_s = ed.get("new_string", ed.get("new_str", ""))
+            replace_all = bool(ed.get("replace_all", False))
+            if not old_s:
+                return {"success": False, "error": f"edit #{i + 1} missing 'old_string'"}
+            occurrences = working.count(old_s)
+            if occurrences == 0:
+                return {"success": False, "error":
+                        f"edit #{i + 1}: old_string not found. No edits applied (atomic). "
+                        f"HINT: read_file first to copy exact text. old_string was:\n"
+                        f"{old_s[:200]}"}
+            if occurrences > 1 and not replace_all:
+                return {"success": False, "error":
+                        f"edit #{i + 1}: old_string matches {occurrences} places — pass "
+                        f"replace_all=true to replace all, or make old_string unique."}
+            working = working.replace(old_s, new_s, -1 if replace_all else 1)
+            applied_count += 1
+            total_added += len(new_s.splitlines())
+            total_removed += len(old_s.splitlines())
+
+        if working == content:
+            return {"success": False, "error": "No changes — edits produced identical content."}
+
+        # ── Phase 2: stage + apply once ───────────────────────────────────────
+        store = _change_store()
+        change = store.stage(p, working, source="multi_edit")
+        console, has_rich = _ui()
+
+        if stage_only:
+            return {"success": True, "data": {
+                "path": str(p), "edits_applied": applied_count,
+                "lines": working.count("\n") + 1,
+                "change_id": change.change_id,
+                "before_hash": change.before_hash, "after_hash": change.after_hash,
+                "diff": change.diff, "staged": True, "applied": False,
+            }}
+
+        try:
+            applied = store.apply(change.change_id)
+        except _ChangeConflictError() as exc:
+            return {"success": False, "error": str(exc), "data": {"change_id": change.change_id}}
+
+        if has_rich and console:
+            console.print(f"  [dim]Applied {applied_count} edits "
+                          f"([green]+{total_added}[/green]/[red]-{total_removed}[/red] lines)[/dim]")
+        else:
+            print(f"  Applied {applied_count} edits (+{total_added}/-{total_removed} lines)")
+
+        _syntax_warn = _verify_python_syntax(p, working)
+        if _syntax_warn and has_rich and console:
+            console.print(f"  [yellow]⚠ 语法检查未通过[/yellow]")
+
+        _data = {
+            "path": str(p), "edits_applied": applied_count,
+            "lines": working.count("\n") + 1,
+            "change_id": applied.change_id,
+            "before_hash": applied.before_hash, "after_hash": applied.after_hash,
+            "diff": applied.diff, "staged": True, "applied": True,
+        }
+        if _syntax_warn:
+            _data["syntax_check"] = "failed"
+            return {"success": True, "data": _data, "warning": _syntax_warn}
+        return {"success": True, "data": _data}
+    except Exception as e:
+        return {"success": False, "error": str(e)}

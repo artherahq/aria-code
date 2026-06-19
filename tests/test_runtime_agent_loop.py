@@ -467,3 +467,62 @@ class TodoTrackerTests(unittest.TestCase):
     def test_empty_rejected(self):
         from apps.cli.todo_tracker import update_todos
         self.assertFalse(update_todos({"todos": []})["success"])
+
+
+class MultiEditTests(unittest.TestCase):
+    def _tmp(self, text):
+        import tempfile, pathlib
+        d = tempfile.mkdtemp()
+        p = pathlib.Path(d) / "m.py"
+        p.write_text(text)
+        return str(p), p
+
+    def test_atomic_success(self):
+        from apps.cli.tools.write_tools import tool_multi_edit
+        path, p = self._tmp("a = 1\nb = 2\nc = 3\n")
+        r = tool_multi_edit({"path": path, "edits": [
+            {"old_string": "a = 1", "new_string": "a = 10"},
+            {"old_string": "c = 3", "new_string": "c = 30"},
+        ]})
+        self.assertTrue(r["success"])
+        self.assertEqual(r["data"]["edits_applied"], 2)
+        self.assertIn("a = 10", p.read_text())
+        self.assertIn("c = 30", p.read_text())
+
+    def test_atomic_rollback_on_missing(self):
+        from apps.cli.tools.write_tools import tool_multi_edit
+        path, p = self._tmp("a = 1\nb = 2\n")
+        before = p.read_text()
+        r = tool_multi_edit({"path": path, "edits": [
+            {"old_string": "a = 1", "new_string": "a = 99"},
+            {"old_string": "NOPE", "new_string": "x"},
+        ]})
+        self.assertFalse(r["success"])
+        self.assertEqual(p.read_text(), before)  # nothing applied
+
+    def test_ambiguous_requires_replace_all(self):
+        from apps.cli.tools.write_tools import tool_multi_edit
+        path, p = self._tmp("x = 1\nx = 1\n")
+        r = tool_multi_edit({"path": path, "edits": [
+            {"old_string": "x = 1", "new_string": "x = 2"},
+        ]})
+        self.assertFalse(r["success"])
+        self.assertIn("replace_all", r["error"])
+
+    def test_replace_all(self):
+        from apps.cli.tools.write_tools import tool_multi_edit
+        path, p = self._tmp("x = 1\nx = 1\n")
+        r = tool_multi_edit({"path": path, "edits": [
+            {"old_string": "x = 1", "new_string": "x = 2", "replace_all": True},
+        ]})
+        self.assertTrue(r["success"])
+        self.assertEqual(p.read_text().count("x = 2"), 2)
+
+    def test_syntax_warning_on_broken_python(self):
+        from apps.cli.tools.write_tools import tool_multi_edit
+        path, p = self._tmp("def f():\n    return 1\n")
+        r = tool_multi_edit({"path": path, "edits": [
+            {"old_string": "def f():", "new_string": "def f("},
+        ]})
+        self.assertTrue(r["success"])
+        self.assertTrue(r.get("warning"))

@@ -15,7 +15,7 @@ from typing import AsyncGenerator, Awaitable, Callable, Dict, FrozenSet, Iterabl
 from .tool_executor import ToolExecutor
 
 
-DEFAULT_SERIAL_TOOLS = {"write_file", "edit_file", "run_command"}
+DEFAULT_SERIAL_TOOLS = {"write_file", "edit_file", "multi_edit", "run_command"}
 
 # Phrases the model uses to signal task completion
 _DONE_PHRASES = frozenset([
