@@ -34,6 +34,85 @@ def detect_task_complete(response_text: str) -> bool:
     return any(phrase in lower for phrase in _DONE_PHRASES)
 
 
+class LoopGuard:
+    """Detect repeated identical *failing* tool calls and break the agent loop.
+
+    Weaker local models (and sometimes cloud models) get stuck calling the
+    exact same tool with the exact same arguments after it has already failed
+    — e.g. reading a file that does not exist, or calling an unknown tool. This
+    guard tracks failure signatures across rounds:
+
+      * After ``soft_threshold`` identical failures it injects a directive
+        telling the model to STOP repeating that call and try another approach.
+      * After ``hard_threshold`` it signals the caller to break the loop so we
+        don't burn the remaining tool rounds.
+
+    A successful call clears that signature's counter.
+    """
+
+    def __init__(self, *, soft_threshold: int = 2, hard_threshold: int = 4) -> None:
+        self.soft_threshold = soft_threshold
+        self.hard_threshold = hard_threshold
+        self._fail_counts: Dict[str, int] = {}
+        self._warned: set = set()
+        self.should_break: bool = False
+
+    @staticmethod
+    def _signature(tool_name: str, params: dict) -> str:
+        import hashlib
+        import json
+        try:
+            key = json.dumps(params or {}, sort_keys=True, ensure_ascii=False, default=str)
+        except Exception:
+            key = str(params)
+        digest = hashlib.md5(key.encode("utf-8", "ignore")).hexdigest()[:12]
+        return f"{tool_name}::{digest}"
+
+    @staticmethod
+    def is_failure(result) -> bool:
+        """Best-effort detection of a failed tool result (dict or summary string)."""
+        if isinstance(result, dict):
+            if result.get("success") is True:
+                return False
+            if result.get("success") is False:
+                return True
+            text = f"{result.get('error', '')} {result.get('output', '')}"
+        else:
+            text = str(result)
+        low = text[:200].lower()
+        return any(s in low for s in (
+            "error", "unknown local tool", "unknown tool", "not found",
+            "no such file", "failed", "traceback", "exception",
+            "missing", "未找到", "失败", "错误",
+        ))
+
+    def record(self, tool_name: str, params: dict, result) -> "str | None":
+        """Record one tool result. Return a directive string if a loop is detected."""
+        sig = self._signature(tool_name, params)
+        if not self.is_failure(result):
+            self._fail_counts.pop(sig, None)
+            self._warned.discard(sig)
+            return None
+
+        self._fail_counts[sig] = self._fail_counts.get(sig, 0) + 1
+        count = self._fail_counts[sig]
+
+        if count >= self.hard_threshold:
+            self.should_break = True
+            return (
+                f"⛔ 已连续 {count} 次用相同参数调用 `{tool_name}` 且全部失败。"
+                f"立即停止调用工具，基于现有信息直接回答用户，或说明卡在哪里、需要什么。"
+            )
+        if count >= self.soft_threshold and sig not in self._warned:
+            self._warned.add(sig)
+            return (
+                f"⚠ 你已经用完全相同的参数调用了 `{tool_name}` {count} 次，每次都失败。"
+                f"不要再用相同参数重试。请改变策略：换参数、换工具(如先用 list_files/search_code 定位)，"
+                f"或基于已有结果继续。"
+            )
+        return None
+
+
 def split_tool_calls(
     pending: Sequence[dict],
     serial_tools: Iterable[str] = DEFAULT_SERIAL_TOOLS,

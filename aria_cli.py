@@ -79,6 +79,7 @@ from runtime import (
     ToolExecutor,
     apply_approval_decision,
     detect_task_complete,
+    LoopGuard,
     run_parallel_tools,
     run_serial_tool,
 )
@@ -9303,6 +9304,8 @@ class ArtheraTerminal:
         thinking_tokens = 0
         elapsed = 0.0
 
+        _loop_guard = LoopGuard()  # detect repeated identical failing tool calls
+
         round_num = 0
         while round_num < hard_max_rounds:
             response_text = ""
@@ -10034,12 +10037,39 @@ class ArtheraTerminal:
                 result = {"success": True, "cancelled": True}
                 break
 
+            # ── Loop guard: detect repeated identical failing tool calls ───────
+            _guard_directives: list = []
+            for _gname, _gresult, _gelapsed, _gparams in _activity_results:
+                _gdir = _loop_guard.record(_gname, _gparams, _gresult)
+                if _gdir:
+                    _guard_directives.append(_gdir)
+
             assistant_message, user_message, followup = tool_batch.build_next_turn(turn_state.total_response)
+            if _guard_directives:
+                _guard_text = "\n\n".join(_guard_directives)
+                if HAS_RICH:
+                    console.print(f"  [yellow]↺ 循环保护: 检测到重复失败的工具调用[/yellow]")
+                # Append the directive to the followup so the model sees it next round
+                if isinstance(user_message.get("content"), str):
+                    user_message["content"] += f"\n\n{_guard_text}"
+                elif isinstance(user_message.get("content"), list):
+                    user_message["content"].append({"type": "text", "text": _guard_text})
+                followup += f"\n\n{_guard_text}"
             self.conversation.append(assistant_message)
             self.conversation.append(user_message)
             current_message = followup
             turn_state.reset_response()
             round_num += 1
+
+            # Hard break: same call failed too many times — stop burning rounds
+            if _loop_guard.should_break:
+                if HAS_RICH:
+                    console.print("  [yellow]⛔ 循环保护触发：已停止重复失败的工具调用[/yellow]")
+                turn_state.append_response(
+                    "\n\n（已检测到重复失败的工具调用并停止。请根据上方已有结果继续，"
+                    "或换一种方式描述需求。）"
+                )
+                break
 
         # --- End of agentic loop ---
         _esc_watcher.stop()
