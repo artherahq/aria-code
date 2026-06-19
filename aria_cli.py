@@ -195,6 +195,7 @@ from apps.cli.handlers.market_handlers import (
     _try_prefetch_market_data  as _src_prefetch_market_data,
     _try_handle_multi_market_snapshot  as _src_multi_snapshot,
     _try_handle_market_snapshot_analysis  as _src_market_snapshot_analysis,
+    _try_handle_market_overview  as _src_market_overview,
 )
 
 
@@ -3597,6 +3598,11 @@ def _try_handle_realty_query(message: str) -> dict:
 def _try_handle_market_snapshot_analysis(message: str, history: list = None) -> dict:
     """Thin wrapper — real implementation in apps.cli.handlers.market_handlers."""
     return _src_market_snapshot_analysis(message, history)
+
+
+def _try_handle_market_overview(message: str) -> dict:
+    """Thin wrapper — real implementation in apps.cli.handlers.market_handlers."""
+    return _src_market_overview(message)
 
 
 
@@ -9503,6 +9509,10 @@ class ArtheraTerminal:
             # Chart requests should be handled before generic market snapshots.
             deterministic = _try_handle_stock_chart_analysis(message)
         if not deterministic.get("success"):
+            # Whole-market overview ("分析A股/港股/美股市场行情") must run BEFORE the
+            # single-stock snapshot path, or "A股" gets parsed as ticker 'A' (Agilent).
+            deterministic = _try_handle_market_overview(message)
+        if not deterministic.get("success"):
             # Market snapshot always uses deterministic renderer — even tool-capable models
             # produce N/A when they try to parse injected data themselves.
             deterministic = _try_handle_market_snapshot_analysis(
@@ -11342,6 +11352,9 @@ class ArtheraTerminal:
             deterministic = _try_handle_broker_query(prompt)
         if not deterministic.get("success"):
             deterministic = _try_handle_stock_chart_analysis(prompt)
+        if not deterministic.get("success"):
+            # Whole-market overview before single-stock snapshot (A股 ≠ ticker 'A')
+            deterministic = _try_handle_market_overview(prompt)
         if not deterministic.get("success"):
             deterministic = _try_handle_market_snapshot_analysis(prompt)
         if deterministic.get("success") or _is_stock_chart_analysis_request(prompt):

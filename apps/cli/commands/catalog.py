@@ -34,6 +34,7 @@ DIRECT_COMMANDS: Tuple[DirectCommandSpec, ...] = (
     DirectCommandSpec("sessions", "cmd_sessions"),
     DirectCommandSpec("watch", "cmd_watch", aliases=("watchlist",)),
     DirectCommandSpec("export", "cmd_export", async_method=True),
+    DirectCommandSpec("tv", "cmd_tv", async_method=True),
 )
 
 
@@ -73,7 +74,7 @@ VISIBLE_SLASH_COMMANDS: FrozenSet[str] = frozenset({
     # Code & project
     "/project", "/init", "/review", "/code", "/plan", "/run",
     # Quant
-    "/backtest", "/wf",
+    "/backtest", "/wf", "/tv",
     # UI generation
     "/ui",
     # Other

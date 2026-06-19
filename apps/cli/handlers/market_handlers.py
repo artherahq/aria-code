@@ -19,6 +19,7 @@ from apps.cli.utils.market_detect import (
     _is_realty_query, _is_market_snapshot_request,
     _format_compact_market_cap, _market_snapshot_trend,
     _has_unresolved_company_mention,
+    _detect_market_overview,
     _PRIVATE_COMPANY_PROFILES,
 )
 from apps.cli.market_metadata import enrich_market_quote, market_display_label
@@ -626,6 +627,143 @@ def _resolve_etf_snapshot_symbols(message: str) -> list[str]:
     if any(k in low or k in text for k in ("黄金", "gold", "gld")):
         return ["GLD", "IAU"]
     return []
+
+
+_MARKET_OVERVIEW_INDICES = {
+    "cn": {
+        "label": "A 股市场",
+        "yf": [("上证综指", "000001.SS"), ("深证成指", "399001.SZ"),
+               ("创业板指", "399006.SZ"), ("沪深300", "000300.SS"),
+               ("科创50", "000688.SS")],
+        "ak_symbol": "沪深重要指数",
+        "extras": ["北向资金", "涨跌家数"],
+    },
+    "us": {
+        "label": "美股市场",
+        "yf": [("道琼斯", "^DJI"), ("纳斯达克", "^IXIC"), ("标普500", "^GSPC"),
+               ("罗素2000", "^RUT"), ("VIX 恐慌指数", "^VIX")],
+        "ak_symbol": None,
+        "extras": ["恐惧贪婪指数"],
+    },
+    "hk": {
+        "label": "港股市场",
+        "yf": [("恒生指数", "^HSI"), ("恒生国企", "^HSCE")],
+        "ak_symbol": None,
+        "extras": [],
+    },
+}
+
+
+def _fetch_overview_indices(market: str) -> list:
+    """Fetch index levels for a market. Tries akshare (CN) then yfinance.
+
+    Returns a list of {name, price, change_pct, ok} dicts; entries that could
+    not be fetched are marked ok=False rather than dropped, so the user always
+    sees the full index set and which data is temporarily unavailable.
+    """
+    cfg = _MARKET_OVERVIEW_INDICES.get(market, {})
+    rows: list = []
+
+    # CN: prefer akshare real-time index spot (yfinance .SS is unreliable)
+    if market == "cn":
+        try:
+            import akshare as ak
+            df = ak.stock_zh_index_spot_em(symbol=cfg.get("ak_symbol", "沪深重要指数"))
+            wanted = {"上证指数": "上证综指", "深证成指": "深证成指",
+                      "创业板指": "创业板指", "沪深300": "沪深300",
+                      "科创50": "科创50", "上证综指": "上证综指"}
+            by_name = {str(r.get("名称", "")): r for _, r in df.iterrows()}
+            for ak_name, disp in wanted.items():
+                r = by_name.get(ak_name)
+                if r is not None:
+                    rows.append({"name": disp,
+                                 "price": float(r.get("最新价", 0) or 0),
+                                 "change_pct": float(r.get("涨跌幅", 0) or 0),
+                                 "ok": True})
+            if rows:
+                return rows
+        except Exception:
+            pass  # fall through to yfinance
+
+    # US / HK / CN-fallback via yfinance
+    try:
+        import yfinance as yf
+        for name, ticker in cfg.get("yf", []):
+            try:
+                h = yf.Ticker(ticker).history(period="2d")
+                if len(h) >= 1:
+                    last = float(h["Close"].iloc[-1])
+                    if last != last:  # NaN
+                        rows.append({"name": name, "price": 0, "change_pct": 0, "ok": False})
+                        continue
+                    chg = ((last - float(h["Close"].iloc[0])) / float(h["Close"].iloc[0]) * 100
+                           if len(h) >= 2 and float(h["Close"].iloc[0]) else 0.0)
+                    rows.append({"name": name, "price": round(last, 2),
+                                 "change_pct": round(chg, 2), "ok": True})
+                else:
+                    rows.append({"name": name, "price": 0, "change_pct": 0, "ok": False})
+            except Exception:
+                rows.append({"name": name, "price": 0, "change_pct": 0, "ok": False})
+    except Exception:
+        pass
+    return rows
+
+
+def _try_handle_market_overview(message: str) -> dict:
+    """Deterministic whole-market overview for '分析A股/港股/美股市场行情'.
+
+    Answers a market-level question with the right index set instead of
+    mis-parsing a market name into a single stock (the 'A股' → Agilent bug).
+    """
+    market = _detect_market_overview(message)
+    if not market:
+        return {"success": False, "error": "not_market_overview"}
+
+    cfg = _MARKET_OVERVIEW_INDICES[market]
+    rows = _fetch_overview_indices(market)
+    if not rows:
+        return {"success": False, "error": "no_index_data"}
+
+    ok_rows = [r for r in rows if r.get("ok")]
+    # Build a markdown overview
+    lines = [f"## 📊 {cfg['label']}行情概览",
+             f"*数据时间: {datetime.now().strftime('%Y-%m-%d %H:%M')} · 不构成投资建议*",
+             "",
+             "| 指数 | 最新点位 | 涨跌幅 |",
+             "|------|---------|--------|"]
+    for r in rows:
+        if r.get("ok"):
+            arrow = "🔴" if r["change_pct"] < 0 else ("🟢" if r["change_pct"] > 0 else "⚪")
+            lines.append(f"| {r['name']} | {r['price']:,.2f} | {arrow} {r['change_pct']:+.2f}% |")
+        else:
+            lines.append(f"| {r['name']} | — | 数据暂不可用 |")
+
+    # Breadth summary from the indices we did get
+    if ok_rows:
+        up = sum(1 for r in ok_rows if r["change_pct"] > 0)
+        down = sum(1 for r in ok_rows if r["change_pct"] < 0)
+        avg = sum(r["change_pct"] for r in ok_rows) / len(ok_rows)
+        if avg > 0.5:
+            tone = "整体偏强，多数指数上涨"
+        elif avg < -0.5:
+            tone = "整体偏弱，多数指数下跌"
+        else:
+            tone = "涨跌互现，方向不明"
+        lines += ["", f"**概况**: {tone}（{up} 涨 / {down} 跌，均值 {avg:+.2f}%）"]
+
+    # Market-specific next steps
+    _next = {
+        "cn": ["`/north` — 北向资金流向", "`/limitup` — 涨停板复盘",
+               "`/quote 600519` — 个股报价（如贵州茅台）"],
+        "us": ["`/quote AAPL MSFT NVDA` — 龙头个股", "`/sector` — 板块表现",
+               "`fear greed` — 市场情绪指数"],
+        "hk": ["`/quote 0700.HK` — 腾讯等个股", "`/north` — 南向资金"],
+    }.get(market, [])
+    if _next:
+        lines += ["", "**下一步**"] + [f"- {s}" for s in _next]
+
+    return {"success": True, "response": "\n".join(lines),
+            "tools_used": ["market_overview"]}
 
 
 def _try_handle_market_snapshot_analysis(message: str, history: list = None) -> dict:
