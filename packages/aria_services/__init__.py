@@ -1,5 +1,12 @@
 """Service boundary manifests for Aria Code."""
 
+from .context import (
+    ContextDecision,
+    ContextPolicy,
+    ContextService,
+    ContextSummaryEnvelope,
+    build_context_service,
+)
 from .provider_health import (
     GLOBAL_PROVIDER_HEALTH,
     ProviderHealthRegistry,
@@ -12,6 +19,10 @@ from .registry import ServiceSpec, list_service_specs, required_service_names, s
 from .usage import ServiceUsageSpec, list_service_usage_specs, service_usage_map
 
 __all__ = [
+    "ContextDecision",
+    "ContextPolicy",
+    "ContextService",
+    "ContextSummaryEnvelope",
     "DataBundle",
     "DataService",
     "DataServiceResult",
@@ -21,6 +32,7 @@ __all__ = [
     "ProviderState",
     "ServiceSpec",
     "ServiceUsageSpec",
+    "build_context_service",
     "classify_provider_error",
     "list_service_specs",
     "list_service_usage_specs",

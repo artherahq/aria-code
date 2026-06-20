@@ -36,7 +36,7 @@ The source of truth is `packages/aria_core/architecture.py`.
 | `launcher` | Stable executable, runtime selection, dependency bootstrap | partial |
 | `settings` | Config, secrets, model profiles, permission policy | planned |
 | `ui` | Terminal rendering, input UX, progress, artifact links | partial |
-| `context` | Memory, automatic compaction, resume checkpoints | planned |
+| `context` | Memory, automatic compaction, resume checkpoints | partial |
 | `runtime` | Agent loop, planning, tools, retries, streaming | partial |
 | `tools` | Tool registry, schemas, permissions, local/MCP adapters | partial |
 | `services` | Data, reports, brokers, skills, channels, gateway | partial |

@@ -144,36 +144,13 @@ class SessionUxCommandsMixin:
         if not silent and HAS_RICH:
             console.print("[dim]Summarising conversation...[/dim]")
 
-        transcript_parts = []
-        for m in conv:
-            role = m.get("role", "")
-            content = m.get("content", "")
-            if role == "tool":
-                lines = [ln.strip() for ln in content.splitlines() if ln.strip()]
-                has_err = any("error" in ln.lower() or "traceback" in ln.lower() for ln in lines[:10])
-                excerpt = " | ".join(lines[:3]) if lines else content[:200]
-                label = "Tool[⚠ error]" if has_err else "Tool"
-                transcript_parts.append(f"{label}: {excerpt[:300]}")
-            elif role == "user":
-                transcript_parts.append(f"User: {content[:800]}")
-            else:
-                transcript_parts.append(f"Aria: {content[:1200]}")
-        transcript = "\n\n".join(transcript_parts)
-
-        summary_prompt = (
-            "You are a context compressor for a quantitative finance AI assistant.\n"
-            "Given the conversation transcript, produce a DENSE SUMMARY (≤350 words).\n"
-            "You MUST preserve:\n"
-            "  • All ticker symbols / asset names discussed\n"
-            "  • Key numerical results (prices, rates, backtest metrics)\n"
-            "  • Code files written or modified (file paths + purpose)\n"
-            "  • Errors encountered and how they were resolved\n"
-            "  • User preferences or decisions made\n"
-            "  • The last task status (complete / in-progress / blocked)\n"
-            "Write in concise third-person present tense. "
-            "Start with: 'Session summary: ...'\n\n"
-            f"TRANSCRIPT:\n{transcript}\n\nSUMMARY:"
-        )
+        try:
+            max_ctx = int(get_model_cfg(self.terminal.config.get("model", "qwen2.5:7b")).get("num_ctx", 16384) or 16384)
+        except Exception:
+            max_ctx = 16384
+        from packages.aria_services.context import build_context_service
+        context_service = build_context_service(max_tokens=max_ctx)
+        summary_prompt = context_service.build_summary_prompt(conv)
 
         summary = ""
         try:
@@ -191,12 +168,8 @@ class SessionUxCommandsMixin:
             pass
 
         if not summary:
-            from apps.cli.message_processing import compact_messages
             try:
-                compacted = compact_messages(
-                    conv,
-                    model_key=self.terminal.config.get("model", "qwen2.5:7b"),
-                )
+                compacted = context_service.compact_messages(conv)
             except Exception:
                 compacted = []
             self.terminal.conversation = compacted if compacted and len(compacted) < len(conv) else conv[-8:]
@@ -205,21 +178,8 @@ class SessionUxCommandsMixin:
                               else "Compacted (summary fallback)")
             return
 
-        kept_tail = conv[-6:] if len(conv) >= 6 else conv[:]
-        self.terminal.conversation = [
-            {
-                "role": "user",
-                "content": (
-                    f"[会话摘要 — 早期对话已压缩]\n\n{summary}\n\n"
-                    f"[以下是最近的对话记录]"
-                )
-            },
-            {
-                "role": "assistant",
-                "content": "已获取摘要，继续之前的工作。"
-            },
-            *kept_tail,
-        ]
+        envelope = context_service.build_summary_envelope(conv, summary)
+        self.terminal.conversation = envelope.messages
         new_count = len(self.terminal.conversation)
         old_count = len(conv)
         if not silent:
