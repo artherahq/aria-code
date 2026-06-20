@@ -8008,11 +8008,11 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
             result = handler(params)
 
         if not result.get("success", True):
-            err = result.get("error", "unknown error")
+            err = _clean_tool_error_message(result.get("error", "unknown error"))
             if HAS_RICH:
-                console.print(f"  [red]Error:[/red] {err}")
+                console.print(f"  [red]✗[/red] {err}")
             else:
-                print(f"  Error: {err}")
+                print(f"  ✗ {err}")
             return
 
         # Pretty-print result

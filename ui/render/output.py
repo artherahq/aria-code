@@ -91,6 +91,17 @@ def clean_tool_error_message(error: object) -> str:
         return "连接被拒绝，服务暂时不可用。请检查本地服务或网络。"
     if "connection aborted" in low or "remotedisconnected" in low:
         return "网络连接中断，数据源未完成响应。请稍后重试。"
+    # Generic connection / proxy / DNS failures — collapse the verbose
+    # urllib3 HTTPSConnectionPool(...) dump into a single readable line.
+    if any(s in low for s in (
+        "httpsconnectionpool", "httpconnectionpool", "max retries exceeded",
+        "proxyerror", "failed to establish a new connection",
+        "nameresolutionerror", "getaddrinfo failed", "newconnectionerror",
+    )):
+        import re as _re3
+        _host = _re3.search(r"host=['\"]([^'\"]+)['\"]", raw)
+        _hint = f"（数据源 {_host.group(1)}）" if _host else ""
+        return f"数据源连接失败{_hint}，可能是网络或代理问题。请检查网络后重试。"
     if "rate" in low or "429" in low or "too many requests" in low:
         return "数据源请求频率受限，请稍后重试。"
     # Collapse verbose HTTP error strings: "web_fetch failed: 401 Client Error: Unauthorized for url: https://..."
