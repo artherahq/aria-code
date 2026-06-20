@@ -42,6 +42,7 @@ def _register_all() -> None:
     if _BROKER_CLASSES:
         return
     _map: Dict[str, tuple] = {
+        "paper":      ("brokers.paper_broker",        "PaperBroker"),
         "xtquant":    ("brokers.cn.xtquant_broker",    "XTQuantBroker"),
         "easytrader": ("brokers.cn.easytrader_broker", "EasyTraderBroker"),
         "futu":       ("brokers.cn.futu_broker",       "FutuBroker"),

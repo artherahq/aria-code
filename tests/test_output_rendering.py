@@ -84,9 +84,13 @@ def test_market_snapshot_handles_multi_symbol_company_names(monkeypatch):
     text = result["response"]
     assert "AAPL" in text
     assert "NVDA" in text
-    assert "Market Cap" in text
+    assert "市值" in text
+    assert "对比结论" in text
+    assert "逐项分析" in text
     assert "NVDA  NVDA" not in text
     assert "- stale: none" in text
+    assert "technical shown as trend only" not in text
+    assert result.get("analysis_complete") is True
     assert "/ta AAPL" in text
     assert "/ta NVDA" in text
 
@@ -279,6 +283,50 @@ def test_display_value_uses_dash_for_missing_values():
 
     assert aria_cli._display_value(None) == "—"
     assert aria_cli._display_value("N/A") == "—"
+
+
+def test_repetition_stopped_text_is_recovered_for_display():
+    import aria_cli
+
+    text = "已经生成文件。\n```python\nprint('ok')\n*[model stopped — repetition detected]*"
+    recovered = aria_cli._recover_repetition_stopped_text(text)
+
+    assert "*[model stopped" not in recovered
+    assert recovered.count("```") == 2
+    assert "已检测到模型开始重复输出" in recovered
+
+
+def test_turn_footer_defaults_to_compact_without_token_noise():
+    from runtime import AgentTurnState
+    from ui.render.output import format_turn_footer
+
+    state = AgentTurnState(provider="ollama")
+    state.add_usage({"prompt_tokens": 100, "completion_tokens": 50})
+    state.tools_used.extend(["market_snapshot", "web_search"])
+    metadata = state.build_metadata(elapsed=3.0)
+
+    compact = format_turn_footer(metadata, mode="compact", copy_available=True)
+    full = format_turn_footer(metadata, mode="full", copy_available=True)
+
+    assert compact == "3.0s · ollama · market_snapshot web_search · /copy"
+    assert "tokens" not in compact
+    assert "150 tokens" in full
+    assert format_turn_footer(metadata, mode="off", copy_available=True) == ""
+
+
+def test_context_compaction_decision_uses_incoming_content():
+    from apps.cli.message_processing import context_compaction_decision
+
+    messages = [{"role": "user", "content": "x" * 1500} for _ in range(8)]
+    decision = context_compaction_decision(
+        messages,
+        model_key="qwen-fast",
+        extra_content="y" * 30_000,
+        threshold=0.50,
+    )
+
+    assert decision["should_compact"] is True
+    assert decision["estimated_tokens"] > 10_000
 
 
 def test_analyze_context_uses_data_service_quality(monkeypatch):

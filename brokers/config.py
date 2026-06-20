@@ -58,6 +58,7 @@ brokers/config.py — 券商配置加载与管理
     }
 
 支持的 type 值:
+    paper       本地仿盘账户（无真实券商连接）
     xtquant     迅投（中信、华鑫、浙商等）
     easytrader  easytrader（同花顺、通达信、华泰、国君）
     futu        富途牛牛 OpenAPI（港股/美股/A股）
@@ -179,6 +180,7 @@ def set_default_broker(broker_id: str) -> bool:
 
 # 每种 type 必需的字段
 _REQUIRED_FIELDS: Dict[str, List[str]] = {
+    "paper":      [],
     "xtquant":    ["account_id"],
     "easytrader": ["broker_name"],
     "futu":       ["host", "port"],           # FutuOpenD must be running locally
@@ -190,6 +192,7 @@ _REQUIRED_FIELDS: Dict[str, List[str]] = {
 }
 
 _TYPE_LABELS: Dict[str, str] = {
+    "paper":      "Aria 本地仿盘账户",
     "xtquant":    "迅投 XTQuant（中信/华鑫/浙商等）",
     "easytrader": "EasyTrader（同花顺/通达信/华泰/国君）",
     "futu":       "富途牛牛 OpenAPI",
@@ -202,6 +205,7 @@ _TYPE_LABELS: Dict[str, str] = {
 
 
 _RECOMMENDED_FIELDS: Dict[str, List[str]] = {
+    "paper":  ["starting_cash", "currency"],
     "futu":   ["market"],
     "ibkr":   ["client_id"],
     "alpaca": ["paper"],
@@ -241,10 +245,23 @@ def supported_broker_types() -> Dict[str, str]:
 # ── 生成配置模板 ──────────────────────────────────────────────────────────────
 
 _TEMPLATES: Dict[str, Dict[str, Any]] = {
+    "paper": {
+        "id": "paper_main",
+        "type": "paper",
+        "label": "Aria 仿盘账户",
+        "mode": "paper",
+        "starting_cash": 100000,
+        "currency": "USD",
+        "default": True,
+        "_comment": "本地仿盘账户，不连接真实券商；订单写入 ~/.arthera/paper_ledger.json"
+    },
     "xtquant": {
         "id": "xt_main",
         "type": "xtquant",
         "label": "中信主账户",
+        "mode": "read_only",
+        "allow_live_trade": False,
+        "require_confirm": True,
         "account_id": "YOUR_ACCOUNT_ID",
         "default": True,
         "_comment": "需安装 xtquant: pip install xtquant  (仅 Windows/Linux)"
@@ -253,6 +270,9 @@ _TEMPLATES: Dict[str, Dict[str, Any]] = {
         "id": "ht_main",
         "type": "easytrader",
         "label": "华泰账户",
+        "mode": "read_only",
+        "allow_live_trade": False,
+        "require_confirm": True,
         "broker_name": "huatai",
         "exe_path": "C:\\华泰证券\\xiadan.exe",
         "_comment": "broker_name 可选: huatai/guojun/ths/tdx/yh/zszq/xq"
@@ -261,6 +281,9 @@ _TEMPLATES: Dict[str, Dict[str, Any]] = {
         "id": "futu_hk",
         "type": "futu",
         "label": "富途港股",
+        "mode": "read_only",
+        "allow_live_trade": False,
+        "require_confirm": True,
         "host": "127.0.0.1",
         "port": 11111,
         "market": "HK",
@@ -270,6 +293,9 @@ _TEMPLATES: Dict[str, Dict[str, Any]] = {
         "id": "tiger_us",
         "type": "tiger",
         "label": "老虎美股",
+        "mode": "read_only",
+        "allow_live_trade": False,
+        "require_confirm": True,
         "tiger_id": "YOUR_TIGER_ID",
         "private_key_path": "~/.aria-code/tiger_rsa.pem",
         "account": "YOUR_ACCOUNT",
@@ -279,6 +305,9 @@ _TEMPLATES: Dict[str, Dict[str, Any]] = {
         "id": "lb_cn",
         "type": "longbridge",
         "label": "长桥A股",
+        "mode": "read_only",
+        "allow_live_trade": False,
+        "require_confirm": True,
         "app_key": "YOUR_APP_KEY",
         "app_secret": "YOUR_APP_SECRET",
         "access_token": "YOUR_ACCESS_TOKEN",
@@ -288,6 +317,9 @@ _TEMPLATES: Dict[str, Dict[str, Any]] = {
         "id": "ibkr_us",
         "type": "ibkr",
         "label": "盈透美股",
+        "mode": "read_only",
+        "allow_live_trade": False,
+        "require_confirm": True,
         "host": "127.0.0.1",
         "port": 7496,
         "client_id": 1,
@@ -297,6 +329,9 @@ _TEMPLATES: Dict[str, Dict[str, Any]] = {
         "id": "alpaca_paper",
         "type": "alpaca",
         "label": "Alpaca 模拟盘",
+        "mode": "paper",
+        "allow_live_trade": False,
+        "require_confirm": True,
         "api_key": "YOUR_API_KEY",
         "api_secret": "YOUR_API_SECRET",
         "paper": True,
@@ -306,6 +341,9 @@ _TEMPLATES: Dict[str, Dict[str, Any]] = {
         "id": "webull_us",
         "type": "webull",
         "label": "Webull 美股",
+        "mode": "read_only",
+        "allow_live_trade": False,
+        "require_confirm": True,
         "username": "YOUR_EMAIL_OR_PHONE",
         "password": "YOUR_PASSWORD",
         "device_id": "",

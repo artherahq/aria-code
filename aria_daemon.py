@@ -450,7 +450,7 @@ async def _run_report(symbol: str) -> str:
 async def _run_tradingview_alert(payload: dict) -> str:
     """Handle a TradingView alert webhook job."""
     try:
-        from apps.cli.tradingview_bridge import parse_tradingview_alert
+        from apps.cli.tradingview_bridge import build_tradingview_order_preview, parse_tradingview_alert
         alert = parse_tradingview_alert(payload)
     except Exception as exc:
         raise ValueError(f"TradingView alert 解析失败: {exc}") from exc
@@ -471,8 +471,35 @@ async def _run_tradingview_alert(payload: dict) -> str:
     if msg:
         header.append(f"Message: {msg[:300]}")
 
+    preview_lines: list[str] = []
+    try:
+        preview_result = build_tradingview_order_preview(payload)
+        if preview_result.get("trade_preview_created"):
+            blockers = preview_result.get("execution_blockers") or []
+            preview_lines.extend([
+                "",
+                "*Trade Preview*",
+                f"preview_id: `{preview_result.get('preview_id')}`",
+                f"Mode: `{preview_result.get('mode')}`  Broker: `{preview_result.get('broker_label')}`",
+                f"Can execute after confirmation: `{bool(preview_result.get('can_execute'))}`",
+                f"Confirm: `{preview_result.get('confirm_command')}`",
+            ])
+            if blockers:
+                preview_lines.append("Blockers: " + "; ".join(str(item) for item in blockers[:4]))
+            preview_lines.append("Webhook 只生成预览，不会自动执行实盘/仿盘订单。")
+        elif preview_result.get("success"):
+            reason = preview_result.get("reason", "no_trade_preview")
+            preview_lines.extend(["", "*Trade Preview*", f"未生成订单预览: `{reason}`"])
+            if preview_result.get("hint"):
+                preview_lines.append(str(preview_result["hint"]))
+        else:
+            preview_lines.extend(["", "*Trade Preview*", f"生成失败: `{preview_result.get('error')}`"])
+    except Exception as exc:
+        logger.warning("TradingView trade preview failed: %s", exc)
+        preview_lines.extend(["", "*Trade Preview*", f"生成失败: `{exc}`"])
+
     analysis = await _run_report(symbol)
-    return "\n".join(header) + "\n\n" + analysis
+    return "\n".join(header + preview_lines) + "\n\n" + analysis
 
 
 async def _run_morning_brief() -> str:
@@ -830,7 +857,7 @@ async def _webhook_http_server() -> None:
         logger.warning("Webhook HTTP server disabled: %s", exc)
         return
 
-    token = os.environ.get("WEBHOOK_TOKEN", "")
+    token = os.environ.get("TRADINGVIEW_WEBHOOK_SECRET") or os.environ.get("WEBHOOK_TOKEN", "")
     host = os.environ.get("ARIA_WEBHOOK_HOST", "127.0.0.1")
     port = int(os.environ.get("ARIA_WEBHOOK_PORT", "8765"))
 
@@ -839,8 +866,10 @@ async def _webhook_http_server() -> None:
             return True
         supplied = (
             request.headers.get("X-Aria-Token")
+            or request.headers.get("X-TradingView-Secret")
             or request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
             or request.query.get("token")
+            or request.query.get("secret")
         )
         return supplied == token
 
@@ -858,6 +887,10 @@ async def _webhook_http_server() -> None:
             payload["channels"] = _json.dumps(
                 [item.strip() for item in request.query["channels"].split(",") if item.strip()]
             )
+        if isinstance(payload, dict):
+            for key in ("broker_id", "quantity", "qty", "target_weight", "order_type"):
+                if request.query.get(key):
+                    payload[key] = request.query[key]
         result = enqueue_tradingview_alert(payload, db_path=_DB_PATH)
         status = 202 if result.get("success") else 400
         return web.json_response(result, status=status)

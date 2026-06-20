@@ -29,8 +29,10 @@ local artifact generation.
 
 3. `TradingView alert webhook`
    - Trigger: TradingView sends an alert to Aria daemon.
-   - Flow: webhook payload -> symbol resolver -> data router -> risk/TA workflow -> notification/report/backtest action.
-   - Security: require `TRADINGVIEW_WEBHOOK_SECRET`; reject unsigned payloads.
+   - Flow: webhook payload -> symbol resolver -> optional broker snapshot -> order preview -> risk/TA workflow -> notification/report/backtest action.
+   - Trading behavior: BUY/SELL/EXIT alerts may create a `preview_id`, but the daemon never executes orders automatically.
+   - Security: prefer `TRADINGVIEW_WEBHOOK_SECRET`; reject unsigned payloads when configured.
+   - Payload fields for trade preview: `symbol`/`ticker`, `action`/`side`, `price`, and either `quantity`/`qty` or `target_weight`. Optional: `broker_id`, `order_type`.
 
 4. `Pine strategy companion`
    - Trigger: user asks for TradingView strategy code.
@@ -54,4 +56,3 @@ local artifact generation.
 | P1 | Add webhook endpoint in `aria_daemon.py` with secret validation and structured payload logs. |
 | P2 | Add optional Lightweight Charts HTML renderer for local TradingView-like UX. |
 | P2 | Add Pine Script export workflow for user-requested strategies. |
-

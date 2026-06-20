@@ -121,7 +121,16 @@ class SessionUxCommandsMixin:
             loop.run_until_complete(self._smart_compact_async(silent=False))
         except RuntimeError:
             if len(self.terminal.conversation) > 6:
-                self.terminal.conversation = self.terminal.conversation[-6:]
+                from apps.cli.message_processing import compact_messages
+                compacted = compact_messages(
+                    self.terminal.conversation,
+                    model_key=self.terminal.config.get("model", "qwen2.5:7b"),
+                )
+                self.terminal.conversation = (
+                    compacted
+                    if len(compacted) < len(self.terminal.conversation)
+                    else self.terminal.conversation[-8:]
+                )
                 console.print("[dim]Compacted (fallback)[/dim]")
 
     async def _smart_compact_async(self, silent: bool = False):
@@ -182,9 +191,17 @@ class SessionUxCommandsMixin:
             pass
 
         if not summary:
-            self.terminal.conversation = conv[-6:]
+            from apps.cli.message_processing import compact_messages
+            try:
+                compacted = compact_messages(
+                    conv,
+                    model_key=self.terminal.config.get("model", "qwen2.5:7b"),
+                )
+            except Exception:
+                compacted = []
+            self.terminal.conversation = compacted if compacted and len(compacted) < len(conv) else conv[-8:]
             if not silent:
-                console.print("[dim]Compacted (summary failed, kept last 6 messages)[/dim]" if HAS_RICH
+                console.print("[dim]Compacted (summary failed, used local fallback)[/dim]" if HAS_RICH
                               else "Compacted (summary fallback)")
             return
 

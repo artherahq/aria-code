@@ -61,11 +61,11 @@ def list_service_usage_specs() -> tuple[ServiceUsageSpec, ...]:
         ),
         ServiceUsageSpec(
             name="broker_execution",
-            purpose="券商连接、账户只读查询、订单草案和确认后下单",
-            cli_entrypoints=("/broker", "/account", "/positions", "/orders"),
-            package_sources=("brokers",),
+            purpose="券商连接、账户只读查询、仿盘账户、订单预览、确认后执行和审计",
+            cli_entrypoints=("/broker", "/paper", "/trade", "/account", "/positions", "/orders"),
+            package_sources=("brokers", "brokers/trading.py", "brokers/paper_broker.py"),
             mcp_tools=("broker_query", "broker_order"),
-            next_step="/broker doctor 或 /broker add alpaca",
+            next_step="/paper start 100000 USD 或 /broker doctor",
         ),
         ServiceUsageSpec(
             name="tradingview_webhook",

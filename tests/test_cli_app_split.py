@@ -13,7 +13,8 @@ from apps.cli.commands.market import (
     route_top_level_text,
     try_top_level_route,
 )
-from apps.cli.commands.market_cmds import _is_probable_football_query, _parse_nl_team_pair
+from apps.cli.commands.market_cmds import _is_probable_football_query, _parse_nl_team_pair, _rss_items_from_xml
+from apps.cli.handlers.strategy_advice import handle_strategy_advice, is_strategy_advice_request
 from apps.cli.commands.market_render import compact_quote_market_cap, render_quote_plain, render_ta_plain
 from apps.cli.utils.market_detect import (
     _detect_broker_type,
@@ -117,6 +118,41 @@ def test_context_compaction_decision_uses_incoming_prompt_pressure():
 
     assert decision["should_compact"] is True
     assert decision["fill_pct"] >= 78
+
+
+def test_strategy_advice_request_is_answered_without_artifact_side_effects():
+    assert is_strategy_advice_request("如果我要写一个美股量化策略，你觉得要从几个角度去写")
+    assert not is_strategy_advice_request("开始生成一个美股量化策略文件")
+
+    result = handle_strategy_advice("如果我要写一个美股量化策略，你觉得要从几个角度去写")
+
+    assert result["success"] is True
+    assert result["analysis_complete"] is True
+    assert result["tools_used"] == ["strategy_advice"]
+    assert "不需要先写文件" in result["response"]
+    assert "请明确说" in result["response"]
+
+
+def test_rss_news_parser_extracts_public_news_items():
+    xml = """
+    <rss><channel>
+      <item>
+        <title>Apple &amp; market update</title>
+        <link>https://example.com/a</link>
+        <pubDate>Sat, 20 Jun 2026 01:23:00 GMT</pubDate>
+        <source>Example News</source>
+      </item>
+    </channel></rss>
+    """
+
+    items = _rss_items_from_xml(xml, limit=5)
+
+    assert items == [{
+        "title": "Apple & market update",
+        "url": "https://example.com/a",
+        "published_at": "Sat, 20 Jun 2026 01:23:00 GMT",
+        "source": "Example News",
+    }]
 
 
 def test_context_compaction_decision_stays_quiet_for_small_sessions():

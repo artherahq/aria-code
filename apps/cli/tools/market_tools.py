@@ -346,12 +346,7 @@ def tool_broker_query(params: dict) -> dict:
 
 
 def tool_broker_order(params: dict) -> dict:
-    """Propose an order for user confirmation.
-
-    Never places orders automatically.  When ``confirmed=False`` (default),
-    returns an order preview.  Only executes when the user has explicitly
-    confirmed and the caller sets ``confirmed=True``.
-    """
+    """Propose or execute a previewed order through the trading service layer."""
     if not _HAS_BROKERS:
         return {"success": False, "error": "brokers 模块未加载"}
 
@@ -361,7 +356,33 @@ def tool_broker_order(params: dict) -> dict:
     price      = params.get("price")
     order_type = str(params.get("order_type", "limit")).lower()
     confirmed  = bool(params.get("confirmed", False))
+    preview_id = str(params.get("preview_id", "") or params.get("order_preview_id", "")).strip()
     target_weight = params.get("target_weight")
+
+    try:
+        reg    = _get_broker_registry()
+        broker = reg.active()
+        if not broker:
+            broker = reg.connect_default()
+    except Exception as _e:
+        logger.debug("broker lookup failed: %s", _e)
+        broker = None
+
+    if not broker:
+        return {"success": False, "error": "无已连接账户，请先 /broker connect"}
+
+    if confirmed:
+        if not preview_id:
+            return {
+                "success": False,
+                "confirmation_required": True,
+                "error": "confirmed=true 需要 preview_id；请先生成订单预览。",
+            }
+        try:
+            from brokers import execute_order_preview
+            return execute_order_preview(broker, preview_id, confirmed=True)
+        except Exception as e:
+            return {"success": False, "error": str(e)}
 
     if not symbol:
         return {"success": False, "error": "symbol 是必填项"}
@@ -370,100 +391,79 @@ def tool_broker_order(params: dict) -> dict:
     if not qty:
         return {"success": False, "error": "quantity 是必填项"}
     try:
-        qty = int(qty)
+        qty = float(qty)
         if qty <= 0:
             raise ValueError
     except (ValueError, TypeError):
-        return {"success": False, "error": "quantity 必须是正整数"}
+        return {"success": False, "error": "quantity 必须是正数"}
 
-    plan_data    = None
-    plan_message = ""
-    broker       = None
     try:
-        reg    = _get_broker_registry()
-        broker = reg.active()
-        if not broker:
-            broker = reg.connect_default()
-        if broker:
-            from brokers import RiskRuleSet, StrategyIntent, plan_order, snapshot_from_broker
-            snapshot = snapshot_from_broker(broker)
-            intent   = StrategyIntent(
-                symbol=symbol, action=side,
-                target_weight=float(target_weight) if target_weight is not None else None,
-                source="order_preview",
-            )
-            planned  = plan_order(
-                snapshot, intent,
+        from brokers import OrderIntent, build_order_preview
+        preview = build_order_preview(
+            broker,
+            OrderIntent(
+                symbol=symbol,
+                side=side,
+                quantity=qty,
                 price=float(price) if price is not None else None,
-                quantity=qty, order_type=order_type,
-                rules=RiskRuleSet(
-                    max_single_position_weight=float(params.get("max_single_position_weight", 0.20)),
-                    min_cash_reserve_weight=float(params.get("min_cash_reserve_weight", 0.02)),
-                    max_order_value_weight=float(params.get("max_order_value_weight", 0.10)),
-                    allow_short=bool(params.get("allow_short", False)),
-                    allow_fractional=bool(params.get("allow_fractional", False)),
-                ),
-            )
-            plan_data    = planned.to_dict()
-            risk         = plan_data.get("risk", {})
-            if risk.get("violations"):
-                plan_message = "\n".join(f"  - {v}" for v in risk.get("violations", []))
-            elif risk.get("warnings"):
-                plan_message = "\n".join(f"  - {w}" for w in risk.get("warnings", []))
-    except Exception as _e:
-        logger.debug("broker order planning failed: %s", _e)
+                order_type=order_type,
+                target_weight=float(target_weight) if target_weight is not None else None,
+                source=str(params.get("source", "order_preview") or "order_preview"),
+                user_message=str(params.get("user_message", "") or ""),
+                metadata={"tool": "broker_order"},
+            ),
+        )
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+    plan_data = preview.get("order_plan")
+    plan_message = ""
+    risk = (plan_data or {}).get("risk", {})
+    if risk.get("violations"):
+        plan_message = "\n".join(f"  - {v}" for v in risk.get("violations", []))
+    elif risk.get("warnings"):
+        plan_message = "\n".join(f"  - {w}" for w in risk.get("warnings", []))
+    blockers = preview.get("execution_blockers") or []
+    if blockers:
+        plan_message = "\n".join(f"  - {v}" for v in blockers)
 
     if plan_data and plan_data.get("risk", {}).get("violations"):
         return {
             "success": False, "risk_rejected": True,
             "order_plan": plan_data,
+            "preview_id": preview.get("preview_id"),
+            "trade_preview": preview,
             "message": "订单计划未通过风控：\n" + plan_message,
         }
 
-    if not confirmed:
-        _price_str = f"{float(price):.2f}" if price is not None else "市价"
-        _side_cn   = "买入" if side == "buy" else "卖出"
-        _risk_note = ""
-        if plan_data:
-            risk = plan_data.get("risk", {})
-            if risk.get("warnings"):
-                _risk_note = "\n\n风控提示：\n" + plan_message
-        return {
-            "success": False, "confirmation_required": True,
-            "order_plan": plan_data,
-            "order_preview": {
-                "symbol": symbol, "side": side, "side_cn": _side_cn,
-                "qty": qty, "price": price, "price_display": _price_str,
-                "order_type": order_type,
-            },
-            "message": (
-                f"⚠️ 请确认以下订单：\n"
-                f"  {_side_cn} **{symbol}**  数量: {qty:,}  价格: {_price_str}\n\n"
-                "回复 **确认下单** 或 **confirm order** 执行，其他任何回复取消。"
-                f"{_risk_note}"
-            ),
-        }
-
-    # User confirmed — place order
-    try:
-        if not broker:
-            reg    = _get_broker_registry()
-            broker = reg.active()
-        if not broker:
-            return {"success": False, "error": "无已连接账户，请先 /broker connect"}
-
-        result = broker.place_order(
-            symbol=symbol, side=side, quantity=qty,
-            price=float(price) if price is not None else 0.0,
-            order_type=order_type,
-        )
-        return {
-            "success": bool(result.success),
-            "order_id": result.order_id,
-            "symbol": symbol, "side": side, "qty": qty,
-            "message": result.message,
-            "broker": broker.label,
-            "order_plan": plan_data,
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+    _price_str = f"{float(price):.2f}" if price is not None else "市价"
+    _side_cn   = "买入" if side == "buy" else "卖出"
+    _risk_note = ""
+    if plan_data:
+        if risk.get("warnings"):
+            _risk_note = "\n\n风控提示：\n" + plan_message
+        elif blockers:
+            _risk_note = "\n\n执行限制：\n" + plan_message
+    return {
+        "success": False,
+        "confirmation_required": True,
+        "preview_id": preview.get("preview_id"),
+        "trade_preview": preview,
+        "order_plan": plan_data,
+        "order_preview": {
+            "preview_id": preview.get("preview_id"),
+            "mode": preview.get("mode"),
+            "broker": preview.get("broker_label"),
+            "symbol": symbol, "side": side, "side_cn": _side_cn,
+            "qty": qty, "price": price, "price_display": _price_str,
+            "order_type": order_type,
+            "can_execute": preview.get("can_execute"),
+        },
+        "message": (
+            f"⚠️ 请确认以下订单预览 `{preview.get('preview_id')}`：\n"
+            f"  模式: {preview.get('mode')}  券商: {preview.get('broker_label')}\n"
+            f"  {_side_cn} **{symbol}**  数量: {qty:,.4g}  价格: {_price_str}\n\n"
+            "确认时必须携带 preview_id；其他任何回复取消。"
+            f"{_risk_note}"
+        ),
+    }

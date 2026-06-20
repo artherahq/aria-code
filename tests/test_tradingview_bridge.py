@@ -1,6 +1,7 @@
 import sqlite3
 
 from apps.cli.tradingview_bridge import (
+    build_tradingview_order_preview,
     enqueue_tradingview_alert,
     export_pine_strategy,
     generate_pine_strategy,
@@ -8,6 +9,16 @@ from apps.cli.tradingview_bridge import (
     tradingview_symbol,
     tradingview_url,
 )
+from brokers.paper_broker import PaperBroker
+
+
+def _patch_trade_paths(monkeypatch, tmp_path):
+    import brokers.paper_broker as paper_mod
+    import brokers.trading as trading_mod
+
+    monkeypatch.setattr(paper_mod, "PAPER_LEDGER_PATH", tmp_path / "paper_ledger.json")
+    monkeypatch.setattr(trading_mod, "TRADE_PREVIEWS_PATH", tmp_path / "trade_previews.json")
+    monkeypatch.setattr(trading_mod, "TRADE_AUDIT_PATH", tmp_path / "trade_audit.jsonl")
 
 
 def test_tradingview_symbol_maps_common_global_assets():
@@ -37,6 +48,65 @@ def test_parse_tradingview_alert_normalizes_symbol_and_action():
     assert alert["price"] == 210.5
 
 
+def test_parse_tradingview_strategy_order_fields():
+    alert = parse_tradingview_alert({
+        "syminfo.tickerid": "NASDAQ:NVDA",
+        "strategy.order.action": "sell",
+        "strategy.order.price": "210.5",
+    })
+
+    assert alert["symbol"] == "NVDA"
+    assert alert["action"] == "SELL"
+    assert alert["price"] == "210.5"
+
+
+def test_tradingview_buy_alert_creates_paper_trade_preview(monkeypatch, tmp_path):
+    _patch_trade_paths(monkeypatch, tmp_path)
+    broker = PaperBroker("paper_tv", {
+        "id": "paper_tv",
+        "type": "paper",
+        "label": "TV Paper",
+        "mode": "paper",
+        "starting_cash": 10000,
+        "currency": "USD",
+    })
+    broker.connect()
+
+    result = build_tradingview_order_preview(
+        {"ticker": "NASDAQ:NVDA", "action": "BUY", "quantity": 2, "price": 100},
+        broker=broker,
+    )
+
+    assert result["success"] is True
+    assert result["trade_preview_created"] is True
+    assert result["preview_id"].startswith("tp_")
+    assert result["mode"] == "paper"
+    assert result["can_execute"] is True
+    assert result["trade_preview"]["order_plan"]["estimated_order"]["quantity"] == 2
+
+
+def test_tradingview_buy_alert_without_size_does_not_create_order(monkeypatch, tmp_path):
+    _patch_trade_paths(monkeypatch, tmp_path)
+    broker = PaperBroker("paper_tv_safe", {
+        "id": "paper_tv_safe",
+        "type": "paper",
+        "label": "TV Paper Safe",
+        "mode": "paper",
+        "starting_cash": 10000,
+        "currency": "USD",
+    })
+    broker.connect()
+
+    result = build_tradingview_order_preview(
+        {"ticker": "NASDAQ:NVDA", "action": "BUY", "price": 100},
+        broker=broker,
+    )
+
+    assert result["success"] is True
+    assert result["trade_preview_created"] is False
+    assert result["reason"] == "missing_quantity"
+
+
 def test_enqueue_tradingview_alert_writes_daemon_job(tmp_path):
     db_path = tmp_path / "daemon.db"
     result = enqueue_tradingview_alert(
@@ -58,6 +128,7 @@ def test_generate_and_export_pine_strategy(tmp_path):
     script = generate_pine_strategy("NVDA")
     assert 'strategy("Aria NVDA EMA RSI Strategy"' in script
     assert '\\"symbol\\":\\"NVDA\\"' in script
+    assert '\\"quantity\\":1' in script
     assert "{{close}}" in script
 
     path = export_pine_strategy("NVDA", output_dir=tmp_path)

@@ -36,6 +36,71 @@ _MARKET_CONTEXT_TERMS = (
 )
 
 
+def _rss_items_from_xml(xml_text: str, limit: int = 5) -> list[dict]:
+    """Parse simple RSS item fields without external dependencies."""
+    import html as _html
+    import xml.etree.ElementTree as _ET
+
+    try:
+        root = _ET.fromstring(xml_text)
+    except Exception:
+        return []
+    items: list[dict] = []
+    for item in root.findall(".//item"):
+        title = item.findtext("title") or ""
+        link = item.findtext("link") or ""
+        pub_date = item.findtext("pubDate") or item.findtext("published") or ""
+        source = item.findtext("source") or ""
+        if not title:
+            continue
+        items.append({
+            "title": _html.unescape(title.strip()),
+            "url": link.strip(),
+            "published_at": pub_date.strip(),
+            "source": source.strip() or "RSS",
+        })
+        if len(items) >= limit:
+            break
+    return items
+
+
+def _fetch_public_news_fallback(topic: str, limit: int = 5) -> list[dict]:
+    """Fetch public RSS news without API keys.
+
+    Yahoo Finance works well for tickers; Google News RSS covers private
+    companies such as SpaceX. This is a best-effort fallback, not a guaranteed
+    research source.
+    """
+    import re as _re
+    import urllib.parse as _parse
+    import urllib.request as _request
+
+    topic = (topic or "market").strip()
+    urls: list[str] = []
+    if _re.match(r"^[A-Z]{1,6}(?:[.-][A-Z]{1,3})?$", topic):
+        urls.append(
+            "https://feeds.finance.yahoo.com/rss/2.0/headline?"
+            f"s={_parse.quote(topic)}&region=US&lang=en-US"
+        )
+    query = f"{topic} latest news when:14d"
+    urls.append(
+        "https://news.google.com/rss/search?"
+        f"q={_parse.quote(query)}&hl=en-US&gl=US&ceid=US:en"
+    )
+    headers = {"User-Agent": "Mozilla/5.0 AriaCode/4.1"}
+    for url in urls:
+        try:
+            req = _request.Request(url, headers=headers)
+            with _request.urlopen(req, timeout=8) as resp:
+                text = resp.read().decode("utf-8", errors="replace")
+            items = _rss_items_from_xml(text, limit=limit)
+            if items:
+                return items
+        except Exception:
+            continue
+    return []
+
+
 def _is_known_football_name(name: str) -> bool:
     """Return True only when a fragment resolves to a known football team/country."""
     n = (name or "").strip()
@@ -951,8 +1016,21 @@ class MarketCommandsMixin:
             )
         if result.get("success"):
             data = result.get("data", {})
-            articles = data.get("articles", data.get("news", data if isinstance(data, list) else []))
-            sentiment = data.get("sentiment", data.get("overall_sentiment", "")) if isinstance(data, dict) else ""
+            if isinstance(data, dict):
+                articles = data.get("articles", data.get("news", []))
+                sentiment = data.get("sentiment", data.get("overall_sentiment", ""))
+            elif isinstance(data, list):
+                articles = data
+                sentiment = ""
+            else:
+                articles = []
+                sentiment = ""
+            if not (isinstance(articles, list) and articles):
+                articles = await asyncio.get_event_loop().run_in_executor(
+                    None, _fetch_public_news_fallback, topic, limit
+                )
+                if articles:
+                    sentiment = "public RSS fallback"
             if isinstance(articles, list) and articles:
                 if HAS_RICH:
                     console.print()
@@ -995,6 +1073,32 @@ class MarketCommandsMixin:
                         console.print("  [dim]  /apikey set newsapi <key>   →  https://newsapi.org/register[/dim]")
                     console.print()
         else:
+            articles = await asyncio.get_event_loop().run_in_executor(
+                None, _fetch_public_news_fallback, topic, limit
+            )
+            if isinstance(articles, list) and articles:
+                if HAS_RICH:
+                    console.print()
+                    console.print("  [dim]新闻 API 不可用，已使用公共 RSS fallback。[/dim]")
+                    console.print()
+                for idx, a in enumerate(articles[:limit], 1):
+                    title = a.get("title", "Untitled") if isinstance(a, dict) else str(a)
+                    source = a.get("source", "") if isinstance(a, dict) else ""
+                    pub_date = a.get("published_at", "") if isinstance(a, dict) else ""
+                    if pub_date:
+                        pub_date = pub_date[:10] if len(pub_date) >= 10 else pub_date
+                    if HAS_RICH:
+                        console.print(f"  [bold]{idx}.[/bold] {title}")
+                        meta_parts = [p for p in [source, pub_date] if p]
+                        if meta_parts:
+                            console.print(f"     [dim]{' · '.join(meta_parts)}[/dim]")
+                    else:
+                        meta = f" ({source})" if source else ""
+                        print(f"  {idx}. {title}{meta}")
+                if HAS_RICH:
+                    console.print()
+                return
+
             # Backend + all local fallbacks unavailable — show actionable config guide
             err = result.get("error", "")
             _data_keys = _load_data_keys()

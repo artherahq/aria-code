@@ -67,6 +67,40 @@ def tool_display_label(tool_name: str) -> str:
     return f"{tool_name} · {tool_display_kind(tool_name)}"
 
 
+def format_turn_footer(metadata, *, mode: str = "compact", copy_available: bool = False) -> str:
+    """Return the post-response status line.
+
+    ``full`` keeps the historical token-heavy line for debugging.  ``compact``
+    is the default interactive UI: elapsed time, provider, tools, and /copy.
+    """
+    mode = (mode or "compact").strip().lower()
+    if mode in {"off", "none", "false", "0"}:
+        return ""
+    parts = list(getattr(metadata, "parts", []) or [])
+    if mode in {"full", "debug", "verbose"}:
+        footer = " · ".join(parts)
+        if copy_available:
+            footer = f"{footer}  /copy" if footer else "/copy"
+        return footer
+
+    elapsed = parts[0] if parts else ""
+    provider = str(getattr(metadata, "provider", "") or "").strip()
+    tools = list(getattr(metadata, "tools", []) or [])
+    out: list[str] = []
+    if elapsed:
+        out.append(elapsed)
+    if provider and provider not in {"aws", "local"}:
+        out.append(provider)
+    if tools:
+        shown = " ".join(str(t) for t in tools[:3])
+        if len(tools) > 3:
+            shown += f" +{len(tools) - 3}"
+        out.append(shown)
+    if copy_available:
+        out.append("/copy")
+    return " · ".join(out)
+
+
 def display_path(path: object, *, fallback: str = "file") -> str:
     """Return a path-safe display value for user-facing UI."""
     if not path:
@@ -291,11 +325,11 @@ def print_tool_result(
                 if stdout:
                     out_lines = stdout.splitlines()
                     if len(out_lines) > 3:
-                        truncated = "\n".join(out_lines[:40])
-                        if len(out_lines) > 40:
-                            truncated += f"\n[dim]… +{len(out_lines) - 40} lines[/dim]"
+                        truncated = "\n".join(out_lines[:12])
+                        if len(out_lines) > 12:
+                            truncated += f"\n[dim]… +{len(out_lines) - 12} lines[/dim]"
                         if data.get("full_output_path"):
-                            truncated += "\n[dim]full output saved[/dim]"
+                            truncated += f"\n[dim]full output saved: {data.get('full_output_path')}[/dim]"
                         console.print(Panel(
                             f"[dim]{truncated}[/dim]",
                             border_style="dim",
@@ -514,9 +548,11 @@ def print_tool_activity_group(
                     from rich.panel import Panel
                     out_lines = stdout.splitlines()
                     if len(out_lines) > 3:
-                        truncated = "\n".join(out_lines[:40])
-                        if len(out_lines) > 40:
-                            truncated += f"\n[dim]… +{len(out_lines) - 40} lines[/dim]"
+                        truncated = "\n".join(out_lines[:12])
+                        if len(out_lines) > 12:
+                            truncated += f"\n[dim]… +{len(out_lines) - 12} lines[/dim]"
+                        if result.get("data", {}).get("full_output_path"):
+                            truncated += f"\n[dim]full output saved: {result.get('data', {}).get('full_output_path')}[/dim]"
                         console.print(Panel(f"[dim]{truncated}[/dim]",
                                             border_style="dim", box=rich_box.SIMPLE,
                                             padding=(0, 1)))

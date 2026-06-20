@@ -247,6 +247,19 @@ def evaluate_risk(plan: OrderPlan, snapshot: PortfolioSnapshot, rules: Optional[
         reserve = total_assets * rules.min_cash_reserve_weight
         if plan.cash_after < reserve:
             warnings.append(f"交易后现金低于保留比例 {rules.min_cash_reserve_weight:.1%}")
+    projected_position_value = 0.0
+    projected_position_weight = 0.0
+    if order and total_assets > 0:
+        current_value = total_assets * plan.current_weight
+        if order.side == "buy":
+            projected_position_value = current_value + order.estimated_value
+        else:
+            projected_position_value = max(0.0, current_value - order.estimated_value)
+        projected_position_weight = projected_position_value / total_assets
+        if projected_position_weight > rules.max_single_position_weight:
+            violations.append(
+                f"成交后单票仓位 {projected_position_weight:.1%} 超过上限 {rules.max_single_position_weight:.1%}"
+            )
     if order and total_assets > 0 and order.estimated_value / total_assets > rules.max_order_value_weight:
         warnings.append(f"单笔订单金额超过账户 {rules.max_order_value_weight:.1%}")
     if order and order.side == "sell" and order.quantity > plan.current_quantity and not rules.allow_short:
@@ -263,6 +276,7 @@ def evaluate_risk(plan: OrderPlan, snapshot: PortfolioSnapshot, rules: Optional[
             "allow_short": rules.allow_short,
             "allow_fractional": rules.allow_fractional,
         },
+        "projected_position_weight": round(projected_position_weight, 6),
     }
 
 

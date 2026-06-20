@@ -439,11 +439,13 @@ class BrokerCommandsMixin:
         # ── 按市场分组、固定宽度对齐 ─────────────────────────────────────────
         # 每组: (分组标签, [broker_key, ...])
         _GROUPS = [
+            ("仿盘",       ["paper"]),
             ("A 股",       ["xtquant", "easytrader"]),
             ("港股 / 美股", ["futu", "tiger", "longbridge"]),
             ("美股 / 国际", ["ibkr", "alpaca", "webull"]),
         ]
         _CAT = {
+            "paper": "仿盘",
             "xtquant": "A股",    "easytrader": "A股",
             "futu": "港/美/A",   "tiger": "港/美/A",   "longbridge": "港/美/A",
             "ibkr": "全球",      "alpaca": "美股",     "webull": "美股",
@@ -495,6 +497,14 @@ class BrokerCommandsMixin:
 
         # ── 开户 & 凭证获取指南 ───────────────────────────────────────────
         _GUIDE: dict[str, str] = {
+            "paper": (
+                "Aria 本地仿盘账户 — 无需真实券商\n\n"
+                "使用步骤：\n"
+                "  1. 运行 /paper start 100000 USD 创建本地仿盘账户\n"
+                "  2. 运行 /trade preview AAPL buy 10 190 生成订单预览\n"
+                "  3. 运行 /trade confirm <preview_id> 执行仿盘成交\n\n"
+                "数据位置：~/.arthera/paper_ledger.json"
+            ),
             "alpaca": (
                 "Alpaca Markets — 免费美股/加密货币 API（支持模拟盘）\n\n"
                 "获取 API Key 步骤：\n"
@@ -601,6 +611,12 @@ class BrokerCommandsMixin:
                 ("api_secret", "API Secret",                       "",              True,  False),
                 ("paper",      "模拟盘 (true=模拟 / false=实盘)",  "true",          False, False),
             ],
+            "paper": [
+                ("id",            "配置 ID",        "paper_main", False, False),
+                ("label",         "显示名称",        "Aria 仿盘账户", False, False),
+                ("starting_cash", "初始资金",        "100000",     False, False),
+                ("currency",      "币种",            "USD",        False, False),
+            ],
             "tiger": [
                 ("id",               "配置 ID",         "tiger_us",               False, False),
                 ("label",            "显示名称",         "老虎",                    False, False),
@@ -689,6 +705,11 @@ class BrokerCommandsMixin:
             # Type coercion
             if key == "paper":
                 filled[key] = val.lower() not in ("false", "0", "no", "f")
+            elif key == "starting_cash" and val:
+                try:
+                    filled[key] = float(val)
+                except ValueError:
+                    filled[key] = val
             elif key in ("port", "client_id") and val:
                 try:
                     filled[key] = int(val)
@@ -844,6 +865,210 @@ class BrokerCommandsMixin:
             _print_broker_orders(orders, broker.label, status)
         except Exception as e:
             _print_error(f"订单查询失败: {e}", "请检查券商连接状态 (/broker status)")
+
+    async def cmd_paper(self, args: str):
+        """本地仿盘账户: /paper start [cash] [currency] | account | positions | orders | reset."""
+        from aria_cli import HAS_RICH, console, _print_error
+        from brokers.config import add_broker_config, get_broker_config, set_default_broker
+        from brokers.paper_broker import PAPER_LEDGER_PATH, PaperBroker
+
+        parts = args.strip().split()
+        sub = parts[0].lower() if parts else "account"
+        rest = parts[1:]
+        broker_id = "paper_main"
+        cash = 100000.0
+        currency = "USD"
+        if rest:
+            try:
+                cash = float(rest[0])
+            except Exception:
+                pass
+        if len(rest) > 1:
+            currency = rest[1].upper()
+
+        if sub in ("start", "init", "reset"):
+            cfg = {
+                "id": broker_id,
+                "type": "paper",
+                "label": "Aria 仿盘账户",
+                "mode": "paper",
+                "starting_cash": cash,
+                "currency": currency,
+                "default": True,
+            }
+            add_broker_config(cfg)
+            set_default_broker(broker_id)
+            broker = PaperBroker(broker_id, cfg)
+            broker.reset(starting_cash=cash, currency=currency)
+            if HAS_RICH:
+                console.print(
+                    f"[green]✓[/green] 仿盘账户已初始化: [bold]{currency} {cash:,.2f}[/bold] "
+                    f"[dim]{PAPER_LEDGER_PATH}[/dim]"
+                )
+            else:
+                print(f"仿盘账户已初始化: {currency} {cash:,.2f} {PAPER_LEDGER_PATH}")
+            return
+
+        cfg = get_broker_config(broker_id)
+        if not cfg:
+            _print_error("尚未创建仿盘账户", "运行 /paper start 100000 USD")
+            return
+        broker = PaperBroker(broker_id, cfg)
+        broker.connect()
+        if sub in ("account", "status"):
+            from aria_cli import _print_broker_account
+            _print_broker_account(broker.account_info())
+        elif sub in ("positions", "pos"):
+            from aria_cli import _print_broker_positions
+            _print_broker_positions(broker.positions(), broker.label, broker.currency)
+        elif sub in ("orders", "order"):
+            from aria_cli import _print_broker_orders
+            _print_broker_orders(broker.orders(limit=30), broker.label, "all")
+        else:
+            if HAS_RICH:
+                console.print("[dim]用法: /paper start [cash] [currency] | account | positions | orders | reset[/dim]")
+            else:
+                print("Usage: /paper start [cash] [currency] | account | positions | orders | reset")
+
+    async def cmd_trade(self, args: str):
+        """两阶段交易: /trade mode | preview SYMBOL buy|sell QTY PRICE | confirm PREVIEW_ID | previews."""
+        from aria_cli import HAS_RICH, console, _print_error, _get_broker_registry
+        from brokers import (
+            OrderIntent, build_order_preview, execute_order_preview,
+            list_order_previews, policy_from_config,
+        )
+
+        parts = args.strip().split()
+        sub = parts[0].lower() if parts else "mode"
+        reg = _get_broker_registry()
+        broker = reg.active() if reg else None
+        if not broker:
+            try:
+                broker = reg.connect_default() if reg else None
+            except Exception as exc:
+                _print_error(f"无法连接默认账户: {exc}", "先运行 /paper start 或 /broker connect <id>")
+                return
+
+        if sub == "mode":
+            if not broker:
+                _print_error("无活跃账户", "先运行 /paper start 或 /broker connect <id>")
+                return
+            policy = policy_from_config(getattr(broker, "config", {}) or {}, getattr(broker, "broker_type", ""))
+            msg = (
+                f"账户: {broker.label} ({broker.broker_type})\n"
+                f"模式: {policy.mode}\n"
+                f"实盘允许: {policy.allow_live_trade}\n"
+                f"确认要求: {policy.require_confirm}\n"
+                f"单笔上限: {policy.max_order_value_weight:.1%}  单票仓位上限: {policy.max_single_position_weight:.1%}"
+            )
+            if HAS_RICH:
+                from aria_cli import Panel, rich_box
+                color = "red" if policy.mode == "live" else "green" if policy.mode == "paper" else "yellow"
+                console.print(Panel(msg, title="[bold]Trade Mode[/bold]", border_style=color, box=rich_box.ROUNDED))
+            else:
+                print(msg)
+            return
+
+        if sub in ("previews", "list"):
+            rows = list_order_previews(limit=10)
+            if HAS_RICH:
+                from rich.table import Table
+                from aria_cli import rich_box
+                tbl = Table(title="[bold]Trade Previews[/bold]", box=rich_box.ROUNDED, border_style="dim")
+                tbl.add_column("ID")
+                tbl.add_column("Mode")
+                tbl.add_column("Broker")
+                tbl.add_column("Order")
+                tbl.add_column("Status")
+                tbl.add_column("Can Exec")
+                for row in rows:
+                    intent = row.get("intent") or {}
+                    tbl.add_row(
+                        row.get("preview_id", ""),
+                        row.get("mode", ""),
+                        row.get("broker_label", ""),
+                        f"{intent.get('side','')} {intent.get('symbol','')} x {intent.get('quantity','')}",
+                        row.get("status", ""),
+                        "yes" if row.get("can_execute") else "no",
+                    )
+                console.print(tbl)
+            else:
+                for row in rows:
+                    print(row)
+            return
+
+        if sub == "confirm":
+            if not broker:
+                _print_error("无活跃账户", "先运行 /paper start 或 /broker connect <id>")
+                return
+            preview_id = parts[1] if len(parts) > 1 else ""
+            if not preview_id:
+                _print_error("请提供 preview_id", "/trade confirm <preview_id>")
+                return
+            result = execute_order_preview(broker, preview_id, confirmed=True)
+            if result.get("success"):
+                if HAS_RICH:
+                    console.print(
+                        f"[green]✓[/green] 订单已执行 [{result.get('mode')}] "
+                        f"{result.get('side')} {result.get('symbol')} x {result.get('qty')} "
+                        f"[dim]#{result.get('order_id')}[/dim]"
+                    )
+                else:
+                    print(result)
+            else:
+                _print_error(
+                    "订单未执行",
+                    "; ".join(result.get("execution_blockers") or [result.get("error", "unknown")]),
+                )
+            return
+
+        if sub == "preview":
+            order_parts = parts[1:]
+        else:
+            order_parts = parts
+        if len(order_parts) < 4:
+            _print_error("用法: /trade preview SYMBOL buy|sell QTY PRICE", "/trade preview AAPL buy 10 190")
+            return
+        if not broker:
+            _print_error("无活跃账户", "先运行 /paper start 或 /broker connect <id>")
+            return
+        symbol, side, qty_raw, price_raw = order_parts[:4]
+        try:
+            qty = float(qty_raw)
+            price = float(price_raw)
+        except Exception:
+            _print_error("数量和价格必须是数字", "/trade preview AAPL buy 10 190")
+            return
+        if side.lower() not in ("buy", "sell"):
+            _print_error("side 必须是 buy 或 sell", "/trade preview AAPL buy 10 190")
+            return
+        preview = build_order_preview(
+            broker,
+            OrderIntent(
+                symbol=symbol,
+                side=side,
+                quantity=qty,
+                price=price,
+                order_type="limit",
+                source="slash_trade",
+            ),
+        )
+        blockers = preview.get("execution_blockers") or []
+        if HAS_RICH:
+            from aria_cli import Panel, rich_box
+            status = "可执行" if preview.get("can_execute") else "不可执行"
+            body = (
+                f"preview_id: [bold]{preview.get('preview_id')}[/bold]\n"
+                f"模式: {preview.get('mode')}  账户: {preview.get('broker_label')}\n"
+                f"订单: {side.upper()} {symbol.upper()} x {qty:g} @ {price:g}\n"
+                f"状态: {status}\n"
+            )
+            if blockers:
+                body += "\n执行限制:\n" + "\n".join(f"  - {b}" for b in blockers)
+            body += "\n\n确认执行: /trade confirm " + str(preview.get("preview_id"))
+            console.print(Panel(body, title="[bold]Trade Preview[/bold]", border_style="yellow", box=rich_box.ROUNDED))
+        else:
+            print(preview)
 
     async def _prompt_no_broker_action(self) -> None:
         """未配置券商时显示可导航的操作菜单，选择后直接路由到对应功能。"""

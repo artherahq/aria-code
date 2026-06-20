@@ -28,7 +28,7 @@ packages/aria_services
 2. New market-data behavior belongs behind the `data` service contract.
 3. New report or chart output belongs behind the `reports` service contract.
 4. New broker behavior belongs behind the `brokers` service contract and must
-   default to read-only.
+   default to read-only unless it is the local paper broker.
 5. New external app integrations should call the `gateway` service, not the CLI.
 6. Every service-facing capability should have a manifest with permissions and
    capabilities.
@@ -82,3 +82,43 @@ Provider errors are normalized into these categories:
 
 Report, team-agent, and strategy outputs should surface stale/partial data
 instead of silently producing confident conclusions from incomplete inputs.
+
+## Broker Execution Contract
+
+Broker execution is a two-stage service flow. The CLI and MCP tool are adapters;
+they should not directly place orders.
+
+```text
+user intent
+  -> symbol/account resolution
+  -> broker snapshot
+  -> order preview
+  -> risk checks
+  -> preview_id
+  -> explicit confirmation with preview_id
+  -> paper/live adapter
+  -> audit log
+```
+
+Required boundaries:
+
+- `read_only` is the default for all real broker configs.
+- `paper` uses `brokers.paper_broker.PaperBroker` and writes only to the local
+  paper ledger.
+- `live` execution is blocked unless the broker config explicitly sets
+  `allow_live_trade=true`.
+- Every executable order must be created by `brokers.trading.build_order_preview`
+  and confirmed through `brokers.trading.execute_order_preview`.
+- Confirmation must use the exact `preview_id`; symbol/side/quantity from a new
+  user message are not enough to execute.
+- Risk checks run before execution and include cash, cash reserve, single-order
+  size, sell availability, and projected single-symbol position weight.
+- Every preview, rejection, and execution writes an audit event.
+
+User-facing commands:
+
+- `/paper start 100000 USD`: create/reset a local paper account.
+- `/paper account|positions|orders`: inspect the paper ledger.
+- `/trade mode`: inspect the active account's execution policy.
+- `/trade preview AAPL buy 10 190`: create a guarded preview.
+- `/trade confirm <preview_id>`: execute only the exact saved preview.

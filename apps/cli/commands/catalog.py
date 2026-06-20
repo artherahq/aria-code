@@ -70,7 +70,7 @@ VISIBLE_SLASH_COMMANDS: FrozenSet[str] = frozenset({
     # Persistent data (direct writes)
     "/alert", "/journal", "/watch", "/note", "/todo", "/memory",
     # Broker
-    "/broker", "/account", "/positions", "/orders",
+    "/broker", "/account", "/positions", "/orders", "/paper", "/trade",
     # Code & project
     "/project", "/init", "/review", "/code", "/plan", "/run",
     # Quant

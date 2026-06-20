@@ -118,11 +118,21 @@ def parse_tradingview_alert(payload: dict[str, Any] | str) -> dict[str, Any]:
         data.get("symbol")
         or data.get("ticker")
         or data.get("tv_symbol")
+        or data.get("syminfo.ticker")
+        or data.get("syminfo.tickerid")
         or data.get("s")
         or ""
     )
     strategy = data.get("strategy") if isinstance(data.get("strategy"), dict) else {}
-    action = data.get("action") or data.get("side") or data.get("signal") or strategy.get("order_action") or ""
+    action = (
+        data.get("action")
+        or data.get("side")
+        or data.get("signal")
+        or data.get("order_action")
+        or data.get("strategy.order.action")
+        or strategy.get("order_action")
+        or ""
+    )
     symbol = normalize_tradingview_alert_symbol(str(raw_symbol))
     action_norm = str(action or "").strip().upper()
     if action_norm in {"LONG", "BUY", "B"}:
@@ -136,11 +146,185 @@ def parse_tradingview_alert(payload: dict[str, Any] | str) -> dict[str, Any]:
     return {
         "symbol": symbol,
         "action": action_norm,
-        "price": data.get("price") or data.get("close") or data.get("last"),
+        "price": data.get("price") or data.get("close") or data.get("last") or data.get("strategy.order.price"),
         "time": data.get("time") or data.get("timestamp") or data.get("t"),
         "message": data.get("message") or data.get("alert_message") or "",
         "channels": data.get("channels"),
         "raw": data,
+    }
+
+
+def _as_float_or_none(value: Any) -> float | None:
+    try:
+        if value in (None, ""):
+            return None
+        out = float(value)
+        return out if out == out else None
+    except Exception:
+        return None
+
+
+def _first_present(raw: dict[str, Any], names: tuple[str, ...]) -> Any:
+    for name in names:
+        if name in raw and raw.get(name) not in (None, ""):
+            return raw.get(name)
+    return None
+
+
+def _strategy_field(raw: dict[str, Any], names: tuple[str, ...]) -> Any:
+    strategy = raw.get("strategy")
+    if not isinstance(strategy, dict):
+        return None
+    return _first_present(strategy, names)
+
+
+def _current_position_quantity(broker: Any, symbol: str) -> float:
+    sym = str(symbol or "").upper()
+    try:
+        for pos in broker.positions() or []:
+            if str(getattr(pos, "symbol", "") or "").upper() == sym:
+                return float(getattr(pos, "quantity", 0.0) or 0.0)
+    except Exception:
+        pass
+    return 0.0
+
+
+def _ensure_tradingview_broker(broker_id: str | None = None) -> Any:
+    """Connect a broker for TradingView alert previews.
+
+    If no broker is configured, create a local paper account. This keeps
+    webhooks useful while never defaulting to live execution.
+    """
+    from brokers.config import add_broker_config, get_broker_config, get_default_broker_config, set_default_broker
+    from brokers.registry import BrokerRegistry
+
+    selected_id = str(broker_id or "").strip()
+    if not selected_id:
+        selected_id = str((get_default_broker_config() or {}).get("id") or "")
+
+    if not selected_id:
+        selected_id = "paper_main"
+        if not get_broker_config(selected_id):
+            add_broker_config({
+                "id": selected_id,
+                "type": "paper",
+                "label": "Aria TradingView 仿盘",
+                "mode": "paper",
+                "starting_cash": 100000,
+                "currency": "USD",
+                "default": True,
+            })
+            set_default_broker(selected_id)
+
+    registry = BrokerRegistry()
+    return registry.connect(selected_id)
+
+
+def build_tradingview_order_preview(
+    payload: dict[str, Any] | str,
+    *,
+    broker: Any | None = None,
+    broker_id: str | None = None,
+) -> dict[str, Any]:
+    """Turn a TradingView alert into an Aria trade preview.
+
+    The function never executes an order. It only creates a `preview_id` through
+    the broker trading service, so live trading still requires manual
+    confirmation through `/trade confirm <preview_id>` or `broker_order`.
+    """
+    alert = parse_tradingview_alert(payload)
+    symbol = str(alert.get("symbol") or "").upper()
+    action = str(alert.get("action") or "ALERT").upper()
+    raw = dict(alert.get("raw") or {})
+    if not symbol:
+        return {"success": False, "error": "symbol is required", "alert": alert}
+    if action not in {"BUY", "SELL", "EXIT"}:
+        return {
+            "success": True,
+            "trade_preview_created": False,
+            "reason": "non_trade_alert",
+            "alert": alert,
+        }
+
+    selected_broker_id = broker_id or raw.get("broker_id") or raw.get("account_id")
+    if broker is None:
+        try:
+            broker = _ensure_tradingview_broker(str(selected_broker_id or "") or None)
+        except Exception as exc:
+            return {"success": False, "error": f"broker connect failed: {exc}", "alert": alert}
+
+    qty = _as_float_or_none(
+        _first_present(raw, (
+            "quantity",
+            "qty",
+            "shares",
+            "contracts",
+            "order_size",
+            "strategy.order.contracts",
+            "strategy.position_size",
+        ))
+        or _strategy_field(raw, ("order_contracts", "position_size"))
+    )
+    target_weight = _as_float_or_none(_first_present(raw, ("target_weight", "weight", "target")))
+    price = _as_float_or_none(alert.get("price"))
+    order_type = str(raw.get("order_type") or raw.get("type") or "limit").lower()
+    if order_type not in {"limit", "market"}:
+        order_type = "limit"
+
+    side = "buy" if action == "BUY" else "sell"
+    if side == "sell" and qty is None:
+        qty = _current_position_quantity(broker, symbol)
+        if qty <= 0:
+            return {
+                "success": True,
+                "trade_preview_created": False,
+                "reason": "no_position_to_exit" if action == "EXIT" else "missing_quantity",
+                "alert": alert,
+                "broker_id": getattr(broker, "broker_id", ""),
+                "broker_label": getattr(broker, "label", ""),
+            }
+    if side == "buy" and qty is None and target_weight is None:
+        return {
+            "success": True,
+            "trade_preview_created": False,
+            "reason": "missing_quantity",
+            "alert": alert,
+            "hint": "TradingView BUY alerts need quantity/qty or target_weight to create an order preview.",
+            "broker_id": getattr(broker, "broker_id", ""),
+            "broker_label": getattr(broker, "label", ""),
+        }
+
+    from brokers import OrderIntent, build_order_preview
+
+    preview = build_order_preview(
+        broker,
+        OrderIntent(
+            symbol=symbol,
+            side=side,
+            quantity=qty,
+            price=price,
+            order_type=order_type,
+            target_weight=target_weight,
+            source="tradingview_alert",
+            user_message=str(alert.get("message") or ""),
+            metadata={
+                "tradingview_action": action,
+                "tradingview_time": alert.get("time"),
+            },
+        ),
+    )
+    return {
+        "success": True,
+        "trade_preview_created": True,
+        "alert": alert,
+        "preview_id": preview.get("preview_id"),
+        "trade_preview": preview,
+        "can_execute": preview.get("can_execute"),
+        "mode": preview.get("mode"),
+        "broker_id": preview.get("broker_id"),
+        "broker_label": preview.get("broker_label"),
+        "execution_blockers": preview.get("execution_blockers") or [],
+        "confirm_command": f"/trade confirm {preview.get('preview_id')}",
     }
 
 
@@ -234,7 +418,7 @@ if exitCondition
 
 plot(fast, "Fast EMA", color=color.teal)
 plot(slow, "Slow EMA", color=color.orange)
-alertcondition(longCondition, "Aria BUY {sym}", "{{\\"symbol\\":\\"{sym}\\",\\"action\\":\\"BUY\\",\\"price\\":{{{{close}}}}}}")
+alertcondition(longCondition, "Aria BUY {sym}", "{{\\"symbol\\":\\"{sym}\\",\\"action\\":\\"BUY\\",\\"quantity\\":1,\\"price\\":{{{{close}}}}}}")
 alertcondition(exitCondition, "Aria EXIT {sym}", "{{\\"symbol\\":\\"{sym}\\",\\"action\\":\\"EXIT\\",\\"price\\":{{{{close}}}}}}")
 """
 

@@ -692,13 +692,21 @@ def render_finance_result(tool_name: str, result: dict, *, console=None, has_ric
                 from rich import box as _rbox
                 _side_cn = preview.get("side_cn", preview.get("side", ""))
                 _side_color = "green" if preview.get("side") == "buy" else "red"
+                _preview_id = preview.get("preview_id") or result.get("preview_id") or ""
+                _mode = preview.get("mode") or (result.get("trade_preview") or {}).get("mode") or ""
+                _broker = preview.get("broker") or (result.get("trade_preview") or {}).get("broker_label") or ""
+                _blockers = (result.get("trade_preview") or {}).get("execution_blockers") or []
                 _body = (
+                    f"preview_id: [bold]{_preview_id}[/bold]\n"
+                    f"模式: [bold]{_mode or '—'}[/bold]  券商: [bold]{_broker or '—'}[/bold]\n\n"
                     f"[bold]{_side_cn}[/bold]  "
                     f"[bold]{preview.get('symbol','')}[/bold]  "
                     f"数量: [bold]{preview.get('qty', 0):,}[/bold]  "
                     f"价格: [bold]{preview.get('price_display','市价')}[/bold]\n\n"
-                    "[yellow]回复 确认下单 执行 · 其他任何回复取消[/yellow]"
+                    "[yellow]确认执行时必须携带 preview_id · 其他任何回复取消[/yellow]"
                 )
+                if _blockers:
+                    _body += "\n\n[red]执行限制:[/red]\n" + "\n".join(f"  - {b}" for b in _blockers)
                 console.print(Panel(
                     _body,
                     title=f"[yellow]⚠ 订单确认[/yellow]",
@@ -1461,4 +1469,3 @@ def format_backtest_output(data: dict):
     out.append(f"  {'Outperformance':<18s}", style="dim")
     out.append(f"{outperf*100:+.2f}%\n", style=_c(outperf))
     return out
-

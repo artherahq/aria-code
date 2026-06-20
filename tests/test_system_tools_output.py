@@ -30,6 +30,25 @@ def test_run_command_persists_full_output_when_inline_stdout_is_truncated(monkey
     assert "x" * 6001 in full_output
 
 
+def test_run_command_persists_full_output_for_many_lines(monkeypatch, tmp_path):
+    from apps.cli.tools.system_tools import tool_run_command
+
+    monkeypatch.setenv("ARIA_ARTIFACT_ROOT", str(tmp_path))
+
+    result = tool_run_command({
+        "command": "python3 -c \"print('\\n'.join(str(i) for i in range(24)))\"",
+        "policy": "balanced",
+        "permission_mode": "workspace-write",
+        "network_enabled": False,
+    }, has_rich=False)
+
+    assert result["success"] is True
+    data = result["data"]
+    assert data["full_output_path"]
+    full_output = pathlib.Path(data["full_output_path"]).read_text(encoding="utf-8")
+    assert "23" in full_output
+
+
 def test_run_command_console_hides_full_output_path(monkeypatch, tmp_path):
     from apps.cli.tools.system_tools import tool_run_command
 

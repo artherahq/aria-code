@@ -1134,7 +1134,8 @@ class ModelCommandsMixin:
                 for key in ("api_url", "ollama_url", "model", "thinking_mode",
                             "command_policy", "permission_mode", "network_enabled",
                             "write_policy", "input_style", "input_theme",
-                            "auto_save_sessions"):
+                            "response_footer", "auto_compact_context",
+                            "auto_compact_threshold", "auto_save_sessions"):
                     val = cfg.get(key, "-")
                     console.print(f"  [dim]{key:<24s}[/dim]{val}")
                 console.print(f"  [dim]{'config_dir':<24s}[/dim]{snap['config_dir']}")
@@ -1178,7 +1179,9 @@ class ModelCommandsMixin:
             else:
                 for key in ("api_url", "ollama_url", "model", "thinking_mode",
                             "command_policy", "permission_mode", "network_enabled",
-                            "write_policy", "input_style", "input_theme"):
+                            "write_policy", "input_style", "input_theme",
+                            "response_footer", "auto_compact_context",
+                            "auto_compact_threshold"):
                     print(f"  {key}: {cfg.get(key, '-')}")
         elif len(parts) == 2 and parts[0] == "set":
             # Parse key=value
@@ -1227,6 +1230,26 @@ class ModelCommandsMixin:
                         msg = "auto_save_sessions must be: true | false"
                         console.print(f"[red]{msg}[/red]" if HAS_RICH else msg)
                         return
+                elif key == "auto_compact_context":
+                    if val.lower() in {"true", "1", "yes", "on"}:
+                        val = True
+                    elif val.lower() in {"false", "0", "no", "off"}:
+                        val = False
+                    else:
+                        msg = "auto_compact_context must be: true | false"
+                        console.print(f"[red]{msg}[/red]" if HAS_RICH else msg)
+                        return
+                elif key == "auto_compact_threshold":
+                    try:
+                        val = float(val)
+                    except Exception:
+                        msg = "auto_compact_threshold must be a number between 0.50 and 0.95"
+                        console.print(f"[red]{msg}[/red]" if HAS_RICH else msg)
+                        return
+                    if not 0.50 <= val <= 0.95:
+                        msg = "auto_compact_threshold must be between 0.50 and 0.95"
+                        console.print(f"[red]{msg}[/red]" if HAS_RICH else msg)
+                        return
                 elif key == "write_policy":
                     if val not in {"desktop_only", "confirm_outside", "always_confirm"}:
                         msg = "write_policy must be: desktop_only | confirm_outside | always_confirm"
@@ -1254,6 +1277,11 @@ class ModelCommandsMixin:
                 elif key == "input_theme":
                     if val not in {"auto", "dark", "light"}:
                         msg = "input_theme must be: auto | dark | light"
+                        console.print(f"[red]{msg}[/red]" if HAS_RICH else msg)
+                        return
+                elif key == "response_footer":
+                    if val not in {"compact", "full", "off"}:
+                        msg = "response_footer must be: compact | full | off"
                         console.print(f"[red]{msg}[/red]" if HAS_RICH else msg)
                         return
                 elif key == "ui_lang":

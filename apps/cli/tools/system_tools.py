@@ -24,7 +24,14 @@ from safety import evaluate_command_policy  # noqa: E402
 
 def _persist_command_output(command: str, stdout: str, stderr: str, returncode: int) -> dict:
     """Persist full command output when it is too large for inline tool context."""
-    if len(stdout) <= 5000 and len(stderr) <= 2000:
+    stdout_lines = stdout.splitlines()
+    stderr_lines = stderr.splitlines()
+    if (
+        len(stdout) <= 2500
+        and len(stderr) <= 1200
+        and len(stdout_lines) <= 18
+        and len(stderr_lines) <= 8
+    ):
         return {}
     try:
         from artifacts import create_artifact, write_artifact_metadata

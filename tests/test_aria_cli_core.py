@@ -362,8 +362,13 @@ class TestPromptRouting(unittest.TestCase):
 
 class TestConfig(unittest.TestCase):
     def test_default_config_has_required_keys(self):
-        for key in ("api_url", "model", "thinking_mode", "command_policy", "permission_mode", "network_enabled", "watchlist"):
+        for key in (
+            "api_url", "model", "thinking_mode", "command_policy",
+            "permission_mode", "network_enabled", "watchlist",
+            "response_footer", "auto_compact_context", "auto_compact_threshold",
+        ):
             self.assertIn(key, DEFAULT_CONFIG)
+        self.assertEqual(DEFAULT_CONFIG["response_footer"], "compact")
 
     def test_resolve_model_key_aliases(self):
         # Model aliases updated: "sonata" maps to "qwen7b", "prelude" to "qwen-fast"

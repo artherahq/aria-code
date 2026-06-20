@@ -47,6 +47,11 @@ from .capabilities import (
     broker_service_playbook, filter_capabilities, get_broker_capability,
     list_broker_capabilities,
 )
+from .paper_broker import PaperBroker, reset_paper_account
+from .trading import (
+    OrderIntent, TradingPolicy, build_order_preview, execute_order_preview,
+    list_order_previews, load_order_preview, policy_from_config, resolve_trading_mode,
+)
 
 __all__ = [
     "BrokerBase", "AccountInfo", "Position", "Order", "OrderResult", "PortfolioSummary",
@@ -61,4 +66,7 @@ __all__ = [
     "BrokerCapability", "broker_connection_plan", "broker_dependency_state",
     "broker_service_playbook", "filter_capabilities", "get_broker_capability",
     "list_broker_capabilities",
+    "PaperBroker", "reset_paper_account",
+    "OrderIntent", "TradingPolicy", "build_order_preview", "execute_order_preview",
+    "list_order_previews", "load_order_preview", "policy_from_config", "resolve_trading_mode",
 ]

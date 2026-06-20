@@ -348,9 +348,10 @@ def build_analysis_system_prompt() -> str:
         "  * query='orders'    → order list (pass status='open'/'filled'/'all')\n"
         "  Call this whenever the user asks about THEIR portfolio, holdings, balance, or orders.\n"
         "  NEVER make up positions — always call broker_query first.\n"
-        "- broker_order: {symbol, side, quantity, price?, order_type?, confirmed?} — propose a trade\n"
+        "- broker_order: {symbol, side, quantity, price?, order_type?, confirmed?, preview_id?} — propose a trade\n"
         "  ⚠️ ALWAYS call without confirmed=true first to show user a preview.\n"
         "  Only set confirmed=true when the user explicitly says '确认下单' or 'confirm order'.\n"
+        "  When confirmed=true, include the exact preview_id returned by the prior preview.\n"
         "  NEVER set confirmed=true on your own initiative.\n\n"
 
         "## Analysis Workflow\n"

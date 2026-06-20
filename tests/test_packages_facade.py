@@ -66,6 +66,8 @@ def test_service_boundaries_are_registered():
     assert "data.quality" in services["data"].capabilities
     assert PermissionLevel.NETWORK in services["data"].permissions
     assert PermissionLevel.BROKER_READ in services["brokers"].permissions
+    assert "broker.trade_preview" in services["brokers"].capabilities
+    assert "broker.paper" in services["brokers"].capabilities
     assert "channels" not in required_service_names()
     assert len(list_service_specs()) >= 8
 
@@ -77,6 +79,8 @@ def test_service_usage_catalog_maps_cli_packages_and_mcp_tools():
 
     assert "broker_execution" in usage
     assert "/broker" in usage["broker_execution"].cli_entrypoints
+    assert "/paper" in usage["broker_execution"].cli_entrypoints
+    assert "/trade" in usage["broker_execution"].cli_entrypoints
     assert "broker_order" in usage["broker_execution"].mcp_tools
     assert "mcp_bridge" in usage
     assert "run_backtest" in usage["mcp_bridge"].mcp_tools

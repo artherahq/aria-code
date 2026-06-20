@@ -47,6 +47,130 @@ def _fmt_int(value) -> str:
         return "N/A"
 
 
+def _num_or_none(value):
+    try:
+        if value in (None, "", "N/A", "-", "nan"):
+            return None
+        out = float(value)
+        return out if out == out else None
+    except Exception:
+        return None
+
+
+def _fmt_money(currency: str, value) -> str:
+    num = _num_or_none(value)
+    if num is None:
+        return "—"
+    return f"{currency} {num:,.2f}"
+
+
+def _clean_provider_chain(providers) -> list[str]:
+    generic = {
+        "quote",
+        "fundamentals",
+        "technical",
+        "history",
+        "market_data_client",
+        "market_data_client.quote",
+        "market_data_client.fundamentals",
+        "market_data_client.technical_indicators",
+    }
+    out: list[str] = []
+    for provider in providers or []:
+        p = str(provider or "").strip()
+        if not p or p in generic:
+            continue
+        if p not in out:
+            out.append(p)
+    return out
+
+
+def _snapshot_signal(price, change_pct, rsi, macd_hist, ma20, ma60) -> tuple[str, int, float, str]:
+    """Return (signal, score, confidence, label) for a compact market snapshot."""
+    enough = any(v is not None for v in (rsi, macd_hist, ma20, ma60))
+    if not enough:
+        return "—", 0, 0.0, "指标不足"
+    score = 0
+    if ma20 is not None and price is not None:
+        score += 1 if price > ma20 else -1
+    if ma60 is not None and price is not None:
+        score += 1 if price > ma60 else -1
+    if macd_hist is not None:
+        score += 1 if macd_hist > 0 else -1 if macd_hist < 0 else 0
+    if rsi is not None:
+        if rsi <= 30:
+            score += 2
+        elif rsi <= 40:
+            score += 1
+        elif rsi >= 75:
+            score -= 2
+        elif rsi >= 65:
+            score -= 1
+    if change_pct is not None:
+        if change_pct >= 2:
+            score += 1
+        elif change_pct <= -2:
+            score -= 1
+
+    if score >= 4:
+        signal, label = "STRONG_BUY", "强势多头"
+    elif score >= 2:
+        signal, label = "BUY", "偏多"
+    elif score <= -4:
+        signal, label = "STRONG_SELL", "强势空头"
+    elif score <= -2:
+        signal, label = "SELL", "偏空"
+    elif score == 1:
+        signal, label = "HOLD+", "短线偏强"
+    elif score == -1:
+        signal, label = "HOLD-", "短线偏弱"
+    else:
+        signal, label = "NEUTRAL", "震荡观察"
+    confidence = min(0.82, 0.46 + abs(score) * 0.07)
+    return signal, score, confidence, label
+
+
+def _support_resistance_for_row(currency: str, price, ma20, ma60, bb_lower, bb_upper) -> tuple[str, str]:
+    p = _num_or_none(price)
+    if p is None:
+        return "", ""
+    supports = sorted(
+        {round(v, 2) for v in (_num_or_none(bb_lower), _num_or_none(ma60), _num_or_none(ma20)) if v is not None and v < p},
+        reverse=True,
+    )[:3]
+    resistances = sorted(
+        {round(v, 2) for v in (_num_or_none(ma20), _num_or_none(ma60), _num_or_none(bb_upper)) if v is not None and v > p},
+    )[:3]
+    support_str = ", ".join(f"{currency} {v:,.2f}" for v in supports)
+    resistance_str = ", ".join(f"{currency} {v:,.2f}" for v in resistances)
+    return support_str, resistance_str
+
+
+def _is_market_share_request(message: str) -> bool:
+    text = (message or "").lower()
+    return any(k in text for k in (
+        "市场份额", "市占率", "份额", "竞争格局", "market share", "share of market",
+    ))
+
+
+def _market_share_note(symbols: list[str], *, english: bool = False) -> list[str]:
+    if english:
+        return [
+            "",
+            "Market Share Follow-up",
+            "- The table above covers stock price and technical trend only.",
+            "- Market share requires business-line research, for example: iPhone vs Android, search, digital ads, cloud, browser, payments, or devices.",
+            "- Run `" + " ".join(["/research", *symbols[:2]]) + "` or `/web <company> market share latest` to fetch source-backed share data.",
+        ]
+    return [
+        "",
+        "市场份额后续",
+        "- 上表只覆盖股价走势、技术指标和市值，不等同于业务市场份额。",
+        "- 市场份额需要按业务线拆开研究，例如：手机、搜索、数字广告、云服务、浏览器、支付、硬件生态。",
+        "- 可继续运行 `" + " ".join(["/research", *symbols[:2]]) + "`，或 `/web <公司> 市场份额 最新` 获取带来源的份额数据。",
+    ]
+
+
 _DATA_KEY_MAP = {
     "finnhub":   "FINNHUB_API_KEY",
     "alphavantage": "ALPHAVANTAGE_API_KEY",
@@ -399,7 +523,9 @@ def _fetch_snapshot_row_for_symbol(symbol: str, mdc) -> dict:
                 provider_chain.append(source.get("provider"))
             elif source.get("source"):
                 provider_chain.append(source.get("source"))
-        provider_chain = list(dict.fromkeys(str(p) for p in provider_chain if p))
+        provider_chain = _clean_provider_chain(provider_chain)
+    else:
+        provider_chain = _clean_provider_chain(provider_chain)
     if not missing_fields:
         missing_fields = []
     # ── yfinance fallback when price is 0 or missing ────────────────────────
@@ -446,16 +572,54 @@ def _fetch_snapshot_row_for_symbol(symbol: str, mdc) -> dict:
     if not technical.get("success"):
         missing_fields.append("technical")
 
+    price_num = _num_or_none(quote.get("price"))
+    chg_num = _num_or_none(quote.get("change_pct"))
+    rsi = _num_or_none(technical.get("rsi"))
+    macd_hist = _num_or_none(technical.get("macd_hist"))
+    ma20 = _num_or_none(technical.get("ma20"))
+    ma60 = _num_or_none(technical.get("ma60"))
+    bb_upper = _num_or_none(technical.get("bb_upper"))
+    bb_lower = _num_or_none(technical.get("bb_lower"))
+    support_str, resistance_str = _support_resistance_for_row(
+        currency, price_num, ma20, ma60, bb_lower, bb_upper
+    )
+    signal, signal_score, signal_confidence, signal_label = _snapshot_signal(
+        price_num, chg_num, rsi, macd_hist, ma20, ma60
+    )
+    technical_available = any(v is not None for v in (rsi, macd_hist, ma20, ma60, bb_upper, bb_lower))
+    missing_fields = [
+        field for field in list(dict.fromkeys(missing_fields))
+        if not (
+            (field == "technical" and technical_available)
+            or (field == "macd" and macd_hist is not None)
+        )
+    ]
+
     return {
         "symbol": symbol,
         "name": quote.get("name") or fundamentals.get("name") or symbol,
         "success": bool(quote.get("success")),
-        "price": quote.get("price"),
-        "change_pct": quote.get("change_pct"),
+        "price": price_num if price_num is not None else quote.get("price"),
+        "change_pct": chg_num if chg_num is not None else quote.get("change_pct"),
         "currency": currency,
         "market_cap": market_cap,
         "high": quote.get("high"),
         "low": quote.get("low"),
+        "volume": quote.get("volume"),
+        "rsi": rsi,
+        "macd_hist": macd_hist,
+        "ma20": ma20,
+        "ma60": ma60,
+        "bb_upper": bb_upper,
+        "bb_lower": bb_lower,
+        "support": support_str,
+        "resistance": resistance_str,
+        "technical_available": technical_available,
+        "technical_provider": technical.get("provider") or technical.get("source") or "",
+        "signal": signal,
+        "signal_score": signal_score,
+        "signal_confidence": signal_confidence,
+        "signal_label": signal_label,
         "trend": _market_snapshot_trend(
             quote.get("price"),
             quote.get("high"),
@@ -463,7 +627,7 @@ def _fetch_snapshot_row_for_symbol(symbol: str, mdc) -> dict:
             quote.get("change_pct"),
         ),
         "provider_chain": provider_chain,
-        "missing_fields": list(dict.fromkeys(missing_fields)),
+        "missing_fields": missing_fields,
         "error": quote.get("error") or "",
         "warnings": warnings,
         "errors": errors,
@@ -475,15 +639,20 @@ def _fetch_snapshot_row_for_symbol(symbol: str, mdc) -> dict:
 def _try_handle_multi_market_snapshot(message: str, symbols: list[str]) -> dict:
     if len(symbols) < 2:
         return {"success": False, "error": "not_multi_symbol"}
+    _lang = _detect_lang(message)
+    _en = _lang == "en"
     if not _has_mdc_lazy():
         return {
             "success": True,
             "response": (
-                "Market Snapshot\n\n"
-                "当前本地行情客户端未加载，无法获取多标的实时行情。\n\n"
-                f"可运行 `/quote {' '.join(symbols)}` 重试。"
+                ("Market Snapshot\n\nLocal market data client is unavailable.\n\n"
+                 f"Run `/quote {' '.join(symbols)}` to retry.")
+                if _en else
+                ("市场快照\n\n当前本地行情客户端未加载，无法获取多标的实时行情。\n\n"
+                 f"可运行 `/quote {' '.join(symbols)}` 重试。")
             ),
             "tools_used": ["market_snapshot"],
+            "analysis_complete": True,
         }
     mdc = _get_mdc_lazy()
     rows = [_fetch_snapshot_row_for_symbol(symbol, mdc) for symbol in symbols]
@@ -491,6 +660,7 @@ def _try_handle_multi_market_snapshot(message: str, symbols: list[str]) -> dict:
     provider_chain = list(dict.fromkeys(
         provider for row in rows for provider in row.get("provider_chain", [])
     ))
+    provider_chain = _clean_provider_chain(provider_chain)
     missing = sorted(set(
         f"{row['symbol']}:{field}"
         for row in rows for field in row.get("missing_fields", [])
@@ -498,51 +668,149 @@ def _try_handle_multi_market_snapshot(message: str, symbols: list[str]) -> dict:
     stale_symbols = [row["symbol"] for row in rows if row.get("stale")]
     warnings = [w for row in rows for w in (row.get("warnings") or [])]
     errors = [e for row in rows for e in (row.get("errors") or [])]
+    ranked = sorted(
+        rows,
+        key=lambda row: (
+            int(row.get("signal_score") or 0),
+            _num_or_none(row.get("change_pct")) or 0,
+        ),
+        reverse=True,
+    )
+    strongest = ranked[0] if ranked else {}
+    weakest = ranked[-1] if ranked else {}
+
     table = [
-        "Market Snapshot · " + now,
+        ("Market Snapshot" if _en else "市场快照") + " · " + now + (" · Multi-symbol comparison" if _en else " · 多标的对比"),
         "",
-        "| Symbol | Company | Price | Change | Market Cap | Trend |",
-        "|---|---|---:|---:|---:|---|",
     ]
+    if len(ranked) >= 2:
+        if _en:
+            table.append(
+                f"**Takeaway**: `{strongest.get('symbol')}` is currently stronger than "
+                f"`{weakest.get('symbol')}` by the quantitative snapshot score."
+            )
+        else:
+            table.append(
+                f"**对比结论**：按量化快照分数看，`{strongest.get('symbol')}` "
+                f"当前相对强于 `{weakest.get('symbol')}`。若技术指标缺失，结论仅基于价格/市值快照。"
+            )
+        table.append("")
+
+    if _en:
+        table.extend([
+            "| Symbol | Company | Price | Change | Market Cap | RSI | MACD hist | Signal |",
+            "|---|---|---:|---:|---:|---:|---:|---|",
+        ])
+    else:
+        table.extend([
+            "| 代码 | 公司 | 最新价 | 涨跌幅 | 市值 | RSI | MACD hist | 信号 |",
+            "|---|---|---:|---:|---:|---:|---:|---|",
+        ])
     for row in rows:
         currency = row.get("currency") or "USD"
         if row.get("success") and row.get("price") not in (None, ""):
-            try:
-                price = f"{currency} {float(row['price']):,.2f}"
-            except Exception:
-                price = "—"
-            try:
-                change = float(row.get("change_pct") or 0)
-                change_text = f"{change:+.2f}%"
-            except Exception:
-                change_text = "—"
+            price = _fmt_money(currency, row.get("price"))
+            change = _num_or_none(row.get("change_pct"))
+            change_text = f"{change:+.2f}%" if change is not None else "—"
         else:
             price = "—"
             change_text = "—"
+        rsi_text = f"{row['rsi']:.1f}" if row.get("rsi") is not None else "—"
+        macd_text = f"{row['macd_hist']:.4f}" if row.get("macd_hist") is not None else "—"
+        sig = row.get("signal") or "—"
+        sig_label = row.get("signal_label") or ""
+        sig_text = f"{sig} / {sig_label}" if sig_label and sig != "—" else sig
         table.append(
             f"| {row['symbol']} | {row.get('name') or row['symbol']} | {price} | "
             f"{change_text} | {_format_compact_market_cap(row.get('market_cap'), currency)} | "
-            f"{row.get('trend') or '—'} |"
+            f"{rsi_text} | {macd_text} | {sig_text} |"
         )
 
     table.append("")
-    table.append("Data")
-    table.append(f"- quote/fundamentals: {', '.join(provider_chain) if provider_chain else 'unavailable'}")
+    table.append("Data" if _en else "数据")
+    table.append(f"- {'sources' if _en else '来源'}: {', '.join(provider_chain) if provider_chain else 'unavailable'}")
     table.append(f"- stale: {', '.join(stale_symbols) if stale_symbols else 'none'}")
     if missing:
         table.append(f"- missing: {', '.join(missing)}")
     else:
         table.append("- missing: none")
+    technical_ok = [row["symbol"] for row in rows if row.get("technical_available")]
+    technical_missing = [row["symbol"] for row in rows if not row.get("technical_available")]
+    if _en:
+        table.append(
+            "- technical: "
+            + (f"available for {', '.join(technical_ok)}" if technical_ok else "unavailable")
+            + (f"; unavailable for {', '.join(technical_missing)}" if technical_missing else "")
+        )
+    else:
+        table.append(
+            "- 技术指标: "
+            + (f"{', '.join(technical_ok)} 可用" if technical_ok else "暂不可用")
+            + (f"；{', '.join(technical_missing)} 暂缺" if technical_missing else "")
+        )
     if warnings:
         table.append(f"- warnings: {'; '.join(str(w) for w in warnings[:3])}")
     if errors:
         table.append(f"- errors: {'; '.join(str(e) for e in errors[:3])}")
-    table.append("- technical: shown as trend only when indicators are unavailable")
+    if _is_market_share_request(message):
+        table.extend(_market_share_note(symbols, english=_en))
+
     table.append("")
-    table.append("Next")
-    table.append("- `/ta " + symbols[0] + "` · `/ta " + symbols[1] + "` — full technical chart")
-    table.append("- `/report " + symbols[0] + "` · `/report " + symbols[1] + "` — generate research reports")
-    return {"success": True, "response": "\n".join(table), "tools_used": ["market_snapshot"]}
+    table.append("Analysis" if _en else "逐项分析")
+    for row in rows:
+        currency = row.get("currency") or "USD"
+        price_text = _fmt_money(currency, row.get("price"))
+        change = _num_or_none(row.get("change_pct"))
+        change_text = f"{change:+.2f}%" if change is not None else "—"
+        vol = _fmt_int(row.get("volume")) if row.get("volume") else ""
+        sig = row.get("signal") or "—"
+        sig_label = row.get("signal_label") or "指标不足"
+        score = int(row.get("signal_score") or 0)
+        conf = float(row.get("signal_confidence") or 0)
+        table.append("")
+        if _en:
+            table.append(f"### {row.get('name') or row['symbol']} `{row['symbol']}`")
+            table.append(f"- Price: {price_text}, change {change_text}; trend: {row.get('trend') or '—'}.")
+            if row.get("technical_available"):
+                table.append(
+                    f"- Technicals: RSI {row.get('rsi') if row.get('rsi') is not None else '—'}, "
+                    f"MACD hist {row.get('macd_hist') if row.get('macd_hist') is not None else '—'}; "
+                    f"signal `{sig}` ({sig_label}), score {score:+d}, confidence {conf:.0%}."
+                )
+                if row.get("support") or row.get("resistance"):
+                    table.append(f"- Levels: support {row.get('support') or '—'}; resistance {row.get('resistance') or '—'}.")
+            else:
+                table.append("- Technicals: unavailable from current data providers; do not infer RSI/MACD.")
+            if vol:
+                table.append(f"- Volume: {vol}.")
+        else:
+            table.append(f"### {row.get('name') or row['symbol']} `{row['symbol']}`")
+            table.append(f"- 价格：{price_text}，涨跌幅 {change_text}；趋势：{row.get('trend') or '—'}。")
+            if row.get("technical_available"):
+                table.append(
+                    f"- 技术：RSI {row.get('rsi') if row.get('rsi') is not None else '—'}，"
+                    f"MACD hist {row.get('macd_hist') if row.get('macd_hist') is not None else '—'}；"
+                    f"信号 `{sig}`（{sig_label}），量化分 {score:+d}，置信度 {conf:.0%}。"
+                )
+                if row.get("support") or row.get("resistance"):
+                    table.append(f"- 关键位：支撑 {row.get('support') or '—'}；阻力 {row.get('resistance') or '—'}。")
+            else:
+                table.append("- 技术：当前数据源未返回 RSI/MACD/均线，不据此编造技术指标。")
+            if vol:
+                table.append(f"- 成交量：{vol}。")
+
+    table.append("")
+    table.append("Next" if _en else "下一步")
+    table.append("- " + " · ".join(f"`/ta {symbol}`" for symbol in symbols[:4]) + (" — full technical chart" if _en else " — 完整技术图表"))
+    table.append("- " + " · ".join(f"`/report {symbol}`" for symbol in symbols[:4]) + (" — generate research reports" if _en else " — 生成研究报告"))
+    table.append("")
+    table.append("*Not investment advice*" if _en else "*不构成投资建议*")
+    return {
+        "success": True,
+        "response": "\n".join(table),
+        "tools_used": ["market_snapshot"],
+        "analysis_complete": True,
+    }
 
 
 def _render_private_company_analysis(profile_key: str, message: str) -> dict:

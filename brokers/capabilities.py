@@ -32,6 +32,23 @@ class BrokerCapability:
 
 _BROKER_CAPABILITIES: tuple[BrokerCapability, ...] = (
     BrokerCapability(
+        broker_type="paper",
+        display_name="Aria 本地仿盘账户",
+        markets=("美股", "港股", "A股", "加密货币"),
+        sdk_module="json",
+        pip_package="builtin",
+        credential_fields=("starting_cash", "currency"),
+        local_runtime="不需要真实券商或本地网关；订单写入本地 paper ledger。",
+        read_capabilities=("account", "positions", "orders"),
+        trade_capability="paper_trade",
+        safety_notes=("仿盘成交不触达真实市场。", "仍使用同一套风控、预览、确认和审计流程。"),
+        setup_steps=(
+            "运行 /paper start 100000 USD 创建本地仿盘账户。",
+            "运行 /broker connect paper_main 连接仿盘账户。",
+            "使用 /trade preview AAPL buy 10 190 生成订单预览，再 /trade confirm <preview_id>。",
+        ),
+    ),
+    BrokerCapability(
         broker_type="xtquant",
         display_name="迅投 XTQuant / QMT",
         markets=("A股",),

@@ -188,6 +188,7 @@ from apps.cli.tools.market_tools import (
 )
 from apps.cli.handlers.broker_handlers import handle_broker_query as _src_handle_broker_query
 from apps.cli.handlers.realty_handlers import handle_realty_query as _src_handle_realty_query
+from apps.cli.handlers.strategy_advice import handle_strategy_advice as _src_strategy_advice
 from apps.cli.handlers.chart_handlers import (
     handle_stock_chart_analysis_direct as _src_chart_analysis_direct,
     handle_stock_chart_analysis        as _src_chart_analysis,
@@ -221,7 +222,10 @@ from apps.cli.commands.business_workflow_cmds import BusinessWorkflowCommandsMix
 from apps.cli.commands.session_cmds import SessionCommandsMixin
 from apps.cli.commands.workspace_cmds import WorkspaceCommandsMixin
 from apps.cli.commands.model_cmds import ModelCommandsMixin
-from apps.cli.commands.market_cmds import MarketCommandsMixin
+from apps.cli.commands.market_cmds import (
+    MarketCommandsMixin,
+    _fetch_public_news_fallback,
+)
 from apps.cli.commands.portfolio_cmds import PortfolioCommandsMixin
 from apps.cli.handlers.market_handlers import (
     _try_prefetch_market_data  as _src_prefetch_market_data,
@@ -1064,6 +1068,7 @@ DEFAULT_CONFIG = {
     "write_policy": "desktop_only",  # desktop_only | confirm_outside | always_confirm
     "input_style": "panel",    # panel | box | plain
     "input_theme": "auto",     # auto | dark | light
+    "response_footer": "compact",  # compact | full | off
     "local_mode": False,        # True = skip AWS, always use Ollama
     "conversation_history": [],
     "ui_lang": "",              # "" = auto-detect from OS locale on first run; "zh" | "en"
@@ -2841,11 +2846,18 @@ def _show_write_preview(params: dict):
         print(f"\n  {action}  {short} ({lines} lines)")
         return
 
-    preview_lines = content.splitlines()[:8]
-    body_parts = [f"[green]+ {pl[:100]}[/green]" for pl in preview_lines]
-    if lines > 8:
-        n = lines - 8
-        body_parts.append(f"[dim]… +{n} more line{'s' if n != 1 else ''}[/dim]")
+    if lines > 80:
+        body_parts = [
+            f"[dim]Large generated file: {lines} lines[/dim]",
+            "[dim]Preview suppressed; the full content will be written as an artifact/file.[/dim]",
+            "[dim]Use /read after creation if you need to inspect it.[/dim]",
+        ]
+    else:
+        preview_lines = content.splitlines()[:6]
+        body_parts = [f"[green]+ {pl[:100]}[/green]" for pl in preview_lines]
+        if lines > 6:
+            n = lines - 6
+            body_parts.append(f"[dim]… +{n} more line{'s' if n != 1 else ''}[/dim]")
     body = "\n".join(body_parts)
 
     console.print()
@@ -3647,6 +3659,10 @@ def _try_handle_market_overview(message: str) -> dict:
     return _src_market_overview(message)
 
 
+def _try_handle_strategy_advice(message: str) -> dict:
+    return _src_strategy_advice(message)
+
+
 def _run_deterministic_chain(message: str, *, model_has_tools: bool,
                              history: list = None) -> dict:
     """Shared deterministic routing chain for both entry points.
@@ -3664,7 +3680,8 @@ def _run_deterministic_chain(message: str, *, model_has_tools: bool,
     if not model_has_tools:
         # Broker account queries only for models that can't do function calling.
         deterministic = _try_handle_broker_query(message)
-    for _handler in (_try_handle_realty_query,
+    for _handler in (_try_handle_strategy_advice,
+                     _try_handle_realty_query,
                      _try_handle_stock_chart_analysis,
                      _try_handle_market_overview):
         if deterministic.get("success"):
@@ -3691,6 +3708,20 @@ def _display_value(value, digits: int = 2, suffix: str = "") -> str:
         return str(value)
     except Exception:
         return "—"
+
+
+def _recover_repetition_stopped_text(text: str) -> str:
+    marker = "*[model stopped — repetition detected]*"
+    if marker not in (text or ""):
+        return text
+    clean = text.split(marker, 1)[0].rstrip()
+    if clean.count("```") % 2 == 1:
+        clean += "\n```"
+    note = (
+        "\n\n> 已检测到模型开始重复输出，已自动停止展开。"
+        "上方工具结果和已生成文件仍然有效；如需继续，请指定要补充的部分或直接查看生成文件。"
+    )
+    return (clean + note).strip()
 
 
 
@@ -5878,9 +5909,6 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
     # New Industry Commands
     # ────────────────────────────────────────────────────────────────────────
 
-    async def cmd_macro(self, args: str):
-        return await super().cmd_macro(args)
-
     async def cmd_options(self, args: str):
         return await super().cmd_options(args)
 
@@ -5961,133 +5989,6 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
         else:
             os.system(f"xdg-open {path_q} >/dev/null 2>&1")
 
-    def cmd_clear(self, args: str):
-        self.terminal.conversation = []
-        os.system("clear" if os.name == "posix" else "cls")
-        console.print("[dim]Conversation cleared[/dim]" if HAS_RICH else "Cleared")
-
-    def cmd_btw(self, args: str):
-        """/btw <question> — Quick side question shown in overlay, does NOT enter conversation history."""
-        q = args.strip()
-        if not q:
-            console.print("[dim]/btw <question>  — quick question without polluting history[/dim]" if HAS_RICH else "/btw <question>")
-            return
-        conv = self.terminal.conversation
-        if not conv:
-            console.print("[dim](no conversation context yet)[/dim]" if HAS_RICH else "(no context)")
-            return
-        # Build a condensed context summary from recent history (read-only, no append)
-        _ctx_slice = conv[-6:] if len(conv) >= 6 else conv
-        _ctx = "\n".join(
-            f"{m['role'].upper()}: {str(m.get('content', ''))[:300]}"
-            for m in _ctx_slice
-        )
-        _btw_prompt = (
-            f"[Side question — answer briefly, do not reference this note]\n"
-            f"Context from conversation:\n{_ctx}\n\nQuestion: {q}"
-        )
-        # Run synchronously using the sync stream helper
-        if HAS_RICH:
-            from rich.panel import Panel as _Panel
-            from rich import box as _rbox
-            console.print(_Panel(f"[dim]{q}[/dim]", title="[dim]/btw[/dim]", box=_rbox.ROUNDED, border_style="dim"))
-        import asyncio as _aio
-        async def _ask_btw():
-            _answer_parts: list[str] = []
-            try:
-                async for chunk in stream_chat(
-                    self.terminal.config.get("ollama_url", "http://localhost:11434"),
-                    _btw_prompt,
-                    [],   # empty history — side question only
-                    model=self.terminal.config.get("model", ""),
-                    config=self.terminal.config,
-                    tools=[],
-                ):
-                    if chunk.get("type") == "content":
-                        _answer_parts.append(chunk.get("content", ""))
-            except Exception as _e:
-                _answer_parts = [f"(error: {_e})"]
-            return "".join(_answer_parts)
-        try:
-            loop = _aio.get_event_loop()
-            answer = loop.run_until_complete(_ask_btw()) if not loop.is_running() else "(run /btw from interactive prompt)"
-        except Exception:
-            answer = "(could not get answer)"
-        if HAS_RICH:
-            from rich.panel import Panel as _Panel
-            from rich import box as _rbox
-            console.print(_Panel(answer.strip(), title="[dim]↩ btw[/dim]", box=_rbox.ROUNDED, border_style="dim #C08050"))
-        else:
-            print(f"\n  [btw] {answer.strip()}\n")
-        # NOT added to self.terminal.conversation — ephemeral by design
-
-    def cmd_recap(self, args: str):
-        """/recap — Summarise the current session in one paragraph."""
-        conv = self.terminal.conversation
-        if not conv:
-            console.print("[dim]No conversation yet[/dim]" if HAS_RICH else "No conversation")
-            return
-        turns = len([m for m in conv if m.get("role") == "user"])
-        topics: list[str] = []
-        for m in conv:
-            if m.get("role") == "user":
-                snippet = str(m.get("content", ""))[:60].strip()
-                if snippet:
-                    topics.append(snippet)
-        if HAS_RICH:
-            from rich.panel import Panel as _Panel
-            from rich import box as _rbox
-            body = f"[dim]{turns} 轮对话[/dim]\n"
-            for i, t in enumerate(topics[-6:], 1):
-                body += f"  [dim]{i}.[/dim] {t}…\n"
-            console.print(_Panel(body.rstrip(), title="[bold]会话摘要[/bold]", box=_rbox.ROUNDED, border_style="dim"))
-        else:
-            print(f"Session: {turns} turns")
-            for i, t in enumerate(topics[-6:], 1):
-                print(f"  {i}. {t}…")
-
-    def cmd_history(self, args: str):
-        if not self.terminal.conversation:
-            console.print("[dim]No conversation history[/dim]" if HAS_RICH else "No history")
-            return
-        for msg in self.terminal.conversation[-10:]:
-            role = msg["role"]
-            content = msg["content"][:120]
-            if HAS_RICH:
-                prefix = "You" if role == "user" else "Aria"
-                style = "bold" if role == "user" else "bold"
-                console.print(f"[{style}]{prefix}:[/{style}] [dim]{content}[/dim]")
-            else:
-                print(f"{'You' if role == 'user' else 'Aria'}: {content}")
-
-    def cmd_compact(self, args: str):
-        """Smart compact: summarise conversation with AI then trim.
-
-        Usage:
-            /compact           — AI-powered summarisation (keeps context intact)
-            /compact --hard    — hard trim to last 6 messages (old behavior)
-        """
-        if "--hard" in args:
-            if len(self.terminal.conversation) > 10:
-                kept = self.terminal.conversation[-6:]
-                self.terminal.conversation = kept
-                console.print(f"[dim]Hard-compacted to last {len(kept)} messages[/dim]" if HAS_RICH
-                              else f"Hard-compacted to {len(kept)} messages")
-            else:
-                console.print("[dim]Context small enough, no compaction needed[/dim]" if HAS_RICH
-                              else "No compaction needed")
-            return
-        # Smart compact via async helper
-        import asyncio as _asyncio
-        try:
-            loop = _asyncio.get_event_loop()
-            loop.run_until_complete(self._smart_compact_async(silent=False))
-        except RuntimeError:
-            # Already inside an event loop (shouldn't happen in sync context but defensive)
-            if len(self.terminal.conversation) > 6:
-                self.terminal.conversation = self.terminal.conversation[-6:]
-                console.print("[dim]Compacted (fallback)[/dim]")
-
     async def _smart_compact_async(self, silent: bool = False):
         """AI-powered conversation compaction (inspired by Claude Code).
 
@@ -6155,10 +6056,18 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
             pass
 
         if not summary:
-            # Fallback: hard trim
-            self.terminal.conversation = conv[-6:]
+            # Fallback: local structural compaction before hard trimming.
+            from apps.cli.message_processing import compact_messages
+            try:
+                compacted = compact_messages(
+                    conv,
+                    model_key=self.terminal.config.get("model", "qwen2.5:7b"),
+                )
+            except Exception:
+                compacted = []
+            self.terminal.conversation = compacted if compacted and len(compacted) < len(conv) else conv[-8:]
             if not silent:
-                console.print("[dim]Compacted (summary failed, kept last 6 messages)[/dim]" if HAS_RICH
+                console.print("[dim]Compacted (summary failed, used local fallback)[/dim]" if HAS_RICH
                               else "Compacted (summary fallback)")
             return
 
@@ -6190,115 +6099,6 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
             else:
                 print(f"Compacted {old_count} → {new_count} messages")
 
-    # ── Fork conversation ────────────────────────────────────────────────────
-
-    def cmd_fork(self, args: str):
-        """Fork conversation at this point — save snapshot, continue independently.
-
-        Usage:
-            /fork              — create fork with auto-name
-            /fork my-analysis  — create fork with given name
-        """
-        import time as _t
-        name = args.strip() or f"fork-{_t.strftime('%H%M%S')}"
-        snapshot = {
-            "name":   name,
-            "ts":     _t.strftime("%Y-%m-%d %H:%M:%S"),
-            "conv":   [dict(m) for m in self.terminal.conversation],
-            "config": dict(self.terminal.config),
-        }
-        self.terminal._forks.append(snapshot)
-        idx = len(self.terminal._forks) - 1
-        if HAS_RICH:
-            console.print(
-                f"  [dim]↳ Forked as [bold]{name}[/bold] "
-                f"(fork #{idx}, {len(snapshot['conv'])} messages). "
-                f"Restore with /load-fork {idx}[/dim]"
-            )
-        else:
-            print(f"Forked as '{name}' (#{idx}). Restore with /load-fork {idx}")
-
-    def cmd_load_fork(self, args: str):
-        """Restore a previously forked conversation snapshot.
-
-        Usage: /load-fork <index>
-        """
-        forks = self.terminal._forks
-        if not forks:
-            console.print("[dim]No forks yet — use /fork to create one[/dim]" if HAS_RICH
-                          else "No forks")
-            return
-        try:
-            idx = int(args.strip())
-        except (ValueError, IndexError):
-            if HAS_RICH:
-                for i, f in enumerate(forks):
-                    console.print(f"  [dim]#{i}[/dim]  {f['name']}  [dim]{f['ts']}  {len(f['conv'])} msgs[/dim]")
-            else:
-                for i, f in enumerate(forks):
-                    print(f"  #{i}  {f['name']}  {f['ts']}")
-            return
-        if idx < 0 or idx >= len(forks):
-            console.print(f"[dim]Fork #{idx} not found[/dim]" if HAS_RICH else "Invalid index")
-            return
-        snap = forks[idx]
-        self.terminal.conversation = [dict(m) for m in snap["conv"]]
-        console.print(
-            f"  [dim]✓ Restored fork [bold]{snap['name']}[/bold] "
-            f"({len(snap['conv'])} messages)[/dim]"
-            if HAS_RICH else f"Restored fork '{snap['name']}'"
-        )
-
-    # ── Copy last response to clipboard ──────────────────────────────────────
-
-    def cmd_copy(self, args: str):
-        """Copy Aria's last response to clipboard.
-
-        Usage: /copy
-        """
-        text = self.terminal._last_response
-        if not text:
-            console.print("[dim]No response to copy yet[/dim]" if HAS_RICH else "Nothing to copy")
-            return
-        copied = False
-        try:
-            import subprocess as _sp
-            _sp.run(["pbcopy"], input=text.encode(), check=True, timeout=3)
-            copied = True
-        except Exception:
-            pass
-        if not copied:
-            try:
-                import subprocess as _sp
-                _sp.run(["xclip", "-selection", "clipboard"],
-                        input=text.encode(), check=True, timeout=3)
-                copied = True
-            except Exception:
-                pass
-        if not copied:
-            try:
-                import subprocess as _sp
-                _sp.run(["xdotool", "type", "--clearmodifiers", text],
-                        check=True, timeout=3)
-                copied = True
-            except Exception:
-                pass
-        if copied:
-            # Copying a response is an implicit positive signal (user found it
-            # useful) — capture it like Claude Code's acceptance signal.
-            self.terminal._record_feedback("copy", text)
-            preview = text[:60].replace("\n", " ")
-            console.print(
-                f"  [dim]✓ Copied to clipboard: \"{preview}{'…' if len(text) > 60 else ''}\"[/dim]"
-                if HAS_RICH else f"Copied: \"{preview}\""
-            )
-        else:
-            console.print(
-                "[yellow]Could not reach clipboard (pbcopy/xclip not found). "
-                "Here is the response:[/yellow]\n" + text
-                if HAS_RICH else "Clipboard unavailable. Response:\n" + text
-            )
-
     def cmd_bug(self, args: str):
         return DiagnosticOpsCommandsMixin.cmd_bug(self, args)
 
@@ -6313,324 +6113,6 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
 
     def cmd_doctor(self, args: str):
         return DiagnosticOpsCommandsMixin.cmd_doctor(self, args)
-
-    # ── Hooks management ─────────────────────────────────────────────────────
-
-    def cmd_hooks(self, args: str):
-        """Manage Aria event hooks — scripts run on specific events.
-
-        Two hook systems:
-          1. JSON config: ~/.arthera/hooks.json  (recommended)
-             Events: PreToolUse  PostToolUse  ResponseDone  SessionStart  SessionEnd
-          2. Shell scripts: ~/.arthera/hooks/<event>.sh  (legacy)
-
-        Usage:
-            /hooks list           — show all hooks (JSON + shell)
-            /hooks edit           — open ~/.arthera/hooks.json in $EDITOR
-            /hooks edit <event>   — open shell hook script in $EDITOR (legacy)
-            /hooks reload         — reload hooks.json without restarting
-            /hooks run <event>    — manually trigger a hook
-        """
-        global _JSON_HOOKS  # modified by reload and edit subcommands
-        hooks_dirs = [
-            CONFIG_DIR / "hooks",
-            pathlib.Path.cwd() / ".aria" / "hooks",
-        ]
-        parts = args.strip().split(maxsplit=1)
-        sub  = parts[0].lower() if parts else "list"
-        rest = parts[1].strip() if len(parts) > 1 else ""
-
-        if sub == "reload":
-            if _HAS_JSON_HOOKS:
-                try:
-                    _JSON_HOOKS = _load_hooks()
-                    n = sum(len(v) for v in _JSON_HOOKS.values())
-                    if HAS_RICH:
-                        console.print(f"  [green]✓[/green] [dim]hooks.json reloaded ({n} entries)[/dim]")
-                    else:
-                        print(f"  hooks.json reloaded ({n} entries)")
-                except Exception as exc:
-                    if HAS_RICH:
-                        console.print(f"  [red]✗ reload failed: {exc}[/red]")
-                    else:
-                        print(f"  reload failed: {exc}")
-            return
-
-        if sub == "list":
-            # ── JSON hooks ────────────────────────────────────────────────────
-            if _HAS_JSON_HOOKS:
-                try:
-                    from apps.cli.hooks import list_hooks as _list_json_hooks
-                    _json_rows = _list_json_hooks()
-                    if _json_rows:
-                        if HAS_RICH:
-                            console.print()
-                            console.print("  [bold]JSON Hooks[/bold]  [dim](~/.arthera/hooks.json)[/dim]")
-                            for r in _json_rows:
-                                _block = " [red][blocking][/red]" if r["blocking"] else ""
-                                _tool  = f"[{r['tool']}]" if r["tool"] != "*" else ""
-                                console.print(
-                                    f"  [cyan]{r['event']:<16}[/cyan]{_tool:<14}  "
-                                    f"[dim]{r['command']}[/dim]{_block}"
-                                )
-                        else:
-                            for r in _json_rows:
-                                print(f"  {r['event']:<16} {r['tool']:<12} {r['command']}")
-                except Exception:
-                    pass
-
-            # ── Shell script hooks ────────────────────────────────────────────
-            found: List[tuple] = []
-            for hdir in hooks_dirs:
-                if hdir.exists():
-                    for f in sorted(hdir.iterdir()):
-                        if f.is_file() and not f.name.startswith("."):
-                            found.append((str(hdir), f.name, str(f)))
-            if not found:
-                if HAS_RICH:
-                    console.print(f"  [dim]No hooks found.[/dim]")
-                    console.print(f"  [dim]Hook dirs:[/dim]")
-                    for d in hooks_dirs:
-                        console.print(f"    [dim]{_display_path(d, fallback='hook dir')}[/dim]")
-                    console.print(f"  [dim]Events: prompt_submit  response_done  tool_use  compact[/dim]")
-                else:
-                    print("No hooks. Dirs:", [str(d) for d in hooks_dirs])
-                return
-            if HAS_RICH:
-                console.print()
-                for hdir, name, path in found:
-                    console.print(f"  [dim]{name:<28}[/dim]  {_display_path(path, fallback='hook')}")
-                console.print()
-            else:
-                for hdir, name, path in found:
-                    print(f"  {name}  {_display_path(path, fallback='hook')}")
-
-        elif sub == "edit":
-            if not rest:
-                # No arg → open hooks.json (the JSON system)
-                if _HAS_JSON_HOOKS:
-                    from apps.cli.hooks import hooks_file_path, create_example_hooks
-                    _hpath = hooks_file_path("global")
-                    create_example_hooks(_hpath)
-                    editor = os.getenv("EDITOR", "nano")
-                    try:
-                        import subprocess as _sp
-                        _sp.run([editor, str(_hpath)])
-                        # Auto-reload after edit
-                        _JSON_HOOKS = _load_hooks()
-                    except Exception as exc:
-                        if HAS_RICH:
-                            console.print(f"[red]Could not open editor: {exc}[/red]")
-                        else:
-                            print(f"Could not open editor: {exc}")
-                return
-            # Legacy: /hooks edit <event> → open shell script
-            event = rest
-            hdir = CONFIG_DIR / "hooks"
-            hdir.mkdir(parents=True, exist_ok=True)
-            script = hdir / f"{event}.sh"
-            if not script.exists():
-                script.write_text(
-                    f"#!/bin/bash\n# Aria hook: {event}\n# "
-                    f"Env vars: ARIA_EVENT ARIA_TOOL ARIA_TOOL_PARAMS ARIA_RESPONSE ARIA_SESSION\n\n"
-                    f'echo "Hook {event} fired"\n',
-                    encoding="utf-8"
-                )
-                script.chmod(0o755)
-            editor = os.getenv("EDITOR", "nano")
-            try:
-                import subprocess as _sp
-                _sp.run([editor, str(script)])
-            except Exception as exc:
-                console.print(f"[red]Could not open editor: {exc}[/red]" if HAS_RICH else str(exc))
-
-        elif sub == "run":
-            event = rest or "ResponseDone"
-            if _HAS_JSON_HOOKS:
-                _fire_json_hook(event, session_id=getattr(self.terminal, "session_id", ""), hooks=_JSON_HOOKS)
-            _run_event_hook(event, {"ARIA_EVENT": event, "ARIA_SESSION": getattr(self.terminal, "session_id", "")})
-            if HAS_RICH:
-                console.print(f"  [dim]Hook '{event}' triggered[/dim]")
-            else:
-                print(f"Hook '{event}' triggered")
-
-        else:
-            if HAS_RICH:
-                console.print("[dim]Usage: /hooks list|edit [event]|reload|run [event][/dim]")
-            else:
-                print("Usage: /hooks list|edit [event]|reload|run [event]")
-
-    # ---- Regen / Undo commands ----
-
-    async def cmd_regen(self, args: str):
-        """Regenerate last AI response by re-sending the last user message."""
-        # Find and remove last assistant message
-        last_user_msg = None
-        for i in range(len(self.terminal.conversation) - 1, -1, -1):
-            if self.terminal.conversation[i]["role"] == "assistant":
-                self.terminal.conversation.pop(i)
-                break
-        # Find the last user message
-        for msg in reversed(self.terminal.conversation):
-            if msg["role"] == "user":
-                last_user_msg = msg["content"]
-                break
-        if last_user_msg:
-            # Remove it from conversation (send_message will re-add it)
-            for i in range(len(self.terminal.conversation) - 1, -1, -1):
-                if self.terminal.conversation[i]["role"] == "user" and self.terminal.conversation[i]["content"] == last_user_msg:
-                    self.terminal.conversation.pop(i)
-                    break
-            console.print("[dim]Regenerating...[/dim]" if HAS_RICH else "Regenerating...")
-            await self.terminal.send_message(last_user_msg)
-        else:
-            console.print("[dim]No message to regenerate[/dim]" if HAS_RICH else "Nothing to regenerate")
-
-    def cmd_undo(self, args: str):
-        """Remove last user+assistant message pair from conversation."""
-        if len(self.terminal.conversation) < 2:
-            console.print("[dim]Nothing to undo[/dim]" if HAS_RICH else "Nothing to undo")
-            return
-        removed = 0
-        # Remove last assistant, then last user
-        for role in ("assistant", "user"):
-            for i in range(len(self.terminal.conversation) - 1, -1, -1):
-                if self.terminal.conversation[i]["role"] == role:
-                    self.terminal.conversation.pop(i)
-                    removed += 1
-                    break
-        if HAS_RICH:
-            console.print(f"[dim]Undone ({removed} messages removed, {len(self.terminal.conversation)} remaining)[/dim]")
-        else:
-            print(f"Undone ({removed} removed)")
-
-    async def cmd_retry(self, args: str):
-        """Re-run last user message with higher temperature (more creative response)."""
-        last_user_msg = None
-        # Remove last assistant message
-        for i in range(len(self.terminal.conversation) - 1, -1, -1):
-            if self.terminal.conversation[i]["role"] == "assistant":
-                self.terminal.conversation.pop(i)
-                break
-        # Find last user message
-        for msg in reversed(self.terminal.conversation):
-            if msg["role"] == "user":
-                last_user_msg = msg["content"]
-                break
-        if not last_user_msg:
-            console.print("[dim]No message to retry[/dim]" if HAS_RICH else "Nothing to retry")
-            return
-        # Remove last user msg too (send_message will re-add)
-        for i in range(len(self.terminal.conversation) - 1, -1, -1):
-            if self.terminal.conversation[i]["role"] == "user" and \
-               self.terminal.conversation[i]["content"] == last_user_msg:
-                self.terminal.conversation.pop(i)
-                break
-        # Temporarily bump temperature
-        orig_model_key = resolve_model_key(self.terminal.config.get("model", "qwen2.5:7b"))
-        _fallback_model = MODELS.get("qwen-fast") or MODELS.get("qwen7b") or next(iter(MODELS.values()))
-        orig_temp = MODELS.get(orig_model_key, _fallback_model).get("temperature", 0.3)
-        MODELS[orig_model_key]["temperature"] = min(0.9, orig_temp + 0.3)
-        if HAS_RICH:
-            console.print(f"[dim]Retrying with temperature {MODELS[orig_model_key]['temperature']:.1f}...[/dim]")
-        else:
-            print(f"Retrying (temp +0.3)...")
-        try:
-            await self.terminal.send_message(last_user_msg)
-        finally:
-            MODELS[orig_model_key]["temperature"] = orig_temp  # restore
-
-    def cmd_note(self, args: str):
-        """Save a persistent note to ARIA.md in current directory.
-
-        Usage: /note <text>
-        Notes are appended to ARIA.md and injected as project context in future sessions.
-        """
-        text = args.strip()
-        if not text:
-            console.print("[dim]Usage: /note <text>[/dim]" if HAS_RICH else "Usage: /note <text>")
-            return
-        aria_md = pathlib.Path.cwd() / "ARIA.md"
-        now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-        entry = f"\n- [{now_str}] {text}"
-        if aria_md.exists():
-            content = aria_md.read_text(encoding="utf-8")
-            if "## Notes" not in content:
-                content += "\n\n## Notes\n"
-            content += entry
-        else:
-            content = f"# Aria Project Notes\n\n## Notes\n{entry}\n"
-        aria_md.write_text(content, encoding="utf-8")
-        # Refresh in-memory project context
-        global _PROJECT_CONTEXT
-        _PROJECT_CONTEXT = _load_project_context()
-        if HAS_RICH:
-            console.print(f"[dim]Note saved to {aria_md.name}[/dim]")
-        else:
-            print(f"Saved to {aria_md.name}")
-    async def cmd_review(self, args: str):
-        """AI code review for a file or git diff.
-
-        Usage:
-            /review                — review git diff HEAD (staged + unstaged)
-            /review <file>         — review a specific file
-            /review --staged       — review only staged changes
-        """
-        raw = args.strip()
-        policy = self.terminal.config.get("command_policy", "safe")
-
-        if raw and not raw.startswith("--"):
-            # File review
-            p = pathlib.Path(raw).expanduser()
-            if not p.exists():
-                msg = f"File not found: {raw}"
-                console.print(f"[red]{msg}[/red]") if HAS_RICH else print(msg)
-                return
-            _print_phase("Reading file")
-            try:
-                content = p.read_text(errors="replace")[:12000]
-            except Exception as e:
-                console.print(f"[red]Cannot read file: {e}[/red]") if HAS_RICH else print(f"Cannot read: {e}")
-                return
-            line_count = content.count("\n")
-            if HAS_RICH:
-                console.print(f"  [dim]↳ {p.name}  ·  {line_count} lines[/dim]")
-            _print_phase("AI Review")
-            prompt = (
-                f"请对以下 `{p.name}` 的代码进行专业审查，查找 Bug、安全问题和改进点。\n"
-                f"每条发现用严重程度标签开头：**BUG**、**IMPROVEMENT**、**NIT**。\n"
-                f"按文件组织输出，直接给结论，不要重复贴出全部代码。\n\n"
-                f"```\n{content}\n```"
-            )
-        else:
-            # Git diff review
-            diff_cmd = "git diff --staged" if raw.startswith("--staged") else "git diff HEAD"
-            _print_phase("Reading diff")
-            tr = _tool_run_command({"command": diff_cmd})
-            if not tr.get("success"):
-                msg = tr.get("error", "git diff failed")
-                console.print(f"[red]{msg}[/red]") if HAS_RICH else print(msg)
-                return
-            diff_text = (tr.get("data") or {}).get("stdout", "").strip()
-            if not diff_text:
-                console.print("[dim]No changes to review.[/dim]") if HAS_RICH else print("No changes to review.")
-                return
-            # Show diff summary stats before sending to LLM
-            _adds    = diff_text.count("\n+") - diff_text.count("\n+++")
-            _dels    = diff_text.count("\n-") - diff_text.count("\n---")
-            _files   = diff_text.count("\ndiff --git")
-            if HAS_RICH:
-                console.print(f"  [dim]↳ {_files} files  ·  +{_adds} −{_dels} lines[/dim]")
-            diff_text = diff_text[:12000]
-            _print_phase("AI Review")
-            prompt = (
-                "请审查以下 git diff，找出 Bug、潜在回归、安全问题和代码质量问题。\n"
-                "每条发现用严重程度标签开头：**BUG**、**IMPROVEMENT**、**NIT**。\n"
-                "按文件分组，直接给出结论。\n\n"
-                f"```diff\n{diff_text}\n```"
-            )
-
-        await self.terminal.send_message(prompt)
 
     # ── Project scaffold templates ────────────────────────────────────────────
 
@@ -8858,303 +8340,6 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
     # ---- News command ----
     # ── /file 多格式文件分析命令 ──────────────────────────────────────────────
     # ── /project — Claude Code style project folder analysis ─────────────────
-    # ---- Vision / image input command ----
-
-    def cmd_vision(self, args: str):
-        """Load an image for visual analysis in the next message: /vision <path>"""
-        from pathlib import Path as _Path
-        import base64 as _b64
-
-        # Check that the current model supports vision before loading
-        _curr_model = self.terminal.config.get("model", "")
-        if _curr_model and _HAS_MODEL_CAP:
-            _vcap = get_model_capability(_curr_model)
-            if not _vcap.vision:
-                _warn = (
-                    f"[yellow]⚠[/yellow]  当前模型 [bold]{_curr_model}[/bold] 不支持图片输入。\n"
-                    f"[dim]支持视觉的模型：llama3.2:11b · gemma3 · llava · qwen2-vl · moondream[/dim]"
-                )
-                if HAS_RICH:
-                    console.print(Panel(_warn, border_style="yellow", box=rich_box.ROUNDED, padding=(0, 1)))
-                else:
-                    print(f"Warning: model {_curr_model} does not support vision input.")
-                return
-
-        path_str = args.strip().strip("\"'")
-        if not path_str:
-            msg = "Usage: /vision <image_path>  (e.g. /vision ~/Pictures/chart.png)"
-            console.print(f"[dim]{msg}[/dim]" if HAS_RICH else msg)
-            return
-
-        path = _Path(path_str).expanduser().resolve()
-        if not path.exists():
-            _print_error(f"File not found: {path}", "vision")
-            return
-
-        suffix = path.suffix.lstrip(".").lower()
-        mime_map = {
-            "png": "image/png",
-            "jpg": "image/jpeg",
-            "jpeg": "image/jpeg",
-            "gif": "image/gif",
-            "webp": "image/webp",
-        }
-        mime = mime_map.get(suffix)
-        if not mime:
-            _print_error(
-                f"Unsupported image type: .{suffix}",
-                "vision — supported: .png .jpg .jpeg .gif .webp",
-            )
-            return
-
-        try:
-            data = _b64.b64encode(path.read_bytes()).decode()
-        except OSError as e:
-            _print_error(f"Cannot read image: {e}", "vision")
-            return
-
-        self.terminal._pending_image = {
-            "type": "image_url",
-            "image_url": {"url": f"data:{mime};base64,{data}"},
-        }
-        size_kb = path.stat().st_size // 1024
-        if HAS_RICH:
-            console.print(Panel(
-                f"[green]✓[/green] [dim]{path.name}[/dim]  [dim]{size_kb} KB · {mime}[/dim]\n"
-                f"[dim]Image queued — ask your question now[/dim]",
-                border_style="dim",
-                box=rich_box.ROUNDED,
-                padding=(0, 1),
-            ))
-        else:
-            print(f"Image loaded: {path.name} ({size_kb} KB) — send your question now")
-
-    # ---- Browser command ----
-
-    async def cmd_browser(self, args: str):
-        """Open a URL in a headless browser.
-        Usage:
-          /browser <url>              — fetch page text + links
-          /browser screenshot <url>  — capture visual screenshot + queue for vision
-        """
-        if not _HAS_COMPUTER_USE:
-            _print_error(
-                "computer_use_tools not available.",
-                "Install: pip install playwright mss pyautogui pillow && playwright install chromium",
-            )
-            return
-        from computer_use_tools import _tool_browser_navigate, _tool_browser_screenshot
-
-        parts = args.strip().split(maxsplit=1)
-        if not parts:
-            if HAS_RICH:
-                console.print("[dim]Usage: /browser <url>  or  /browser screenshot <url>[/dim]")
-            return
-
-        if parts[0].lower() == "screenshot" and len(parts) > 1:
-            url = parts[1].strip()
-            if HAS_RICH:
-                with console.status(f"[dim]Screenshotting {url[:60]}…[/dim]", spinner="dots"):
-                    result = _tool_browser_screenshot({"url": url})
-            else:
-                result = _tool_browser_screenshot({"url": url})
-            if result.get("success"):
-                d = result["data"]
-                # Set pending image so next question sees the screenshot
-                from computer_use_tools import pop_pending_vision_image
-                b64 = pop_pending_vision_image()
-                if b64:
-                    self.terminal._pending_image = {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/png;base64,{b64}"},
-                    }
-                if HAS_RICH:
-                    console.print(Panel(
-                        f"[green]✓[/green]  [bold]{d.get('title','')[:60]}[/bold]\n"
-                        f"[dim]{url}  ·  {d.get('size_kb', 0)} KB[/dim]\n"
-                        f"[dim]Screenshot queued — ask your question now[/dim]",
-                        border_style="dim", box=rich_box.ROUNDED, padding=(0, 1),
-                    ))
-                else:
-                    print(f"Screenshot ready ({d.get('size_kb', 0)} KB) — send your question")
-            else:
-                _print_error(result.get("error", "Screenshot failed"), "browser screenshot")
-        else:
-            url = parts[0].strip()
-            if HAS_RICH:
-                with console.status(f"[dim]Opening {url[:60]}…[/dim]", spinner="dots"):
-                    result = _tool_browser_navigate({"url": url})
-            else:
-                result = _tool_browser_navigate({"url": url})
-            if result.get("success"):
-                d = result["data"]
-                title = d.get("title", "")
-                text = d.get("text", "")[:2000]
-                links = d.get("links", [])[:5]
-                engine = d.get("engine", "")
-                if HAS_RICH:
-                    link_str = "\n".join(f"  {l}" for l in links) if links else "  (none)"
-                    console.print(Panel(
-                        f"[bold]{title[:80]}[/bold]  [dim]({engine})[/dim]\n\n"
-                        f"{text}\n\n[dim]Links:[/dim]\n{link_str}",
-                        border_style="dim", box=rich_box.ROUNDED, padding=(0, 1),
-                        title=f"[dim]{url[:60]}[/dim]", title_align="left",
-                    ))
-                else:
-                    print(f"Title: {title}\n{text[:500]}")
-            else:
-                _print_error(result.get("error", "Navigation failed"), "browser")
-
-    # ---- Screenshot command ----
-
-    async def cmd_screenshot(self, args: str):
-        """Capture desktop screenshot and queue for vision analysis.
-        Usage: /screenshot [monitor_number]
-        """
-        if not _HAS_COMPUTER_USE:
-            _print_error(
-                "computer_use_tools not available.",
-                "Install: pip install mss pillow",
-            )
-            return
-        from computer_use_tools import _tool_computer_screenshot, pop_pending_vision_image
-
-        monitor = int(args.strip()) if args.strip().isdigit() else 1
-        if HAS_RICH:
-            with console.status("[dim]Capturing screen…[/dim]", spinner="dots"):
-                result = _tool_computer_screenshot({"monitor": monitor})
-        else:
-            result = _tool_computer_screenshot({"monitor": monitor})
-
-        if result.get("success"):
-            d = result["data"]
-            b64 = pop_pending_vision_image()
-            if b64:
-                self.terminal._pending_image = {
-                    "type": "image_url",
-                    "image_url": {"url": f"data:image/png;base64,{b64}"},
-                }
-            if HAS_RICH:
-                console.print(Panel(
-                    f"[green]✓[/green]  [dim]{d['width']}×{d['height']}  ·  {d['size_kb']} KB[/dim]\n"
-                    f"[dim]Screenshot queued — ask your question now[/dim]",
-                    border_style="dim", box=rich_box.ROUNDED, padding=(0, 1),
-                ))
-            else:
-                print(f"Screenshot {d['width']}×{d['height']} ({d['size_kb']} KB) — send your question")
-        else:
-            _print_error(result.get("error", "Screenshot failed"), "screenshot")
-
-    # ---- Config command ----
-
-    def cmd_input(self, args: str):
-        """Configure the interactive input UI."""
-        raw = args.strip().lower()
-        cfg = self.terminal.config
-        valid_styles = {"panel", "box", "plain"}
-        valid_themes = {"auto", "dark", "light"}
-
-        def _save_and_show(message: str) -> None:
-            save_config(cfg)
-            if HAS_RICH:
-                console.print(f"[green]✓[/green] {message}")
-                console.print(
-                    f"  [dim]style[/dim] {cfg.get('input_style', 'panel')}  "
-                    f"[dim]theme[/dim] {cfg.get('input_theme', 'auto')}"
-                )
-            else:
-                print(message)
-                print(f"  style {cfg.get('input_style', 'panel')}  theme {cfg.get('input_theme', 'auto')}")
-
-        if not raw or raw in {"status", "show"}:
-            style = cfg.get("input_style", "panel")
-            theme = cfg.get("input_theme", "auto")
-            if HAS_RICH:
-                console.print(Panel(
-                    f"[bold]style[/bold]  {style}\n"
-                    f"[bold]theme[/bold]  {theme}\n\n"
-                    "[dim]Use[/dim] /input panel [dim]for the Codex-style input block[/dim]\n"
-                    "[dim]Use[/dim] /input theme auto [dim]to follow the terminal/system theme[/dim]",
-                    title="Input UI",
-                    border_style="dim",
-                    box=rich_box.ROUNDED,
-                    padding=(0, 1),
-                ))
-            else:
-                print(f"input style: {style}")
-                print(f"input theme: {theme}")
-                print("Usage: /input panel|box|plain | /input theme auto|dark|light")
-            return
-
-        if raw == "reset":
-            cfg["input_style"] = "panel"
-            cfg["input_theme"] = "auto"
-            _save_and_show("input UI reset to panel · auto")
-            return
-
-        parts = raw.split()
-        if parts[0] == "theme":
-            if len(parts) != 2 or parts[1] not in valid_themes:
-                msg = "Usage: /input theme auto|dark|light"
-                console.print(f"[red]{msg}[/red]" if HAS_RICH else msg)
-                return
-            cfg["input_theme"] = parts[1]
-            _save_and_show(f"input theme set to {parts[1]}")
-            return
-
-        if parts[0] in valid_themes and len(parts) == 1:
-            cfg["input_theme"] = parts[0]
-            _save_and_show(f"input theme set to {parts[0]}")
-            return
-
-        if parts[0] in valid_styles and len(parts) == 1:
-            cfg["input_style"] = parts[0]
-            _save_and_show(f"input style set to {parts[0]}")
-            return
-
-        msg = "Usage: /input panel|box|plain | /input theme auto|dark|light | /input reset"
-        console.print(f"[red]{msg}[/red]" if HAS_RICH else msg)
-    # ---- Context command ----
-
-    def cmd_context(self, args: str):
-        """Show current AI context: model, conversation length, token usage, project context."""
-        cfg = self.terminal.config
-        conv = self.terminal.conversation
-        conv_len = len(conv)
-        model_id = cfg.get("model", "qwen2.5:7b")
-        thinking = cfg.get("thinking_mode", "auto")
-        has_auth = bool(cfg.get("auth_token"))
-        local_mode = cfg.get("local_mode", False)
-
-        # Rough token estimate: ~3 chars per token
-        total_chars = sum(len(m.get("content", "")) for m in conv)
-        est_tokens = total_chars // 3
-        max_ctx = get_model_cfg(model_id).get("num_ctx", 16384)
-        ctx_pct = min(100, int(est_tokens / max_ctx * 100))
-        ctx_color = "green" if ctx_pct < 60 else ("yellow" if ctx_pct < 85 else "red")
-
-        if HAS_RICH:
-            console.print()
-            console.print("[bold]Current Context[/bold]")
-            console.print()
-            console.print(f"  [dim]{'Model':<20s}[/dim]{model_id}")
-            console.print(f"  [dim]{'Provider':<20s}[/dim]{'[green]Local (Ollama)[/green]' if local_mode else 'AWS → Ollama fallback'}")
-            console.print(f"  [dim]{'Thinking':<20s}[/dim]{thinking}")
-            console.print(f"  [dim]{'Messages':<20s}[/dim]{conv_len}")
-            console.print(f"  [dim]{'Est. tokens':<20s}[/dim][{ctx_color}]{est_tokens:,} / {max_ctx:,} ({ctx_pct}%)[/{ctx_color}]")
-            console.print(f"  [dim]{'Authenticated':<20s}[/dim]{'yes' if has_auth else 'no'}")
-            console.print(f"  [dim]{'Session':<20s}[/dim]{self.terminal.session_id}")
-            console.print(f"  [dim]{'Project context':<20s}[/dim]{'loaded' if _PROJECT_CONTEXT else 'none'}")
-            wl = cfg.get("watchlist", [])
-            if wl:
-                console.print(f"  [dim]{'Watchlist':<20s}[/dim]{', '.join(wl)}")
-            if ctx_pct >= 80:
-                console.print(f"\n  [yellow]⚠ Context {ctx_pct}% full — use /compact to free space[/yellow]")
-            console.print()
-        else:
-            print(f"  Model: {model_id}  ({'local' if local_mode else 'aws'})")
-            print(f"  Messages: {conv_len}  Tokens: ~{est_tokens:,}/{max_ctx:,} ({ctx_pct}%)")
-            print(f"  Session: {self.terminal.session_id}")
 
     def cmd_vision(self, args: str):
         return UiCommandsMixin.cmd_vision(self, args)
@@ -9681,6 +8866,11 @@ class ArtheraTerminal:
         key = message.strip()
         if not key or key == self._last_preflight_key:
             return False
+        try:
+            if _try_handle_strategy_advice(key).get("success"):
+                return False
+        except Exception:
+            pass
         shown = _print_preflight_notice(key, quiet=quiet)
         if shown:
             self._last_preflight_key = key
@@ -9878,6 +9068,7 @@ class ArtheraTerminal:
                 "stock_chart":     "图表分析",
                 "broker_query":    "账户数据",
                 "realty_query":    "房地产数据",
+                "strategy_advice":  "策略框架",
             }.get(_tools[0], _tools[0]) if _tools else "本地分析"
             _rate_limited = deterministic.get("rate_limited", False)
             _rl_note = "  [yellow]⚠ 数据源限流[/yellow]" if _rate_limited else ""
@@ -9900,10 +9091,12 @@ class ArtheraTerminal:
                 # ⏺/✓ workflow indicator — mirrors LLM tool call display style
                 _t_icon = _tools[0] if _tools else "local"
                 console.print(f"\n  [#C08050]⏺[/#C08050]  [bold]{_t_icon}[/bold]")
-                console.print(f"  [green]✓[/green]  [dim]{_tool_label} 数据已获取[/dim]")
+                _done_label = "已生成" if _tools and _tools[0] == "strategy_advice" else "数据已获取"
+                console.print(f"  [green]✓[/green]  [dim]{_tool_label} {_done_label}[/dim]")
                 console.print()
                 console.print(Markdown(_strip_latex(final_text)))
-                console.print(f"\n[dim]{_tool_label} · 本内容不构成投资建议[/dim]{_rl_note}\n")
+                _disclaimer = "" if _tools and _tools[0] == "strategy_advice" else " · 本内容不构成投资建议"
+                console.print(f"\n[dim]{_tool_label}{_disclaimer}[/dim]{_rl_note}\n")
             else:
                 print("\nAria\n")
                 print(final_text)
@@ -10898,6 +10091,7 @@ class ArtheraTerminal:
                 final_text = (final_text or "") + _leftover
                 if _use_plain_print[0] and not _use_batch_render[0]:
                     print(_leftover, end="", flush=True)
+            final_text = _recover_repetition_stopped_text(final_text)
 
             # Stop progressive Live display (final state stays in terminal)
             _stop_live()
@@ -10930,31 +10124,78 @@ class ArtheraTerminal:
             prompt_t = metadata.prompt_tokens
             completion_t = metadata.completion_tokens
             think_t = metadata.thinking_tokens
+            self._last_response = final_text   # for /copy
+            _context_compacted_from_usage = False
 
+            _ctx_max = get_model_cfg(self.config.get("model", "qwen2.5:7b")).get("num_ctx", 16384)
             if HAS_RICH:
-                copy_hint = "  [dim]/copy[/dim]" if self._last_response else ""
-                console.print(f"\n[dim]{' · '.join(metadata.parts)}[/dim]{copy_hint}")
-                # Context pressure warning — fire when input tokens > 60% of model context
-                _ctx_max = get_model_cfg(self.config.get("model", "qwen2.5:7b")).get("num_ctx", 16384)
-                if prompt_t > 0 and _ctx_max > 0:
-                    _ctx_fill_pct = prompt_t / _ctx_max
-                    if _ctx_fill_pct >= 0.60:
-                        _ctx_color = "#cc4444" if _ctx_fill_pct >= 0.85 else "#aa8800"
-                        console.print(
-                            f"[{_ctx_color}]  ⚠ 当前上下文约 {prompt_t:,} / {_ctx_max:,} tokens"
-                            f" ({int(_ctx_fill_pct*100)}%)，"
-                            f"{'上下文已接近满载！' if _ctx_fill_pct >= 0.85 else '对话历史较长。'}"
-                            f" 可用 /compact 压缩历史，或 /clear 重置。[/{_ctx_color}]"
-                        )
+                from ui.render.output import format_turn_footer as _format_turn_footer
+                _footer = _format_turn_footer(
+                    metadata,
+                    mode=self.config.get("response_footer", "compact"),
+                    copy_available=bool(final_text),
+                )
+                if _footer:
+                    console.print(f"\n[dim]{_footer}[/dim]")
             else:
-                print(f"\n{' · '.join(metadata.parts)}\n")
+                from ui.render.output import format_turn_footer as _format_turn_footer
+                _footer = _format_turn_footer(
+                    metadata,
+                    mode=self.config.get("response_footer", "compact"),
+                    copy_available=bool(final_text),
+                )
+                if _footer:
+                    print(f"\n{_footer}\n")
+
+            # Context pressure: if the real provider prompt is already hot,
+            # compact immediately after this turn. This catches cases where the
+            # provider count includes large system/tool context that the local
+            # char estimate misses.
+            if prompt_t > 0 and _ctx_max > 0:
+                _ctx_fill_pct = prompt_t / _ctx_max
+                try:
+                    _compact_threshold = float(self.config.get("auto_compact_threshold", 0.78))
+                except Exception:
+                    _compact_threshold = 0.78
+                _compact_threshold = max(0.50, min(0.95, _compact_threshold))
+                if bool(self.config.get("auto_compact_context", True)) and _ctx_fill_pct >= _compact_threshold:
+                    _old_pct = int(_ctx_fill_pct * 100)
+                    try:
+                        await self.commands._smart_compact_async(silent=True)
+                    except Exception:
+                        try:
+                            self.conversation = _compact_messages(
+                                self.conversation,
+                                model_key=self.config.get("model", "qwen2.5:7b"),
+                            )
+                        except Exception:
+                            if len(self.conversation) > 10:
+                                self.conversation = self.conversation[-10:]
+                    self._auto_compact_count += 1
+                    _context_compacted_from_usage = True
+                    if HAS_RICH:
+                        console.print(f"  [dim]↩ Auto-compacted context after response ({_old_pct}% full)[/dim]")
+                elif _ctx_fill_pct >= 0.85:
+                    from ui.render.output import print_context_warning as _print_context_warning
+                    _print_context_warning(
+                        prompt_t,
+                        _ctx_max,
+                        console=console,
+                        has_rich=HAS_RICH,
+                        session_id=self.session_id,
+                    )
+                elif _ctx_fill_pct >= 0.70 and HAS_RICH:
+                    _ctx_color = "#aa8800"
+                    console.print(
+                        f"[{_ctx_color}]  ⚠ 上下文 {int(_ctx_fill_pct * 100)}% 已用，"
+                        f"将按阈值 {int(_compact_threshold * 100)}% 自动压缩。[/{_ctx_color}]"
+                    )
 
             # ── Accumulate session-level usage stats (for /cost) ──────────
             self._session_input_tokens  += prompt_t or 0
             self._session_output_tokens += completion_t or 0
             self._session_thinking_tokens += think_t or 0
             self._session_turns += 1
-            self._last_response = final_text   # for /copy
 
             # Fire response_done lifecycle hooks (shell + JSON)
             _turn_envelope = self._last_turn_envelope.to_dict() if self._last_turn_envelope else {}
@@ -10992,11 +10233,9 @@ class ArtheraTerminal:
             # Auto-warn when context approaches the limit; auto-compact before
             # the prompt is already at the edge and tool traces become noisy.
             _est = sum(len(m.get("content", "")) for m in self.conversation) // 3
-            _mkey = resolve_model_key(self.config.get("model", "qwen2.5:7b"))
-            _default_m2 = MODELS.get("qwen7b") or MODELS.get("qwen-fast") or next(iter(MODELS.values()))
-            _max = MODELS.get(_mkey, _default_m2).get("num_ctx", 16384)
+            _max = get_model_cfg(self.config.get("model", "qwen2.5:7b")).get("num_ctx", 16384)
             _pct = min(100, int(_est / _max * 100))
-            if _pct >= 90:
+            if _pct >= 90 and not _context_compacted_from_usage:
                 # Auto-compact: silently summarise and truncate
                 try:
                     await self.commands._smart_compact_async(silent=True)
@@ -11005,7 +10244,7 @@ class ArtheraTerminal:
                     self.conversation = self.conversation[-10:]
                 if HAS_RICH:
                     console.print("  [dim]↩ Auto-compacted context (was 90%+ full)[/dim]")
-            elif _pct >= 70 and HAS_RICH:
+            elif _pct >= 70 and HAS_RICH and not _context_compacted_from_usage:
                 _color = "yellow" if _pct < 85 else "red"
                 console.print(
                     f"  [{_color}]⚠ Context {_pct}% full "
