@@ -5397,6 +5397,13 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
             "/limitup":   (self.cmd_limitup,  "A-share limit-up pool: /limitup [date]"),
             "/north":     (self.cmd_north,    "Northbound flow: /north"),
             "/news":      (self.cmd_news,     "Market news: /news AAPL"),
+            # ── Strategy / plan workflows (declared in usage hints, now wired) ──
+            "/apply-plan":   (self.cmd_apply_plan,   "Execute a saved plan: /apply-plan [--resume] [--from N]"),
+            "/plan-report":  (self.cmd_plan_report,  "Plan run report: /plan-report [md|json] [file] [--open]"),
+            "/optimize-port":(self.cmd_optimize_port,"Portfolio optimization: /optimize-port [SYMBOL...]"),
+            "/factor-lab":   (self.cmd_factor_lab,   "Factor lab: /factor-lab [SYMBOL]"),
+            "/stat-arb":     (self.cmd_stat_arb,     "Statistical arbitrage: /stat-arb SYMBOL_A SYMBOL_B [period=2y]"),
+            "/screenshot":   (self.cmd_screenshot,   "Desktop screenshot: /screenshot [monitor]"),
             # ── UI generation (sets Bloomberg design context) ─────────────────
             "/ui":        (self.cmd_ui,       "Generate Bloomberg-style HTML: /ui <description>"),
             "/cloud":     (self.cmd_cloud,    "Aliyun config: /cloud status|set|data|token|health"),

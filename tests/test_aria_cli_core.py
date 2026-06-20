@@ -604,3 +604,48 @@ class TestWritePolicy(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestCommandRegistryContract(unittest.TestCase):
+    """Guard against the registration/crash bug class found in the audit:
+    cmd_* handlers existing but never wired into the dispatch dict (e.g. /team,
+    /portfolio went to the LLM), and handlers with wrong signatures."""
+
+    @classmethod
+    def setUpClass(cls):
+        import aria_cli as _ac
+        cls._ac = _ac
+        cls.term = _ac.ArtheraTerminal(dict(_ac.DEFAULT_CONFIG))
+        cls.cmds = cls.term.commands.commands
+
+    def test_every_registered_command_is_callable(self):
+        import inspect
+        for name, entry in self.cmds.items():
+            handler = entry[0]
+            self.assertTrue(callable(handler), f"{name} handler not callable")
+            # Handler must accept exactly one positional arg (args) besides bound self
+            sig = inspect.signature(handler)
+            params = [p for p in sig.parameters.values()
+                      if p.kind in (p.POSITIONAL_OR_KEYWORD, p.POSITIONAL_ONLY)]
+            self.assertGreaterEqual(len(params), 1,
+                                    f"{name} handler must accept an args parameter")
+
+    def test_declared_commands_are_registered(self):
+        """Any command advertised via a usage hint (shown in /help, tab-complete)
+        MUST be wired into the dispatch dict. This is the exact audit bug:
+        /team, /portfolio, /apply-plan etc. had hints but fell through to the
+        LLM, which then hallucinated."""
+        S = self._ac.SlashCommands
+        hints = getattr(S, "_COMMAND_HELP", {}) or {}
+        if not hints:
+            self.skipTest("_COMMAND_HELP not found")
+        missing = []
+        for name in hints:
+            base = name.split()[0]            # "/broker add" → "/broker"
+            if base in self.cmds:
+                continue
+            method = "cmd_" + base.lstrip("/").replace("-", "_")
+            if hasattr(S, method):            # a real handler exists but isn't wired
+                missing.append(f"{base} → {method}")
+        self.assertEqual(missing, [],
+                         f"commands have usage hints but no dispatch entry: {missing}")
