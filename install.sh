@@ -35,6 +35,7 @@ CLI_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_DIR="${ARIA_VENV:-$CLI_DIR/.venv}"
 BIN_DIR="${ARIA_BIN_DIR:-$HOME/.local/bin}"
 LINK_PATH="$BIN_DIR/aria-code"
+ALIAS_PATH="$BIN_DIR/aria"
 PYTHON="${ARIA_PYTHON:-python3}"
 
 # ── Pre-flight: ensure git & python exist before anything else ─
@@ -255,20 +256,11 @@ fi
 step "7 / 7  Registering aria-code launcher"
 mkdir -p "$BIN_DIR"
 
-# Patch the aria-code launcher shebang to point at the venv python
 LAUNCHER="$CLI_DIR/aria-code"
 if [[ -f "$LAUNCHER" ]]; then
-    # Rewrite first line to use venv python
-    SHEBANG="#!$VENV_DIR/bin/python"
-    if [[ "$(head -1 "$LAUNCHER")" != "$SHEBANG" ]]; then
-        # Create patched launcher in venv/bin
-        cp "$LAUNCHER" "$VENV_DIR/bin/aria-code-script"
-        sed -i.bak "1s|.*|$SHEBANG|" "$VENV_DIR/bin/aria-code-script"
-        rm -f "$VENV_DIR/bin/aria-code-script.bak"
-        chmod +x "$VENV_DIR/bin/aria-code-script"
-    fi
-    ln -sf "$VENV_DIR/bin/aria-code-script" "$LINK_PATH" 2>/dev/null || \
+    chmod +x "$LAUNCHER"
     ln -sf "$LAUNCHER" "$LINK_PATH"
+    ln -sf "$LAUNCHER" "$ALIAS_PATH"
 else
     # No launcher script — create one
     cat > "$VENV_DIR/bin/aria-code-launcher" <<EOF
@@ -277,8 +269,9 @@ exec "$VENV_DIR/bin/python" "$CLI_DIR/aria_cli.py" "\$@"
 EOF
     chmod +x "$VENV_DIR/bin/aria-code-launcher"
     ln -sf "$VENV_DIR/bin/aria-code-launcher" "$LINK_PATH"
+    ln -sf "$VENV_DIR/bin/aria-code-launcher" "$ALIAS_PATH"
 fi
-ok "Launcher → $LINK_PATH"
+ok "Launchers → $LINK_PATH, $ALIAS_PATH"
 
 # ── PATH check ────────────────────────────────────────────────
 if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then

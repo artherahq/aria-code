@@ -1,34 +1,75 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SOURCE="${BASH_SOURCE[0]}"
+while [[ -L "$SOURCE" ]]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  TARGET="$(readlink "$SOURCE")"
+  if [[ "$TARGET" == /* ]]; then
+    SOURCE="$TARGET"
+  else
+    SOURCE="$DIR/$TARGET"
+  fi
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
 CLI_PY="$SCRIPT_DIR/aria_cli.py"
-VENV_PY="$SCRIPT_DIR/.venv/bin/python"
+VENV_DIR="${ARIA_VENV:-$SCRIPT_DIR/.venv}"
+VENV_PY="$VENV_DIR/bin/python"
 
-if [[ -x "$VENV_PY" ]]; then
-  exec "$VENV_PY" "$CLI_PY" "$@"
-fi
+die() {
+  echo "aria: $*" >&2
+  exit 1
+}
 
-# Aria requires Python >= 3.10 (pyproject: requires-python = ">=3.10").
-# Bare `python3` may resolve to an older system Python (e.g. /usr/bin/python3
-# is 3.9 on macOS), which crashes on import. Pick the first interpreter that
-# satisfies 3.10+ so the app never starts under an unsupported runtime.
 pick_python() {
-  for cand in python3.13 python3.12 python3.11 python3.10 python3; do
+  if [[ -n "${ARIA_PYTHON:-}" ]]; then
+    command -v "$ARIA_PYTHON" >/dev/null 2>&1 && echo "$ARIA_PYTHON" && return 0
+    die "ARIA_PYTHON is set to '$ARIA_PYTHON', but it is not executable"
+  fi
+
+  # Prefer stable supported interpreters before a bleeding-edge `python3`
+  # selected by PATH. This keeps Homebrew/PATH changes from breaking the UI.
+  for cand in python3.12 python3.11 python3.13 python3.10 python3; do
     if command -v "$cand" >/dev/null 2>&1; then
-      if "$cand" -c 'import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)' 2>/dev/null; then
-        echo "$cand"; return 0
+      if "$cand" -c 'import sys; sys.exit(0 if (3, 10) <= sys.version_info[:2] else 1)' 2>/dev/null; then
+        echo "$cand"
+        return 0
       fi
     fi
   done
   return 1
 }
 
-PY="$(pick_python || true)"
-if [[ -z "$PY" ]]; then
-  echo "错误: 未找到 Python 3.10+。Aria 需要 Python >= 3.10。" >&2
-  echo "  请安装较新的 Python (https://www.python.org/downloads/) 后重试。" >&2
-  exit 1
+ensure_venv() {
+  if [[ -x "$VENV_PY" ]]; then
+    return
+  fi
+
+  local py
+  py="$(pick_python || true)"
+  [[ -n "$py" ]] || die "Python 3.10+ not found. Install Python 3.12/3.11 and retry."
+
+  echo "aria: creating runtime at $VENV_DIR with $py" >&2
+  "$py" -m venv "$VENV_DIR" || die "failed to create virtual environment"
+}
+
+ensure_runtime_deps() {
+  "$VENV_PY" - <<'PY' >/dev/null 2>&1 && return
+import rich
+import prompt_toolkit
+PY
+
+  echo "aria: installing terminal UI dependencies into $VENV_DIR" >&2
+  "$VENV_PY" -m pip install --quiet --upgrade pip
+  "$VENV_PY" -m pip install --quiet "rich>=13.7.0" "prompt_toolkit>=3.0.43"
+}
+
+[[ -f "$CLI_PY" ]] || die "aria_cli.py not found at $CLI_PY"
+
+ensure_venv
+if [[ "${ARIA_SKIP_DEP_CHECK:-0}" != "1" ]]; then
+  ensure_runtime_deps
 fi
 
-exec "$PY" "$CLI_PY" "$@"
+cd "$SCRIPT_DIR"
+exec "$VENV_PY" "$CLI_PY" "$@"

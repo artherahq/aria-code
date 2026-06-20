@@ -343,6 +343,8 @@ if HAS_RICH:
     from rich.panel import Panel
     from rich.rule import Rule
     from rich import box as rich_box
+else:
+    rich_box = None
 # prompt_toolkit re-exports
 if HAS_PT:
     from prompt_toolkit import PromptSession
