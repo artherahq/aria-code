@@ -73,21 +73,36 @@ except ImportError:
 
 
 def _ak_retry(fn, *args, _tries: int = 3, _delay: float = 0.8, **kwargs):
-    """Call an akshare function with retries.
+    """Call an akshare function with retries, bypassing a broken proxy.
 
-    akshare internally hits numbered eastmoney hosts (NN.push2.eastmoney.com);
-    individual hosts go down transiently. Retrying usually lands on a healthy
-    host. Re-raises the last error if all attempts fail.
+    Two transient failure modes are handled:
+      1. akshare hits numbered eastmoney hosts (NN.push2.eastmoney.com) that go
+         down individually — a retry usually lands on a healthy host.
+      2. A misconfigured HTTP(S)_PROXY raises ProxyError even though the source
+         is directly reachable. On a proxy/connection error we retry with the
+         proxy env vars temporarily cleared (akshare uses requests trust_env),
+         then restore them so the rest of the app is unaffected.
     """
+    import os as _os
     import time as _t
+    _PROXY_VARS = ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy")
     last_exc = None
     for _i in range(_tries):
+        _saved = {}
+        _bypass = _i > 0  # first attempt honours the proxy; retries bypass it
+        if _bypass:
+            for _v in _PROXY_VARS:
+                if _v in _os.environ:
+                    _saved[_v] = _os.environ.pop(_v)
         try:
             return fn(*args, **kwargs)
         except Exception as exc:  # noqa: BLE001 — akshare raises many types
             last_exc = exc
             if _i < _tries - 1:
                 _t.sleep(_delay)
+        finally:
+            for _v, _val in _saved.items():
+                _os.environ[_v] = _val
     raise last_exc
 
 try:
@@ -930,7 +945,7 @@ def _get_northbound_flow(params: dict) -> dict:
     try:
         # stock_hsgt_fund_flow_summary_em returns today's 沪深港通 summary.
         # 成交净买额 is already in 亿元 — no further scaling needed.
-        df = ak.stock_hsgt_fund_flow_summary_em()
+        df = _ak_retry(ak.stock_hsgt_fund_flow_summary_em)
         north = df[df["资金方向"] == "北向"]
         if north.empty:
             return {"success": False, "error": "No northbound data in response"}
@@ -1025,7 +1040,7 @@ def _get_limit_up_pool(params: dict) -> dict:
         return {"success": False, "error": "akshare not installed: 运行 pip install akshare 或 /install akshare"}
     try:
         date_str = date.replace("-", "")
-        df = ak.stock_zt_pool_em(date=date_str)
+        df = _ak_retry(ak.stock_zt_pool_em, date=date_str)
         if df is None or df.empty:
             return {"success": True, "count": 0, "stocks": [], "date": date}
 

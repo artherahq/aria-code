@@ -64,6 +64,38 @@ def _load_aria_env() -> None:
 
 _load_aria_env()
 
+
+def _disable_broken_proxy() -> None:
+    """Drop HTTP(S)_PROXY env vars when the configured proxy is unreachable.
+
+    A dead/misconfigured proxy makes every data source fail with ProxyError
+    even though the sources are directly reachable. If a proxy is set but we
+    cannot open a TCP connection to it, unset the proxy vars so requests/akshare
+    fall back to direct connections. (If the proxy is alive we leave it alone.)
+    """
+    import socket
+    import urllib.parse as _up
+    _proxy = (os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
+              or os.environ.get("HTTP_PROXY") or os.environ.get("http_proxy"))
+    if not _proxy:
+        return
+    try:
+        _u = _up.urlparse(_proxy if "://" in _proxy else f"http://{_proxy}")
+        _host, _port = _u.hostname, _u.port or 80
+        if not _host:
+            return
+        _s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        _s.settimeout(1.5)
+        _alive = _s.connect_ex((_host, _port)) == 0
+        _s.close()
+    except Exception:
+        _alive = False
+    if not _alive:
+        for _v in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy"):
+            os.environ.pop(_v, None)
+
+_disable_broken_proxy()
+
 from change_store import ChangeConflictError, GLOBAL_CHANGE_STORE
 from safety import evaluate_command_policy
 from plan_utils import parse_plan_steps
@@ -2607,16 +2639,16 @@ LOCAL_TOOL_SCHEMAS.extend([
                 "properties": {
                     "symbol": {
                         "type": "string",
-                        "description": "Stock/ETF ticker symbol, e.g. AAPL, 600519, 0700.HK",
+                        "description": "Required for a new preview. Stock/ETF ticker symbol, e.g. AAPL, 600519, 0700.HK",
                     },
                     "side": {
                         "type": "string",
                         "enum": ["buy", "sell"],
-                        "description": "Trade direction: 'buy' to purchase, 'sell' to liquidate",
+                        "description": "Required for a new preview. Trade direction: 'buy' to purchase, 'sell' to liquidate",
                     },
                     "quantity": {
                         "type": "integer",
-                        "description": "Number of shares/units to trade (positive integer)",
+                        "description": "Required for a new preview. Number of shares/units to trade (positive integer)",
                     },
                     "price": {
                         "type": "number",
@@ -2636,7 +2668,7 @@ LOCAL_TOOL_SCHEMAS.extend([
                         "description": "Required when confirmed=true. Use the preview_id returned by the prior broker_order preview.",
                     },
                 },
-                "required": ["symbol", "side", "quantity"],
+                "required": [],
             },
         },
     },
