@@ -6801,19 +6801,30 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
             console.print(f"[red]{msg}[/red]" if HAS_RICH else msg)
             return
 
-        # Optional remote upload only after explicit opt-in.
+        # Optional remote upload only after explicit opt-in. Posts to the
+        # backend /feedback endpoint in the shape it expects (FeedbackRequest)
+        # so the rating reaches production_data_collector → DPO training.
+        # No trail_id needed: the backend matches the latest sample for this
+        # session_id (good→thumbs_up, bad→thumbs_down; bad+comment→DPO pair).
         api_success = False
         upload_attempted = settings.data_sharing and settings.feedback_upload
-        if upload_attempted:
+        if upload_attempted and rating in ("positive", "negative"):
             try:
                 import aiohttp
                 headers = {}
                 if self.terminal.config.get("auth_token"):
                     headers["Authorization"] = f"Bearer {self.terminal.config['auth_token']}"
+                payload = {
+                    "user_id":       self.terminal.config.get("user_id") or "cli",
+                    "session_id":    self.terminal.session_id,
+                    "feedback_type": "thumbs_up" if rating == "positive" else "thumbs_down",
+                    "response_id":   self.terminal.session_id,  # latest-in-session match
+                    "value":         comment or None,
+                }
                 async with aiohttp.ClientSession() as session:
                     async with session.post(
-                        f"{self.terminal.api_url}/api/v2/ai/feedback",
-                        json=json.loads(record.to_json()),
+                        f"{self.terminal.api_url}/feedback",
+                        json=payload,
                         headers=headers,
                         timeout=aiohttp.ClientTimeout(total=8)
                     ) as resp:
