@@ -3669,31 +3669,16 @@ def _try_handle_strategy_advice(message: str) -> dict:
 
 def _run_deterministic_chain(message: str, *, model_has_tools: bool,
                              history: list = None) -> dict:
-    """Shared deterministic routing chain for both entry points.
+    """Thin wrapper around the SDK-safe deterministic router."""
+    from apps.cli.deterministic import run_deterministic_chain
 
-    send_message (REPL) and run_prompt (-p mode) used to each maintain their own
-    copy of this chain and drifted — realty, football and market-overview were
-    silently missing from -p mode. Centralising the order here guarantees both
-    paths behave identically and can never drift again.
-
-    Order matters: realty before stock (so housing never inherits a ticker),
-    chart before snapshot, whole-market overview before single-stock snapshot
-    (so "分析A股" is the A-share market, not ticker 'A' / Agilent).
-    """
-    deterministic: dict = {"success": False}
-    if not model_has_tools:
-        # Broker account queries only for models that can't do function calling.
-        deterministic = _try_handle_broker_query(message)
-    for _handler in (_try_handle_strategy_advice,
-                     _try_handle_realty_query,
-                     _try_handle_stock_chart_analysis,
-                     _try_handle_market_overview):
-        if deterministic.get("success"):
-            break
-        deterministic = _handler(message)
-    if not deterministic.get("success"):
-        deterministic = _try_handle_market_snapshot_analysis(message, history=history)
-    return deterministic
+    return run_deterministic_chain(
+        message,
+        model_has_tools=model_has_tools,
+        history=history,
+        has_brokers=_HAS_BROKERS,
+        get_broker_registry=_get_broker_registry,
+    )
 
 
 def _fmt_int(value) -> str:
