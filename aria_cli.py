@@ -255,6 +255,8 @@ try:
     from market_data_client import MarketDataClient as _MDC, get_mdc as _get_mdc
     _HAS_MDC = True
 except ImportError:
+    _MDC = None
+    _get_mdc = None
     _HAS_MDC = False
 
 # Session-level TA cache: persists across multiple /analyze calls in a session,
@@ -9609,7 +9611,12 @@ class ArtheraTerminal:
                 # help text. Skip it entirely and go straight to the Ollama path
                 # below (which also auto-picks an installed model / cloud fallback).
                 _is_ollama_model = "/" not in (model or "")
-                if _is_ollama_model:
+                # backend_chat=True forces ALL chat through the self-hosted
+                # backend (which proxies to its own Ollama + collects training
+                # data), instead of the CLI's local Ollama. Used for the
+                # self-host deployment where users connect to your server.
+                _force_backend = bool(self.config.get("backend_chat")) and bool(self.api_url)
+                if _is_ollama_model and not _force_backend:
                     result = {"success": False, "response": "", "cancelled": False}
                 else:
                     # Pass system_override through user_context for cloud path
@@ -10959,7 +10966,8 @@ class ArtheraTerminal:
             try:
                 # Ollama models (no "/" provider prefix) skip the api_url stub
                 # backend entirely — same routing as the interactive REPL.
-                if local_mode or "/" not in (model or ""):
+                _force_backend_p = bool(self.config.get("backend_chat")) and bool(self.api_url)
+                if not _force_backend_p and (local_mode or "/" not in (model or "")):
                     result = await stream_ollama(
                         self.config.get("ollama_url", "http://localhost:11434"),
                         prompt, [], model=model,

@@ -22,7 +22,10 @@ import time
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
-import requests
+try:
+    import requests
+except Exception:
+    requests = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +111,11 @@ def _load_football_key() -> str:
 def _get(path: str, params: Optional[Dict] = None) -> Optional[Dict]:
     """GET from football-data.org API with simple cache."""
     global _WARNED_NO_KEY
+    if requests is None:
+        if not _WARNED_NO_KEY:
+            _WARNED_NO_KEY = True
+            logger.info("football-data.org: requests 未安装，实时赛程降级为空；本地预测仍可用。")
+        return None
     api_key = _load_football_key()
     cache_key = path + json.dumps(params or {}, sort_keys=True)
     now = time.time()

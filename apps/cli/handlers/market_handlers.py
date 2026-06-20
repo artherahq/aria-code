@@ -1913,6 +1913,40 @@ def _try_handle_market_snapshot_analysis(message: str, history: list = None) -> 
 
     # ── Prediction hint when the user explicitly asks for forecast/outlook ──
     if any(k in message.lower() for k in ("预测", "预判", "forecast", "predict", "prediction", "outlook")):
+        _prediction_added = False
+
+        def _append_rule_prediction() -> None:
+            nonlocal _prediction_added
+            if _prediction_added or not _enough_data:
+                return
+            score = 0
+            if ma20 is not None:
+                score += 1 if price > ma20 else -1
+            if ma60 is not None:
+                score += 1 if price > ma60 else -1
+            if mhist is not None:
+                score += 1 if mhist > 0 else -1
+            if rsi is not None:
+                if rsi >= 75:
+                    score -= 1
+                elif rsi <= 30:
+                    score += 1
+            if _en:
+                direction = "bullish" if score >= 2 else ("bearish" if score <= -2 else "range-bound")
+                confidence = min(0.7, 0.45 + abs(score) * 0.06)
+                lines.append("")
+                lines.append("### Forecast reference")
+                lines.append(f"- Rule-based direction: `{direction}` · confidence: {confidence:.0%}")
+                lines.append("- Prediction model did not return this symbol; this is inferred only from RSI, MACD, and moving averages.")
+            else:
+                direction = "偏强" if score >= 2 else ("偏弱" if score <= -2 else "震荡")
+                confidence = min(0.7, 0.45 + abs(score) * 0.06)
+                lines.append("")
+                lines.append("### 预测参考")
+                lines.append(f"- 规则型方向：`{direction}` · 置信度：{confidence:.0%}")
+                lines.append("- 预测工具当前未返回该标的数据，以上仅由 RSI、MACD 和均线结构推导。")
+            _prediction_added = True
+
         try:
             pred_symbol = symbol
             if _is_a_share and _ashare_code:
@@ -1941,27 +1975,11 @@ def _try_handle_market_snapshot_analysis(message: str, history: list = None) -> 
                     pass
                 lines.append("- " + " · ".join(bits))
                 lines.append("- 该预测由本地动量/技术因子模型生成，只作为风险参考，不构成投资建议。")
+                _prediction_added = True
             elif _enough_data:
-                score = 0
-                if ma20 is not None:
-                    score += 1 if price > ma20 else -1
-                if ma60 is not None:
-                    score += 1 if price > ma60 else -1
-                if mhist is not None:
-                    score += 1 if mhist > 0 else -1
-                if rsi is not None:
-                    if rsi >= 75:
-                        score -= 1
-                    elif rsi <= 30:
-                        score += 1
-                direction = "偏强" if score >= 2 else ("偏弱" if score <= -2 else "震荡")
-                confidence = min(0.7, 0.45 + abs(score) * 0.06)
-                lines.append("")
-                lines.append("### 预测参考")
-                lines.append(f"- 规则型方向：`{direction}` · 置信度：{confidence:.0%}")
-                lines.append("- 预测工具当前未返回该标的数据，以上仅由 RSI、MACD 和均线结构推导。")
+                _append_rule_prediction()
         except Exception:
-            pass
+            _append_rule_prediction()
 
     # ── Data quality — only show when actionable ──
     _quality_missing = _snapshot_quality.get("missing_fields") or []
