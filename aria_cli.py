@@ -5276,6 +5276,8 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
             "/account":   (self.cmd_account,  "Account funds: /account [broker_id]"),
             "/positions": (self.cmd_positions,"Current positions: /positions [broker_id]"),
             "/orders":    (self.cmd_orders,   "Order history: /orders [open|filled|all]"),
+            "/paper":     (self.cmd_paper,    "Paper trading: /paper start|account|positions|orders|reset"),
+            "/trade":     (self.cmd_trade,    "Trade preview/confirm: /trade preview ... | confirm <id>"),
             "/strategy":  (self.cmd_strategy, "Strategy vault: /strategy save|list|diff|load|review"),
             "/accuracy":  (self.cmd_accuracy, "Prediction track record vs live prices"),
             "/artifacts": (self.cmd_artifacts,"List or prune generated files: /artifacts [limit|stats|prune [keep] [--dry-run]]"),
@@ -5341,6 +5343,33 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
             # ── Feedback ─────────────────────────────────────────────────────
             "/bug":       (self.cmd_bug,      "Report issue locally: /bug <description>"),
             "/feedback":  (self.cmd_feedback, "Rate response: /feedback good|bad|note <text>"),
+            # ── Analysis / data commands with dedicated deterministic handlers ──
+            # These have real cmd_* handlers; without registration they fell
+            # through to the LLM (which hallucinated, e.g. /team → fake roster).
+            "/portfolio": (self.cmd_portfolio,"Portfolio analysis: /portfolio [analyze|rebalance] [SYMBOL...]"),
+            "/realty":    (self.cmd_realty,   "Real-estate data: /realty market|reit|valuation|compare"),
+            "/crypto":    (self.cmd_crypto,   "Crypto data: /crypto BTC ETH | /crypto account"),
+            "/risk":      (self.cmd_risk,     "Risk metrics: /risk AAPL | /risk portfolio"),
+            "/corr":      (self.cmd_corr,     "Correlation matrix: /corr AAPL MSFT TSLA [1y]"),
+            "/factors":   (self.cmd_factors,  "Factor analysis: /factors AAPL"),
+            "/peer":      (self.cmd_peer,     "Peer valuation: /peer <symbol> [peers...]"),
+            "/optimize":  (self.cmd_optimize, "Portfolio optimization: /optimize [symbols...]"),
+            "/signal":    (self.cmd_signal,   "ML signal: /signal <symbol>"),
+            "/predict":   (self.cmd_predict,  "ML return predictions: /predict <symbols...>"),
+            "/forex":     (self.cmd_forex,    "Forex rates: /forex EUR/USD USD/CNY"),
+            "/commodity": (self.cmd_commodity,"Commodities: /commodity gold oil silver"),
+            "/funding":   (self.cmd_funding,  "Perp funding rates: /funding [compare] [BTC ETH]"),
+            "/indices":   (self.cmd_indices,  "Global indices real-time: /indices"),
+            "/hot":       (self.cmd_hot,      "Hot/active stocks: /hot [cn|us] [top=20]"),
+            "/stress":    (self.cmd_stress,   "Stress test: /stress <strategy> [symbol]"),
+            "/edgar":     (self.cmd_edgar,    "SEC EDGAR filings: /edgar <ticker|query>"),
+            "/compliance":(self.cmd_compliance,"Compliance check: /compliance <strategy>"),
+            "/data":      (self.cmd_data,     "DuckDB SQL/Excel: /data sql \"...\" | export | load"),
+            "/longterm":  (self.cmd_longterm, "A股长线分析（月线，3-18个月）: /longterm <代码>"),
+            "/shortterm": (self.cmd_shortterm,"A股短线分析（日线，3-15日）: /shortterm <代码>"),
+            "/git":       (self.cmd_git,      "Git helper: /git <status|log|diff|...>"),
+            "/gh":        (self.cmd_gh,       "GitHub CLI: /gh prs|issues|pr N|issue N|search"),
+            "/browser":   (self.cmd_browser,  "Open URL in headless browser: /browser <url>"),
         }
         # ── Visible commands: shown in /help (session/config/state management only)
         # All other commands still work when typed — just not cluttering /help.
@@ -5495,6 +5524,8 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
         "/realty":    ("Usage: /realty [market CITY] [calc buy|rent|roi] [compare] [trend CITY]", ["/realty market 北京", "/realty calc buy", "/realty compare", "/realty trend 上海"]),
         # ── Brokers ─────────────────────────────────────────────────────────
         "/broker":    ("Usage: /broker [guide|doctor|services|list|connect NAME|disconnect|status]", ["/broker guide", "/broker doctor", "/broker connect alpaca_paper"]),
+        "/paper":     ("Usage: /paper [start CASH CURRENCY|account|positions|orders|reset]", ["/paper start 100000 USD", "/paper account", "/paper orders"]),
+        "/trade":     ("Usage: /trade [mode|preview SYMBOL buy|sell QTY PRICE|confirm PREVIEW_ID|previews]", ["/trade mode", "/trade preview AAPL buy 10 190", "/trade confirm tp_xxx"]),
         "/account":   ("Usage: /account", ["/account"]),
         "/positions": ("Usage: /positions", ["/positions"]),
         "/orders":    ("Usage: /orders [pending|all]", ["/orders", "/orders pending"]),
