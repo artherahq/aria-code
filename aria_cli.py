@@ -3647,6 +3647,32 @@ def _try_handle_market_overview(message: str) -> dict:
     return _src_market_overview(message)
 
 
+def _run_deterministic_chain(message: str, *, model_has_tools: bool,
+                             history: list = None) -> dict:
+    """Shared deterministic routing chain for both entry points.
+
+    send_message (REPL) and run_prompt (-p mode) used to each maintain their own
+    copy of this chain and drifted — realty, football and market-overview were
+    silently missing from -p mode. Centralising the order here guarantees both
+    paths behave identically and can never drift again.
+
+    Order matters: realty before stock (so housing never inherits a ticker),
+    chart before snapshot, whole-market overview before single-stock snapshot
+    (so "分析A股" is the A-share market, not ticker 'A' / Agilent).
+    """
+    deterministic: dict = {"success": False}
+    if not model_has_tools:
+        # Broker account queries only for models that can't do function calling.
+        deterministic = _try_handle_broker_query(message)
+    for _handler in (_try_handle_realty_query,
+                     _try_handle_stock_chart_analysis,
+                     _try_handle_market_overview):
+        if deterministic.get("success"):
+            break
+        deterministic = _handler(message)
+    if not deterministic.get("success"):
+        deterministic = _try_handle_market_snapshot_analysis(message, history=history)
+    return deterministic
 
 
 def _fmt_int(value) -> str:
@@ -9653,6 +9679,30 @@ class ArtheraTerminal:
             self._last_preflight_key = key
         return shown
 
+    async def _try_football_nl_intercept(self, message: str) -> bool:
+        """Route an NL football query to the Poisson engine. Returns True if handled.
+
+        Shared by send_message (REPL) and run_prompt (-p) so the two paths can't
+        drift — this intercept was previously missing from -p mode, letting the
+        LLM hallucinate match data.
+        """
+        if message.startswith("/"):
+            return False
+        try:
+            from apps.cli.commands.market_cmds import (
+                _is_probable_football_query as _pfq,
+                _parse_nl_team_pair as _pfnl,
+            )
+            pair = _pfnl(message)
+            if pair and _pfq(message, pair):
+                if HAS_RICH:
+                    console.print("\n[dim]⚽ 识别足球对阵，调用 Poisson 引擎…[/dim]")
+                await self.commands.cmd_football(f"{pair[0]} vs {pair[1]} wc")
+                return True
+        except Exception:
+            pass
+        return False
+
     async def send_message(self, message: str, system_override: Optional[str] = None):
         """Send message to Aria AI with agentic tool loop, smart fallback, markdown."""
         if (
@@ -9804,48 +9854,13 @@ class ArtheraTerminal:
                 await self.commands.cmd_chart(f"{symbol} {period}")
                 return
 
-        # ── Football prediction intercept: NL chat queries → built-in Poisson handler ──
-        # Prevents LLM from hallucinating match data — route to the real Poisson engine.
-        if not message.startswith("/"):
-            _fp_pair = None
-            _fp_ok = False
-            try:
-                from apps.cli.commands.market_cmds import (
-                    _is_probable_football_query as _pfq,
-                    _parse_nl_team_pair as _pfnl,
-                )
-                _fp_pair = _pfnl(message)
-                _fp_ok = _pfq(message, _fp_pair)
-            except Exception:
-                pass
-            if _fp_pair and _fp_ok:
-                _h_cn, _a_cn = _fp_pair
-                if HAS_RICH:
-                    console.print(f"\n[dim]⚽ 识别足球对阵，调用 Poisson 引擎…[/dim]")
-                await self.commands.cmd_football(f"{_h_cn} vs {_a_cn} wc")
-                return
+        # ── Football prediction intercept → built-in Poisson handler ──────────
+        if await self._try_football_nl_intercept(message):
+            return
 
-        deterministic: dict = {"success": False}
         _det_wants_analysis = False  # set True for snapshot + analysis query → LLM follows
-        if not _model_has_tools:
-            # Deterministic path: only for models that can't reliably do function calling
-            deterministic = _try_handle_broker_query(message)
-        if not deterministic.get("success"):
-            # Real-estate / housing queries get their own deterministic handler so they
-            # never accidentally inherit a stock ticker from session history.
-            deterministic = _try_handle_realty_query(message)
-        if not deterministic.get("success"):
-            # Chart requests should be handled before generic market snapshots.
-            deterministic = _try_handle_stock_chart_analysis(message)
-        if not deterministic.get("success"):
-            # Whole-market overview ("分析A股/港股/美股市场行情") must run BEFORE the
-            # single-stock snapshot path, or "A股" gets parsed as ticker 'A' (Agilent).
-            deterministic = _try_handle_market_overview(message)
-        if not deterministic.get("success"):
-            # Market snapshot always uses deterministic renderer — even tool-capable models
-            # produce N/A when they try to parse injected data themselves.
-            deterministic = _try_handle_market_snapshot_analysis(
-                message, history=self.conversation[:-1])
+        deterministic = _run_deterministic_chain(
+            message, model_has_tools=_model_has_tools, history=self.conversation[:-1])
         if deterministic.get("success") or _is_stock_chart_analysis_request(message):
             final_text = deterministic.get("response", "")
             if not final_text:
@@ -9870,7 +9885,8 @@ class ArtheraTerminal:
                 }
             # For snapshot + "分析" queries: show data then continue to LLM for deep analysis
             _det_wants_analysis = (
-                any(k in message for k in ("分析", "analyze", "analysis", "对比", "比较", "compare"))
+                not bool(deterministic.get("analysis_complete"))
+                and any(k in message for k in ("分析", "analyze", "analysis", "对比", "比较", "compare"))
                 and bool(_tools) and _tools[0] == "market_snapshot"
             )
             if HAS_RICH:
@@ -11663,41 +11679,12 @@ class ArtheraTerminal:
             await self.commands._cmd_broker_add(_btype_p)
             return
 
-        # ── Football prediction intercept (same as send_message) ──────────────
-        # Route NL football queries to the Poisson engine instead of letting the
-        # LLM hallucinate match data. Must mirror the REPL path for -p parity.
-        if not prompt.startswith("/"):
-            _fp_pair_p = None
-            _fp_ok_p = False
-            try:
-                from apps.cli.commands.market_cmds import (
-                    _is_probable_football_query as _pfq_p,
-                    _parse_nl_team_pair as _pfnl_p,
-                )
-                _fp_pair_p = _pfnl_p(prompt)
-                _fp_ok_p = _pfq_p(prompt, _fp_pair_p)
-            except Exception:
-                pass
-            if _fp_pair_p and _fp_ok_p:
-                _h_cn_p, _a_cn_p = _fp_pair_p
-                if HAS_RICH:
-                    console.print(f"\n[dim]⚽ 识别足球对阵，调用 Poisson 引擎…[/dim]")
-                await self.commands.cmd_football(f"{_h_cn_p} vs {_a_cn_p} wc")
-                return
+        # ── Football prediction intercept → built-in Poisson handler ──────────
+        if await self._try_football_nl_intercept(prompt):
+            return
 
-        deterministic: dict = {"success": False}
-        if not _model_has_tools_p:
-            deterministic = _try_handle_broker_query(prompt)
-        if not deterministic.get("success"):
-            # Real-estate / housing queries (parity with the REPL send_message path)
-            deterministic = _try_handle_realty_query(prompt)
-        if not deterministic.get("success"):
-            deterministic = _try_handle_stock_chart_analysis(prompt)
-        if not deterministic.get("success"):
-            # Whole-market overview before single-stock snapshot (A股 ≠ ticker 'A')
-            deterministic = _try_handle_market_overview(prompt)
-        if not deterministic.get("success"):
-            deterministic = _try_handle_market_snapshot_analysis(prompt)
+        deterministic = _run_deterministic_chain(
+            prompt, model_has_tools=_model_has_tools_p)
         if deterministic.get("success") or _is_stock_chart_analysis_request(prompt):
             result = deterministic
         else:
