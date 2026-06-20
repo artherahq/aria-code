@@ -1041,13 +1041,13 @@ class MarketDataClient:
         # ── 主路径: 东方财富 push2 API ─────────────────────────────────
         secid = _ashare_secid(code)
         try:
-            r = self._sess.get(self.EM_QUOTE_URL, params={
+            _resp = self._em_get_json(self.EM_QUOTE_URL, {
                 "secid":  secid,
                 "fields": self._EM_FIELDS,
                 "ut":     _EM_UT,
                 "fltt": 2, "invt": 2,
             }, timeout=6)
-            d = r.json().get("data", {}) or {}
+            d = (_resp or {}).get("data", {}) or {}
             price = float(d.get("f43", 0))
             if not _is_valid_price(price):
                 raise ValueError("empty Eastmoney quote")
@@ -1277,7 +1277,7 @@ class MarketDataClient:
 
         # ── 主路径: 东方财富历史 K线（通过系统代理）──────────────────────────
         try:
-            r = self._sess.get(self.EM_HIST_URL, params={
+            _resp = self._em_get_json(self.EM_HIST_URL, {
                 "secid":   secid,
                 "klt":     klt,
                 "fqt":     1,       # 前复权
@@ -1287,7 +1287,7 @@ class MarketDataClient:
                 "fields2": "f51,f52,f53,f54,f55,f56",
                 "ut":      _EM_UT,
             }, timeout=10)
-            raw = r.json().get("data", {}) or {}
+            raw = (_resp or {}).get("data", {}) or {}
             name = raw.get("name", code)
             klines = raw.get("klines", [])
             records = []
@@ -1576,13 +1576,16 @@ class MarketDataClient:
         cn_names  = {"000001":"上证指数","399001":"深证成指",
                      "399006":"创业板指","000016":"上证50","000688":"科创50"}
         try:
-            r = self._sess.get(self.EM_ULIST_URL, params={
+            _resp = self._em_get_json(self.EM_ULIST_URL, {
                 "fltt": 2, "invt": 2,
                 "fields": "f1,f2,f3,f4,f12,f14",
                 "secids": cn_secids,
                 "ut": _EM_UT,
             }, timeout=8)
-            for item in r.json().get("data",{}).get("diff",[]):
+            _diff = (_resp or {}).get("data", {}).get("diff", []) or []
+            if isinstance(_diff, dict):
+                _diff = list(_diff.values())
+            for item in _diff:
                 code = item.get("f12","")
                 indices[cn_names.get(code, code)] = {
                     "price":      round(float(item.get("f2",0)), 2),
@@ -1632,13 +1635,13 @@ class MarketDataClient:
 
     def _fetch_northbound(self) -> Dict[str, Any]:
         try:
-            r = self._sess.get(self.EM_NORTHBOUND, params={
+            _resp = self._em_get_json(self.EM_NORTHBOUND, {
                 "fields1": "f1,f2,f3,f4",
                 "fields2": "f51,f52,f53,f54,f55,f56,f57,f58",
                 "klt": 101, "lmt": 5,
                 "ut": _EM_UT,
             }, timeout=8)
-            data = r.json().get("data", {}) or {}
+            data = (_resp or {}).get("data", {}) or {}
             sh   = data.get("s2n", {}) or {}   # 沪股通
             sz   = data.get("s3n", {}) or {}   # 深股通
             def _val(obj, key):
