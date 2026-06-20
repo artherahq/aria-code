@@ -11689,6 +11689,9 @@ class ArtheraTerminal:
         if not _model_has_tools_p:
             deterministic = _try_handle_broker_query(prompt)
         if not deterministic.get("success"):
+            # Real-estate / housing queries (parity with the REPL send_message path)
+            deterministic = _try_handle_realty_query(prompt)
+        if not deterministic.get("success"):
             deterministic = _try_handle_stock_chart_analysis(prompt)
         if not deterministic.get("success"):
             # Whole-market overview before single-stock snapshot (A股 ≠ ticker 'A')
