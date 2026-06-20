@@ -199,8 +199,44 @@ class MarketDataClient:
 
     def __init__(self, alpha_vantage_key: str = ""):
         self._sess   = _session()
+        self._sess_np = None  # lazy no-proxy session for proxy-bypass fallback
         self._av_key = alpha_vantage_key or os.getenv("ALPHA_VANTAGE_KEY", "")
         self._fh_key = self._load_finnhub_key()
+
+    def _em_get_json(self, url: str, params: dict, timeout: int = 8):
+        """GET JSON from an eastmoney endpoint, resilient to flaky hosts/proxy.
+
+        Two failure modes are handled together:
+          * A broken HTTP(S)_PROXY returns empty bodies / ProxyError → retry
+            with a trust_env=False (no-proxy) session.
+          * eastmoney's push2 cluster has many numbered hosts
+            (N.push2.eastmoney.com) that go down individually → rotate hosts
+            until one responds with valid JSON.
+        """
+        import re as _re
+        # Build a small candidate host list (original + a couple numbered hosts).
+        # Kept short so we fail fast and don't hammer eastmoney's rate limiter.
+        m = _re.search(r"https?://([^/]+)(/.*)", url)
+        if m and "push2.eastmoney.com" in m.group(1):
+            path = m.group(2)
+            _hosts = list(dict.fromkeys([m.group(1), "1.push2.eastmoney.com", "7.push2.eastmoney.com"]))
+            _urls = [f"https://{h}{path}" for h in _hosts]
+        else:
+            _urls = [url]
+
+        if self._sess_np is None:
+            self._sess_np = _session_no_proxy()
+        for candidate in _urls:
+            for sess in (self._sess, self._sess_np):
+                try:
+                    r = sess.get(candidate, params=params, timeout=timeout)
+                    r.raise_for_status()
+                    data = r.json()
+                    if isinstance(data, dict) and data.get("data") is not None:
+                        return data
+                except Exception:
+                    continue
+        return None
 
     @staticmethod
     def _load_finnhub_key() -> str:
@@ -1628,14 +1664,18 @@ class MarketDataClient:
 
     def _fetch_hot_ashare(self, top_n: int = 20) -> Dict[str, Any]:
         try:
-            r = self._sess.get(self.EM_HOT_URL, params={
+            data = self._em_get_json(self.EM_HOT_URL, {
                 "pn": 1, "pz": top_n, "po": 1, "np": 1,
                 "ut": _EM_UT,
                 "fltt": 2, "invt": 2, "fid": "f6",
                 "fs": "m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23",
                 "fields": "f2,f3,f4,f5,f6,f7,f12,f14,f62",
-            }, timeout=8)
-            items = r.json().get("data",{}).get("diff",[]) or []
+            })
+            if not data:
+                return {"success": False, "error": "eastmoney 无响应（网络或代理）"}
+            items = (data.get("data") or {}).get("diff", []) or []
+            if isinstance(items, dict):
+                items = list(items.values())
             stocks = []
             for d in items[:top_n]:
                 stocks.append({
@@ -1651,6 +1691,73 @@ class MarketDataClient:
                     "count": len(stocks), "provider": "eastmoney"}
         except Exception as e:
             return {"success": False, "error": str(e)}
+
+    def screen_ashare(self, *, max_pe: float = 50, min_market_cap_yi: float = 0,
+                      limit: int = 20, exclude_st: bool = True) -> Dict[str, Any]:
+        """Screen A-shares via the eastmoney clist endpoint (host-rotating,
+        proxy-resilient). Sorted by change% desc, then filtered by PE/market cap.
+
+        Fetches a few pages (not all ~5000 stocks) so the request stays small
+        and reliable. Fields: f2 price, f3 chg%, f8 turnover, f9 PE(dynamic),
+        f12 code, f14 name, f20 total mktcap, f23 PB.
+        """
+        rows: List[Dict[str, Any]] = []
+        for pn in range(1, 4):  # up to 3 pages × 100 = 300 movers
+            data = self._em_get_json(self.EM_HOT_URL, {
+                "pn": pn, "pz": 100, "po": 1, "np": 1, "ut": _EM_UT,
+                "fltt": 2, "invt": 2, "fid": "f3",  # sort by change% desc
+                "fs": "m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048",
+                "fields": "f2,f3,f8,f9,f12,f14,f20,f23",
+            })
+            if not data:
+                break
+            diff = (data.get("data") or {}).get("diff", []) or []
+            if isinstance(diff, dict):
+                diff = list(diff.values())
+            if not diff:
+                break
+            rows.extend(diff)
+            if len(diff) < 100:
+                break
+
+        if not rows:
+            return {"success": False, "error": "eastmoney 无响应（网络或代理）"}
+
+        def _num(v):
+            try:
+                return float(v)
+            except (ValueError, TypeError):
+                return None
+
+        out: List[Dict[str, Any]] = []
+        for d in rows:
+            name = str(d.get("f14", ""))
+            if exclude_st and ("ST" in name or "退" in name):
+                continue
+            price = _num(d.get("f2"))
+            pe = _num(d.get("f9"))
+            mktcap = _num(d.get("f20"))  # 元
+            if price is None or price <= 0:
+                continue
+            if pe is not None and not (0.1 <= pe <= max_pe):
+                continue
+            if min_market_cap_yi > 0 and (mktcap is None or mktcap < min_market_cap_yi * 1e8):
+                continue
+            out.append({
+                "code": str(d.get("f12", "")),
+                "name": name,
+                "price": round(price, 2),
+                "change_pct": round(_num(d.get("f3")) or 0, 2),
+                "pe_dynamic": round(pe, 1) if pe is not None else None,
+                "pb": round(_num(d.get("f23")) or 0, 2),
+                "turnover_rate": round(_num(d.get("f8")) or 0, 2),
+                "market_cap_yi": round(mktcap / 1e8, 1) if mktcap else None,
+            })
+            if len(out) >= limit:
+                break
+
+        return {"success": True, "count": len(out), "stocks": out,
+                "provider": "eastmoney"}
 
     def _fetch_hot_us(self, top_n: int = 10) -> Dict[str, Any]:
         """US most active stocks via yfinance screener."""
@@ -1707,6 +1814,9 @@ def fundamentals(symbol: str) -> Dict[str, Any]:
 
 def hot_stocks(market: str = "cn", top_n: int = 20) -> Dict[str, Any]:
     return get_mdc().hot_stocks(market=market, top_n=top_n)
+
+def screen_ashare(**kwargs) -> Dict[str, Any]:
+    return get_mdc().screen_ashare(**kwargs)
 
 
 if __name__ == "__main__":

@@ -977,6 +977,17 @@ def _screen_ashare(params: dict) -> dict:
     min_market_cap  = float(params.get("min_market_cap_yi", 0))    # 亿元
     limit           = int(params.get("limit", 20))
 
+    # Primary: direct eastmoney clist (host-rotating, proxy-resilient, small
+    # paged query). Far more reliable than akshare's full-market spot endpoint.
+    try:
+        from market_data_client import screen_ashare as _em_screen
+        _em = _em_screen(max_pe=max_pe, min_market_cap_yi=min_market_cap, limit=limit)
+        if _em.get("success") and _em.get("stocks"):
+            _em["criteria"] = params
+            return _em
+    except Exception:
+        pass  # fall through to akshare
+
     if not _HAS_AK:
         return {"success": False, "error": "akshare not installed: 运行 pip install akshare 或 /install akshare"}
 
