@@ -2597,8 +2597,9 @@ LOCAL_TOOL_SCHEMAS.extend([
                 "Propose a trade order (buy or sell). "
                 "IMPORTANT: This tool requires explicit user confirmation. "
                 "When called without confirmed=true, it returns an order preview with a "
-                "confirmation prompt. Only set confirmed=true after the user has explicitly "
+                "preview_id and confirmation prompt. Only set confirmed=true after the user has explicitly "
                 "said '确认下单', 'confirm order', or equivalent in this conversation turn. "
+                "When confirmed=true, pass the exact preview_id from the prior preview. "
                 "NEVER set confirmed=true on your own initiative."
             ),
             "parameters": {
@@ -2629,6 +2630,10 @@ LOCAL_TOOL_SCHEMAS.extend([
                     "confirmed": {
                         "type": "boolean",
                         "description": "Set to true ONLY after the user explicitly confirmed the order in this turn.",
+                    },
+                    "preview_id": {
+                        "type": "string",
+                        "description": "Required when confirmed=true. Use the preview_id returned by the prior broker_order preview.",
                     },
                 },
                 "required": ["symbol", "side", "quantity"],
@@ -5649,7 +5654,7 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
                              "/setup","/apikey","/doctor","/mcp"]),
                 ("Data",    ["/alert","/journal","/watch","/note","/todo","/memory",
                              "/artifacts","/strategy","/accuracy"]),
-                ("Broker",  ["/broker","/account","/positions","/orders"]),
+                ("Broker",  ["/broker","/paper","/trade","/account","/positions","/orders"]),
                 ("Code",    ["/project","/init","/review","/code","/plan","/run",
                              "/read","/write","/edit","/ls","/search","/verify",
                              "/scaffold","/apply","/changes"]),
@@ -8060,10 +8065,10 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
         desc = args.strip()
         if not desc:
             if HAS_RICH:
-                self.console.print("[dim]Usage: /ui <描述>[/dim]")
-                self.console.print("[dim]  /ui 今日A股热力图[/dim]")
-                self.console.print("[dim]  /ui 持仓组合报告[/dim]")
-                self.console.print("[dim]  /ui 市场晨报看板[/dim]")
+                console.print("[dim]Usage: /ui <描述>[/dim]")
+                console.print("[dim]  /ui 今日A股热力图[/dim]")
+                console.print("[dim]  /ui 持仓组合报告[/dim]")
+                console.print("[dim]  /ui 市场晨报看板[/dim]")
             else:
                 print("Usage: /ui <description>")
             return
@@ -8102,7 +8107,7 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
         )
 
         if HAS_RICH:
-            self.console.print(f"[bold]UI Generation:[/bold] {desc}")
+            console.print(f"[bold]UI Generation:[/bold] {desc}")
         else:
             print(f"Generating UI: {desc}")
 
@@ -8118,7 +8123,7 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
             from dashboard_generator import generate_and_open
         except ImportError:
             if HAS_RICH:
-                self.console.print("[red]dashboard_generator.py 未找到，请检查安装[/red]")
+                console.print("[red]dashboard_generator.py 未找到，请检查安装[/red]")
             else:
                 print("dashboard_generator.py 未找到")
             return
@@ -8127,14 +8132,14 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
         mode = parts[0].lower() if parts and parts[0].lower() in {"brief", "market", "portfolio", "full"} else "brief"
         watchlist = self.terminal.config.get("watchlist", [])
         if HAS_RICH:
-            self.console.print(f"[dim]正在抓取数据并生成 Dashboard（{mode}）…[/dim]")
+            console.print(f"[dim]正在抓取数据并生成 Dashboard（{mode}）…[/dim]")
         else:
             print(f"正在生成 Dashboard（{mode}）…")
 
         try:
             out = generate_and_open(watchlist=watchlist, config=self.terminal.config, mode=mode)
             if HAS_RICH:
-                self.console.print(
+                console.print(
                     f"  [green]✓[/green] Dashboard 已生成并在浏览器打开\n"
                     f"  [dim]路径: [bold]{out}[/bold][/dim]"
                 )
@@ -8142,7 +8147,7 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
                 print(f"Dashboard saved: {out}")
         except Exception as exc:
             if HAS_RICH:
-                self.console.print(f"[red]生成失败: {exc}[/red]")
+                console.print(f"[red]生成失败: {exc}[/red]")
             else:
                 print(f"生成失败: {exc}")
 
