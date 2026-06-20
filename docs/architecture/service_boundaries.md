@@ -21,6 +21,43 @@ packages/aria_services
         +-- channels  optional external entrypoints
 ```
 
+## Agent Architecture Contract
+
+Aria should follow the same product shape users expect from Claude Code and
+Codex-style coding agents: a thin launcher and UI, a separate agent runtime, a
+typed tool/service layer, explicit safety policy, MCP/app connectors, and
+observable task state. This is not a claim about private internal
+implementations; it is the Aria product contract.
+
+The source of truth is `packages/aria_core/architecture.py`.
+
+| Layer | Responsibility | Current status |
+| --- | --- | --- |
+| `launcher` | Stable executable, runtime selection, dependency bootstrap | partial |
+| `settings` | Config, secrets, model profiles, permission policy | planned |
+| `ui` | Terminal rendering, input UX, progress, artifact links | partial |
+| `context` | Memory, automatic compaction, resume checkpoints | planned |
+| `runtime` | Agent loop, planning, tools, retries, streaming | partial |
+| `tools` | Tool registry, schemas, permissions, local/MCP adapters | partial |
+| `services` | Data, reports, brokers, skills, channels, gateway | partial |
+| `mcp` | External tool/package integration and health | partial |
+| `safety` | Filesystem, shell, network, broker, privacy guardrails | partial |
+| `channels` | Daemon, webhooks, TradingView alerts, chat apps | planned |
+| `observability` | Doctor checks, traces, provider health, audits | partial |
+
+Architectural rules:
+
+1. CLI commands are adapters. They may parse user input and render output, but
+   business behavior belongs behind tools or services.
+2. Tool calls are typed manifests with permissions and deterministic result
+   shapes before the LLM consumes them.
+3. Runtime state, context compaction, and trace artifacts must be separate from
+   terminal rendering.
+4. MCP, TradingView webhooks, daemon tasks, and future apps should enter through
+   gateway/channel services, not call `aria_cli.py` internals.
+5. Live broker execution must keep preview/confirm/audit boundaries even when
+   requests originate from MCP or webhooks.
+
 ## Migration Rules
 
 1. Do not add new business logic directly to `aria_cli.py` unless it is a small

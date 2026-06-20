@@ -72,6 +72,44 @@ def test_service_boundaries_are_registered():
     assert len(list_service_specs()) >= 8
 
 
+def test_agent_architecture_contract_tracks_required_layers():
+    from packages.aria_core import (
+        ARCHITECTURE_SCHEMA_VERSION,
+        LayerStatus,
+        architecture_contract,
+        architecture_gaps,
+        architecture_layer_map,
+        architecture_status_counts,
+        list_architecture_layers,
+        required_architecture_layer_names,
+    )
+
+    layers = architecture_layer_map()
+    required = {
+        "launcher",
+        "settings",
+        "ui",
+        "context",
+        "runtime",
+        "tools",
+        "services",
+        "mcp",
+        "safety",
+        "channels",
+        "observability",
+    }
+
+    assert required.issubset(layers)
+    assert required.issubset(set(required_architecture_layer_names()))
+    assert layers["launcher"].status in {LayerStatus.DONE, LayerStatus.PARTIAL}
+    assert "aria-code" in layers["launcher"].source_paths
+    assert "aria_cli.py" in layers["runtime"].source_paths
+    assert "context" in {layer.name for layer in architecture_gaps()}
+    assert architecture_status_counts()[LayerStatus.PARTIAL.value] >= 1
+    assert architecture_contract()["schema_version"] == ARCHITECTURE_SCHEMA_VERSION
+    assert len(list_architecture_layers()) == len(layers)
+
+
 def test_service_usage_catalog_maps_cli_packages_and_mcp_tools():
     from packages.aria_services import list_service_usage_specs, service_usage_map
 
@@ -195,6 +233,7 @@ def test_package_manifest_export_shape(tmp_path):
 
 
 def test_package_doctor_report_statuses(tmp_path):
+    from packages.aria_core import list_architecture_layers, required_architecture_layer_names
     from packages.aria_infra import discover_arthera_packages, build_package_doctor_report
     from packages.aria_services import list_service_specs, required_service_names
 
@@ -219,10 +258,13 @@ def test_package_doctor_report_statuses(tmp_path):
         manifest_path=tmp_path / "manifest.json",
         services=list_service_specs(),
         required_services=required_service_names(),
+        architecture_layers=list_architecture_layers(),
+        required_architecture_layers=required_architecture_layer_names(),
         provider_health=[{"provider": "yfinance", "status": "ok"}],
     )
-    assert ok_report.status == "ok"
+    assert ok_report.status == "warn"
     assert any(check.name == "service_boundaries" and check.status == "ok" for check in ok_report.checks)
+    assert any(check.name == "architecture_layers" and check.status == "warn" for check in ok_report.checks)
     assert any(check.name == "data_provider_health" and check.status == "ok" for check in ok_report.checks)
 
     warn_report = build_package_doctor_report(

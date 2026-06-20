@@ -45,6 +45,12 @@ def _overall_status(checks: List[CheckResult]) -> str:
     return "ok"
 
 
+def _status_value(value: Any) -> str:
+    if hasattr(value, "value"):
+        return str(value.value)
+    return str(value)
+
+
 def build_package_doctor_report(
     *,
     arthera: ArtheraPackageMap,
@@ -54,6 +60,8 @@ def build_package_doctor_report(
     manifest_path: Path,
     services: Iterable[Any] = (),
     required_services: Iterable[str] = (),
+    architecture_layers: Iterable[Any] = (),
+    required_architecture_layers: Iterable[str] = (),
     provider_health: Iterable[Dict[str, Any]] = (),
 ) -> PackageDoctorReport:
     """Build package bridge health checks without doing I/O."""
@@ -91,6 +99,42 @@ def build_package_doctor_report(
             "No service manifests registered yet.",
             "Add Gateway/Data/Reports/Brokers service specs.",
         ))
+
+    architecture_rows = list(architecture_layers or [])
+    required_layer_names = set(required_architecture_layers or [])
+    if architecture_rows or required_layer_names:
+        layer_names = {
+            getattr(layer, "name", "")
+            for layer in architecture_rows
+            if getattr(layer, "name", "")
+        }
+        missing_layers = sorted(required_layer_names - layer_names)
+        if missing_layers:
+            checks.append(CheckResult(
+                "architecture_layers",
+                "fail",
+                f"Missing architecture layers: {', '.join(missing_layers)}.",
+                "Update packages.aria_core.architecture.",
+            ))
+        else:
+            incomplete = [
+                getattr(layer, "name", "")
+                for layer in architecture_rows
+                if _status_value(getattr(layer, "status", "")).lower() != "done"
+            ]
+            if incomplete:
+                checks.append(CheckResult(
+                    "architecture_layers",
+                    "warn",
+                    f"{len(layer_names)} layers registered; incomplete: {', '.join(incomplete[:6])}.",
+                    "Prioritize context, settings, runtime, safety, and channel extraction.",
+                ))
+            else:
+                checks.append(CheckResult(
+                    "architecture_layers",
+                    "ok",
+                    f"{len(layer_names)} architecture layers complete.",
+                ))
 
     provider_rows = list(provider_health or [])
     if not provider_rows:

@@ -109,6 +109,12 @@ def build_session_diagnostic_bundle(
             bundle["artifact_summary"] = _artifact_summary()
         except Exception:
             pass
+    try:
+        from packages.aria_core.architecture import architecture_contract
+
+        bundle["architecture"] = architecture_contract()
+    except Exception:
+        pass
     return bundle
 
 

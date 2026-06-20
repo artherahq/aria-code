@@ -476,6 +476,7 @@ class TestSessionManager(unittest.TestCase):
         self.assertEqual(bundle["provider_health_summary"]["schema"], "aria.provider_health_summary.v1")
         self.assertEqual(bundle["provider_health_summary"]["total"], 1)
         self.assertIn("artifact_summary", bundle)
+        self.assertEqual(bundle["architecture"]["schema_version"], "aria.agent-architecture.v1")
 
     def test_build_session_export_payload_supports_bundle_and_sft(self):
         conversation = [
@@ -504,6 +505,7 @@ class TestSessionManager(unittest.TestCase):
         self.assertIn("runtime_trace", bundle)
         self.assertEqual(bundle["provider_health_summary"]["status"], "ok")
         self.assertIn("artifact_summary", bundle)
+        self.assertIn("architecture", bundle)
 
         sft_content, sft_ext, sft_prefix = build_session_export_payload("sft", conversation)
         pairs = json.loads(sft_content)

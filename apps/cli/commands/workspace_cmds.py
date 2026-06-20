@@ -14,7 +14,12 @@ class WorkspaceCommandsMixin:
         """Show Aria Code package facades and Arthera package bridge status."""
         try:
             from packages.aria_agents import list_agent_manifests
-            from packages.aria_core import build_package_manifest, write_package_manifest
+            from packages.aria_core import (
+                build_package_manifest,
+                list_architecture_layers,
+                required_architecture_layer_names,
+                write_package_manifest,
+            )
             from packages.aria_infra import (
                 aria_code_identity,
                 build_package_doctor_report,
@@ -123,6 +128,8 @@ class WorkspaceCommandsMixin:
                 manifest_path=manifest_path,
                 services=services,
                 required_services=required_service_names(),
+                architecture_layers=list_architecture_layers(),
+                required_architecture_layers=required_architecture_layer_names(),
                 provider_health=GLOBAL_PROVIDER_HEALTH.snapshot(),
             )
             if HAS_RICH:
