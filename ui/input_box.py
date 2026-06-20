@@ -16,16 +16,38 @@ import time
 from dataclasses import dataclass, replace
 from typing import Callable, Optional
 
-from prompt_toolkit.application import Application
-from prompt_toolkit.buffer import Buffer
-from prompt_toolkit.key_binding import KeyBindings
-from prompt_toolkit.layout.dimension import Dimension
-from prompt_toolkit.layout import Float, FloatContainer, HSplit, Layout, VSplit, Window
-from prompt_toolkit.layout.controls import FormattedTextControl
-from prompt_toolkit.layout.menus import CompletionsMenu
-from prompt_toolkit.layout.processors import Processor, Transformation
-from prompt_toolkit.styles import Style
-from prompt_toolkit.widgets import TextArea
+try:
+    from prompt_toolkit.application import Application
+    from prompt_toolkit.buffer import Buffer
+    from prompt_toolkit.key_binding import KeyBindings
+    from prompt_toolkit.layout.dimension import Dimension
+    from prompt_toolkit.layout import Float, FloatContainer, HSplit, Layout, VSplit, Window
+    from prompt_toolkit.layout.controls import FormattedTextControl
+    from prompt_toolkit.layout.menus import CompletionsMenu
+    from prompt_toolkit.layout.processors import Processor, Transformation
+    from prompt_toolkit.styles import Style
+    from prompt_toolkit.widgets import TextArea
+    HAS_PROMPT_TOOLKIT = True
+except ImportError:
+    HAS_PROMPT_TOOLKIT = False
+
+    class Processor:  # type: ignore[no-redef]
+        pass
+
+    class Transformation:  # type: ignore[no-redef]
+        def __init__(self, fragments, source_to_display=None, display_to_source=None):
+            self.fragments = fragments
+            self.source_to_display = source_to_display or (lambda i: i)
+            self.display_to_source = display_to_source or (lambda i: i)
+
+    class Style:  # type: ignore[no-redef]
+        @staticmethod
+        def from_dict(values):
+            return values
+
+    Application = Buffer = KeyBindings = Dimension = None  # type: ignore
+    Float = FloatContainer = HSplit = Layout = VSplit = Window = None  # type: ignore
+    FormattedTextControl = CompletionsMenu = TextArea = None  # type: ignore
 
 
 # ── Theme detection ────────────────────────────────────────────────────────────
@@ -267,6 +289,11 @@ def run_panel_input(
     config: Optional[PanelInputConfig] = None,
 ) -> str:
     cfg = (config or PanelInputConfig()).resolved()
+    if not HAS_PROMPT_TOOLKIT:
+        try:
+            return input(cfg.prompt)
+        except EOFError:
+            return ""
 
     def _accept(buf: Buffer) -> bool:
         app.exit(result=buf.text)

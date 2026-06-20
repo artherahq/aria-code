@@ -285,6 +285,39 @@ def test_display_value_uses_dash_for_missing_values():
     assert aria_cli._display_value("N/A") == "—"
 
 
+def test_market_render_import_does_not_require_prompt_toolkit():
+    import subprocess
+    import textwrap
+
+    code = textwrap.dedent("""
+        import importlib.abc
+        import sys
+
+        class BlockPromptToolkit(importlib.abc.MetaPathFinder):
+            def find_spec(self, fullname, path=None, target=None):
+                if fullname == "prompt_toolkit" or fullname.startswith("prompt_toolkit."):
+                    raise ModuleNotFoundError("No module named 'prompt_toolkit'")
+                return None
+
+        sys.meta_path.insert(0, BlockPromptToolkit())
+        from ui.render.market import print_quote_result, print_ta_result
+        from ui.input_box import HAS_PROMPT_TOOLKIT
+        assert HAS_PROMPT_TOOLKIT is False
+        print("ok")
+    """)
+
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=pathlib.Path(__file__).parents[1],
+        text=True,
+        capture_output=True,
+        timeout=10,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
+
+
 def test_repetition_stopped_text_is_recovered_for_display():
     import aria_cli
 
