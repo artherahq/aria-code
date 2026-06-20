@@ -654,8 +654,67 @@ _MARKET_OVERVIEW_INDICES = {
 }
 
 
+def _http_get_json(url: str, params: dict, timeout: int = 8):
+    """GET JSON with a proxy-bypass retry.
+
+    A misconfigured/flaky HTTP(S)_PROXY (corporate or local) is a common cause
+    of "ProxyError / connection aborted" on otherwise-reachable data sources.
+    Try the normal request first (respecting the user's proxy), then retry with
+    proxies disabled so the data still loads when only the proxy is broken.
+    """
+    import requests as _rq
+    headers = {"User-Agent": "Mozilla/5.0"}
+    for proxies in (None, {"http": None, "https": None}):
+        try:
+            r = _rq.get(url, params=params, timeout=timeout,
+                        headers=headers, proxies=proxies)
+            r.raise_for_status()
+            return r.json()
+        except Exception:
+            continue
+    return None
+
+
+# 上证综指/深证成指/创业板指/沪深300/科创50 — eastmoney secids (1=SH, 0=SZ)
+_CN_INDEX_SECIDS = [
+    ("上证综指", "1.000001"), ("深证成指", "0.399001"),
+    ("创业板指", "0.399006"), ("沪深300", "1.000300"),
+    ("科创50", "1.000688"),
+]
+
+
+def _fetch_cn_indices_eastmoney() -> list:
+    """Fetch CN index levels + change% directly from eastmoney ulist endpoint."""
+    secids = ",".join(s for _, s in _CN_INDEX_SECIDS)
+    data = _http_get_json(
+        "https://push2.eastmoney.com/api/qt/ulist.np/get",
+        {"secids": secids, "fields": "f2,f3,f12,f14", "fltt": 2, "invt": 2},
+    )
+    if not data:
+        return []
+    diff = (data.get("data") or {}).get("diff") or []
+    # eastmoney may return a dict keyed by index or a list — normalize to list
+    items = list(diff.values()) if isinstance(diff, dict) else diff
+    disp_by_code = {sid.split(".")[1]: name for name, sid in _CN_INDEX_SECIDS}
+    rows: list = []
+    for it in items:
+        code = str(it.get("f12", ""))
+        name = disp_by_code.get(code) or str(it.get("f14", code))
+        price = it.get("f2")
+        chg = it.get("f3")
+        if price in (None, "-", ""):
+            continue
+        try:
+            rows.append({"name": name, "price": round(float(price), 2),
+                         "change_pct": round(float(chg), 2) if chg not in (None, "-", "") else 0.0,
+                         "ok": True})
+        except (ValueError, TypeError):
+            continue
+    return rows
+
+
 def _fetch_overview_indices(market: str) -> list:
-    """Fetch index levels for a market. Tries akshare (CN) then yfinance.
+    """Fetch index levels for a market. Direct eastmoney (CN) / yfinance (US/HK).
 
     Returns a list of {name, price, change_pct, ok} dicts; entries that could
     not be fetched are marked ok=False rather than dropped, so the user always
@@ -664,40 +723,25 @@ def _fetch_overview_indices(market: str) -> list:
     cfg = _MARKET_OVERVIEW_INDICES.get(market, {})
     rows: list = []
 
-    # CN: prefer akshare real-time index spot (yfinance .SS is unreliable)
+    # CN: direct eastmoney ulist endpoint — returns price + change% in one call
+    # and is far more reliable than akshare's stock_zh_index_spot_em.
     if market == "cn":
-        try:
-            import akshare as ak
-            df = ak.stock_zh_index_spot_em(symbol=cfg.get("ak_symbol", "沪深重要指数"))
-            wanted = {"上证指数": "上证综指", "深证成指": "深证成指",
-                      "创业板指": "创业板指", "沪深300": "沪深300",
-                      "科创50": "科创50", "上证综指": "上证综指"}
-            by_name = {str(r.get("名称", "")): r for _, r in df.iterrows()}
-            for ak_name, disp in wanted.items():
-                r = by_name.get(ak_name)
-                if r is not None:
-                    rows.append({"name": disp,
-                                 "price": float(r.get("最新价", 0) or 0),
-                                 "change_pct": float(r.get("涨跌幅", 0) or 0),
-                                 "ok": True})
-            if rows:
-                return rows
-        except Exception:
-            pass  # fall through to yfinance
+        rows = _fetch_cn_indices_eastmoney()
+        if rows:
+            return rows
+        # fall through to yfinance .SS as a last resort
 
-    # US / HK / CN-fallback via yfinance
+    # US / HK / CN-fallback via yfinance (5d window so change% always computes)
     try:
         import yfinance as yf
         for name, ticker in cfg.get("yf", []):
             try:
-                h = yf.Ticker(ticker).history(period="2d")
-                if len(h) >= 1:
-                    last = float(h["Close"].iloc[-1])
-                    if last != last:  # NaN
-                        rows.append({"name": name, "price": 0, "change_pct": 0, "ok": False})
-                        continue
-                    chg = ((last - float(h["Close"].iloc[0])) / float(h["Close"].iloc[0]) * 100
-                           if len(h) >= 2 and float(h["Close"].iloc[0]) else 0.0)
+                h = yf.Ticker(ticker).history(period="5d")
+                closes = [float(c) for c in h["Close"].tolist() if c == c]  # drop NaN
+                if closes:
+                    last = closes[-1]
+                    prev = closes[-2] if len(closes) >= 2 else last
+                    chg = ((last - prev) / prev * 100) if prev else 0.0
                     rows.append({"name": name, "price": round(last, 2),
                                  "change_pct": round(chg, 2), "ok": True})
                 else:
