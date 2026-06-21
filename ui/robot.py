@@ -5,15 +5,15 @@ States
   The mascot stays visually stable at startup. Runtime state is shown by the
   compact status dot so the banner keeps the same low-noise feel as Claude Code.
 
-Robot shape (7 terminal rows, rendered from hand-tuned half-block pixels):
+Robot shape (7 terminal rows, hand-tuned for light and dark terminals):
 
-      ██████████
-    ██        ██
-  ████  ██  ██  ████
-    ██        ██
-    ████████████
-    ████████████
-      ██  ██  ██  ██
+    ░░░░░░░░░░
+  ░░          ░░
+▓░  ██████████  ░▓
+▓▮  ██▌   ▬▬██  ▮▓
+▓░  ██████████  ░▓
+  ░░▄▄▄▄▄▄▄▄▄▄░░
+    ▓▓  ▓▓  ▓▓  ▓▓
 """
 
 from __future__ import annotations
@@ -81,68 +81,36 @@ _STATUS = {
     RobotState.DONE:      "done",
 }
 
-_SHELL = "#f2eadc"
-_SCREEN = "#0d1117"
-_SHADOW = "#b8b2a8"
-_LEG = "#c7c3ba"
-_EYE_LIGHT = "#fffaf0"
-_ACCENT_STYLE = "#ffb35c"
+_SHELL_STYLE = "bold #d9cbb7"
+_SCREEN_STYLE = "bold #0d1117"
+_SHADOW_STYLE = "dim #9f9a90"
+_LEG_STYLE = "dim #bdb7ad"
+_EYE_LIGHT_STYLE = "bold #f8f4ec"
+_ACCENT_STYLE = "bold #ffb35c"
 
-_PIXEL_ROWS = [
-    "...SSSSSSSSSSSS...",
-    "..SSSSSSSSSSSSSS..",
-    ".GSSDDDDDDDDDDSSG.",
-    ".GSSDDDDDDDDDDSSG.",
-    "GASSDDDDDDDDDDSSAG",
-    "GGSSDDWWDDAADDSSGG",
-    ".GSSDDDDDDDDDDSSG.",
-    "..SSDDDDDDDDDDSS..",
-    "..SSDDDDDDDDDDSS..",
-    "..SSSSSSSSSSSSSS..",
-    "..SSSAAAAAAAAASS..",
-    "..SSSSSSSSSSSSSS..",
-    "...LL..LL..LL..LL.",
-    "...LL..LL..LL..LL.",
+_MASCOT_ROWS = [
+    [("", "    "), (_SHELL_STYLE, "░░░░░░░░░░"), ("", "    ")],
+    [("", "  "), (_SHELL_STYLE, "░░          ░░"), ("", "  ")],
+    [(_SHADOW_STYLE, "▓"), (_SHELL_STYLE, "░  "), (_SCREEN_STYLE, "██████████"), (_SHELL_STYLE, "  ░"), (_SHADOW_STYLE, "▓")],
+    [
+        (_SHADOW_STYLE, "▓"),
+        (_ACCENT_STYLE, "▮"),
+        (_SHELL_STYLE, "  "),
+        (_SCREEN_STYLE, "██"),
+        (_EYE_LIGHT_STYLE, "▌"),
+        (_SCREEN_STYLE, "   "),
+        (_ACCENT_STYLE, "▬▬"),
+        (_SCREEN_STYLE, "██"),
+        (_SHELL_STYLE, "  "),
+        (_ACCENT_STYLE, "▮"),
+        (_SHADOW_STYLE, "▓"),
+    ],
+    [(_SHADOW_STYLE, "▓"), (_SHELL_STYLE, "░  "), (_SCREEN_STYLE, "██████████"), (_SHELL_STYLE, "  ░"), (_SHADOW_STYLE, "▓")],
+    [("", "  "), (_SHELL_STYLE, "░░"), (_ACCENT_STYLE, "▄▄▄▄▄▄▄▄▄▄"), (_SHELL_STYLE, "░░"), ("", "  ")],
+    [("", "    "), (_LEG_STYLE, "▓▓"), ("", "  "), (_LEG_STYLE, "▓▓"), ("", "  "), (_LEG_STYLE, "▓▓"), ("", "  "), (_LEG_STYLE, "▓▓")],
 ]
 
-_COLOUR_BY_PIXEL = {
-    "S": _SHELL,
-    "D": _SCREEN,
-    "G": _SHADOW,
-    "L": _LEG,
-    "A": _ACCENT_STYLE,
-    "W": _EYE_LIGHT,
-}
-
-ROBOT_ROW_COUNT = len(_PIXEL_ROWS) // 2
-
-
-def _halfblock(top: str, bottom: str) -> tuple[str, str]:
-    if top == "." and bottom == ".":
-        return "", " "
-    if top == ".":
-        return _COLOUR_BY_PIXEL[bottom], "▄"
-    if bottom == ".":
-        return _COLOUR_BY_PIXEL[top], "▀"
-    return f"{_COLOUR_BY_PIXEL[top]} on {_COLOUR_BY_PIXEL[bottom]}", "▀"
-
-
-def _row_from_halfblocks(top: str, bottom: str) -> list:
-    fragments: list = []
-    current_style: str | None = None
-    current_text = ""
-    for top_pixel, bottom_pixel in zip(top, bottom):
-        style, text = _halfblock(top_pixel, bottom_pixel)
-        if style == current_style:
-            current_text += text
-            continue
-        if current_text:
-            fragments.append((current_style or "", current_text))
-        current_style = style
-        current_text = text
-    if current_text:
-        fragments.append((current_style or "", current_text))
-    return fragments
+ROBOT_ROW_COUNT = len(_MASCOT_ROWS)
 
 
 def _resolve_eyes(state: RobotState, tick: int) -> tuple[str, str]:
@@ -162,16 +130,16 @@ def get_robot_row(tick: int, row: int) -> list:
     """Return FormattedText fragments for a single robot row.
 
     Rows:
-      0 → top cap
-      1 → body top + screen
-      2 → side LEDs + eyes
-      3 → screen bottom
-      4 → copper underline
-      5 → lower shell + leg mounts
+      0 → shell cap
+      1 → shell shoulders
+      2 → screen top
+      3 → side LEDs + eyes
+      4 → screen bottom
+      5 → copper underline
       6 → legs
     """
     del tick
-    return _row_from_halfblocks(_PIXEL_ROWS[row * 2], _PIXEL_ROWS[row * 2 + 1])
+    return _MASCOT_ROWS[row]
 
 
 def get_robot_frame(tick: int) -> list:

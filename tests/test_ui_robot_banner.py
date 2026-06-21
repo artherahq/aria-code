@@ -18,24 +18,24 @@ class RobotBannerTests(unittest.TestCase):
         rows = ["".join(text for _, text in get_robot_row(2, row)) for row in range(ROBOT_ROW_COUNT)]
 
         self.assertEqual(rows, [
-            "  ▄▀▀▀▀▀▀▀▀▀▀▀▀▄  ",
-            " ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀ ",
-            "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
-            " ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀ ",
-            "  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀  ",
-            "  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀  ",
-            "   ▀▀  ▀▀  ▀▀  ▀▀ ",
+            "    ░░░░░░░░░░    ",
+            "  ░░          ░░  ",
+            "▓░  ██████████  ░▓",
+            "▓▮  ██▌   ▬▬██  ▮▓",
+            "▓░  ██████████  ░▓",
+            "  ░░▄▄▄▄▄▄▄▄▄▄░░  ",
+            "    ▓▓  ▓▓  ▓▓  ▓▓",
         ])
 
-    def test_robot_uses_halfblock_styles_for_screen_and_accents(self):
+    def test_robot_uses_distinct_styles_for_screen_and_accents(self):
         set_robot_state(RobotState.IDLE)
 
         styles = [style for row in range(ROBOT_ROW_COUNT) for style, _ in get_robot_row(2, row)]
 
-        self.assertIn("#0d1117 on #0d1117", styles)
-        self.assertIn("#0d1117 on #fffaf0", styles)
-        self.assertIn("#0d1117 on #ffb35c", styles)
-        self.assertIn("#ffb35c on #f2eadc", styles)
+        self.assertIn("bold #0d1117", styles)
+        self.assertIn("bold #f8f4ec", styles)
+        self.assertIn("bold #ffb35c", styles)
+        self.assertIn("bold #d9cbb7", styles)
 
     def test_idle_status_dot_does_not_blink_to_dim_dot(self):
         set_robot_state(RobotState.IDLE)
