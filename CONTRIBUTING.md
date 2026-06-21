@@ -86,6 +86,35 @@ Types: `feat` · `fix` · `docs` · `style` · `refactor` · `test` · `chore`
 
 ---
 
+## Branch Convention
+
+Long-lived branches:
+
+- `main` for protected releases.
+- `develop` for integration, if the team keeps a staging branch.
+
+Short-lived branches:
+
+- `feature/<topic>`
+- `fix/<topic>`
+- `refactor/<topic>`
+- `chore/<topic>`
+- `docs/<topic>`
+- `release/vX.Y`
+- `codex/<topic>` for temporary agent-authored work only.
+
+Do not merge directly into `main`. Open a pull request and wait for CI.
+
+For organization migration and repository ownership, see
+[`docs/operations/github_enterprise_migration.md`](docs/operations/github_enterprise_migration.md).
+Run the migration preflight before pushing to a new Arthera remote:
+
+```bash
+python3 scripts/github_migration_preflight.py
+```
+
+---
+
 ## PR Checklist
 
 - [ ] Tests pass: `pytest tests/ -v`
