@@ -18,22 +18,26 @@ class RobotBannerTests(unittest.TestCase):
         rows = ["".join(text for _, text in get_robot_row(2, row)) for row in range(ROBOT_ROW_COUNT)]
 
         self.assertEqual(rows, [
-            "    ███████    ",
-            "   █████████   ",
-            "  ███████████  ",
-            "███████████████",
-            "██████■██▬█████",
-            "  ███████████  ",
-            "  ██▀▀▀▀▀▀▀██  ",
-            "   ██ ██ ██ ██ ",
+            "  ▄▀▀▀▀▀▀▀▀▀▀▀▀▄  ",
+            "  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀  ",
+            "▄▄▀▀▀▀▀▀▀▀▀▀▀▀▀▀▄▄",
+            "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+            "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+            "  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀  ",
+            "  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀  ",
+            "  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▄ ",
+            "   ▀▀  ▀▀  ▀▀  ▀▀ ",
         ])
 
-    def test_robot_thinking_uses_asymmetric_eye_frames(self):
-        set_robot_state(RobotState.THINKING)
+    def test_robot_uses_halfblock_styles_for_screen_and_accents(self):
+        set_robot_state(RobotState.IDLE)
 
-        row = "".join(text for _, text in get_robot_row(0, 4))
+        styles = [style for row in range(ROBOT_ROW_COUNT) for style, _ in get_robot_row(2, row)]
 
-        self.assertEqual(row, "██████◐██◑█████")
+        self.assertIn("#0d1117 on #0d1117", styles)
+        self.assertIn("#0d1117 on #fffaf0", styles)
+        self.assertIn("#0d1117 on #ffb35c", styles)
+        self.assertIn("#f2eadc on #ffb35c", styles)
 
     def test_idle_status_dot_does_not_blink_to_dim_dot(self):
         set_robot_state(RobotState.IDLE)
@@ -60,8 +64,6 @@ class RobotBannerTests(unittest.TestCase):
         )
 
         rendered = console.export_text()
-        self.assertIn("    ███████    ", rendered)
-        self.assertIn("██████■██▬█████", rendered)
         self.assertIn("~/Desktop/aria-code", rendered)
         self.assertNotIn("71 tools", rendered)
         self.assertNotIn("14 skills", rendered)
