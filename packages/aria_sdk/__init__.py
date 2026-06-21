@@ -1,6 +1,7 @@
 """Public Aria Agent SDK facade."""
 
 from .client import AriaSDKClient, query, run
+from .providers import ProviderSelection, build_llm_provider, normalize_provider_name
 from .types import AriaAgentOptions, AriaMessage, AriaResult
 
 __all__ = [
@@ -8,6 +9,9 @@ __all__ = [
     "AriaMessage",
     "AriaResult",
     "AriaSDKClient",
+    "ProviderSelection",
+    "build_llm_provider",
+    "normalize_provider_name",
     "query",
     "run",
 ]

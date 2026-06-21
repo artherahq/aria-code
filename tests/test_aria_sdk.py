@@ -1,7 +1,18 @@
 import pytest
 
+from apps.cli.providers.base import AriaSSEProvider, LLMDone, LLMToken, OllamaProvider
 from apps.cli.deterministic import run_deterministic_chain
-from packages.aria_sdk import AriaAgentOptions, AriaMessage, AriaResult, AriaSDKClient, query, run
+from packages.aria_sdk import (
+    AriaAgentOptions,
+    AriaMessage,
+    AriaResult,
+    AriaSDKClient,
+    ProviderSelection,
+    build_llm_provider,
+    normalize_provider_name,
+    query,
+    run,
+)
 
 
 async def _collect(async_iterable):
@@ -9,14 +20,28 @@ async def _collect(async_iterable):
 
 
 def test_sdk_public_exports_are_importable():
-    options = AriaAgentOptions(model="test-model", cwd="/tmp/aria")
+    options = AriaAgentOptions(model="test-model", provider="local", cwd="/tmp/aria")
     message = AriaMessage(kind="result", content="ok", data={"success": True})
     result = AriaResult(success=True, content="ok")
 
     assert options.to_dict()["model"] == "test-model"
+    assert options.to_dict()["provider"] == "local"
     assert options.to_dict()["get_broker_registry"] is None
     assert message.to_dict()["data"] == {"success": True}
     assert result.to_dict()["success"] is True
+
+
+def test_sdk_provider_factory_normalizes_local_and_cloud_modes():
+    assert normalize_provider_name("local") == "ollama"
+    assert normalize_provider_name("cloud") == "aria_sse"
+
+    local = build_llm_provider(AriaAgentOptions(provider="auto", local_mode=True))
+    cloud = build_llm_provider(AriaAgentOptions(provider="auto", local_mode=False, api_url="https://example.com"))
+
+    assert local.name == "ollama"
+    assert isinstance(local.provider, OllamaProvider)
+    assert cloud.name == "aria_sse"
+    assert isinstance(cloud.provider, AriaSSEProvider)
 
 
 @pytest.mark.asyncio
@@ -39,6 +64,7 @@ async def test_sdk_query_uses_deterministic_router(monkeypatch):
     events = await _collect(client.query("如果我要写一个美股量化策略，你觉得要从几个角度去写"))
 
     assert [event.kind for event in events] == ["system", "user", "assistant", "result"]
+    assert events[0].data["provider"] == "auto"
     assert events[-1].data["success"] is True
     assert events[-1].data["provider"] == "deterministic"
     assert events[-1].data["tools_used"] == ["strategy_advice"]
@@ -71,6 +97,30 @@ async def test_sdk_query_falls_back_to_llm_when_deterministic_misses(monkeypatch
 
     assert [event.kind for event in events] == ["system", "user", "token", "result"]
     assert events[-1].data["provider"] == "fake"
+
+
+@pytest.mark.asyncio
+async def test_sdk_llm_path_uses_provider_factory(monkeypatch):
+    import packages.aria_sdk.client as sdk_client
+
+    class FakeProvider:
+        async def stream(self, messages, tools, *, cancel_event=None):
+            assert messages[-1] == {"role": "user", "content": "hello"}
+            yield LLMToken("hi")
+            yield LLMDone(response="hi", provider="fake_provider", success=True)
+
+    monkeypatch.setattr(
+        sdk_client,
+        "build_llm_provider",
+        lambda options: ProviderSelection("fake_provider", FakeProvider()),
+    )
+
+    client = AriaSDKClient(AriaAgentOptions(deterministic=False))
+    events = await _collect(client.query("hello"))
+
+    assert [event.kind for event in events] == ["system", "user", "token", "assistant", "result"]
+    assert events[-1].data["provider"] == "fake_provider"
+    assert client.messages[-1] == {"role": "assistant", "content": "hi"}
 
 
 @pytest.mark.asyncio

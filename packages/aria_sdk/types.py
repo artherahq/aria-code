@@ -16,8 +16,12 @@ class AriaAgentOptions:
     """
 
     model: str = "qwen2.5-coder:1.5b"
+    provider: str = "auto"
     ollama_url: str = "http://localhost:11434"
     api_url: str = "http://localhost:8000"
+    auth_token: str = ""
+    thinking_mode: str = "auto"
+    user_context: dict[str, Any] = field(default_factory=dict)
     local_mode: bool = True
     deterministic: bool = True
     model_has_tools: bool = False

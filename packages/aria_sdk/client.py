@@ -18,9 +18,9 @@ from apps.cli.providers.base import (
     LLMThinking,
     LLMToken,
     LLMToolCall,
-    OllamaProvider,
 )
 
+from .providers import build_llm_provider
 from .types import AriaAgentOptions, AriaMessage, AriaResult
 
 
@@ -56,6 +56,8 @@ class AriaSDKClient:
             data={
                 "session_id": self.session_id,
                 "model": self.options.model,
+                "provider": self.options.provider,
+                "local_mode": self.options.local_mode,
                 "cwd": self.options.cwd or os.getcwd(),
                 "permission_mode": self.options.permission_mode,
             },
@@ -108,11 +110,8 @@ class AriaSDKClient:
     ) -> AsyncGenerator[AriaMessage, None]:
         """Fallback to the configured LLM provider and normalize its events."""
 
-        provider = OllamaProvider(
-            self.options.ollama_url,
-            self.options.model,
-            system_override=self.options.system_prompt or None,
-        )
+        selection = build_llm_provider(self.options)
+        provider = selection.provider
         messages = list(history) + [{"role": "user", "content": prompt}]
         token_parts: list[str] = []
 
@@ -166,7 +165,7 @@ class AriaSDKClient:
                 content="",
                 data={
                     "success": False,
-                    "provider": "ollama",
+                    "provider": selection.name,
                     "session_id": self.session_id,
                     "error": str(exc),
                 },

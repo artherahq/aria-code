@@ -181,7 +181,7 @@ class AriaSSEProvider:
         *,
         cancel_event: Optional[asyncio.Event] = None,
     ) -> AsyncGenerator[LLMEvent, None]:
-        from apps.chat_service import stream_chat
+        from apps.cli.providers.llm.sse_stream import stream_chat
 
         history = [m for m in messages if not (m.get("role") == "user" and m is messages[-1])]
         prompt = messages[-1].get("content", "") if messages else ""
