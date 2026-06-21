@@ -119,6 +119,7 @@ from apps.cli.commands.market_context import build_analyze_context, build_analyz
 from apps.cli.commands.market import parse_symbols, parse_technical_args, route_top_level_text, try_top_level_route
 from apps.cli.providers.base import AriaSSEProvider, OllamaProvider
 from apps.cli.preflight import build_intent_preflight, format_preflight_plain
+from apps.cli.runtime_consumer import TerminalApprovalEventConsumer, TerminalRuntimeEventConsumer
 from packages.aria_sdk.streaming import stream_provider_result
 from ui.render.market import print_quote_result, print_ta_result
 from apps.cli.commands.report import (
@@ -9328,6 +9329,29 @@ class ArtheraTerminal:
                     if not _use_batch_render[0]:
                         print(flush=True)
 
+            stream_consumer = TerminalRuntimeEventConsumer(
+                terminal=self,
+                console=console,
+                has_rich=HAS_RICH,
+                markdown_cls=Markdown,
+                live_cls=Live,
+                strip_latex=_strip_latex,
+                set_robot_state=set_robot_state,
+                streaming_state=RobotState.STREAMING,
+                print_tool_call=_print_tool_call,
+                print_tool_done=_print_tool_done,
+                fallback_from=self._last_provider or "local",
+            )
+            _start_spinner = stream_consumer.start_spinner
+            _stop_spinner = stream_consumer.stop_spinner
+            _stop_live = stream_consumer.stop_live
+            _flush_latex_buf = stream_consumer.flush_latex_buf
+            _first_token_received = stream_consumer.first_token_received_ref
+            _use_plain_print = stream_consumer.use_plain_print_ref
+            _use_batch_render = stream_consumer.use_batch_render_ref
+            _latex_buf = stream_consumer.latex_buf_ref
+            _in_latex = stream_consumer.in_latex_ref
+
             _start_spinner()
 
             def on_token(token):
@@ -9574,6 +9598,12 @@ class ArtheraTerminal:
                     from ui.render.output import print_fallback_toast as _pft
                     _pft(_from, _to, reason, console=console, has_rich=HAS_RICH)
 
+            on_token = stream_consumer.on_token
+            on_thinking = stream_consumer.on_thinking
+            on_tool_call = stream_consumer.on_tool_call
+            on_tool_result = stream_consumer.on_tool_result
+            on_status = stream_consumer.on_status
+
             # Route: local_mode → Ollama directly; otherwise AWS first → Ollama fallback
             local_mode = self.config.get("local_mode", False)
             if local_mode:
@@ -9640,6 +9670,9 @@ class ArtheraTerminal:
                         on_tool_result=on_tool_result,
                         on_status=on_status,
                     )
+                response_text = stream_consumer.response_text
+                token_count = stream_consumer.token_count
+                thinking_tokens = stream_consumer.thinking_tokens
                 # 响应质量检测：success=True 但返回占位符/空响应 → 同样 fallback
                 def _is_placeholder_response(r: dict) -> bool:
                     resp = r.get("response", "")
@@ -9669,6 +9702,9 @@ class ArtheraTerminal:
                     # Also reset streaming state so the fallback starts fresh
                     response_text = ""
                     streamed_any = False
+                    token_count = 0
+                    thinking_tokens = stream_consumer.thinking_tokens
+                    stream_consumer.reset_stream_state()
                     _first_token_received[0] = False
 
                     # ── 1. 查询 Ollama 实际安装列表 ───────────────────────────
@@ -9786,6 +9822,11 @@ class ArtheraTerminal:
                             result = {"success": False, "error": "no_provider",
                                       "response": "", "cancelled": False}
 
+            response_text = stream_consumer.response_text
+            streamed_any = stream_consumer.streamed_any
+            token_count = stream_consumer.token_count
+            thinking_tokens = stream_consumer.thinking_tokens
+
             # Stop Live display before handling results
             _stop_live()
 
@@ -9868,38 +9909,24 @@ class ArtheraTerminal:
                     auth_token=auth_token,
                 )
 
+            approval_consumer = TerminalApprovalEventConsumer(
+                terminal=self,
+                console=console,
+                has_rich=HAS_RICH,
+                confirm_decision=_confirm_tool_execution_decision,
+                apply_decision=_apply_tool_approval,
+                save_config=save_config,
+            )
+
             async def _approval_callback(tool_name: str, tool_params: dict) -> ApprovalDecision:
-                _stop_live()
-                try:
-                    approval = _confirm_tool_execution_decision(
-                        tool_name,
-                        tool_params,
-                        config_policy=self.config.get("command_policy", "safe"),
-                    )
-                except KeyboardInterrupt:
-                    approval = ApprovalDecision.deny("KeyboardInterrupt")
-                # Implicit feedback signal (Claude Code "acceptance or rejections").
-                self._record_feedback(
-                    "tool_accept" if approval.approved else "tool_reject",
+                return await approval_consumer.approve(
                     tool_name,
+                    tool_params,
+                    stop_before_prompt=_stop_live,
                 )
-                if not approval.approved:
-                    from ui.render.output import print_tool_blocked as _ptb
-                    _ptb(tool_name, "用户取消", console=console, has_rich=HAS_RICH)
-                return approval
 
             def _approval_applier(tool_params: dict, approval: ApprovalDecision) -> dict:
-                _apply_tool_approval(tool_params, approval)
-                if approval.upgrade_policy:
-                    tool_params.pop("_upgrade_policy", None)
-                    self.config["command_policy"] = "balanced"
-                    try:
-                        save_config(self.config)
-                        if HAS_RICH:
-                            console.print("  [dim]策略已升级为 balanced 并保存[/dim]")
-                    except Exception:
-                        pass
-                return tool_params
+                return approval_consumer.apply(tool_params, approval)
 
             tool_turn_result = await execute_tool_turn(
                 pending,
