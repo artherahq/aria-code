@@ -8,13 +8,16 @@ States
   ERROR      × ×  X eyes
   DONE       ✓ ✓  check eyes, brief flash then back to IDLE
 
-Robot shape (5 rows, terminal pixel mark based on the app mascot):
+Robot shape (8 rows, terminal pixel mark based on the app mascot):
 
-    ▄▄▄▄▄▄
-  ▄▟██████▙▄
-  ▐██■  ▬██▌
-  ▐▄▄▔▔▔▔▄▄▌
-    ▀▙▙▙▙▀
+    ███████
+   █████████
+  ███████████
+███████████████
+██████■██▬█████
+  ███████████
+  ██▀▀▀▀▀▀▀██
+   ██ ██ ██ ██
 """
 
 from __future__ import annotations
@@ -83,18 +86,19 @@ _STATUS = {
 }
 
 _SHELL = "bold #f2eadc"
-_SCREEN = "#0d1117"
-_SHADOW = "dim #9aa0a6"
+_SCREEN = "bold #0d1117"
+_SHADOW = "#b8b2a8"
+_LEG = "bold #c7c3ba"
 _EYE_LIGHT = "bold #fffaf0"
 _ACCENT_STYLE = "bold #ffb35c"
-ROBOT_ROW_COUNT = 5
+ROBOT_ROW_COUNT = 8
 
 
 def _resolve_eyes(state: RobotState, tick: int) -> tuple[str, str]:
     el, er = _EYES[state]
     if state is RobotState.IDLE:
         if tick % 24 in (0, 1):
-            el, er = "▪", "·"
+            el, er = "·", "·"
     elif state is RobotState.THINKING:
         frames = (("◐", "◑"), ("◓", "◒"), ("◑", "◐"), ("◒", "◓"))
         el, er = frames[tick % len(frames)]
@@ -107,11 +111,14 @@ def get_robot_row(tick: int, row: int) -> list:
     """Return FormattedText fragments for a single robot row.
 
     Rows:
-      0 →   ▄▄▄▄▄▄
-      1 → ▄▟██████▙▄
-      2 → ▐██EL  ER██▌
-      3 → ▐▄▄▔▔▔▔▄▄▌
-      4 →   ▀▙▙▙▙▀
+      0 →     ███████
+      1 →    █████████
+      2 →   ██SSSSSSS██
+      3 → EEE█SSSSSSS█EEE
+      4 → EAE█SS EL SS ER S█EAE
+      5 →   ██SSSSSSS██
+      6 →   ██AAAAAAA██
+      7 →    LL LL LL LL
     """
     state = get_robot_state()
     col   = _COLOUR[state]
@@ -120,22 +127,34 @@ def get_robot_row(tick: int, row: int) -> list:
     left_eye_style = _EYE_LIGHT if state is RobotState.IDLE else eye
 
     if row == 0:
-        return [(_SHELL, "  ▄▄▄▄▄▄  ")]
+        return [("", "    "), (_SHELL, "███████"), ("", "    ")]
     if row == 1:
-        return [(_SHADOW, "▄"), (_SHELL, "▟"), (_SCREEN, "██████"), (_SHELL, "▙"), (_SHADOW, "▄")]
+        return [("", "   "), (_SHELL, "█████████"), ("", "   ")]
     if row == 2:
+        return [("", "  "), (_SHELL, "██"), (_SCREEN, "███████"), (_SHELL, "██"), ("", "  ")]
+    if row == 3:
+        return [(_SHADOW, "███"), (_SHELL, "█"), (_SCREEN, "███████"), (_SHELL, "█"), (_SHADOW, "███")]
+    if row == 4:
         return [
-            (_SHELL, "▐"),
+            (_SHADOW, "█"),
+            (_ACCENT_STYLE, "█"),
+            (_SHADOW, "█"),
+            (_SHELL, "█"),
             (_SCREEN, "██"),
             (left_eye_style, el),
-            (_SCREEN, "  "),
-            (eye, er),
             (_SCREEN, "██"),
-            (_SHELL, "▌"),
+            (eye, er),
+            (_SCREEN, "█"),
+            (_SHELL, "█"),
+            (_SHADOW, "█"),
+            (_ACCENT_STYLE, "█"),
+            (_SHADOW, "█"),
         ]
-    if row == 3:
-        return [(_SHELL, "▐▄▄"), (_ACCENT_STYLE, "▔▔▔▔"), (_SHELL, "▄▄▌")]
-    return [(_SHELL, "  ▀"), (_SHADOW, "▙▙▙▙"), (_SHELL, "▀  ")]
+    if row == 5:
+        return [("", "  "), (_SHELL, "██"), (_SCREEN, "███████"), (_SHELL, "██"), ("", "  ")]
+    if row == 6:
+        return [("", "  "), (_SHELL, "██"), (_ACCENT_STYLE, "▀▀▀▀▀▀▀"), (_SHELL, "██"), ("", "  ")]
+    return [("", "   "), (_LEG, "██"), ("", " "), (_LEG, "██"), ("", " "), (_LEG, "██"), ("", " "), (_LEG, "██"), ("", " ")]
 
 
 def get_robot_frame(tick: int) -> list:

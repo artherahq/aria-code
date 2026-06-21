@@ -18,19 +18,22 @@ class RobotBannerTests(unittest.TestCase):
         rows = ["".join(text for _, text in get_robot_row(2, row)) for row in range(ROBOT_ROW_COUNT)]
 
         self.assertEqual(rows, [
-            "  ▄▄▄▄▄▄  ",
-            "▄▟██████▙▄",
-            "▐██■  ▬██▌",
-            "▐▄▄▔▔▔▔▄▄▌",
-            "  ▀▙▙▙▙▀  ",
+            "    ███████    ",
+            "   █████████   ",
+            "  ███████████  ",
+            "███████████████",
+            "██████■██▬█████",
+            "  ███████████  ",
+            "  ██▀▀▀▀▀▀▀██  ",
+            "   ██ ██ ██ ██ ",
         ])
 
     def test_robot_thinking_uses_asymmetric_eye_frames(self):
         set_robot_state(RobotState.THINKING)
 
-        row = "".join(text for _, text in get_robot_row(0, 2))
+        row = "".join(text for _, text in get_robot_row(0, 4))
 
-        self.assertEqual(row, "▐██◐  ◑██▌")
+        self.assertEqual(row, "██████◐██◑█████")
 
     def test_idle_status_dot_does_not_blink_to_dim_dot(self):
         set_robot_state(RobotState.IDLE)
@@ -57,8 +60,8 @@ class RobotBannerTests(unittest.TestCase):
         )
 
         rendered = console.export_text()
-        self.assertIn("  ▄▄▄▄▄▄  ", rendered)
-        self.assertIn("▐██■  ▬██▌", rendered)
+        self.assertIn("    ███████    ", rendered)
+        self.assertIn("██████■██▬█████", rendered)
         self.assertIn("~/Desktop/aria-code", rendered)
         self.assertNotIn("71 tools", rendered)
         self.assertNotIn("14 skills", rendered)
