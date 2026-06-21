@@ -55,13 +55,23 @@ ensure_venv() {
 
 ensure_runtime_deps() {
   "$VENV_PY" - <<'PY' >/dev/null 2>&1 && return
+import aiohttp
+import requests
 import rich
 import prompt_toolkit
+import yaml
+import yfinance
 PY
 
-  echo "aria: installing terminal UI dependencies into $VENV_DIR" >&2
+  echo "aria: installing runtime dependencies into $VENV_DIR" >&2
   "$VENV_PY" -m pip install --quiet --upgrade pip
-  "$VENV_PY" -m pip install --quiet "rich>=13.7.0" "prompt_toolkit>=3.0.43"
+  "$VENV_PY" -m pip install --quiet \
+    "aiohttp>=3.9.0" \
+    "requests>=2.32.0" \
+    "rich>=13.7.0" \
+    "prompt_toolkit>=3.0.43" \
+    "PyYAML>=6.0.2" \
+    "yfinance>=0.2.55"
 }
 
 [[ -f "$CLI_PY" ]] || die "aria_cli.py not found at $CLI_PY"
