@@ -70,7 +70,7 @@ _ARCHITECTURE_LAYERS: Tuple[ArchitectureLayer, ...] = (
         current_state="Terminal streaming and approval prompts now have a CLI runtime event consumer; Rich/prompt_toolkit remain optional and generated-file UX still needs hardening.",
         status=LayerStatus.PARTIAL,
         source_paths=("ui/", "apps/cli/commands/", "apps/cli/runtime_consumer.py"),
-        next_steps=("Delete the remaining legacy callback dead code in aria_cli.py and move generated-file open actions behind a UI service.",),
+        next_steps=("Move generated-file open actions and remaining terminal panels behind a UI service.",),
     ),
     ArchitectureLayer(
         name="context",
@@ -90,7 +90,7 @@ _ARCHITECTURE_LAYERS: Tuple[ArchitectureLayer, ...] = (
         status=LayerStatus.PARTIAL,
         source_paths=("aria_cli.py", "runtime/", "packages/aria_sdk/", "apps/cli/runtime_consumer.py", "apps/cli/deterministic.py", "apps/cli/providers/"),
         depends_on=("settings", "tools", "safety", "context"),
-        next_steps=("Route the whole CLI tool loop through run_agent events and remove legacy nested callback code from aria_cli.py.",),
+        next_steps=("Route the whole CLI tool loop through run_agent events and keep aria_cli.py as orchestration glue.",),
     ),
     ArchitectureLayer(
         name="tools",
