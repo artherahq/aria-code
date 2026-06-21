@@ -1,6 +1,14 @@
 import pytest
 
-from apps.cli.providers.base import AriaSSEProvider, LLMDone, LLMToken, LLMToolCall, OllamaProvider
+from apps.cli.providers.base import (
+    AriaSSEProvider,
+    LLMDone,
+    LLMStatus,
+    LLMToken,
+    LLMToolCall,
+    LLMToolResult,
+    OllamaProvider,
+)
 from apps.cli.deterministic import run_deterministic_chain
 from runtime import ToolExecutor
 from packages.aria_sdk import (
@@ -13,6 +21,7 @@ from packages.aria_sdk import (
     normalize_provider_name,
     query,
     run,
+    stream_provider_result,
 )
 
 
@@ -43,6 +52,73 @@ def test_sdk_provider_factory_normalizes_local_and_cloud_modes():
     assert isinstance(local.provider, OllamaProvider)
     assert cloud.name == "aria_sse"
     assert isinstance(cloud.provider, AriaSSEProvider)
+
+
+@pytest.mark.asyncio
+async def test_callback_provider_streams_events_before_done(monkeypatch):
+    import apps.cli.providers.base as provider_base
+
+    async def fake_stream_ollama(*args, **kwargs):
+        kwargs["on_token"]("hello")
+        kwargs["on_thinking"]("thinking")
+        kwargs["on_tool_call"]("echo", {"x": 1})
+        kwargs["on_tool_result"]("echo", "done")
+        return {"success": True, "response": "hello", "provider": "ollama"}
+
+    monkeypatch.setattr(provider_base, "_resolve_ollama_stream", lambda: fake_stream_ollama)
+
+    events = [event async for event in OllamaProvider("http://ollama", "fake").stream(
+        [{"role": "user", "content": "hi"}],
+        [{"type": "function", "function": {"name": "echo"}}],
+    )]
+
+    assert [type(event).__name__ for event in events] == [
+        "LLMToken",
+        "LLMThinking",
+        "LLMToolCall",
+        "LLMToolResult",
+        "LLMDone",
+    ]
+    assert events[0].text == "hello"
+    assert events[2].tool == "echo"
+    assert events[3].summary == "done"
+    assert events[-1].success is True
+
+
+@pytest.mark.asyncio
+async def test_stream_provider_result_forwards_callbacks():
+    class FakeProvider:
+        async def stream(self, messages, tools, *, cancel_event=None):
+            assert messages[-1] == {"role": "user", "content": "hi"}
+            assert tools == [{"name": "echo"}]
+            yield LLMToken("A")
+            yield LLMToolCall("echo", {"value": 3})
+            yield LLMToolResult("echo", "ok")
+            yield LLMStatus("retry", "again")
+            yield LLMDone(response="AB", provider="fake", success=True)
+
+    seen = []
+    result = await stream_provider_result(
+        FakeProvider(),
+        "hi",
+        [],
+        tools=[{"name": "echo"}],
+        on_token=lambda token: seen.append(("token", token)),
+        on_tool_call=lambda tool, params: seen.append(("tool", tool, params)),
+        on_tool_result=lambda tool, summary: seen.append(("result", tool, summary)),
+        on_status=lambda state, message: seen.append(("status", state, message)),
+    )
+
+    assert seen == [
+        ("token", "A"),
+        ("tool", "echo", {"value": 3}),
+        ("result", "echo", "ok"),
+        ("status", "retry", "again"),
+    ]
+    assert result["success"] is True
+    assert result["response"] == "AB"
+    assert result["provider"] == "fake"
+    assert result["tool_calls_pending"] == [{"tool": "echo", "params": {"value": 3}}]
 
 
 @pytest.mark.asyncio
@@ -108,6 +184,8 @@ async def test_sdk_llm_path_uses_provider_factory(monkeypatch):
         async def stream(self, messages, tools, *, cancel_event=None):
             assert messages[-1] == {"role": "user", "content": "hello"}
             yield LLMToken("hi")
+            yield LLMToolResult("search", "ok")
+            yield LLMStatus("retry", "again")
             yield LLMDone(response="hi", provider="fake_provider", success=True)
 
     monkeypatch.setattr(
@@ -119,7 +197,17 @@ async def test_sdk_llm_path_uses_provider_factory(monkeypatch):
     client = AriaSDKClient(AriaAgentOptions(deterministic=False))
     events = await _collect(client.query("hello"))
 
-    assert [event.kind for event in events] == ["system", "user", "token", "assistant", "result"]
+    assert [event.kind for event in events] == [
+        "system",
+        "user",
+        "token",
+        "tool_result",
+        "status",
+        "assistant",
+        "result",
+    ]
+    assert events[3].data == {"tool": "search", "summary": "ok"}
+    assert events[4].data == {"state": "retry"}
     assert events[-1].data["provider"] == "fake_provider"
     assert client.messages[-1] == {"role": "assistant", "content": "hi"}
 

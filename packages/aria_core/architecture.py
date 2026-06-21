@@ -86,11 +86,11 @@ _ARCHITECTURE_LAYERS: Tuple[ArchitectureLayer, ...] = (
         name="runtime",
         responsibility="Agent turn loop, planning, tool execution, retries, streaming, and interruption handling.",
         target_state="Runtime is separate from UI and business services, with typed tool calls, retries, cancellation, and traces.",
-        current_state="A public packages.aria_sdk facade now owns SDK-style query/result events, provider selection, and the reusable runtime tool-turn loop; CLI still owns terminal UI and several model-stream adapters.",
+        current_state="A public packages.aria_sdk facade now owns SDK-style query/result events, provider selection, provider streaming normalization, and the reusable runtime tool-turn loop; CLI still owns terminal rendering callbacks.",
         status=LayerStatus.PARTIAL,
         source_paths=("aria_cli.py", "runtime/", "packages/aria_sdk/", "apps/cli/deterministic.py", "apps/cli/providers/"),
         depends_on=("settings", "tools", "safety", "context"),
-        next_steps=("Move the remaining terminal-specific model streaming callbacks and approval UI out of aria_cli.py adapters.",),
+        next_steps=("Move the remaining terminal-specific token/thinking rendering callbacks and approval UI out of aria_cli.py adapters.",),
     ),
     ArchitectureLayer(
         name="tools",

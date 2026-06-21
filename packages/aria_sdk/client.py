@@ -15,9 +15,11 @@ from typing import AsyncGenerator
 from apps.cli.deterministic import run_deterministic_chain
 from apps.cli.providers.base import (
     LLMDone,
+    LLMStatus,
     LLMThinking,
     LLMToken,
     LLMToolCall,
+    LLMToolResult,
 )
 from runtime import (
     AgentEventCancelled,
@@ -34,6 +36,7 @@ from runtime import (
 )
 
 from .providers import build_llm_provider
+from .streaming import stream_provider_result
 from .types import AriaAgentOptions, AriaMessage, AriaResult
 
 
@@ -138,42 +141,21 @@ class AriaSDKClient:
         cancel_event: asyncio.Event | None = None,
     ) -> dict:
         selection = build_llm_provider(self.options)
-        provider = selection.provider
-        messages = list(history) + [{"role": "user", "content": prompt}]
-        response_parts: list[str] = []
-        tool_calls: list[dict] = []
-        final = LLMDone(response="", provider=selection.name, success=True)
-
-        async for llm_event in provider.stream(
-            messages,
-            list(self.options.tool_schemas),
+        result = await stream_provider_result(
+            selection.provider,
+            prompt,
+            history,
+            tools=list(self.options.tool_schemas),
             cancel_event=cancel_event,
-        ):
-            if isinstance(llm_event, LLMToken):
-                response_parts.append(llm_event.text)
-                if on_token:
-                    on_token(llm_event.text)
-            elif isinstance(llm_event, LLMThinking):
-                if on_thinking:
-                    on_thinking(llm_event.content)
-            elif isinstance(llm_event, LLMToolCall):
-                call = {"tool": llm_event.tool, "params": dict(llm_event.params)}
-                tool_calls.append(call)
-                if on_tool_call:
-                    on_tool_call(llm_event.tool, dict(llm_event.params))
-            elif isinstance(llm_event, LLMDone):
-                final = llm_event
-
-        response = final.response or "".join(response_parts)
-        return {
-            "success": final.success,
-            "response": response,
-            "provider": final.provider or selection.name,
-            "tool_calls_pending": tool_calls or list(final.tool_calls_pending),
-            "usage": dict(final.usage),
-            "cancelled": final.cancelled,
-            "error": final.error,
-        }
+            on_token=on_token,
+            on_thinking=on_thinking,
+            on_tool_call=on_tool_call,
+            on_tool_result=on_tool_result,
+            on_status=on_status,
+        )
+        if not result.get("provider") or result.get("provider") == "unknown":
+            result["provider"] = selection.name
+        return result
 
     async def _run_agent(
         self,
@@ -309,6 +291,20 @@ class AriaSDKClient:
                         role="assistant",
                         content=llm_event.tool,
                         data={"tool": llm_event.tool, "params": dict(llm_event.params)},
+                    )
+                elif isinstance(llm_event, LLMToolResult):
+                    yield AriaMessage(
+                        kind="tool_result",
+                        role="tool",
+                        content=llm_event.summary,
+                        data={"tool": llm_event.tool, "summary": llm_event.summary},
+                    )
+                elif isinstance(llm_event, LLMStatus):
+                    yield AriaMessage(
+                        kind="status",
+                        role="system",
+                        content=llm_event.message,
+                        data={"state": llm_event.state},
                     )
                 elif isinstance(llm_event, LLMDone):
                     content = llm_event.response or "".join(token_parts)

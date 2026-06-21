@@ -38,21 +38,21 @@ class SessionUxCommandsMixin:
         import asyncio as _aio
 
         async def _ask_btw():
-            _answer_parts: list[str] = []
             try:
-                async for chunk in stream_chat(
-                    self.terminal.config.get("ollama_url", "http://localhost:11434"),
+                _result = await stream_provider_result(
+                    OllamaProvider(
+                        self.terminal.config.get("ollama_url", "http://localhost:11434"),
+                        self.terminal.config.get("model", "qwen2.5:7b"),
+                        show_market_prefetch_status=False,
+                    ),
                     _btw_prompt,
-                    [],
-                    model=self.terminal.config.get("model", ""),
-                    config=self.terminal.config,
                     tools=[],
-                ):
-                    if chunk.get("type") == "content":
-                        _answer_parts.append(chunk.get("content", ""))
+                )
+                if _result.get("success"):
+                    return _result.get("response", "")
+                return f"(error: {_result.get('error', '')})"
             except Exception as _e:
-                _answer_parts = [f"(error: {_e})"]
-            return "".join(_answer_parts)
+                return f"(error: {_e})"
 
         try:
             loop = _aio.get_event_loop()
@@ -154,13 +154,15 @@ class SessionUxCommandsMixin:
 
         summary = ""
         try:
-            ollama_url = self.terminal.config.get("ollama_url", "http://localhost:11434")
-            result = await stream_ollama(
-                ollama_url,
+            result = await stream_provider_result(
+                OllamaProvider(
+                    self.terminal.config.get("ollama_url", "http://localhost:11434"),
+                    self.terminal.config.get("model", "qwen2.5:7b"),
+                    show_market_prefetch_status=False,
+                ),
                 summary_prompt,
-                history=[],
-                model=self.terminal.config.get("model", "qwen2.5:7b"),
-                enable_tools=False,
+                [],
+                tools=[],
             )
             if result.get("success") and result.get("response"):
                 summary = result["response"].strip()

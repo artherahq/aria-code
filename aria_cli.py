@@ -117,7 +117,9 @@ from workspace import VerificationPlanner, WorkspaceFiles, WorkspaceSecurity
 from apps.cli.commands.catalog import VISIBLE_SLASH_COMMANDS
 from apps.cli.commands.market_context import build_analyze_context, build_analyze_prompt
 from apps.cli.commands.market import parse_symbols, parse_technical_args, route_top_level_text, try_top_level_route
+from apps.cli.providers.base import AriaSSEProvider, OllamaProvider
 from apps.cli.preflight import build_intent_preflight, format_preflight_plain
+from packages.aria_sdk.streaming import stream_provider_result
 from ui.render.market import print_quote_result, print_ta_result
 from apps.cli.commands.report import (
     all_agents_failed,
@@ -6029,13 +6031,15 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
 
         summary = ""
         try:
-            ollama_url = self.terminal.config.get("ollama_url", "http://localhost:11434")
-            result = await stream_ollama(
-                ollama_url,
+            result = await stream_provider_result(
+                OllamaProvider(
+                    self.terminal.config.get("ollama_url", "http://localhost:11434"),
+                    self.terminal.config.get("model", "qwen2.5:7b"),
+                    show_market_prefetch_status=False,
+                ),
                 summary_prompt,
-                history=[],   # no history — pure summarisation task
-                model=self.terminal.config.get("model", "qwen2.5:7b"),
-                enable_tools=False,
+                [],   # no history — pure summarisation task
+                tools=[],
             )
             if result.get("success") and result.get("response"):
                 summary = result["response"].strip()
@@ -9157,12 +9161,15 @@ class ArtheraTerminal:
                 f"Request: {message[:600]}"
             )
             try:
-                _plan_result = await stream_ollama(
-                    self.config.get("ollama_url", "http://localhost:11434"),
+                _plan_result = await stream_provider_result(
+                    OllamaProvider(
+                        self.config.get("ollama_url", "http://localhost:11434"),
+                        self.config.get("model", "qwen2.5:7b"),
+                        show_market_prefetch_status=False,
+                    ),
                     _decomp_prompt,
-                    history=[],
-                    model=self.config.get("model", "qwen2.5:7b"),
-                    enable_tools=False,
+                    [],
+                    tools=[],
                 )
                 if _plan_result.get("success") and _plan_result.get("response"):
                     _decomp_plan = _plan_result["response"].strip()
@@ -9574,15 +9581,21 @@ class ArtheraTerminal:
                 _use_batch_render[0] = True   # accumulate silently → Rich render at end
                 _sys_ov = getattr(self, "_system_override", None)
                 self._system_override = None
-                result = await stream_ollama(
-                    self.config.get("ollama_url", "http://localhost:11434"),
-                    current_message, self.conversation,
-                    model=model, on_token=on_token, on_thinking=on_thinking,
-                    on_tool_call=on_tool_call, on_tool_result=on_tool_result,
+                result = await stream_provider_result(
+                    OllamaProvider(
+                        self.config.get("ollama_url", "http://localhost:11434"),
+                        model,
+                        system_override=_sys_ov,
+                        show_market_prefetch_status=not _det_wants_analysis,
+                    ),
+                    current_message,
+                    self.conversation,
+                    tools=LOCAL_TOOL_SCHEMAS,
                     cancel_event=self.cancel_event,
-                    enable_tools=True,
-                    system_override=_sys_ov,
-                    show_market_prefetch_status=not _det_wants_analysis,
+                    on_token=on_token,
+                    on_thinking=on_thinking,
+                    on_tool_call=on_tool_call,
+                    on_tool_result=on_tool_result,
                 )
                 provider = "ollama"
                 self._last_provider = "ollama"
@@ -9608,13 +9621,24 @@ class ArtheraTerminal:
                     if _so:
                         _cloud_uctx["system_role_override"] = _so
                         self._system_override = None
-                    result = await stream_chat(
-                        self.api_url, current_message, self.conversation,
-                        model=model, thinking_mode=thinking_mode,
-                        user_context=_cloud_uctx or user_context, auth_token=auth_token,
-                        on_token=on_token, on_thinking=on_thinking,
-                        on_tool_call=on_tool_call, on_tool_result=on_tool_result,
-                        on_status=on_status, cancel_event=self.cancel_event,
+                    result = await stream_provider_result(
+                        AriaSSEProvider(
+                            self.api_url,
+                            model,
+                            thinking_mode=thinking_mode,
+                            user_context=_cloud_uctx or user_context,
+                            auth_token=auth_token,
+                            project_context=_PROJECT_CONTEXT,
+                        ),
+                        current_message,
+                        self.conversation,
+                        tools=LOCAL_TOOL_SCHEMAS,
+                        cancel_event=self.cancel_event,
+                        on_token=on_token,
+                        on_thinking=on_thinking,
+                        on_tool_call=on_tool_call,
+                        on_tool_result=on_tool_result,
+                        on_status=on_status,
                     )
                 # 响应质量检测：success=True 但返回占位符/空响应 → 同样 fallback
                 def _is_placeholder_response(r: dict) -> bool:
@@ -9708,14 +9732,21 @@ class ArtheraTerminal:
                         _use_batch_render[0] = True   # accumulate silently → Rich render at end
                         _sys_ov = getattr(self, "_system_override", None)
                         self._system_override = None  # consume before call
-                        result = await stream_ollama(
-                            ollama_url, current_message, self.conversation,
-                            model=_ollama_model, on_token=on_token,
+                        result = await stream_provider_result(
+                            OllamaProvider(
+                                ollama_url,
+                                _ollama_model,
+                                system_override=_sys_ov,
+                                show_market_prefetch_status=not _det_wants_analysis,
+                            ),
+                            current_message,
+                            self.conversation,
+                            tools=LOCAL_TOOL_SCHEMAS,
+                            cancel_event=self.cancel_event,
+                            on_token=on_token,
                             on_thinking=on_thinking,
-                            on_tool_call=on_tool_call, on_tool_result=on_tool_result,
-                            cancel_event=self.cancel_event, enable_tools=True,
-                            system_override=_sys_ov,
-                            show_market_prefetch_status=not _det_wants_analysis,
+                            on_tool_call=on_tool_call,
+                            on_tool_result=on_tool_result,
                         )
                         provider = "ollama"
                         self._last_provider = "ollama"
@@ -10882,25 +10913,45 @@ class ArtheraTerminal:
                 # backend entirely — same routing as the interactive REPL.
                 _force_backend_p = bool(self.config.get("backend_chat")) and bool(self.api_url)
                 if not _force_backend_p and (local_mode or "/" not in (model or "")):
-                    result = await stream_ollama(
-                        self.config.get("ollama_url", "http://localhost:11434"),
-                        prompt, [], model=model,
+                    result = await stream_provider_result(
+                        OllamaProvider(
+                            self.config.get("ollama_url", "http://localhost:11434"),
+                            model,
+                            show_market_prefetch_status=False,
+                        ),
+                        prompt,
+                        [],
+                        tools=LOCAL_TOOL_SCHEMAS,
                     )
                 else:
                     # Cloud-provider model: try api_url, fall back to Ollama on
                     # failure OR a stub placeholder response.
-                    result = await stream_chat(
-                        self.api_url, prompt, [],
-                        model=model, thinking_mode=thinking_mode,
-                        user_context=user_context, auth_token=auth_token,
+                    result = await stream_provider_result(
+                        AriaSSEProvider(
+                            self.api_url,
+                            model,
+                            thinking_mode=thinking_mode,
+                            user_context=user_context,
+                            auth_token=auth_token,
+                            project_context=_PROJECT_CONTEXT,
+                        ),
+                        prompt,
+                        [],
+                        tools=LOCAL_TOOL_SCHEMAS,
                     )
                     _resp = result.get("response", "") or ""
                     if (not result.get("success")
                             or len(_resp) < 20
                             or _response_is_stub_placeholder(_resp)):
-                        result = await stream_ollama(
-                            self.config.get("ollama_url", "http://localhost:11434"),
-                            prompt, [], model=model,
+                        result = await stream_provider_result(
+                            OllamaProvider(
+                                self.config.get("ollama_url", "http://localhost:11434"),
+                                model,
+                                show_market_prefetch_status=False,
+                            ),
+                            prompt,
+                            [],
+                            tools=LOCAL_TOOL_SCHEMAS,
                         )
             finally:
                 if _prompt_spinner is not None:

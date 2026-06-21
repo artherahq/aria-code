@@ -38,6 +38,20 @@ class LLMToolCall:
 
 
 @dataclass(frozen=True)
+class LLMToolResult:
+    """Provider reported a tool execution result summary."""
+    tool: str
+    summary: str
+
+
+@dataclass(frozen=True)
+class LLMStatus:
+    """Provider emitted a streaming status update."""
+    state: str
+    message: str
+
+
+@dataclass(frozen=True)
 class LLMDone:
     """Stream finished. Carries the aggregated result."""
     response: str
@@ -50,7 +64,66 @@ class LLMDone:
 
 
 # Union type for type-checkers
-LLMEvent = LLMToken | LLMThinking | LLMToolCall | LLMDone
+LLMEvent = LLMToken | LLMThinking | LLMToolCall | LLMToolResult | LLMStatus | LLMDone
+
+
+def _resolve_ollama_stream():
+    """Prefer the aria_cli rebound stream_ollama when available."""
+    import sys
+
+    aria_cli = sys.modules.get("aria_cli")
+    rebound = getattr(aria_cli, "stream_ollama", None) if aria_cli else None
+    if callable(rebound):
+        return rebound
+    from apps.cli.providers.llm.ollama_stream import stream_ollama
+
+    return stream_ollama
+
+
+async def _stream_callback_provider(invoke, *, done_provider: str) -> AsyncGenerator[LLMEvent, None]:
+    """Convert a callback-based provider coroutine into a real async event stream."""
+
+    queue: asyncio.Queue[LLMEvent] = asyncio.Queue()
+
+    def _on_token(tok: str) -> None:
+        queue.put_nowait(LLMToken(text=tok))
+
+    def _on_thinking(content: str) -> None:
+        queue.put_nowait(LLMThinking(content=content))
+
+    def _on_tool_call(tool: str, params: dict) -> None:
+        queue.put_nowait(LLMToolCall(tool=tool, params=params))
+
+    def _on_tool_result(tool: str, summary: str) -> None:
+        queue.put_nowait(LLMToolResult(tool=tool, summary=summary))
+
+    def _on_status(state: str, message: str) -> None:
+        queue.put_nowait(LLMStatus(state=state, message=message))
+
+    task = asyncio.create_task(
+        invoke(_on_token, _on_thinking, _on_tool_call, _on_tool_result, _on_status)
+    )
+    while not task.done() or not queue.empty():
+        try:
+            yield await asyncio.wait_for(queue.get(), timeout=0.05)
+        except asyncio.TimeoutError:
+            continue
+
+    try:
+        result = await task
+    except Exception as exc:
+        yield LLMDone(response="", provider=done_provider, success=False, error=str(exc))
+        return
+
+    yield LLMDone(
+        response=result.get("response", ""),
+        tool_calls_pending=result.get("tool_calls_pending", []),
+        usage=result.get("usage", {}),
+        provider=result.get("provider", done_provider),
+        success=result.get("success", False),
+        cancelled=result.get("cancelled", False),
+        error=result.get("error", ""),
+    )
 
 
 # ── Protocol ─────────────────────────────────────────────────────────────────
@@ -98,10 +171,12 @@ class OllamaProvider:
         model: str,
         *,
         system_override: Optional[str] = None,
+        show_market_prefetch_status: bool = True,
     ) -> None:
         self.ollama_url = ollama_url
         self.model = model
         self.system_override = system_override
+        self.show_market_prefetch_status = show_market_prefetch_status
 
     async def stream(
         self,
@@ -110,48 +185,30 @@ class OllamaProvider:
         *,
         cancel_event: Optional[asyncio.Event] = None,
     ) -> AsyncGenerator[LLMEvent, None]:
-        from apps.cli.providers.llm.ollama_stream import stream_ollama
+        stream_ollama = _resolve_ollama_stream()
 
         # Extract last user message as the prompt; the rest is history
         history = [m for m in messages if not (m.get("role") == "user" and m is messages[-1])]
         prompt = messages[-1].get("content", "") if messages else ""
 
-        _buf: list[LLMEvent] = []
+        async def _invoke(on_token, on_thinking, on_tool_call, on_tool_result, _on_status):
+            return await stream_ollama(
+                self.ollama_url,
+                prompt,
+                history,
+                model=self.model,
+                on_token=on_token,
+                on_thinking=on_thinking,
+                on_tool_call=on_tool_call,
+                on_tool_result=on_tool_result,
+                cancel_event=cancel_event,
+                enable_tools=bool(tools),
+                system_override=self.system_override,
+                show_market_prefetch_status=self.show_market_prefetch_status,
+            )
 
-        def _on_token(tok: str) -> None:
-            _buf.append(LLMToken(text=tok))
-
-        def _on_thinking(content: str) -> None:
-            _buf.append(LLMThinking(content=content))
-
-        def _on_tool_call(tool: str, params: dict) -> None:
-            _buf.append(LLMToolCall(tool=tool, params=params))
-
-        result = await stream_ollama(
-            self.ollama_url,
-            prompt,
-            history,
-            model=self.model,
-            on_token=_on_token,
-            on_thinking=_on_thinking,
-            on_tool_call=_on_tool_call,
-            cancel_event=cancel_event,
-            enable_tools=bool(tools),
-            system_override=self.system_override,
-        )
-
-        for event in _buf:
+        async for event in _stream_callback_provider(_invoke, done_provider="ollama"):
             yield event
-
-        yield LLMDone(
-            response=result.get("response", ""),
-            tool_calls_pending=result.get("tool_calls_pending", []),
-            usage=result.get("usage", {}),
-            provider=result.get("provider", "ollama"),
-            success=result.get("success", False),
-            cancelled=result.get("cancelled", False),
-            error=result.get("error", ""),
-        )
 
 
 class AriaSSEProvider:
@@ -166,6 +223,7 @@ class AriaSSEProvider:
         thinking_mode: str = "auto",
         user_context: Optional[dict] = None,
         system_override: Optional[str] = None,
+        project_context: str = "",
     ) -> None:
         self.api_url = api_url
         self.model = model
@@ -173,6 +231,7 @@ class AriaSSEProvider:
         self.thinking_mode = thinking_mode
         self.user_context = user_context or {}
         self.system_override = system_override
+        self.project_context = project_context
 
     async def stream(
         self,
@@ -190,40 +249,23 @@ class AriaSSEProvider:
         if self.system_override:
             uctx["system_role_override"] = self.system_override
 
-        _buf: list[LLMEvent] = []
+        async def _invoke(on_token, on_thinking, on_tool_call, on_tool_result, on_status):
+            return await stream_chat(
+                self.api_url,
+                prompt,
+                history,
+                model=self.model,
+                thinking_mode=self.thinking_mode,
+                user_context=uctx or None,
+                auth_token=self.auth_token,
+                on_token=on_token,
+                on_thinking=on_thinking,
+                on_tool_call=on_tool_call,
+                on_tool_result=on_tool_result,
+                on_status=on_status,
+                cancel_event=cancel_event,
+                project_context=self.project_context,
+            )
 
-        def _on_token(tok: str) -> None:
-            _buf.append(LLMToken(text=tok))
-
-        def _on_thinking(content: str) -> None:
-            _buf.append(LLMThinking(content=content))
-
-        def _on_tool_call(tool: str, params: dict) -> None:
-            _buf.append(LLMToolCall(tool=tool, params=params))
-
-        result = await stream_chat(
-            self.api_url,
-            prompt,
-            history,
-            model=self.model,
-            thinking_mode=self.thinking_mode,
-            user_context=uctx or None,
-            auth_token=self.auth_token,
-            on_token=_on_token,
-            on_thinking=_on_thinking,
-            on_tool_call=_on_tool_call,
-            cancel_event=cancel_event,
-        )
-
-        for event in _buf:
+        async for event in _stream_callback_provider(_invoke, done_provider="aria_sse"):
             yield event
-
-        yield LLMDone(
-            response=result.get("response", ""),
-            tool_calls_pending=result.get("tool_calls_pending", []),
-            usage=result.get("usage", {}),
-            provider=result.get("provider", "aws"),
-            success=result.get("success", False),
-            cancelled=result.get("cancelled", False),
-            error=result.get("error", ""),
-        )
