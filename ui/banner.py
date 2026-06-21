@@ -191,13 +191,13 @@ def render_full_banner(
 
     # Left column: flat pixel mascot. Keep it quiet; copper is reserved for
     # the state accents and important text.
-    from .robot import get_robot_row
+    from .robot import ROBOT_ROW_COUNT, get_robot_row
 
     _face = Text()
-    for _idx in range(4):
+    for _idx in range(ROBOT_ROW_COUNT):
         for _style, _text in get_robot_row(2, _idx):
             _face.append(_text, style=_style)
-        if _idx < 3:
+        if _idx < ROBOT_ROW_COUNT - 1:
             _face.append("\n")
 
     # Right column: Claude Code-like essentials only. Operational detail is

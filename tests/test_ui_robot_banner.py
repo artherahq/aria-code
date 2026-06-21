@@ -5,7 +5,7 @@ from rich import box
 from rich.console import Console
 
 from ui.banner import render_full_banner
-from ui.robot import RobotState, get_robot_row, get_status_dot, set_robot_state
+from ui.robot import ROBOT_ROW_COUNT, RobotState, get_robot_row, get_status_dot, set_robot_state
 
 
 class RobotBannerTests(unittest.TestCase):
@@ -15,21 +15,22 @@ class RobotBannerTests(unittest.TestCase):
     def test_robot_idle_face_is_compact_and_open_eyed(self):
         set_robot_state(RobotState.IDLE)
 
-        rows = ["".join(text for _, text in get_robot_row(2, row)) for row in range(4)]
+        rows = ["".join(text for _, text in get_robot_row(2, row)) for row in range(ROBOT_ROW_COUNT)]
 
         self.assertEqual(rows, [
-            "  ▄▄▄▄▄  ",
-            " ▐ • • ▌ ",
-            " ▐  ─  ▌ ",
-            "  ▀▀▀▀▀  ",
+            "  ▄▄▄▄▄▄  ",
+            "▄▟██████▙▄",
+            "▐██■  ▬██▌",
+            "▐▄▄▔▔▔▔▄▄▌",
+            "  ▀▙▙▙▙▀  ",
         ])
 
     def test_robot_thinking_uses_asymmetric_eye_frames(self):
         set_robot_state(RobotState.THINKING)
 
-        row = "".join(text for _, text in get_robot_row(0, 1))
+        row = "".join(text for _, text in get_robot_row(0, 2))
 
-        self.assertEqual(row, " ▐ ◐ ◑ ▌ ")
+        self.assertEqual(row, "▐██◐  ◑██▌")
 
     def test_idle_status_dot_does_not_blink_to_dim_dot(self):
         set_robot_state(RobotState.IDLE)
@@ -56,8 +57,8 @@ class RobotBannerTests(unittest.TestCase):
         )
 
         rendered = console.export_text()
-        self.assertIn("  ▄▄▄▄▄  ", rendered)
-        self.assertIn(" ▐ • • ▌ ", rendered)
+        self.assertIn("  ▄▄▄▄▄▄  ", rendered)
+        self.assertIn("▐██■  ▬██▌", rendered)
         self.assertIn("~/Desktop/aria-code", rendered)
         self.assertNotIn("71 tools", rendered)
         self.assertNotIn("14 skills", rendered)

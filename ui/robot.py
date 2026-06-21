@@ -8,12 +8,13 @@ States
   ERROR      × ×  X eyes
   DONE       ✓ ✓  check eyes, brief flash then back to IDLE
 
-Robot shape (4 rows, flat pixel mark with copper state accents):
+Robot shape (5 rows, terminal pixel mark based on the app mascot):
 
-   ▄▄▄▄▄
-  ▐ • • ▌
-  ▐  ─  ▌
-   ▀▀▀▀▀
+    ▄▄▄▄▄▄
+  ▄▟██████▙▄
+  ▐██■  ▬██▌
+  ▐▄▄▔▔▔▔▄▄▌
+    ▀▙▙▙▙▀
 """
 
 from __future__ import annotations
@@ -53,22 +54,14 @@ def get_robot_state() -> RobotState:
         return _state
 
 
-# Eye symbols per state.
+# Eye symbols per state. IDLE mirrors the mascot art: one light square eye and
+# one copper dash eye.
 _EYES = {
-    RobotState.IDLE:      ("•", "•"),
+    RobotState.IDLE:      ("■", "▬"),
     RobotState.THINKING:  ("◐", "◑"),
     RobotState.STREAMING: ("▸", "▸"),
     RobotState.ERROR:     ("×", "×"),
     RobotState.DONE:      ("✓", "✓"),
-}
-
-# Mouth bar per state — two chars wide.
-_MOUTH = {
-    RobotState.IDLE:      "─",
-    RobotState.THINKING:  "·",
-    RobotState.STREAMING: "━",
-    RobotState.ERROR:     "!",
-    RobotState.DONE:      "─",
 }
 
 # Accent colour per state
@@ -89,16 +82,19 @@ _STATUS = {
     RobotState.DONE:      "done",
 }
 
-_BODY = "dim #a8b0b8"
-_MOUTH_STYLE = "dim #C08050"
-ROBOT_ROW_COUNT = 4
+_SHELL = "bold #f2eadc"
+_SCREEN = "#0d1117"
+_SHADOW = "dim #9aa0a6"
+_EYE_LIGHT = "bold #fffaf0"
+_ACCENT_STYLE = "bold #ffb35c"
+ROBOT_ROW_COUNT = 5
 
 
 def _resolve_eyes(state: RobotState, tick: int) -> tuple[str, str]:
     el, er = _EYES[state]
     if state is RobotState.IDLE:
         if tick % 24 in (0, 1):
-            el = er = "·"
+            el, er = "▪", "·"
     elif state is RobotState.THINKING:
         frames = (("◐", "◑"), ("◓", "◒"), ("◑", "◐"), ("◒", "◓"))
         el, er = frames[tick % len(frames)]
@@ -111,24 +107,35 @@ def get_robot_row(tick: int, row: int) -> list:
     """Return FormattedText fragments for a single robot row.
 
     Rows:
-      0 →   ▄▄▄▄▄
-      1 →  ▐ EL ER ▌
-      2 →  ▐  MM  ▌
-      3 →   ▀▀▀▀▀
+      0 →   ▄▄▄▄▄▄
+      1 → ▄▟██████▙▄
+      2 → ▐██EL  ER██▌
+      3 → ▐▄▄▔▔▔▔▄▄▌
+      4 →   ▀▙▙▙▙▀
     """
     state = get_robot_state()
     col   = _COLOUR[state]
     eye   = f"bold {col}"
     el, er = _resolve_eyes(state, tick)
-    mouth  = _MOUTH[state]
+    left_eye_style = _EYE_LIGHT if state is RobotState.IDLE else eye
 
     if row == 0:
-        return [(_BODY, "  ▄▄▄▄▄  ")]
+        return [(_SHELL, "  ▄▄▄▄▄▄  ")]
     if row == 1:
-        return [(_BODY, " ▐ "), (eye, el), (_BODY, " "), (eye, er), (_BODY, " ▌ ")]
+        return [(_SHADOW, "▄"), (_SHELL, "▟"), (_SCREEN, "██████"), (_SHELL, "▙"), (_SHADOW, "▄")]
     if row == 2:
-        return [(_BODY, " ▐  "), (_MOUTH_STYLE, mouth), (_BODY, "  ▌ ")]
-    return [(_BODY, "  ▀▀▀▀▀  ")]
+        return [
+            (_SHELL, "▐"),
+            (_SCREEN, "██"),
+            (left_eye_style, el),
+            (_SCREEN, "  "),
+            (eye, er),
+            (_SCREEN, "██"),
+            (_SHELL, "▌"),
+        ]
+    if row == 3:
+        return [(_SHELL, "▐▄▄"), (_ACCENT_STYLE, "▔▔▔▔"), (_SHELL, "▄▄▌")]
+    return [(_SHELL, "  ▀"), (_SHADOW, "▙▙▙▙"), (_SHELL, "▀  ")]
 
 
 def get_robot_frame(tick: int) -> list:
