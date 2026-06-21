@@ -19,13 +19,11 @@ class RobotBannerTests(unittest.TestCase):
 
         self.assertEqual(rows, [
             "  ▄▀▀▀▀▀▀▀▀▀▀▀▀▄  ",
-            "  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀  ",
-            "▄▄▀▀▀▀▀▀▀▀▀▀▀▀▀▀▄▄",
+            " ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀ ",
             "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
-            "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+            " ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀ ",
             "  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀  ",
             "  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀  ",
-            "  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▄ ",
             "   ▀▀  ▀▀  ▀▀  ▀▀ ",
         ])
 
@@ -37,7 +35,7 @@ class RobotBannerTests(unittest.TestCase):
         self.assertIn("#0d1117 on #0d1117", styles)
         self.assertIn("#0d1117 on #fffaf0", styles)
         self.assertIn("#0d1117 on #ffb35c", styles)
-        self.assertIn("#f2eadc on #ffb35c", styles)
+        self.assertIn("#ffb35c on #f2eadc", styles)
 
     def test_idle_status_dot_does_not_blink_to_dim_dot(self):
         set_robot_state(RobotState.IDLE)

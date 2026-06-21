@@ -5,17 +5,15 @@ States
   The mascot stays visually stable at startup. Runtime state is shown by the
   compact status dot so the banner keeps the same low-noise feel as Claude Code.
 
-Robot shape (9 terminal rows, rendered from half-block pixels):
+Robot shape (7 terminal rows, rendered from hand-tuned half-block pixels):
 
-       ██████
-     ████████
-   ████████████
- ████        ████
- ████  █  ██  ████
- ████        ████
-   ████████████
-   ██        ██
-     ██  ██  ██  ██
+      ██████████
+    ██        ██
+  ████  ██  ██  ████
+    ██        ██
+    ████████████
+    ████████████
+      ██  ██  ██  ██
 """
 
 from __future__ import annotations
@@ -93,22 +91,18 @@ _ACCENT_STYLE = "#ffb35c"
 _PIXEL_ROWS = [
     "...SSSSSSSSSSSS...",
     "..SSSSSSSSSSSSSS..",
-    "..SSSSSSSSSSSSSS..",
-    "..SSDDDDDDDDDDSS..",
-    "..SSDDDDDDDDDDSS..",
-    "GGSSDDDDDDDDDDSSGG",
+    ".GSSDDDDDDDDDDSSG.",
+    ".GSSDDDDDDDDDDSSG.",
     "GASSDDDDDDDDDDSSAG",
     "GGSSDDWWDDAADDSSGG",
-    "GGSSDDDDDDDDDDSSGG",
+    ".GSSDDDDDDDDDDSSG.",
     "..SSDDDDDDDDDDSS..",
     "..SSDDDDDDDDDDSS..",
     "..SSSSSSSSSSSSSS..",
+    "..SSSAAAAAAAAASS..",
     "..SSSSSSSSSSSSSS..",
-    "..SSAAAAAAAAAASS..",
-    "..GGLLLLLLLLLLGG..",
     "...LL..LL..LL..LL.",
     "...LL..LL..LL..LL.",
-    "..................",
 ]
 
 _COLOUR_BY_PIXEL = {
@@ -169,14 +163,12 @@ def get_robot_row(tick: int, row: int) -> list:
 
     Rows:
       0 → top cap
-      1 → body top + screen top
-      2 → screen + ears
-      3 → side LEDs + eyes
-      4 → screen bottom
-      5 → shell bottom
-      6 → copper underline
-      7 → legs top
-      8 → legs bottom
+      1 → body top + screen
+      2 → side LEDs + eyes
+      3 → screen bottom
+      4 → copper underline
+      5 → lower shell + leg mounts
+      6 → legs
     """
     del tick
     return _row_from_halfblocks(_PIXEL_ROWS[row * 2], _PIXEL_ROWS[row * 2 + 1])
