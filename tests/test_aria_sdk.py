@@ -1,7 +1,8 @@
 import pytest
 
-from apps.cli.providers.base import AriaSSEProvider, LLMDone, LLMToken, OllamaProvider
+from apps.cli.providers.base import AriaSSEProvider, LLMDone, LLMToken, LLMToolCall, OllamaProvider
 from apps.cli.deterministic import run_deterministic_chain
+from runtime import ToolExecutor
 from packages.aria_sdk import (
     AriaAgentOptions,
     AriaMessage,
@@ -121,6 +122,50 @@ async def test_sdk_llm_path_uses_provider_factory(monkeypatch):
     assert [event.kind for event in events] == ["system", "user", "token", "assistant", "result"]
     assert events[-1].data["provider"] == "fake_provider"
     assert client.messages[-1] == {"role": "assistant", "content": "hi"}
+
+
+@pytest.mark.asyncio
+async def test_sdk_agent_path_emits_tool_events(monkeypatch):
+    import packages.aria_sdk.client as sdk_client
+
+    class FakeProvider:
+        def __init__(self):
+            self.calls = 0
+
+        async def stream(self, messages, tools, *, cancel_event=None):
+            self.calls += 1
+            if self.calls == 1:
+                yield LLMToolCall("echo", {"value": 7})
+                yield LLMDone(response="need echo", provider="fake_provider", success=True)
+            else:
+                assert "Tool Results" in messages[-1]["content"]
+                yield LLMToken("done")
+                yield LLMDone(response="done", provider="fake_provider", success=True)
+
+    fake_provider = FakeProvider()
+    monkeypatch.setattr(
+        sdk_client,
+        "build_llm_provider",
+        lambda options: ProviderSelection("fake_provider", fake_provider),
+    )
+
+    def echo(params):
+        return {"success": True, "data": {"value": params["value"]}}
+
+    client = AriaSDKClient(
+        AriaAgentOptions(deterministic=False, max_turns=3),
+        tool_executor=ToolExecutor({"echo": (echo, "Echo")}),
+        tool_result_formatter=lambda tool, result: f"{tool}:{result['data']['value']}",
+    )
+    events = await _collect(client.query("use a tool"))
+    kinds = [event.kind for event in events]
+
+    assert "tool_use" in kinds
+    assert "tool_result" in kinds
+    assert events[-1].kind == "result"
+    assert events[-1].data["provider"] == "fake_provider"
+    assert events[-1].data["tools"] == ["echo"]
+    assert client.messages[-1] == {"role": "assistant", "content": "done"}
 
 
 @pytest.mark.asyncio

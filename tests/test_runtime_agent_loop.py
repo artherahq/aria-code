@@ -1,17 +1,25 @@
 import unittest
+import asyncio
 
 from runtime import (
+    AgentEventComplete,
+    AgentEventStatus,
     AgentErrorPresentation,
+    AgentOptions,
+    ApprovalDecision,
     AgentTurnState,
     AgentTurnResult,
     AgentTurnEnvelope,
+    LoopGuard,
     ToolExecutor,
     ToolBatchState,
     ToolTurnPlan,
     build_next_turn_messages,
     build_tool_followup,
     collect_parallel_done,
+    execute_tool_turn,
     record_tool_result,
+    run_agent,
     run_parallel_tools,
     run_serial_tool,
     split_tool_calls,
@@ -277,6 +285,123 @@ class RuntimeAgentLoopTests(unittest.TestCase):
         self.assertEqual(batch.tool_results, [record])
         self.assertEqual(batch.elapsed_total, 1.25)
         self.assertFalse(batch.cancelled)
+
+    def test_execute_tool_turn_applies_approval_and_builds_next_turn(self):
+        captured = {}
+
+        def run_command(params):
+            captured.update(params)
+            return {"success": True, "data": {"exit_code": 0, "stdout": "ok"}}
+
+        async def approval(tool_name, params):
+            self.assertEqual(tool_name, "run_command")
+            self.assertEqual(params["command"], "pytest -q")
+            return ApprovalDecision.allow(policy="balanced", user_approved=True)
+
+        executor = ToolExecutor({"run_command": (run_command, "Run")})
+        result = asyncio.run(execute_tool_turn(
+            [{"tool": "run_command", "params": {"command": "pytest -q"}}],
+            total_response="assistant text",
+            tool_executor=executor,
+            formatter=lambda tool, res: f"{tool}:{res['data']['stdout']}",
+            confirm_tools={"run_command"},
+            approval_callback=approval,
+        ))
+
+        self.assertFalse(result.cancelled)
+        self.assertEqual(captured["policy"], "balanced")
+        self.assertTrue(captured["user_approved"])
+        self.assertEqual(result.activities[0].tool, "run_command")
+        self.assertEqual(result.assistant_message, {"role": "assistant", "content": "assistant text"})
+        self.assertEqual(result.user_message["role"], "user")
+        self.assertIn("run_command:ok", result.followup)
+
+    def test_execute_tool_turn_denied_approval_cancels_without_running(self):
+        ran = False
+
+        def write_file(_params):
+            nonlocal ran
+            ran = True
+            return {"success": True}
+
+        executor = ToolExecutor({"write_file": (write_file, "Write")})
+        result = asyncio.run(execute_tool_turn(
+            [{"tool": "write_file", "params": {"path": "x", "content": "y"}}],
+            total_response="",
+            tool_executor=executor,
+            formatter=lambda _tool, res: str(res),
+            confirm_tools={"write_file"},
+            approval_callback=lambda _tool, _params: ApprovalDecision.deny("no"),
+        ))
+
+        self.assertTrue(result.cancelled)
+        self.assertFalse(ran)
+        self.assertEqual(result.activities, [])
+
+    def test_execute_tool_turn_loop_guard_appends_retry_directive(self):
+        def failing_tool(_params):
+            return {"success": False, "error": "boom"}
+
+        executor = ToolExecutor({"run_command": (failing_tool, "Run")})
+        guard = LoopGuard(soft_threshold=2, hard_threshold=4)
+        pending = [{"tool": "run_command", "params": {"command": "pytest -q"}}]
+
+        first = asyncio.run(execute_tool_turn(
+            pending,
+            total_response="",
+            tool_executor=executor,
+            formatter=lambda _tool, res: f"Error: {res['error']}",
+            loop_guard=guard,
+        ))
+        second = asyncio.run(execute_tool_turn(
+            pending,
+            total_response="",
+            tool_executor=executor,
+            formatter=lambda _tool, res: f"Error: {res['error']}",
+            loop_guard=guard,
+        ))
+
+        self.assertEqual(first.guard_directives, [])
+        self.assertTrue(second.guard_directives)
+        self.assertIn("不要再用相同参数重试", second.followup)
+
+    def test_run_agent_uses_runtime_tool_turn_and_emits_loop_guard_status(self):
+        calls = {"provider": 0}
+
+        async def provider_fn(message, history, **kwargs):
+            calls["provider"] += 1
+            if calls["provider"] <= 2:
+                return {
+                    "success": True,
+                    "response": "need tool",
+                    "provider": "fake",
+                    "tool_calls_pending": [
+                        {"tool": "run_command", "params": {"command": "pytest -q"}}
+                    ],
+                }
+            return {"success": True, "response": "done", "provider": "fake"}
+
+        def failing_tool(_params):
+            return {"success": False, "error": "boom"}
+
+        async def collect_events():
+            events = []
+            async for event in run_agent(
+                "start",
+                [],
+                provider_fn=provider_fn,
+                tool_executor=ToolExecutor({"run_command": (failing_tool, "Run")}),
+                options=AgentOptions(max_rounds=3),
+                tool_result_formatter=lambda _tool, res: f"Error: {res['error']}",
+            ):
+                events.append(event)
+            return events
+
+        events = asyncio.run(collect_events())
+
+        self.assertTrue(any(isinstance(event, AgentEventStatus) and event.state == "loop_guard" for event in events))
+        self.assertIsInstance(events[-1], AgentEventComplete)
+        self.assertEqual(events[-1].result.provider, "fake")
 
     def test_tool_batch_state_cancel_and_next_turn(self):
         batch = ToolBatchState()

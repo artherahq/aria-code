@@ -8,10 +8,12 @@ shape of tool batching and follow-up construction.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import time
 from dataclasses import dataclass, field
 from typing import AsyncGenerator, Awaitable, Callable, Dict, FrozenSet, Iterable, List, Optional, Sequence, Tuple, Union
 
+from .approval import ApprovalDecision, apply_approval_decision
 from .tool_executor import ToolExecutor
 
 
@@ -174,6 +176,7 @@ def collect_parallel_done(
 RemoteToolRunner = Callable[[str, dict], Awaitable[dict]]
 Hook = Callable[[str, str, dict, dict | None], None]
 SummaryFormatter = Callable[[str, dict], str]
+ApprovalCallback = Callable[[str, dict], Union[ApprovalDecision, Awaitable[ApprovalDecision]]]
 
 
 @dataclass
@@ -588,6 +591,33 @@ class ToolTurnPlan:
         ]
 
 
+@dataclass(frozen=True)
+class ToolExecutionActivity:
+    """One executed tool activity in a model-requested batch."""
+
+    tool: str
+    result: dict
+    elapsed: float
+    params: dict
+    from_parallel: bool = False
+
+
+@dataclass(frozen=True)
+class ToolExecutionTurnResult:
+    """Structured result from one pending tool-call turn."""
+
+    batch: ToolBatchState
+    activities: List[ToolExecutionActivity]
+    assistant_message: dict
+    user_message: dict
+    followup: str
+    guard_directives: List[str] = field(default_factory=list)
+
+    @property
+    def cancelled(self) -> bool:
+        return self.batch.cancelled
+
+
 async def run_parallel_tools(
     pending: Sequence[dict],
     tool_executor: ToolExecutor,
@@ -655,6 +685,117 @@ async def run_serial_tool(
     else:
         result = {"success": False, "error": f"Unknown tool: {tool_name}"}
     return result, time.time() - started
+
+
+async def _maybe_await(value):
+    if inspect.isawaitable(value):
+        return await value
+    return value
+
+
+async def execute_tool_turn(
+    pending: Sequence[dict],
+    *,
+    total_response: str,
+    tool_executor: ToolExecutor,
+    formatter: SummaryFormatter,
+    remote_runner: RemoteToolRunner | None = None,
+    hook: Hook | None = None,
+    cancel_event: asyncio.Event | None = None,
+    confirm_tools: Iterable[str] = (),
+    approval_callback: ApprovalCallback | None = None,
+    approval_applier: Callable[[dict, ApprovalDecision], dict] = apply_approval_decision,
+    loop_guard: LoopGuard | None = None,
+    serial_tools: Iterable[str] = DEFAULT_SERIAL_TOOLS,
+) -> ToolExecutionTurnResult:
+    """Execute one model-requested tool batch and prepare the next turn.
+
+    This is the reusable runtime boundary for the agent tool loop.  Callers
+    provide UI-specific approval and rendering callbacks; this function owns
+    batching, permission application, execution, loop-guard retry directives,
+    and construction of the assistant/user follow-up messages.
+    """
+
+    confirm = set(confirm_tools)
+    parallel_done = await run_parallel_tools(
+        pending,
+        tool_executor,
+        remote_runner=remote_runner,
+        hook=hook,
+        serial_tools=serial_tools,
+    )
+    tool_turn = ToolTurnPlan(pending=pending, parallel_done=parallel_done)
+    tool_batch = tool_turn.batch
+    activities: List[ToolExecutionActivity] = []
+
+    for task in tool_turn.tasks():
+        if cancel_event and cancel_event.is_set():
+            tool_batch.cancel()
+            break
+
+        tool_name = task.tool_name
+        tool_params = task.params
+
+        if task.has_parallel_result:
+            tr = task.parallel_result or {}
+            tool_batch.add_result(tool_name, tr, formatter)
+            activities.append(ToolExecutionActivity(
+                tool=tool_name,
+                result=tr,
+                elapsed=0.0,
+                params=tool_params,
+                from_parallel=True,
+            ))
+            continue
+
+        if tool_name in confirm and approval_callback is not None:
+            decision = await _maybe_await(approval_callback(tool_name, tool_params))
+            if decision is None:
+                decision = ApprovalDecision.allow()
+            if not decision.approved:
+                tool_batch.cancel()
+                break
+            approval_applier(tool_params, decision)
+
+        tr, tool_elapsed = await run_serial_tool(
+            tool_name,
+            tool_params,
+            tool_executor,
+            remote_runner=remote_runner,
+            hook=hook,
+        )
+        tool_batch.add_result(tool_name, tr, formatter, elapsed=tool_elapsed)
+        activities.append(ToolExecutionActivity(
+            tool=tool_name,
+            result=tr,
+            elapsed=tool_elapsed,
+            params=tool_params,
+        ))
+
+    guard_directives: List[str] = []
+    if loop_guard is not None:
+        for activity in activities:
+            directive = loop_guard.record(activity.tool, activity.params, activity.result)
+            if directive:
+                guard_directives.append(directive)
+
+    assistant_message, user_message, followup = tool_batch.build_next_turn(total_response)
+    if guard_directives:
+        guard_text = "\n\n".join(guard_directives)
+        if isinstance(user_message.get("content"), str):
+            user_message["content"] += f"\n\n{guard_text}"
+        elif isinstance(user_message.get("content"), list):
+            user_message["content"].append({"type": "text", "text": guard_text})
+        followup += f"\n\n{guard_text}"
+
+    return ToolExecutionTurnResult(
+        batch=tool_batch,
+        activities=activities,
+        assistant_message=assistant_message,
+        user_message=user_message,
+        followup=followup,
+        guard_directives=guard_directives,
+    )
 
 
 def build_tool_followup(tool_results: Sequence[dict]) -> str:
@@ -896,6 +1037,7 @@ async def run_agent(
     token_count = 0
     thinking_tokens = 0
     result: dict = {}
+    loop_guard = LoopGuard()
 
     for round_num in range(opts.max_rounds):
         # ── Provider call ────────────────────────────────────────────────────
@@ -949,6 +1091,11 @@ async def run_agent(
         pending = result.get("tool_calls_pending", [])
         if not pending:
             break
+        for tool_call in pending:
+            yield AgentEventToolCall(
+                tool=tool_call.get("tool", ""),
+                params=tool_call.get("params", {}),
+            )
 
         # Warn caller on final round
         if round_num == opts.max_rounds - 1:
@@ -959,51 +1106,48 @@ async def run_agent(
             break
 
         # ── Tool execution ───────────────────────────────────────────────────
-        _parallel_done = await run_parallel_tools(
+        tool_turn_result = await execute_tool_turn(
             pending,
-            tool_executor,
+            total_response=turn_state.total_response,
+            tool_executor=tool_executor,
+            formatter=_formatter,
             remote_runner=remote_runner,
             hook=hook,
+            cancel_event=cancel_event,
+            loop_guard=loop_guard,
             serial_tools=_serial,
         )
-        tool_turn = ToolTurnPlan(pending=pending, parallel_done=_parallel_done)
-        tool_batch = tool_turn.batch
 
-        for task in tool_turn.tasks():
-            if cancel_event and cancel_event.is_set():
-                tool_batch.cancel()
-                break
-
-            tool_name = task.tool_name
-            tool_params = task.params
-
-            if task.has_parallel_result:
-                tr = task.parallel_result
-                tool_batch.add_result(tool_name, tr, _formatter)
-                yield AgentEventToolResult(tool=tool_name, result=tr, elapsed=0.0)
-                continue
-
-            tr, tool_elapsed = await run_serial_tool(
-                tool_name,
-                tool_params,
-                tool_executor,
-                remote_runner=remote_runner,
-                hook=hook,
+        for activity in tool_turn_result.activities:
+            turn_state.tools_used.append(activity.tool)
+            yield AgentEventToolResult(
+                tool=activity.tool,
+                result=activity.result,
+                elapsed=activity.elapsed,
             )
-            tool_batch.add_result(tool_name, tr, _formatter, elapsed=tool_elapsed)
-            yield AgentEventToolResult(tool=tool_name, result=tr, elapsed=tool_elapsed)
 
-        turn_state.add_tool_time(tool_batch.elapsed_total)
-        if tool_batch.cancelled:
+        turn_state.add_tool_time(tool_turn_result.batch.elapsed_total)
+        if tool_turn_result.cancelled:
             yield AgentEventCancelled(partial_text=turn_state.total_response)
             return
+        if tool_turn_result.guard_directives:
+            yield AgentEventStatus(
+                state="loop_guard",
+                message="Repeated failing tool call detected",
+            )
 
-        assistant_msg, user_msg, followup = tool_batch.build_next_turn(
-            turn_state.total_response
-        )
-        history = list(history) + [assistant_msg, user_msg]
-        current_message = followup
+        history = list(history) + [
+            tool_turn_result.assistant_message,
+            tool_turn_result.user_message,
+        ]
+        current_message = tool_turn_result.followup
         turn_state.reset_response()
+
+        if loop_guard.should_break:
+            turn_state.append_response(
+                "\n\nRepeated failing tool calls were detected and the agent stopped retrying."
+            )
+            break
 
     # ── Build final result ───────────────────────────────────────────────────
     elapsed = time.time() - start_time

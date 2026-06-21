@@ -107,13 +107,11 @@ from runtime import (
     AgentTurnState,
     ApprovalDecision,
     RuntimeTrace,
-    ToolTurnPlan,
     ToolExecutor,
     apply_approval_decision,
     detect_task_complete,
+    execute_tool_turn,
     LoopGuard,
-    run_parallel_tools,
-    run_serial_tool,
 )
 from workspace import VerificationPlanner, WorkspaceFiles, WorkspaceSecurity
 from apps.cli.commands.catalog import VISIBLE_SLASH_COMMANDS
@@ -9839,110 +9837,56 @@ class ArtheraTerminal:
                     auth_token=auth_token,
                 )
 
-            _parallel_done = await run_parallel_tools(
+            async def _approval_callback(tool_name: str, tool_params: dict) -> ApprovalDecision:
+                _stop_live()
+                try:
+                    approval = _confirm_tool_execution_decision(
+                        tool_name,
+                        tool_params,
+                        config_policy=self.config.get("command_policy", "safe"),
+                    )
+                except KeyboardInterrupt:
+                    approval = ApprovalDecision.deny("KeyboardInterrupt")
+                # Implicit feedback signal (Claude Code "acceptance or rejections").
+                self._record_feedback(
+                    "tool_accept" if approval.approved else "tool_reject",
+                    tool_name,
+                )
+                if not approval.approved:
+                    from ui.render.output import print_tool_blocked as _ptb
+                    _ptb(tool_name, "用户取消", console=console, has_rich=HAS_RICH)
+                return approval
+
+            def _approval_applier(tool_params: dict, approval: ApprovalDecision) -> dict:
+                _apply_tool_approval(tool_params, approval)
+                if approval.upgrade_policy:
+                    tool_params.pop("_upgrade_policy", None)
+                    self.config["command_policy"] = "balanced"
+                    try:
+                        save_config(self.config)
+                        if HAS_RICH:
+                            console.print("  [dim]策略已升级为 balanced 并保存[/dim]")
+                    except Exception:
+                        pass
+                return tool_params
+
+            tool_turn_result = await execute_tool_turn(
                 pending,
-                self.tool_executor,
+                total_response=turn_state.total_response,
+                tool_executor=self.tool_executor,
+                formatter=_format_tool_summary,
                 remote_runner=_remote_tool_runner,
                 hook=_run_hook,
+                cancel_event=self.cancel_event,
+                confirm_tools=_CONFIRM_TOOLS,
+                approval_callback=_approval_callback,
+                approval_applier=_approval_applier,
+                loop_guard=_loop_guard,
             )
-
-            # Execute pending tools: local tools first, then remote Aria tools
-            tool_turn = ToolTurnPlan(pending=pending, parallel_done=_parallel_done)
-            tool_batch = tool_turn.batch
-            _activity_results: list = []   # accumulate (name, result, elapsed, params) for group render
-
-            for task in tool_turn.tasks():
-                # Check if user cancelled (ESC / Ctrl+C) between tool executions
-                if self.cancel_event and self.cancel_event.is_set():
-                    tool_batch.cancel()
-                    break
-
-                tool_name = task.tool_name
-                tool_params = task.params
-
-                # Note: _print_tool_call already called by on_tool_call during streaming
-
-                # If this tool was already executed in the parallel batch, reuse result
-                if task.has_parallel_result:
-                    tr = task.parallel_result
-                    tool_batch.add_result(tool_name, tr, _format_tool_summary)
-                    _activity_results.append((tool_name, tr, 0.0, task.params))
-                    continue
-
-                # Ask user confirmation for destructive local tools
-                if tool_name in _CONFIRM_TOOLS:
-                    _stop_live()
-                    try:
-                        _cfg_policy = self.config.get("command_policy", "safe")
-                        approval = _confirm_tool_execution_decision(
-                            tool_name,
-                            tool_params,
-                            config_policy=_cfg_policy,
-                        )
-                        _apply_tool_approval(tool_params, approval)
-                        # Implicit feedback signal (Claude Code "acceptance or
-                        # rejections") — the user accepting/rejecting the AI's
-                        # proposed action is the training signal, no 👍/👎 needed.
-                        self._record_feedback(
-                            "tool_accept" if approval.approved else "tool_reject",
-                            tool_name,
-                        )
-                        if not approval.approved:
-                            tool_batch.cancel()
-                            from ui.render.output import print_tool_blocked as _ptb
-                            _ptb(tool_name, "用户取消", console=console, has_rich=HAS_RICH)
-                            break
-                        # If user chose "Allow & set balanced", persist to config
-                        if approval.upgrade_policy:
-                            tool_params.pop("_upgrade_policy", None)
-                            self.config["command_policy"] = "balanced"
-                            try:
-                                save_config(self.config)
-                                if HAS_RICH:
-                                    console.print("  [dim]策略已升级为 balanced 并保存[/dim]")
-                            except Exception:
-                                pass
-                    except KeyboardInterrupt:
-                        tool_batch.cancel()
-                        break
-
-                try:
-                    async def _serial_remote_runner(_tool_name: str, _tool_params: dict) -> dict:
-                        return await execute_aria_tool(
-                            self.api_url,
-                            _tool_name,
-                            _tool_params,
-                            auth_token=auth_token,
-                        )
-
-                    progress_label = task.progress_label(len(pending))
-                    _slow_local = {"write_file", "edit_file", "multi_edit", "run_command", "search_code"}
-                    if HAS_RICH and (tool_name not in LOCAL_TOOLS or tool_name in _slow_local):
-                        spinner_label = "" if tool_name in LOCAL_TOOLS else f"[dim]{progress_label}[/dim]"
-                        with console.status(spinner_label, spinner="dots", spinner_style="dim"):
-                            tr, tool_elapsed = await run_serial_tool(
-                                tool_name,
-                                tool_params,
-                                self.tool_executor,
-                                remote_runner=_serial_remote_runner,
-                                hook=_run_hook,
-                            )
-                    else:
-                        if tool_name not in LOCAL_TOOLS:
-                            print(progress_label, end="", flush=True)
-                        tr, tool_elapsed = await run_serial_tool(
-                            tool_name,
-                            tool_params,
-                            self.tool_executor,
-                            remote_runner=_serial_remote_runner,
-                            hook=_run_hook,
-                        )
-                except KeyboardInterrupt:
-                    tool_batch.cancel()
-                    break
-
-                _activity_results.append((tool_name, tr, tool_elapsed, tool_params))
-                tool_batch.add_result(tool_name, tr, _format_tool_summary, elapsed=tool_elapsed)
+            _activity_results = [
+                (activity.tool, activity.result, activity.elapsed, activity.params)
+                for activity in tool_turn_result.activities
+            ]
 
             # ── Render tool results as Activity group or single-line ───────────
             if _activity_results:
@@ -9957,32 +9901,17 @@ class ArtheraTerminal:
                 )
 
             # User cancelled during tool execution
-            turn_state.add_tool_time(tool_batch.elapsed_total)
-            if tool_batch.cancelled:
+            turn_state.add_tool_time(tool_turn_result.batch.elapsed_total)
+            if tool_turn_result.cancelled:
                 result = {"success": True, "cancelled": True}
                 break
 
-            # ── Loop guard: detect repeated identical failing tool calls ───────
-            _guard_directives: list = []
-            for _gname, _gresult, _gelapsed, _gparams in _activity_results:
-                _gdir = _loop_guard.record(_gname, _gparams, _gresult)
-                if _gdir:
-                    _guard_directives.append(_gdir)
-
-            assistant_message, user_message, followup = tool_batch.build_next_turn(turn_state.total_response)
-            if _guard_directives:
-                _guard_text = "\n\n".join(_guard_directives)
+            if tool_turn_result.guard_directives:
                 if HAS_RICH:
                     console.print(f"  [yellow]↺ 循环保护: 检测到重复失败的工具调用[/yellow]")
-                # Append the directive to the followup so the model sees it next round
-                if isinstance(user_message.get("content"), str):
-                    user_message["content"] += f"\n\n{_guard_text}"
-                elif isinstance(user_message.get("content"), list):
-                    user_message["content"].append({"type": "text", "text": _guard_text})
-                followup += f"\n\n{_guard_text}"
-            self.conversation.append(assistant_message)
-            self.conversation.append(user_message)
-            current_message = followup
+            self.conversation.append(tool_turn_result.assistant_message)
+            self.conversation.append(tool_turn_result.user_message)
+            current_message = tool_turn_result.followup
             turn_state.reset_response()
             round_num += 1
 

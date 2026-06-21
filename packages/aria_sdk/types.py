@@ -29,6 +29,7 @@ class AriaAgentOptions:
     permission_mode: str = "workspace-write"
     allowed_tools: tuple[str, ...] = ()
     disallowed_tools: tuple[str, ...] = ()
+    tool_schemas: tuple[dict[str, Any], ...] = ()
     max_turns: int = 1
     cwd: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
