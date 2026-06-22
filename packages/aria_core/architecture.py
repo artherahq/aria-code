@@ -86,11 +86,11 @@ _ARCHITECTURE_LAYERS: Tuple[ArchitectureLayer, ...] = (
         name="runtime",
         responsibility="Agent turn loop, planning, tool execution, retries, streaming, and interruption handling.",
         target_state="Runtime is separate from UI and business services, with typed tool calls, retries, cancellation, and traces.",
-        current_state="A public packages.aria_sdk facade owns SDK-style query/result events, provider selection, provider streaming normalization, and the reusable runtime tool-turn loop; CLI terminal rendering/approval is now consumed through apps.cli.runtime_consumer.",
+        current_state="A public packages.aria_sdk facade owns SDK-style query/result events, provider selection, streaming normalization, and the reusable runtime tool-turn loop; CLI rendering/approval is consumed through apps.cli.runtime_consumer. The CLI chat turn can now opt into run_agent via apps.cli.providers.runtime_bridge (config use_runtime_loop), with route-aware provider/fallback decisions in apps.cli.providers.chat_routing; send_message falls back to the inline loop on any error.",
         status=LayerStatus.PARTIAL,
         source_paths=("aria_cli.py", "runtime/", "packages/aria_sdk/", "apps/cli/runtime_consumer.py", "apps/cli/deterministic.py", "apps/cli/providers/"),
         depends_on=("settings", "tools", "safety", "context"),
-        next_steps=("Route the whole CLI tool loop through run_agent events and keep aria_cli.py as orchestration glue.",),
+        next_steps=("Verify the use_runtime_loop path in a live REPL, default it on, then retire the inline send_message loop so the turn runs entirely through run_agent.",),
     ),
     ArchitectureLayer(
         name="tools",
@@ -146,11 +146,11 @@ _ARCHITECTURE_LAYERS: Tuple[ArchitectureLayer, ...] = (
         name="observability",
         responsibility="Doctor checks, traces, provider health, audit logs, and user-visible diagnostics.",
         target_state="Health checks explain missing services, degraded providers, unsafe configs, and incomplete architecture layers.",
-        current_state="Provider and package doctor checks exist; architecture coverage is now represented by this contract.",
+        current_state="Provider and package doctor checks exist; this contract represents architecture coverage and the /architecture command renders it (layers, status, gaps, per-layer next steps; --gaps for outstanding work).",
         status=LayerStatus.PARTIAL,
-        source_paths=("packages/aria_infra/doctor.py", "packages/aria_services/provider_health.py"),
+        source_paths=("packages/aria_infra/doctor.py", "packages/aria_services/provider_health.py", "apps/cli/commands/diagnostic_ops_cmds.py"),
         depends_on=("services", "mcp", "safety"),
-        next_steps=("Expose architecture gaps in /doctor, /packages doctor, and generated support bundles.",),
+        next_steps=("Fold the architecture summary into /doctor and generated support bundles too.",),
     ),
 )
 
