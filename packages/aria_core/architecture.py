@@ -146,11 +146,11 @@ _ARCHITECTURE_LAYERS: Tuple[ArchitectureLayer, ...] = (
         name="observability",
         responsibility="Doctor checks, traces, provider health, audit logs, and user-visible diagnostics.",
         target_state="Health checks explain missing services, degraded providers, unsafe configs, and incomplete architecture layers.",
-        current_state="Provider and package doctor checks exist; this contract represents architecture coverage and the /architecture command renders it (layers, status, gaps, per-layer next steps; --gaps for outstanding work).",
+        current_state="Provider and package doctor checks exist; this contract represents architecture coverage. The /architecture command renders it (layers, status, gaps, per-layer next steps; --gaps for outstanding work) and /doctor prints a one-line coverage summary.",
         status=LayerStatus.PARTIAL,
-        source_paths=("packages/aria_infra/doctor.py", "packages/aria_services/provider_health.py", "apps/cli/commands/diagnostic_ops_cmds.py"),
+        source_paths=("packages/aria_infra/doctor.py", "packages/aria_services/provider_health.py", "apps/cli/commands/diagnostic_ops_cmds.py", "aria_cli.py"),
         depends_on=("services", "mcp", "safety"),
-        next_steps=("Fold the architecture summary into /doctor and generated support bundles too.",),
+        next_steps=("Fold the architecture summary into generated support bundles too.",),
     ),
 )
 

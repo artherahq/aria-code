@@ -6209,7 +6209,19 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
         return DiagnosticOpsCommandsMixin.cmd_todo(self, args)
 
     def cmd_doctor(self, args: str):
-        return DiagnosticOpsCommandsMixin.cmd_doctor(self, args)
+        _r = DiagnosticOpsCommandsMixin.cmd_doctor(self, args)
+        # Architecture coverage summary (observability layer) — /architecture for the
+        # full layered view. Best-effort; never let it break /doctor.
+        try:
+            from packages.aria_core import architecture_gaps, architecture_status_counts
+            _c = architecture_status_counts()
+            _done, _total = _c.get("done", 0), sum(_c.values())
+            _line = (f"架构契约: {_done}/{_total} 层完成 · {len(architecture_gaps())} 层待办"
+                     f"  (/architecture 看详情, --gaps 只看待办)")
+            console.print(f"\n  [dim]{_line}[/dim]") if HAS_RICH else print(f"\n  {_line}")
+        except Exception:
+            pass
+        return _r
 
     # ── Project scaffold templates ────────────────────────────────────────────
 
