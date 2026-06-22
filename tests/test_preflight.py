@@ -1,4 +1,9 @@
-from apps.cli.preflight import build_install_plan, build_intent_preflight, format_preflight_plain
+from apps.cli.preflight import (
+    build_install_plan,
+    build_intent_preflight,
+    format_preflight_plain,
+    select_install_packages,
+)
 
 
 def _modules_available(*present):
@@ -108,6 +113,26 @@ def test_install_plan_deduplicates_packages_and_keeps_tool_hints_structured():
     assert plan.pip_command.startswith("python3 -m pip install ")
     assert any(hint.startswith("playwright:") for hint in plan.command_hints)
     assert plan.has_required_items
+
+
+def test_install_selector_supports_required_optional_custom_and_plan():
+    report = build_intent_preflight(
+        "生成 AAPL 近一年 K线图 png",
+        module_available=_modules_available("pandas", "numpy", "yfinance"),
+        command_available=_commands_available(),
+    )
+    plan = build_install_plan(report)
+
+    required = select_install_packages(plan, report, mode="required")
+    optional = select_install_packages(plan, report, mode="optional")
+    custom = select_install_packages(plan, report, mode="custom", custom=["mplfinance"])
+    dry = select_install_packages(plan, report, mode="plan")
+
+    assert required.pip_packages == ()
+    assert optional.pip_packages == ("matplotlib", "mplfinance")
+    assert custom.pip_packages == ("mplfinance",)
+    assert dry.pip_packages == ()
+    assert set(dry.skipped_packages) == {"matplotlib", "mplfinance"}
 
 
 def test_cloud_preflight_install_plan_keeps_env_setup_separate():

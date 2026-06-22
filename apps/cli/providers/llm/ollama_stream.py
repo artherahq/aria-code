@@ -396,7 +396,7 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
             # Replace system prompt with data-first prompt.
             # Use nano variant for 1-3B models (no template placeholders).
             _is_nano_model = _use_lite_prompt or _model_size in ("nano", "small")
-            _prefetched_sys = _build_prefetched_analysis_prompt(nano=_is_nano_model)
+            _prefetched_sys = _build_prefetched_analysis_prompt(nano=_is_nano_model, user_message=message)
             if messages and messages[0].get("role") == "system":
                 messages[0]["content"] = _prefetched_sys
             else:

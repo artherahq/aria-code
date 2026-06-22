@@ -32,6 +32,31 @@ LANG_RULE: dict[str, str] = {
 }
 
 
+def build_response_style_rule(lang: str) -> str:
+    """Shared terminal-answer contract inspired by Claude Code's concise style."""
+    if lang == "en":
+        return (
+            "## Terminal Answer Style\n"
+            "- Lead with the answer or conclusion. Do not start with filler such as 'Sure' or 'I can help'.\n"
+            "- Use short sections only when they improve scanning. Prefer 1-3 word headings.\n"
+            "- For analysis: Conclusion -> Evidence -> Risk/Limitations -> Next.\n"
+            "- For errors or missing data: state what failed, why if known, and the exact next action.\n"
+            "- Keep output compact: avoid repeated disclaimers, generic education, and duplicated sections.\n"
+            "- Use Markdown tables only for dense numeric comparisons; otherwise use bullets or short prose.\n"
+            "- Never invent data. If a field is unavailable, say the source did not return it and continue with available data.\n\n"
+        )
+    return (
+        "## 终端回答风格\n"
+        "- 先给结论或直接答案，不要以“好的/当然/我来帮你”开头。\n"
+        "- 只有在便于扫读时才使用短标题，标题控制在 1-3 个词。\n"
+        "- 分析类回答按：结论 -> 依据 -> 风险/限制 -> 下一步。\n"
+        "- 错误或缺数据时：说明失败点、已知原因、可执行的下一步。\n"
+        "- 输出要紧凑：避免重复免责声明、泛泛教学和重复章节。\n"
+        "- 数字密集对比才用 Markdown 表格；普通解释用短段落或列表。\n"
+        "- 绝不编造数据。字段不可用时说明数据源未返回，并继续使用已有数据。\n\n"
+    )
+
+
 # ── Builder functions ─────────────────────────────────────────────────────────
 
 def build_coding_prompt_lite(user_message: str) -> str:
@@ -135,6 +160,7 @@ def build_analysis_prompt_lite(user_message: str) -> str:
     return (
         intro
         + lr
+        + build_response_style_rule(lang)
         + rules_hdr
         + "1. 如果上方系统提示中已注入了「📊 实时行情」或「📈 技术指标」数据块，\n"
         "   必须直接使用这些数字作答，绝不修改或替换任何数值。\n"
@@ -206,6 +232,7 @@ def build_finance_prompt(user_message: str = "") -> str:
         intro
         + lr
         + conduct
+        + build_response_style_rule(lang)
         + "## ⚠️ 实时数据规则（最重要！）\n"
         "- 你**不知道任何股票的当前价格、涨跌幅、市值**。绝对不编造具体数字。\n"
         "- 如用户问当前股价/市值：回答'我没有实时数据，请用 `/quote AAPL` 命令获取当前价格。'\n"
@@ -314,6 +341,10 @@ def build_analysis_system_prompt() -> str:
     return (
         f"You are Aria, an expert quantitative finance AI analyst. Today is {today}.\n"
         "Your job is to provide data-driven, structured financial analysis.\n\n"
+        "## Language\n"
+        "Match the user's language. If the user writes in Chinese, answer in Chinese. "
+        "If the user writes in English, answer in English. Keep financial terms such as RSI, MACD, P/E unchanged.\n\n"
+        + build_response_style_rule("en") +
 
         "## ABSOLUTE RULES\n"
         "1. ALWAYS call get_market_data (or get_crypto_data / get_forex_data) FIRST to fetch live prices.\n"
@@ -401,15 +432,26 @@ def build_analysis_system_prompt() -> str:
     )
 
 
-def build_prefetched_analysis_prompt(nano: bool = False) -> str:
+def build_prefetched_analysis_prompt(nano: bool = False, user_message: str = "") -> str:
     """System prompt for when real market data has already been injected.
 
     nano=True: ultra-minimal prompt for 1-3B models.
     nano=False: structured prompt for 7B+ models.
     """
     today = _dt.now().strftime("%Y年%m月%d日")
+    lang = detect_lang(user_message)
 
     if nano:
+        if lang == "en":
+            return (
+                f"You are Aria, a quantitative finance AI. Today is {_dt.now().strftime('%Y-%m-%d')}.\n"
+                "Real market data has already been injected into the user message.\n"
+                "Only provide the final analysis. Do not explain data fetching.\n"
+                "Keep it under five lines: price/change, RSI, MACD, support/resistance, short-term view.\n"
+                "If a field is missing, write `—` and say the data source did not return it. Do not invent values.\n"
+                "RSI: >70 overbought risk, <30 oversold rebound potential, 30-70 neutral.\n"
+                "MACD: hist>0 bullish momentum, hist<0 bearish momentum.\n"
+            )
         return (
             f"你是 Aria，量化金融 AI。今天是 {today}。\n"
             "用户消息前半部分已经包含真实行情数据；可能还包含技术指标数据。\n"
@@ -420,12 +462,31 @@ def build_prefetched_analysis_prompt(nano: bool = False) -> str:
             "MACD 规则：hist>0 偏多，hist<0 偏空。\n"
         )
 
+    if lang == "en":
+        return (
+            f"You are Aria, a professional quantitative finance analyst. Today is {_dt.now().strftime('%Y-%m-%d')}.\n\n"
+            "## Data Already Fetched\n"
+            "The user message contains real quote and technical data. Do not call tools or APIs.\n\n"
+            + build_response_style_rule("en") +
+            "## Analysis Rules\n"
+            "1. Use only the numbers in the user message. Do not modify or replace them.\n"
+            "2. Extract support/resistance from the 'Key Price Levels' section when present.\n"
+            "3. RSI: <30 oversold, >70 overbought, 30-70 neutral.\n"
+            "4. MACD: hist > 0 bullish momentum, hist < 0 bearish momentum.\n"
+            "5. Give one of: buy / wait / reduce / avoid, with numeric evidence.\n"
+            "6. If a field is missing, write `—` and state the source did not return it.\n\n"
+            "## Output Shape\n"
+            "Use four compact sections: **Price**, **Indicators**, **Levels**, **View**.\n"
+            "No Markdown tables. No preamble. No tool-call text.\n"
+        )
+
     return (
         f"你是 Aria，专业量化金融 AI 分析师。今天是 {today}。\n\n"
 
         "## ⚠️ 重要：数据已经预取完毕，禁止调用工具\n"
         "用户消息中包含真实行情和技术指标数据。\n"
         "你的任务是解读这些数据并给出专业分析，不要试图调用任何工具或 API。\n\n"
+        + build_response_style_rule("zh") +
 
         "## 分析规则\n"
         "1. 价格/指标数字：只能使用用户消息中的数值，逐字引用，不得修改。\n"

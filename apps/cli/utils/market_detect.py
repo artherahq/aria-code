@@ -1177,6 +1177,50 @@ _FINANCIAL_TERMS_BLOCKLIST: frozenset = frozenset({
     "BTC", "ETH", "XRP",  # crypto are handled by _CRYPTO_WORDS
     "AI", "AR", "VR", "ML", "NLP", "API", "SaaS", "B2B", "B2C",
 })
+_FINANCIAL_TERMS_SYMBOL_BLOCKLIST: frozenset = frozenset(
+    str(item).upper() for item in _FINANCIAL_TERMS_BLOCKLIST
+)
+
+_MARKET_SYMBOL_WORD_BLOCKLIST: frozenset = frozenset({
+    "ANALYZE", "ANALYSIS", "DATA", "QUOTE", "QUOTES", "PRICE", "PRICES",
+    "MARKET", "MARKETS", "VOLUME", "VOLUMES", "CHART", "CHARTS", "PLOT",
+    "YAHOO", "STOOQ", "YFINANCE", "AKSHARE", "FINNHUB", "SOURCE",
+    "SOURCES", "PROVIDER", "PROVIDERS", "HISTORY", "HISTORICAL",
+})
+
+
+def _company_alias_symbol_blocklist() -> set[str]:
+    """Words like APPLE/TESLA are company aliases, not Yahoo ticker symbols."""
+    blocked: set[str] = set()
+    for name, ticker in _COMPANY_TO_TICKER.items():
+        alias = str(name or "").strip().upper()
+        resolved = str(ticker or "").strip().upper()
+        if (
+            1 < len(alias) <= 5
+            and alias.isalpha()
+            and resolved
+            and resolved not in ("未上市", "未独立")
+            and not resolved.startswith("PRIVATE:")
+            and alias != resolved
+        ):
+            blocked.add(alias)
+    return blocked
+
+
+_COMPANY_ALIAS_SYMBOL_BLOCKLIST: frozenset = frozenset(_company_alias_symbol_blocklist())
+
+
+def _is_blocked_market_symbol_candidate(symbol: str) -> bool:
+    """Return True for uppercase words that are context terms, not tickers."""
+    normalized = str(symbol or "").strip().upper()
+    if not normalized:
+        return True
+    return (
+        normalized in _FINANCIAL_TERMS_SYMBOL_BLOCKLIST
+        or normalized in _MARKET_SYMBOL_WORD_BLOCKLIST
+        or normalized in _COMPANY_ALIAS_SYMBOL_BLOCKLIST
+    )
+
 
 def _extract_market_symbol(message: str) -> str:
     """Extract a likely market symbol from Chinese company names or tickers."""
@@ -1196,12 +1240,12 @@ def _extract_market_symbol(message: str) -> str:
     if m:
         return m.group(1).upper()
     m = _re_sym.search(r'\b([A-Z]{1,5}(?:\.(?:HK|SH|SZ))?)\b', message)
-    if m and m.group(1) not in _FINANCIAL_TERMS_BLOCKLIST:
+    if m and not _is_blocked_market_symbol_candidate(m.group(1)):
         return m.group(1)
     # Chinese text immediately after a ticker ("AAPL的市场") prevents \b from
     # matching because Unicode word-boundary rules treat 的 as a word char.
     m = _re_sym.search(r'(?<![A-Za-z])([A-Z]{1,5}(?:\.(?:HK|SH|SZ))?)(?![A-Za-z])', message)
-    if m and m.group(1) not in _FINANCIAL_TERMS_BLOCKLIST:
+    if m and not _is_blocked_market_symbol_candidate(m.group(1)):
         return m.group(1)
     return ""
 
@@ -1236,12 +1280,12 @@ def _extract_market_symbols(message: str, limit: int = 6) -> list[str]:
 
     for match in _re_sym.finditer(r'\b([A-Z]{1,5}(?:\.(?:HK|SH|SZ))?)\b', message):
         symbol = match.group(1)
-        if symbol not in _FINANCIAL_TERMS_BLOCKLIST:
+        if not _is_blocked_market_symbol_candidate(symbol):
             add_hit(match.start(), symbol)
 
     for match in _re_sym.finditer(r'(?<![A-Za-z])([A-Z]{1,5}(?:\.(?:HK|SH|SZ))?)(?![A-Za-z])', message):
         symbol = match.group(1)
-        if symbol not in _FINANCIAL_TERMS_BLOCKLIST:
+        if not _is_blocked_market_symbol_candidate(symbol):
             add_hit(match.start(), symbol)
 
     ordered: list[str] = []
