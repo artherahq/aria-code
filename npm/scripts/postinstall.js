@@ -39,7 +39,7 @@ const step  = (n, t) => process.stdout.write(`\n${C.bold}── Step ${n}: ${t}$
 const hr    = () => log(`${C.dim}${"─".repeat(44)}${C.reset}`);
 
 const PLATFORM = process.platform;   // darwin | linux | win32
-const REPO_URL  = "https://github.com/Cinsoul/Aria-Code.git";
+const REPO_URL  = "https://github.com/artherahq/aria-code.git";
 const PATHS = resolveAriaPaths();
 const INSTALL_DIR = PATHS.installDir;
 const INFO_FILE   = PATHS.infoFile;

@@ -16,7 +16,7 @@
   <img src="https://img.shields.io/badge/Ollama-本地大模型-black?style=for-the-badge&logo=llama&logoColor=white" alt="ollama"/>
   <img src="https://img.shields.io/badge/云端-19+供应商-f59e0b?style=for-the-badge" alt="providers"/>
   <img src="https://img.shields.io/badge/协议-MIT-22c55e?style=for-the-badge" alt="license"/>
-  <img src="https://img.shields.io/github/stars/Cinsoul/Aria-Code?style=for-the-badge&color=f59e0b" alt="stars"/>
+  <img src="https://img.shields.io/github/stars/artherahq/aria-code?style=for-the-badge&color=f59e0b" alt="stars"/>
 </p>
 
 <h1 align="center">Aria Code</h1>
@@ -128,7 +128,7 @@ $ aria-code
 全新电脑无需任何前置条件，一条命令搞定：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Cinsoul/Aria-Code/main/bootstrap.sh | bash
+curl -fsSL https://raw.githubusercontent.com/artherahq/aria-code/main/bootstrap.sh | bash
 ```
 
 自动完成以下步骤：
@@ -163,7 +163,7 @@ aria-code
 ### 方式三：Git Clone（已安装 Python 3.10+）
 
 ```bash
-git clone https://github.com/Cinsoul/Aria-Code.git
+git clone https://github.com/artherahq/aria-code.git
 cd Aria-Code
 bash install.sh
 ```
@@ -177,7 +177,7 @@ echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc
 ### 方式三：Windows
 
 ```powershell
-git clone https://github.com/Cinsoul/Aria-Code.git
+git clone https://github.com/artherahq/aria-code.git
 cd Aria-Code
 .\install.ps1
 ```
@@ -185,7 +185,7 @@ cd Aria-Code
 ### 方式四：直接运行（无需安装）
 
 ```bash
-git clone https://github.com/Cinsoul/Aria-Code.git
+git clone https://github.com/artherahq/aria-code.git
 cd Aria-Code
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
@@ -684,7 +684,7 @@ pip install -r requirements.txt
 欢迎贡献！请查看 [CONTRIBUTING.md](./CONTRIBUTING.md)。
 
 ```bash
-git clone https://github.com/Cinsoul/Aria-Code.git
+git clone https://github.com/artherahq/aria-code.git
 cd aria-code
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
@@ -710,6 +710,6 @@ MIT © 2025 Arthera Team — 详见 [LICENSE](./LICENSE)
 <p align="center">
   <a href="https://arthera.finance">官网</a> ·
   <a href="https://github.com/Cinsoul/Arthera">完整平台</a> ·
-  <a href="https://github.com/Cinsoul/Aria-Code/issues">问题反馈</a> ·
-  <a href="https://github.com/Cinsoul/Aria-Code/discussions">讨论社区</a>
+  <a href="https://github.com/artherahq/aria-code/issues">问题反馈</a> ·
+  <a href="https://github.com/artherahq/aria-code/discussions">讨论社区</a>
 </p>

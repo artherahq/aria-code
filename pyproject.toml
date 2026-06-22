@@ -96,9 +96,9 @@ all = [
 aria-code = "apps.cli.main:main"
 
 [project.urls]
-Homepage = "https://github.com/Cinsoul/aria-code"
-Repository = "https://github.com/Cinsoul/aria-code"
-Issues = "https://github.com/Cinsoul/aria-code/issues"
+Homepage = "https://github.com/artherahq/aria-code"
+Repository = "https://github.com/artherahq/aria-code"
+Issues = "https://github.com/artherahq/aria-code/issues"
 
 # ── Package discovery ──────────────────────────────────────────────────────────
 [tool.setuptools]

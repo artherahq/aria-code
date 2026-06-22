@@ -16,7 +16,7 @@
   <img src="https://img.shields.io/badge/Ollama-Local_LLM-black?style=for-the-badge&logo=llama&logoColor=white" alt="ollama"/>
   <img src="https://img.shields.io/badge/Providers-19+_Cloud-f59e0b?style=for-the-badge" alt="providers"/>
   <img src="https://img.shields.io/badge/License-MIT-22c55e?style=for-the-badge" alt="license"/>
-  <img src="https://img.shields.io/github/stars/Cinsoul/Aria-Code?style=for-the-badge&color=f59e0b" alt="stars"/>
+  <img src="https://img.shields.io/github/stars/artherahq/aria-code?style=for-the-badge&color=f59e0b" alt="stars"/>
 </p>
 
 <h1 align="center">Aria Code</h1>
@@ -183,7 +183,7 @@ mindmap
 No Node.js, Python, or Xcode required. One command handles everything:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Cinsoul/Aria-Code/main/bootstrap.sh | bash
+curl -fsSL https://raw.githubusercontent.com/artherahq/aria-code/main/bootstrap.sh | bash
 ```
 
 What it does automatically:
@@ -218,7 +218,7 @@ Repair if broken: `npm explore -g aria-code -- npm run repair`
 ### Option 3: Git clone (if Python 3.10+ is already installed)
 
 ```bash
-git clone https://github.com/Cinsoul/Aria-Code.git
+git clone https://github.com/artherahq/aria-code.git
 cd Aria-Code
 bash install.sh
 ```
@@ -232,7 +232,7 @@ echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc
 ### Option 3: Windows
 
 ```powershell
-git clone https://github.com/Cinsoul/Aria-Code.git
+git clone https://github.com/artherahq/aria-code.git
 cd Aria-Code
 .\install.ps1
 ```
@@ -240,7 +240,7 @@ cd Aria-Code
 ### Option 4: Run directly (no install)
 
 ```bash
-git clone https://github.com/Cinsoul/Aria-Code.git
+git clone https://github.com/artherahq/aria-code.git
 cd Aria-Code
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
@@ -739,7 +739,7 @@ Core dependencies: `rich` · `prompt_toolkit` · `yfinance` · `akshare` · `ccx
 Contributions welcome! See [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ```bash
-git clone https://github.com/Cinsoul/Aria-Code.git
+git clone https://github.com/artherahq/aria-code.git
 cd aria-code
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
@@ -765,6 +765,6 @@ MIT © 2025 Arthera Team — see [LICENSE](./LICENSE)
 <p align="center">
   <a href="https://arthera.finance">Website</a> ·
   <a href="https://github.com/Cinsoul/Arthera">Full Platform</a> ·
-  <a href="https://github.com/Cinsoul/Aria-Code/issues">Issues</a> ·
-  <a href="https://github.com/Cinsoul/Aria-Code/discussions">Discussions</a>
+  <a href="https://github.com/artherahq/aria-code/issues">Issues</a> ·
+  <a href="https://github.com/artherahq/aria-code/discussions">Discussions</a>
 </p>

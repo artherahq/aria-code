@@ -7,7 +7,7 @@ We welcome contributions of all kinds — bug fixes, new features, documentation
 ## Quick Start
 
 ```bash
-git clone https://github.com/Cinsoul/Aria-Code.git
+git clone https://github.com/artherahq/aria-code.git
 cd aria-code
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt

@@ -9,7 +9,7 @@ secrets.
 At the time this runbook was added, the local repository used:
 
 - canonical local path: `/Users/mac/Desktop/aria-code`
-- personal remote: `origin -> https://github.com/Cinsoul/Aria-Code.git`
+- personal remote: `origin -> https://github.com/artherahq/aria-code.git`
 - active automation branch pattern: `codex/...`
 
 The `codex/` branch prefix is a development namespace created by agent-assisted
@@ -133,7 +133,7 @@ git remote -v
 If CI, permissions, or secrets are not ready:
 
 ```bash
-git remote set-url origin https://github.com/Cinsoul/Aria-Code.git
+git remote set-url origin https://github.com/artherahq/aria-code.git
 git fetch origin
 ```
 

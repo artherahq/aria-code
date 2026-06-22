@@ -4,7 +4,7 @@
 #  Works on a completely fresh Mac with nothing installed.
 #
 #  Usage (one-liner):
-#    curl -fsSL https://raw.githubusercontent.com/Cinsoul/Aria-Code/main/bootstrap.sh | bash
+#    curl -fsSL https://raw.githubusercontent.com/artherahq/aria-code/main/bootstrap.sh | bash
 #
 #  Or after cloning:
 #    bash bootstrap.sh
@@ -164,7 +164,7 @@ else
         ok "Repository up to date"
     else
         info "Cloning Aria Code into $REPO_DIR …"
-        git clone https://github.com/Cinsoul/Aria-Code.git "$REPO_DIR"
+        git clone https://github.com/artherahq/aria-code.git "$REPO_DIR"
         ok "Cloned to $REPO_DIR"
     fi
     INSTALL_SH="$REPO_DIR/install.sh"

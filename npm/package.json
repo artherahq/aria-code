@@ -6,11 +6,11 @@
     "ai", "llm", "finance", "trading", "terminal", "cli",
     "stocks", "quantitative", "ollama", "investment", "quant"
   ],
-  "homepage": "https://github.com/Cinsoul/Aria-Code#readme",
-  "bugs": { "url": "https://github.com/Cinsoul/Aria-Code/issues" },
+  "homepage": "https://github.com/artherahq/aria-code#readme",
+  "bugs": { "url": "https://github.com/artherahq/aria-code/issues" },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Cinsoul/Aria-Code.git"
+    "url": "git+https://github.com/artherahq/aria-code.git"
   },
   "license": "MIT",
   "author": "Cinsoul",
