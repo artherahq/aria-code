@@ -5,19 +5,15 @@ States
   The mascot stays visually stable at startup. Runtime state is shown by the
   compact status dot so the banner keeps the same low-noise feel as Claude Code.
 
-Robot shape (7 terminal rows, hand-tuned for light and dark terminals):
-
-    ░░░░░░░░░░
-  ░░          ░░
-▓░  ██████████  ░▓
-▓▮  ██▌   ▬▬██  ▮▓
-▓░  ██████████  ░▓
-  ░░▄▄▄▄▄▄▄▄▄▄░░
-    ▓▓  ▓▓  ▓▓  ▓▓
+Robot shape (7 rows, 13 columns, hand-placed). It is intentionally drawn as a
+terminal icon, not a raster-image conversion: light shell, dark screen, one
+white eye, one copper eye, a copper status strip, and four small legs.
 """
 
 from __future__ import annotations
 
+import os
+import sys
 import threading
 import time
 from enum import Enum
@@ -81,36 +77,99 @@ _STATUS = {
     RobotState.DONE:      "done",
 }
 
-_SHELL_STYLE = "bold #d9cbb7"
-_SCREEN_STYLE = "bold #0d1117"
-_SHADOW_STYLE = "dim #9f9a90"
-_LEG_STYLE = "dim #bdb7ad"
-_EYE_LIGHT_STYLE = "bold #f8f4ec"
-_ACCENT_STYLE = "bold #ffb35c"
+# ── Theme-aware palette ───────────────────────────────────────────────────────
+# Every region is a BACKGROUND fill — a space painted with an `on <colour>` style.
+# The terminal paints a cell background across the whole line height (including the
+# inter-row gap), so fills join into a solid shape with no horizontal striping.
+# Two palettes (light/dark) are swapped from the OS/terminal theme so the robot
+# inverts (white-on-dark ↔ dark-on-light) and never disappears into the background.
+# The copper accent reads on both, so it is shared (just darkened a touch on light).
+_PALETTES = {
+    "dark": {
+        "shelltop": "#e8e2d4",             # thin top cap (▄): fg only → transparent above
+        "shell":    "on #e8e2d4",          # light shell body
+        "screen":   "on #0d1117",          # dark screen
+        "eye":      "#f6f2ea on #0d1117",  # light square eye (▀)
+        "dash":     "#C08050 on #0d1117",  # copper dash (▬)
+        "ear":      "#C08050 on #9d9488",  # copper dot on a gray ear nub (▪)
+        "strip":    "#C08050 on #e8e2d4",  # copper strip on the body bottom (▬)
+        "leg":      "#8a8176",             # gray legs (▀)
+    },
+    "light": {
+        "shelltop": "#E7E1D3",             # warm cap, matching the light shell
+        "shell":    "on #E7E1D3",          # warm shell, distinct from white terminal bg
+        "screen":   "on #0D1117",          # same dark screen as dark mode
+        "eye":      "#F6F2EA on #0D1117",  # light eye on dark screen
+        "dash":     "#9A6700 on #0D1117",  # dark copper on dark screen
+        "ear":      "#9A6700 on #6E7781",  # copper dot on gray side nub
+        "strip":    "#9A6700 on #E7E1D3",  # copper strip on warm shell
+        "leg":      "#6E7781",             # medium gray legs
+    },
+}
 
-_MASCOT_ROWS = [
-    [("", "    "), (_SHELL_STYLE, "░░░░░░░░░░"), ("", "    ")],
-    [("", "  "), (_SHELL_STYLE, "░░          ░░"), ("", "  ")],
-    [(_SHADOW_STYLE, "▓"), (_SHELL_STYLE, "░  "), (_SCREEN_STYLE, "██████████"), (_SHELL_STYLE, "  ░"), (_SHADOW_STYLE, "▓")],
+_theme_cache: str | None = None
+
+
+def _resolve_theme() -> str:
+    pref = os.environ.get("ARIA_THEME", "").strip().lower()
+    if pref in ("light", "dark"):
+        return pref
+    if sys.platform == "darwin":
+        try:
+            import subprocess
+            r = subprocess.run(
+                ["defaults", "read", "-g", "AppleInterfaceStyle"],
+                capture_output=True, text=True, timeout=1,
+            )
+            # `defaults` prints "Dark" in dark mode and errors (non-zero) in light.
+            return "dark" if (r.returncode == 0 and "dark" in r.stdout.lower()) else "light"
+        except Exception:
+            pass
+    # xterm-style COLORFGBG ("fg;bg"): bg 0-6/8 → dark, 7/9-15 → light.
+    cfb = os.environ.get("COLORFGBG", "")
+    if ";" in cfb:
+        try:
+            bg = int(cfb.split(";")[-1])
+            return "light" if (bg == 7 or bg >= 9) else "dark"
+        except Exception:
+            pass
+    return "dark"
+
+
+def detect_theme() -> str:
+    """Return 'light' or 'dark' for the mascot, auto-detected once and cached.
+
+    Order: ``ARIA_THEME`` env override → macOS system appearance → ``COLORFGBG``
+    → default dark.
+    """
+    global _theme_cache
+    if _theme_cache is None:
+        _theme_cache = _resolve_theme()
+    return _theme_cache
+
+
+# 11 cols × 5 rows — a SOLID body with a "monitor" screen cut into it, modelled on
+# the minimal robot icon and kept short/flat to sit beside the three-line banner
+# text. Each cell is ``(palette-role, text)``; get_robot_row() resolves the role
+# to a themed style. Layout: ▄ top cap · screen · eye(▀) + dash(▬) + ear dots(▪)
+# · copper strip(▬) · legs(▀).
+_MASCOT_TEMPLATE = [
+    [("", " "), ("shelltop", "▄▄▄▄▄▄▄▄▄"), ("", " ")],
+    [("", " "), ("shell", " "), ("screen", "       "), ("shell", " "), ("", " ")],
     [
-        (_SHADOW_STYLE, "▓"),
-        (_ACCENT_STYLE, "▮"),
-        (_SHELL_STYLE, "  "),
-        (_SCREEN_STYLE, "██"),
-        (_EYE_LIGHT_STYLE, "▌"),
-        (_SCREEN_STYLE, "   "),
-        (_ACCENT_STYLE, "▬▬"),
-        (_SCREEN_STYLE, "██"),
-        (_SHELL_STYLE, "  "),
-        (_ACCENT_STYLE, "▮"),
-        (_SHADOW_STYLE, "▓"),
+        ("ear", "▪"), ("shell", " "),
+        ("screen", " "), ("eye", "▀"), ("screen", "   "),
+        ("dash", "▬"), ("screen", " "),
+        ("shell", " "), ("ear", "▪"),
     ],
-    [(_SHADOW_STYLE, "▓"), (_SHELL_STYLE, "░  "), (_SCREEN_STYLE, "██████████"), (_SHELL_STYLE, "  ░"), (_SHADOW_STYLE, "▓")],
-    [("", "  "), (_SHELL_STYLE, "░░"), (_ACCENT_STYLE, "▄▄▄▄▄▄▄▄▄▄"), (_SHELL_STYLE, "░░"), ("", "  ")],
-    [("", "    "), (_LEG_STYLE, "▓▓"), ("", "  "), (_LEG_STYLE, "▓▓"), ("", "  "), (_LEG_STYLE, "▓▓"), ("", "  "), (_LEG_STYLE, "▓▓")],
+    [("", " "), ("strip", "▬▬▬▬▬▬▬▬▬"), ("", " ")],
+    [
+        ("", "  "), ("leg", "▀"), ("", " "), ("leg", "▀"), ("", " "),
+        ("leg", "▀"), ("", " "), ("leg", "▀"), ("", "  "),
+    ],
 ]
 
-ROBOT_ROW_COUNT = len(_MASCOT_ROWS)
+ROBOT_ROW_COUNT = len(_MASCOT_TEMPLATE)
 
 
 def _resolve_eyes(state: RobotState, tick: int) -> tuple[str, str]:
@@ -127,19 +186,15 @@ def _resolve_eyes(state: RobotState, tick: int) -> tuple[str, str]:
 
 
 def get_robot_row(tick: int, row: int) -> list:
-    """Return FormattedText fragments for a single robot row.
+    """Return FormattedText fragments for a single robot row, themed.
 
-    Rows:
-      0 → shell cap
-      1 → shell shoulders
-      2 → screen top
-      3 → side LEDs + eyes
-      4 → screen bottom
-      5 → copper underline
-      6 → legs
+    Rows: 0 shell top · 1 screen · 2 ear dots + eyes (square · dash) · 3 copper
+    strip · 4 legs. Each role is resolved to a colour for the active light/dark
+    theme (see detect_theme()).
     """
     del tick
-    return _MASCOT_ROWS[row]
+    pal = _PALETTES[detect_theme()]
+    return [(pal[key] if key else "", text) for key, text in _MASCOT_TEMPLATE[row]]
 
 
 def get_robot_frame(tick: int) -> list:
@@ -161,6 +216,14 @@ def get_status_dot(tick: int) -> list:
     """
     state = get_robot_state()
     col   = _COLOUR[state]
+    if detect_theme() == "light":
+        col = {
+            RobotState.IDLE:      "#9A6700",
+            RobotState.THINKING:  "#9A6700",
+            RobotState.STREAMING: "#1A7F37",
+            RobotState.ERROR:     "#CF222E",
+            RobotState.DONE:      "#1A7F37",
+        }[state]
     el, _ = _resolve_eyes(state, tick)
     if state is RobotState.IDLE:
         el = "•"
