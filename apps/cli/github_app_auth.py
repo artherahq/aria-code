@@ -36,7 +36,7 @@ ARIA_BOT_EMAIL = f"{ARIA_APP_ID}+{ARIA_APP_SLUG}[bot]@users.noreply.github.com"
 ARIA_BOT_NAME  = "Aria Code"
 
 # GitHub user account for Aria — shows up in Contributors
-ARIA_GITHUB_LOGIN = os.getenv("ARIA_GITHUB_LOGIN", "aria-artherahq")
+ARIA_GITHUB_LOGIN = os.getenv("ARIA_GITHUB_LOGIN", "ariaaii")
 ARIA_GITHUB_EMAIL = os.getenv("ARIA_GITHUB_EMAIL", "support@arthera.finance")
 
 
