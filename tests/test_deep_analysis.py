@@ -297,5 +297,41 @@ class LLMCriticTests(unittest.TestCase):
         self.assertEqual(asyncio.run(llm_critique("X", "syn", "t", None)), [])
 
 
+def test_pipeline_run_orchestrates_team_to_deep_result(monkeypatch):
+    """End-to-end: run() drives team → deepen → themes → quant → critic into a
+    structured DeepAnalysisResult. Fully mocked (no LLM, no network)."""
+    import agents.team as _team
+    from agents.team import TeamResult
+    from agents.deep import DeepAnalysisPipeline
+
+    class _FakeTeam:
+        def __init__(self, **kw):
+            pass
+
+        async def run(self, symbol, agents=None):
+            results = [
+                AgentResult(agent="technical", symbol=symbol, analysis="上行",
+                            confidence=0.8, signal="BUY", key_points=["突破均线"]),
+                AgentResult(agent="risk", symbol=symbol, analysis="风险可控",
+                            confidence=0.7, signal="HOLD", key_points=["回撤有限"]),
+            ]
+            return TeamResult(symbol=symbol, agents_run=["technical", "risk"],
+                              results=results, synthesis="综合：偏多",
+                              final_signal="BUY", confidence=0.75)
+
+    monkeypatch.setattr(_team, "AgentTeam", _FakeTeam)
+
+    pipe = DeepAnalysisPipeline(llm_provider=None)   # deterministic deepen, no LLM critic
+    res = asyncio.run(pipe.run(
+        "TEST", quant_provider=lambda s: {}, tool_runner=lambda t, p: None))
+
+    assert res.symbol == "TEST"
+    assert res.final_signal in {"STRONG_BUY", "BUY", "HOLD", "SELL", "STRONG_SELL"}
+    assert res.themes                        # P1 theme grouping ran
+    assert res.critique is not None          # P1 self-check ran
+    assert res.calibrated_confidence >= 0.0  # P2 calibration produced a value
+    assert res.elapsed_sec >= 0.0
+
+
 if __name__ == "__main__":
     unittest.main()
