@@ -84,7 +84,22 @@ if [[ "$OS" == "Darwin" ]]; then
         ok "Homebrew already installed: $(brew --version | head -1)"
     else
         info "Installing Homebrew (this may take 2–3 minutes)…"
-        /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+        # Homebrew requires an interactive TTY for sudo — detect piped mode
+        if [[ ! -t 0 ]]; then
+            warn "Running in non-interactive mode (curl | bash)."
+            warn "Homebrew cannot be installed automatically without a terminal."
+            echo
+            echo -e "  ${BOLD}Please install Homebrew first, then re-run:${NC}"
+            echo -e "  ${CYAN}  /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\"${NC}"
+            echo -e "  ${CYAN}  curl -fsSL https://raw.githubusercontent.com/artherahq/aria-code/main/bootstrap.sh | bash${NC}"
+            echo
+            echo -e "  ${DIM}Or install without Homebrew if Python 3.10+ is already present:${NC}"
+            echo -e "  ${CYAN}  git clone https://github.com/artherahq/aria-code.git ~/aria-code && cd ~/aria-code && bash install.sh${NC}"
+            exit 1
+        fi
+
+        NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 
         # Activate brew for the current shell session
         if [[ -f /opt/homebrew/bin/brew ]]; then
