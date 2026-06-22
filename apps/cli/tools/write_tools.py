@@ -251,6 +251,26 @@ def _write_policy_confirm(p: pathlib.Path, content: str, existed: bool) -> tuple
     return choice in ("y", "yes", ""), p
 
 
+# ── Rich diff helper ─────────────────────────────────────────────────────────
+
+def _print_inline_diff(old_str: str, new_str: str, console, max_lines: int = 12) -> None:
+    """Print a compact color-coded inline diff after an edit_file call."""
+    old_lines = old_str.splitlines()
+    new_lines = new_str.splitlines()
+
+    total_changed = max(len(old_lines), len(new_lines))
+    if total_changed > max_lines:
+        console.print(f"  [dim]  (diff too large to display inline — {total_changed} lines)[/dim]")
+        return
+
+    for line in old_lines:
+        display = line[:120]
+        console.print(f"  [red dim]-  {display}[/red dim]")
+    for line in new_lines:
+        display = line[:120]
+        console.print(f"  [green dim]+  {display}[/green dim]")
+
+
 # ── Public tool functions ─────────────────────────────────────────────────────
 
 def tool_write_file(params: dict) -> dict:
@@ -497,7 +517,9 @@ def tool_edit_file(params: dict) -> dict:
                 parts.append(f"[green]+{added}[/green]")
             if removed > 0:
                 parts.append(f"[red]-{removed}[/red]")
-            console.print(f"  [dim]Applied ({', '.join(parts)} lines)[/dim]")
+            short_path = str(p.name) if len(str(p)) > 60 else str(p)
+            console.print(f"  [dim]✎ [bold]{short_path}[/bold]  ({', '.join(parts)} lines)[/dim]")
+            _print_inline_diff(old_str, new_str, console)
         else:
             print(f"  Applied (+{added}, -{removed} lines)")
 

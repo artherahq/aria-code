@@ -36,6 +36,17 @@ from .agent_loop import (
 from .approval import ApprovalDecision, apply_approval_decision
 from .events import RuntimeEvent, RuntimeTrace, ToolCallRecord, TurnResultRecord
 from .tool_executor import ToolExecutor
+from .tool_policy import check_tool_policy, add_to_policy, remove_from_policy, load_tool_policy
+from .subagent import (
+    SUBAGENT_TOOLS,
+    SUBAGENT_SCHEMAS,
+    tool_spawn_task,
+    tool_task_status,
+    tool_task_result,
+    tool_task_list,
+    tool_task_cancel,
+    register_runner,
+)
 
 __all__ = [
     "AgentErrorPresentation",
@@ -76,4 +87,16 @@ __all__ = [
     "run_parallel_tools",
     "run_serial_tool",
     "split_tool_calls",
+    "check_tool_policy",
+    "add_to_policy",
+    "remove_from_policy",
+    "load_tool_policy",
+    "SUBAGENT_TOOLS",
+    "SUBAGENT_SCHEMAS",
+    "tool_spawn_task",
+    "tool_task_status",
+    "tool_task_result",
+    "tool_task_list",
+    "tool_task_cancel",
+    "register_runner",
 ]

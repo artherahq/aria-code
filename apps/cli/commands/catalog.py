@@ -72,7 +72,7 @@ VISIBLE_SLASH_COMMANDS: FrozenSet[str] = frozenset({
     # Broker
     "/broker", "/account", "/positions", "/orders", "/paper", "/trade",
     # Code & project
-    "/project", "/init", "/review", "/code", "/plan", "/run",
+    "/project", "/init", "/review", "/code", "/plan", "/run", "/tasks",
     # Research
     "/team", "/deep",
     # Quant

@@ -1361,6 +1361,114 @@ class ModelCommandsMixin:
             self.terminal.config.update(fresh)
             msg = f"Config reloaded from {config_snapshot()['config_file']}"
             console.print(f"[dim]{msg}[/dim]" if HAS_RICH else msg)
+
+        elif parts[0] == "allow":
+            # /config allow <tool_name>  — permanently auto-approve this tool
+            if len(parts) < 2:
+                msg = "Usage: /config allow <tool_name>  (e.g. /config allow read_file)"
+                console.print(f"[dim]{msg}[/dim]") if HAS_RICH else print(msg)
+                return
+            tool = parts[1].strip()
+            try:
+                from runtime.tool_policy import add_to_policy
+                add_to_policy(tool, "allow")
+                msg = f"✓ 工具 '{tool}' 加入永久白名单（始终自动批准，无需确认）"
+                console.print(f"[green]{msg}[/green]") if HAS_RICH else print(msg)
+            except Exception as _e:
+                console.print(f"[red]Error: {_e}[/red]") if HAS_RICH else print(f"Error: {_e}")
+
+        elif parts[0] == "deny":
+            # /config deny <tool_name>  — permanently block this tool
+            if len(parts) < 2:
+                msg = "Usage: /config deny <tool_name>  (e.g. /config deny run_command)"
+                console.print(f"[dim]{msg}[/dim]") if HAS_RICH else print(msg)
+                return
+            tool = parts[1].strip()
+            try:
+                from runtime.tool_policy import add_to_policy
+                add_to_policy(tool, "deny")
+                msg = f"✓ 工具 '{tool}' 加入黑名单（始终拒绝，不会执行）"
+                console.print(f"[red]{msg}[/red]") if HAS_RICH else print(msg)
+            except Exception as _e:
+                console.print(f"[red]Error: {_e}[/red]") if HAS_RICH else print(f"Error: {_e}")
+
+        elif parts[0] == "ask":
+            # /config ask <tool_name>  — always prompt before this tool
+            if len(parts) < 2:
+                msg = "Usage: /config ask <tool_name>  (e.g. /config ask write_file)"
+                console.print(f"[dim]{msg}[/dim]") if HAS_RICH else print(msg)
+                return
+            tool = parts[1].strip()
+            try:
+                from runtime.tool_policy import add_to_policy
+                add_to_policy(tool, "ask")
+                msg = f"✓ 工具 '{tool}' 设为始终询问（每次执行前都弹出确认）"
+                console.print(f"[yellow]{msg}[/yellow]") if HAS_RICH else print(msg)
+            except Exception as _e:
+                console.print(f"[red]Error: {_e}[/red]") if HAS_RICH else print(f"Error: {_e}")
+
+        elif parts[0] == "policy":
+            # /config policy          — show all policy settings
+            # /config policy reset    — reset to defaults
+            sub = parts[1].lower() if len(parts) > 1 else "show"
+            try:
+                from runtime.tool_policy import load_tool_policy, save_tool_policy, remove_from_policy
+                if sub == "reset":
+                    save_tool_policy({"allowed": [], "denied": [], "ask_always": []})
+                    msg = "✓ 工具权限策略已重置为默认值"
+                    console.print(f"[green]{msg}[/green]") if HAS_RICH else print(msg)
+                elif sub in ("remove", "rm") and len(parts) > 2:
+                    tool = parts[2].strip()
+                    removed = remove_from_policy(tool)
+                    if removed:
+                        msg = f"✓ '{tool}' 已从策略中移除"
+                        console.print(f"[green]{msg}[/green]") if HAS_RICH else print(msg)
+                    else:
+                        msg = f"'{tool}' 不在任何策略列表中"
+                        console.print(f"[dim]{msg}[/dim]") if HAS_RICH else print(msg)
+                else:
+                    policy = load_tool_policy()
+                    if HAS_RICH:
+                        console.print()
+                        console.print("  [bold]工具权限策略[/bold]  [dim]~/.arthera/tool_policy.json[/dim]")
+                        console.print()
+                        allowed = policy.get("allowed", [])
+                        denied = policy.get("denied", [])
+                        asked = policy.get("ask_always", [])
+                        if allowed:
+                            console.print(f"  [green]✓ 白名单（自动允许）:[/green]  {', '.join(allowed)}")
+                        else:
+                            console.print("  [dim]✓ 白名单: 空[/dim]")
+                        if denied:
+                            console.print(f"  [red]✗ 黑名单（始终拒绝）:[/red]  {', '.join(denied)}")
+                        else:
+                            console.print("  [dim]✗ 黑名单: 空[/dim]")
+                        if asked:
+                            console.print(f"  [yellow]? 始终询问:[/yellow]  {', '.join(asked)}")
+                        else:
+                            console.print("  [dim]? 始终询问: 空[/dim]")
+                        console.print()
+                        console.print("  [dim]/config allow <tool>   — 加入白名单[/dim]")
+                        console.print("  [dim]/config deny  <tool>   — 加入黑名单[/dim]")
+                        console.print("  [dim]/config ask   <tool>   — 设为始终询问[/dim]")
+                        console.print("  [dim]/config policy remove <tool>  — 移除策略[/dim]")
+                        console.print("  [dim]/config policy reset          — 清空所有策略[/dim]")
+                        console.print()
+                    else:
+                        print("\n  Tool Policy:")
+                        print(f"  Allowed:    {', '.join(policy.get('allowed', [])) or 'none'}")
+                        print(f"  Denied:     {', '.join(policy.get('denied', [])) or 'none'}")
+                        print(f"  Ask-always: {', '.join(policy.get('ask_always', [])) or 'none'}")
+            except Exception as _e:
+                console.print(f"[red]Error: {_e}[/red]") if HAS_RICH else print(f"Error: {_e}")
+
         else:
-            console.print("[dim]Usage: /config [show] | /config set key=value | /config reload[/dim]" if HAS_RICH
-                          else "Usage: /config [show] | /config set key=value | /config reload")
+            console.print(
+                "[dim]Usage: /config [show] | /config set key=value | /config reload\n"
+                "       /config allow <tool> | /config deny <tool> | /config ask <tool>\n"
+                "       /config policy [reset|remove <tool>][/dim]"
+                if HAS_RICH else
+                "Usage: /config [show] | /config set key=value | /config reload\n"
+                "       /config allow <tool> | /config deny <tool> | /config ask <tool>\n"
+                "       /config policy [reset|remove <tool>]"
+            )

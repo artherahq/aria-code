@@ -74,6 +74,8 @@ from runtime import (
     execute_tool_turn,
     LoopGuard,
 )
+from runtime.tool_policy import check_tool_policy
+from apps.cli.plan_mode import PlanModeState
 from workspace import VerificationPlanner, WorkspaceFiles, WorkspaceSecurity
 from apps.cli.commands.catalog import VISIBLE_SLASH_COMMANDS
 from apps.cli.commands.market_context import build_analyze_context, build_analyze_prompt
@@ -2136,6 +2138,15 @@ LOCAL_TOOLS = {
     "broker_order": (_tool_broker_order, "Propose a trade order — requires explicit user confirmation before execution"),
 }
 
+# ── Register subagent tools ──────────────────────────────────────────────────
+try:
+    from runtime.subagent import SUBAGENT_TOOLS, SUBAGENT_SCHEMAS
+    LOCAL_TOOLS.update(SUBAGENT_TOOLS)
+    logger.info("Registered %d subagent tools", len(SUBAGENT_TOOLS))
+except Exception as _exc:
+    logger.debug("Subagent tools init error: %s", _exc)
+    SUBAGENT_SCHEMAS: list = []
+
 # ── Register computer-use tools (browser automation + desktop control) ──────
 _HAS_COMPUTER_USE = False
 try:
@@ -2589,6 +2600,9 @@ _auto_approve_session: bool = _ARIA_BOT_MODE  # Set True when user chooses "Yes,
 # More granular than _auto_approve_session: allows write_file without approving run_command.
 _session_always_allow: set = set()
 
+# Plan mode singleton — intercepts ALL tool calls for step-by-step approval
+_PLAN_MODE = PlanModeState()
+
 # Load JSON hooks once at startup; reloaded on demand via /hooks reload
 try:
     from apps.cli.hooks import load_hooks as _load_hooks, fire as _fire_json_hook
@@ -2771,6 +2785,22 @@ def _confirm_tool_execution_decision(tool_name: str, params: dict,
     """
     if config_policy is None:
         config_policy = _ACTIVE_COMMAND_POLICY[0]
+    # ── Persistent per-tool policy check (allowlist / denylist) ─────────────
+    _policy_verdict = check_tool_policy(tool_name)
+    if _policy_verdict == "deny":
+        if HAS_RICH:
+            console.print(
+                f"  [red]✗ 工具 '{tool_name}' 被永久黑名单拒绝[/red]  "
+                f"[dim]（/config policy remove {tool_name} 可解除）[/dim]"
+            )
+        else:
+            print(f"  ✗ '{tool_name}' blocked by tool policy")
+        return ApprovalDecision.deny(f"blocked by tool policy (deny list)")
+    if _policy_verdict == "allow":
+        if tool_name == "run_command":
+            return ApprovalDecision.allow(policy=config_policy, user_approved=True)
+        return ApprovalDecision.allow()
+
     if _auto_approve_session:
         # Still inject policy so run_command doesn't re-block
         if tool_name == "run_command":
@@ -2781,6 +2811,19 @@ def _confirm_tool_execution_decision(tool_name: str, params: dict,
         if tool_name == "run_command":
             return ApprovalDecision.allow(policy=config_policy, user_approved=True)
         return ApprovalDecision.allow()
+
+    # ── Plan mode: confirm ALL tools (even non-CONFIRM_TOOLS) ────────────────
+    if _PLAN_MODE.active and tool_name not in _CONFIRM_TOOLS:
+        return _PLAN_MODE.confirm_step(
+            tool_name, params,
+            console=console,
+            has_rich=HAS_RICH,
+            arrow_select_fn=_arrow_select,
+        )
+    # Ask-always policy: force confirmation even for normally silent tools
+    if _policy_verdict == "ask" and tool_name not in _CONFIRM_TOOLS:
+        _CONFIRM_TOOLS.add(tool_name)  # promote for this call only
+
     if tool_name not in _CONFIRM_TOOLS:
         return ApprovalDecision.allow()
 
@@ -5535,6 +5578,7 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
             # ── Strategy / plan workflows (declared in usage hints, now wired) ──
             "/apply-plan":   (self.cmd_apply_plan,   "Execute a saved plan: /apply-plan [--resume] [--from N]"),
             "/plan-report":  (self.cmd_plan_report,  "Plan run report: /plan-report [md|json] [file] [--open]"),
+            "/tasks":        (self.cmd_tasks,         "Background tasks: /tasks [list|cancel <id>]"),
             "/optimize-port":(self.cmd_optimize_port,"Portfolio optimization: /optimize-port [SYMBOL...]"),
             "/factor-lab":   (self.cmd_factor_lab,   "Factor lab: /factor-lab [SYMBOL]"),
             "/stat-arb":     (self.cmd_stat_arb,     "Statistical arbitrage: /stat-arb SYMBOL_A SYMBOL_B [period=2y]"),
@@ -6065,10 +6109,103 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
         return OpsCommandsMixin.cmd_services(self, args)
 
     def cmd_plan(self, args: str):
+        sub = args.strip().lower().split()[0] if args.strip() else ""
+
+        if sub in ("mode", "enter", "on", "start"):
+            _PLAN_MODE.enter()
+            if HAS_RICH:
+                console.print()
+                console.print(
+                    "  [bold cyan]◆ 计划模式已激活[/bold cyan]  "
+                    "[dim]每个工具调用前都会显示确认提示[/dim]"
+                )
+                console.print("  [dim]/plan exit  — 退出计划模式[/dim]")
+                console.print()
+            else:
+                print("  Plan mode ON — every tool call will ask for approval.")
+            return
+
+        if sub in ("exit", "off", "stop", "quit"):
+            summary = _PLAN_MODE.summary()
+            _PLAN_MODE.exit()
+            if HAS_RICH:
+                console.print(
+                    f"  [dim]◆ 计划模式已退出  "
+                    f"(共 {summary['total']} 步 · "
+                    f"[green]{summary['approved']} 执行[/green] · "
+                    f"[red]{summary['rejected']} 跳过[/red])[/dim]"
+                )
+            else:
+                print(f"  Plan mode OFF. ({summary['total']} steps, {summary['approved']} approved)")
+            return
+
+        if sub == "status":
+            if _PLAN_MODE.active:
+                summary = _PLAN_MODE.summary()
+                msg = (
+                    f"计划模式: [bold cyan]激活[/bold cyan]  "
+                    f"(已执行 {summary['approved']} 步，跳过 {summary['rejected']} 步)"
+                )
+            else:
+                msg = "计划模式: [dim]未激活[/dim]  (/plan mode 开启)"
+            console.print(f"  {msg}") if HAS_RICH else print(f"  {msg.replace('[bold cyan]', '').replace('[/bold cyan]', '').replace('[dim]', '').replace('[/dim]', '')}")
+            return
+
         return OpsCommandsMixin.cmd_plan(self, args)
 
     def cmd_plan_report(self, args: str):
         return OpsCommandsMixin.cmd_plan_report(self, args)
+
+    def cmd_tasks(self, args: str):
+        """Show and manage background subagent tasks."""
+        try:
+            from runtime.subagent import _TASKS, tool_task_cancel
+        except ImportError:
+            msg = "Subagent module not available."
+            console.print(f"[red]{msg}[/red]") if HAS_RICH else print(msg)
+            return
+
+        parts = args.strip().split()
+        sub = parts[0].lower() if parts else "list"
+
+        if sub == "cancel" and len(parts) > 1:
+            result = tool_task_cancel({"task_id": parts[1]})
+            if result.get("success"):
+                msg = f"✓ Task {parts[1]} cancelled"
+                console.print(f"[green]{msg}[/green]") if HAS_RICH else print(msg)
+            else:
+                console.print(f"[red]{result.get('error', 'Error')}[/red]") if HAS_RICH else print(result.get("error"))
+            return
+
+        # Default: list all tasks
+        tasks = list(_TASKS.values())
+        if not tasks:
+            msg = "没有活跃的后台任务。使用 spawn_task 工具创建任务。"
+            console.print(f"  [dim]{msg}[/dim]") if HAS_RICH else print(msg)
+            return
+
+        if HAS_RICH:
+            console.print()
+            console.print("  [bold]后台任务[/bold]")
+            console.print()
+            status_colors = {"pending": "yellow", "running": "cyan", "done": "green",
+                             "failed": "red", "cancelled": "dim"}
+            for t in tasks:
+                col = status_colors.get(t.status, "white")
+                preview = t.prompt[:60] + ("…" if len(t.prompt) > 60 else "")
+                console.print(
+                    f"  [{col}]●[/{col}] [bold]{t.task_id}[/bold]  "
+                    f"[{col}]{t.status:10s}[/{col}]  "
+                    f"[dim]{t.age_str():>5s}[/dim]  {preview}"
+                )
+            console.print()
+            console.print("  [dim]/tasks cancel <id>  — 取消任务[/dim]")
+            console.print()
+        else:
+            print(f"\n  Background Tasks ({len(tasks)}):")
+            for t in tasks:
+                preview = t.prompt[:50]
+                print(f"  {t.task_id}  {t.status:10s}  {t.age_str():>5s}  {preview}")
 
     def cmd_git(self, args: str):
         return OpsCommandsMixin.cmd_git(self, args)
@@ -8698,6 +8835,25 @@ class ArtheraTerminal:
         self.cancel_event: Optional[asyncio.Event] = None
         self._streaming = False
         self._last_provider = ""   # last successful provider ("" = no message sent yet)
+
+        # ── Wire subagent runner so spawn_task can use the same LLM ─────────
+        try:
+            from runtime.subagent import register_runner as _register_subagent_runner
+            _terminal_ref = self
+
+            async def _subagent_runner(prompt: str) -> str:
+                """Run prompt through the same provider in isolated history."""
+                result = await stream_provider_result(
+                    prompt,
+                    history=[],
+                    config=_terminal_ref.config,
+                    local_tools=LOCAL_TOOLS,
+                )
+                return result.get("response", "") if result.get("success") else ""
+
+            _register_subagent_runner(_subagent_runner)
+        except Exception:
+            pass
         self._actual_model: Optional[str] = None  # actual Ollama model in use (may differ from config)
         self._ollama_alive = False                # set by print_header / health check
         self._installed_models: set = set()       # installed Ollama models (from header detection)
