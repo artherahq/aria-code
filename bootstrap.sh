@@ -4,7 +4,7 @@
 #  Works on a completely fresh Mac with nothing installed.
 #
 #  Usage (one-liner):
-#    curl -fsSL https://raw.githubusercontent.com/artherahq/aria-code/main/bootstrap.sh | bash
+#    curl -fsSL https://raw.githubusercontent.com/artherahq/aria-code/aria-code/bootstrap.sh | bash
 #
 #  Or after cloning:
 #    bash bootstrap.sh
@@ -92,7 +92,7 @@ if [[ "$OS" == "Darwin" ]]; then
             echo
             echo -e "  ${BOLD}Please install Homebrew first, then re-run:${NC}"
             echo -e "  ${CYAN}  /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\"${NC}"
-            echo -e "  ${CYAN}  curl -fsSL https://raw.githubusercontent.com/artherahq/aria-code/main/bootstrap.sh | bash${NC}"
+            echo -e "  ${CYAN}  curl -fsSL https://raw.githubusercontent.com/artherahq/aria-code/aria-code/bootstrap.sh | bash${NC}"
             echo
             echo -e "  ${DIM}Or install without Homebrew if Python 3.10+ is already present:${NC}"
             echo -e "  ${CYAN}  git clone https://github.com/artherahq/aria-code.git ~/aria-code && cd ~/aria-code && bash install.sh${NC}"

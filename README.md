@@ -183,7 +183,7 @@ mindmap
 No Node.js, Python, or Xcode required. One command handles everything:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/artherahq/aria-code/main/bootstrap.sh | bash
+curl -fsSL https://raw.githubusercontent.com/artherahq/aria-code/aria-code/bootstrap.sh | bash
 ```
 
 What it does automatically:

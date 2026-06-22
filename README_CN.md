@@ -128,7 +128,7 @@ $ aria-code
 全新电脑无需任何前置条件，一条命令搞定：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/artherahq/aria-code/main/bootstrap.sh | bash
+curl -fsSL https://raw.githubusercontent.com/artherahq/aria-code/aria-code/bootstrap.sh | bash
 ```
 
 自动完成以下步骤：
