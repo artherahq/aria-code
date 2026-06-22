@@ -61,15 +61,33 @@ def test_service_boundaries_are_registered():
 
     services = service_map()
 
-    assert {"gateway", "runtime", "data", "reports", "brokers", "safety"}.issubset(services)
+    assert {
+        "gateway",
+        "runtime",
+        "settings",
+        "context",
+        "tools",
+        "data",
+        "reports",
+        "brokers",
+        "skills",
+        "mcp",
+        "safety",
+        "observability",
+    }.issubset(services)
     assert "channels" in services
+    assert "settings.permission_policy" in services["settings"].capabilities
+    assert "context.compaction" in services["context"].capabilities
+    assert "tool.permissions" in services["tools"].capabilities
     assert "data.quality" in services["data"].capabilities
+    assert "mcp.provenance" in services["mcp"].capabilities
+    assert "architecture.coverage" in services["observability"].capabilities
     assert PermissionLevel.NETWORK in services["data"].permissions
     assert PermissionLevel.BROKER_READ in services["brokers"].permissions
     assert "broker.trade_preview" in services["brokers"].capabilities
     assert "broker.paper" in services["brokers"].capabilities
     assert "channels" not in required_service_names()
-    assert len(list_service_specs()) >= 8
+    assert len(list_service_specs()) >= 13
 
 
 def test_agent_architecture_contract_tracks_required_layers():
@@ -116,13 +134,21 @@ def test_service_usage_catalog_maps_cli_packages_and_mcp_tools():
     usage = service_usage_map()
 
     assert "broker_execution" in usage
+    assert "agent_runtime" in usage
+    assert "settings_config" in usage
+    assert "context_memory" in usage
+    assert "tool_registry" in usage
+    assert "safety_policy" in usage
+    assert "observability" in usage
     assert "/broker" in usage["broker_execution"].cli_entrypoints
     assert "/paper" in usage["broker_execution"].cli_entrypoints
     assert "/trade" in usage["broker_execution"].cli_entrypoints
     assert "broker_order" in usage["broker_execution"].mcp_tools
+    assert "/architecture" in usage["observability"].cli_entrypoints
+    assert "runtime" in usage["agent_runtime"].package_sources
     assert "mcp_bridge" in usage
     assert "run_backtest" in usage["mcp_bridge"].mcp_tools
-    assert len(list_service_usage_specs()) >= 8
+    assert len(list_service_usage_specs()) >= 14
 
 
 def test_broker_capability_catalog_has_safe_trade_boundaries():

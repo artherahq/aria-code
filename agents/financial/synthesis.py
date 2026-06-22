@@ -57,7 +57,7 @@ class SynthesisAgent(BaseAgent):
         _data_available = bool(_safe_float(_price))
         _market_block = data.get("market_data_block") or _format_market_block(data)
         _target = _snapshot.get("analyst_target")
-        _ma60 = _snapshot.get("ma60")
+        _stop = _risk_stop(_snapshot, _snapshot.get("currency") or "USD")
 
         summary_parts = []
         for r in agent_results:
@@ -77,10 +77,10 @@ class SynthesisAgent(BaseAgent):
             _price_instruction = (
                 "3. Entry strategy using ONLY the supplied current price, MA20/MA60, RSI, MACD and analyst_target.\n"
                 "4. Target/stop rules: use analyst_target only if supplied; otherwise write Target: N/A (analyst target missing). "
-                "Use MA60 or a stated technical support from supplied data as a risk control level only; do not invent prices.\n"
+                "Use stated support first; use MA60 only when price is still above it. If price is already below MA60, call MA60 a recovery level, not a stop. Do not invent prices.\n"
                 f"FINAL: {consensus_signal} | Target: "
                 f"{'$' + str(_target) if _safe_float(_target) else 'N/A (analyst target missing)'} | "
-                f"Stop: {'below MA60 ' + str(_ma60) if _safe_float(_ma60) else 'N/A (technical stop missing)'}"
+                f"Stop: {_stop}"
             )
         else:
             _price_instruction = (
@@ -193,6 +193,39 @@ def _fmt_price(value: Any, currency: str = "USD") -> str:
     return f"{currency} {number:.2f}" if number is not None else "N/A"
 
 
+def _first_level(value: Any) -> float | None:
+    if value in (None, "", [], {}):
+        return None
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            level = _first_level(item)
+            if level is not None:
+                return level
+        return None
+    if isinstance(value, dict):
+        for key in ("price", "level", "value"):
+            level = _safe_float(value.get(key))
+            if level is not None:
+                return level
+        return None
+    text = str(value).replace("USD", "").replace("$", "").split(",")[0].strip()
+    return _safe_float(text)
+
+
+def _risk_stop(snapshot: Dict[str, Any], currency: str = "USD") -> str:
+    support = _first_level(snapshot.get("support") or snapshot.get("supports"))
+    if support is not None:
+        return f"below support {_fmt_price(support, currency)}"
+
+    ma60 = _safe_float(snapshot.get("ma60"))
+    price = _safe_float(snapshot.get("price"))
+    if ma60 is None:
+        return "N/A (technical stop missing)"
+    if price is not None and price < ma60:
+        return f"N/A (already below MA60; recovery level {_fmt_price(ma60, currency)})"
+    return f"below MA60 {_fmt_price(ma60, currency)}"
+
+
 def _format_market_block(data: Dict[str, Any]) -> str:
     snapshot = data.get("market_snapshot", {}) or {}
     quote = data.get("quote", {}) or {}
@@ -223,10 +256,7 @@ def _template_synthesis(symbol: str, results: List[Dict], data: Dict[str, Any] |
     currency = snapshot.get("currency") or "USD"
     price = _fmt_price(snapshot.get("price"), currency)
     target = _fmt_price(snapshot.get("analyst_target"), currency) if _safe_float(snapshot.get("analyst_target")) else "N/A (analyst target missing)"
-    stop = (
-        f"below MA60 {_fmt_price(snapshot.get('ma60'), currency)}"
-        if _safe_float(snapshot.get("ma60")) else "N/A (technical stop missing)"
-    )
+    stop = _risk_stop(snapshot, currency)
     providers = ", ".join(snapshot.get("provider_chain") or []) or "unknown"
     missing = ", ".join(snapshot.get("missing_fields") or []) or "none"
 

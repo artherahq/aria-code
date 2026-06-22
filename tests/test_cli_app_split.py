@@ -45,6 +45,7 @@ from apps.cli.commands.team import (
     resolve_team_symbols,
     run_team_analysis,
     save_team_report,
+    team_quote_snapshot,
     team_agent_names,
 )
 from apps.cli.commands.team_render import build_team_table_rows, render_team_rows_plain, team_mode_label, truncate_cell
@@ -789,6 +790,32 @@ def test_build_team_market_context_extracts_real_snapshot_fields():
     assert context["market_snapshot"]["analyst_target"] == 310.0
     assert "providers=finnhub, yfinance, local_pandas" in context["market_data_block"]
     assert "rsi=39.1" in context["market_data_block"]
+
+
+def test_team_quote_snapshot_downgrades_complete_when_visible_fields_are_missing():
+    bundle = SimpleNamespace(
+        symbol="NFLX",
+        quote={
+            "price": 77.38,
+            "change_pct": 0.55,
+            "currency": "USD",
+            "market_cap": 325_800_000_000,
+        },
+        fundamentals={"name": "Netflix Inc"},
+        technical={"rsi": 22.2, "macd_hist": -0.3282, "ma20": 83.11, "ma60": 90.35},
+        provider_chain=["finnhub", "quote", "yahoo_chart", "fundamentals"],
+        missing_fields=[],
+        warnings=[],
+        errors=[],
+        quality={"status": "complete", "stale": False},
+        status="complete",
+    )
+
+    snapshot = team_quote_snapshot(bundle)
+
+    assert snapshot["status"] == "partial"
+    assert snapshot["quality"]["status"] == "partial"
+    assert set(snapshot["missing_fields"]) >= {"volume", "analyst_target", "risk_metrics"}
 
 
 def test_clean_team_synthesis_text_removes_raw_markdown_noise():

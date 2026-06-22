@@ -145,12 +145,16 @@ def _fmt_compact_number(value: Any) -> str:
     return f"{sign}{number:.0f}"
 
 
+def _dedupe_missing(values: list[Any]) -> list[str]:
+    return list(dict.fromkeys(str(value) for value in values if value not in (None, "", [], {})))
+
+
 def team_quote_snapshot(data_bundle: Any) -> dict[str, Any]:
     quote = getattr(data_bundle, "quote", {}) or {}
     fundamentals = getattr(data_bundle, "fundamentals", {}) or {}
     technical = getattr(data_bundle, "technical", {}) or {}
-    quality = getattr(data_bundle, "quality", {}) or {}
-    return {
+    quality = dict(getattr(data_bundle, "quality", {}) or {})
+    snapshot = {
         "symbol": getattr(data_bundle, "symbol", "") or quote.get("symbol"),
         "price": quote.get("price") or quote.get("current_price") or quote.get("regular_market_price"),
         "change_pct": quote.get("change_pct") or quote.get("change_percent") or quote.get("pct_change"),
@@ -189,6 +193,23 @@ def team_quote_snapshot(data_bundle: Any) -> dict[str, Any]:
         "status": getattr(data_bundle, "status", "data_unavailable"),
         "timestamp": getattr(data_bundle, "timestamp", ""),
     }
+    display_missing = list(snapshot["missing_fields"])
+    if snapshot.get("volume") in (None, "", [], {}):
+        display_missing.append("volume")
+    if snapshot.get("analyst_target") in (None, "", [], {}):
+        display_missing.append("analyst_target")
+    if snapshot.get("beta") in (None, "", [], {}):
+        display_missing.append("risk_metrics")
+    snapshot["missing_fields"] = _dedupe_missing(display_missing)
+    if snapshot["missing_fields"] and snapshot["status"] in {"complete", "ok"}:
+        snapshot["status"] = "partial"
+    quality_missing = _dedupe_missing(list(quality.get("missing_fields") or []) + snapshot["missing_fields"])
+    if quality_missing:
+        quality["missing_fields"] = quality_missing
+        if quality.get("status") in {"complete", "ok"}:
+            quality["status"] = "partial"
+    snapshot["quality"] = quality
+    return snapshot
 
 
 def build_team_market_context(data_bundle: Any) -> dict[str, Any]:

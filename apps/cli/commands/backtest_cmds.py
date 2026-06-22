@@ -91,6 +91,15 @@ def _bt_result_summary(data: dict) -> str:
 class BacktestCommandsMixin:
     """Mixin providing backtest, strategy, factor-lab, and scaffold commands."""
 
+    _bt_num = staticmethod(_bt_num)
+    _bt_pct = staticmethod(_bt_pct)
+    _bt_money = staticmethod(_bt_money)
+    _bt_int = staticmethod(_bt_int)
+    _bt_trade_count = staticmethod(_bt_trade_count)
+    _bt_value = staticmethod(_bt_value)
+    _bt_volume_summary = staticmethod(_bt_volume_summary)
+    _bt_result_summary = staticmethod(_bt_result_summary)
+
     async def cmd_backtest(self, args: str):
         """Direct REST backtest → /api/v1/backtest (falls back to Aria tool).
 
@@ -439,14 +448,14 @@ class BacktestCommandsMixin:
                 tbl.add_column("Metric", style="#57606a")
                 tbl.add_column("Value", justify="right")
                 tbl.add_column("vs B&H", justify="right", style="#57606a")
-                bh = _bt_num(_bt_value(d, "buy_hold_return", "benchmark_return", default=0))
-                trades = _bt_trade_count(d)
+                bh = self._bt_num(self._bt_value(d, "buy_hold_return", "benchmark_return", default=0))
+                trades = self._bt_trade_count(d)
                 rows = [
-                    ("Total Return", _bt_pct(d.get("total_return")), _bt_pct(bh)),
-                    ("Ann. Return",  _bt_pct(_bt_value(d, "annualized_return", "annual_return", default=0)), ""),
-                    ("Sharpe Ratio", f"{_bt_num(d.get('sharpe_ratio')):.2f}", ""),
-                    ("Max Drawdown", _bt_pct(d.get("max_drawdown")), ""),
-                    ("Win Rate",     _bt_pct(d.get("win_rate")), ""),
+                    ("Total Return", self._bt_pct(d.get("total_return")), self._bt_pct(bh)),
+                    ("Ann. Return",  self._bt_pct(self._bt_value(d, "annualized_return", "annual_return", default=0)), ""),
+                    ("Sharpe Ratio", f"{self._bt_num(d.get('sharpe_ratio')):.2f}", ""),
+                    ("Max Drawdown", self._bt_pct(d.get("max_drawdown")), ""),
+                    ("Win Rate",     self._bt_pct(d.get("win_rate")), ""),
                     ("# Trades",     str(trades), ""),
                 ]
                 if d.get("calmar_ratio"):
@@ -456,12 +465,12 @@ class BacktestCommandsMixin:
                 for r in rows:
                     tbl.add_row(*r)
                 console.print(tbl)
-                console.print(f"  [bold]{_bt_result_summary(d)}[/bold]")
+                console.print(f"  [bold]{self._bt_result_summary(d)}[/bold]")
 
-                actual_start = _bt_value(d, "start", "start_date", default=start_date)
-                actual_end = _bt_value(d, "end", "end_date", default=end_date)
-                bars = _bt_int(d.get("bars"))
-                initial = _bt_money(d.get("initial_capital", _initial_capital))
+                actual_start = self._bt_value(d, "start", "start_date", default=start_date)
+                actual_end = self._bt_value(d, "end", "end_date", default=end_date)
+                bars = self._bt_int(d.get("bars"))
+                initial = self._bt_money(d.get("initial_capital", _initial_capital))
                 console.print(
                     f"  [#57606a]source:[/#57606a] {src}"
                     f"  [#57606a]period:[/#57606a] {actual_start} → {actual_end}"
@@ -481,11 +490,11 @@ class BacktestCommandsMixin:
                         f"  [#57606a]status:[/#57606a] {status}"
                         f"  [#57606a]missing:[/#57606a] {missing}"
                     )
-                vol = _bt_volume_summary(d)
+                vol = self._bt_volume_summary(d)
                 if vol:
                     avg = vol.get("average")
                     last = vol.get("last")
-                    coverage = _bt_num(vol.get("coverage"))
+                    coverage = self._bt_num(vol.get("coverage"))
                     console.print(
                         f"  [#57606a]volume:[/#57606a] "
                         f"avg {avg:,.0f} · last {last:,.0f} · coverage {coverage:.0%}"

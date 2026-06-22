@@ -20,6 +20,38 @@ def list_service_usage_specs() -> tuple[ServiceUsageSpec, ...]:
 
     return (
         ServiceUsageSpec(
+            name="agent_runtime",
+            purpose="模型回合、工具调用、并行/串行执行、审批、取消、LoopGuard 和 trace",
+            cli_entrypoints=("/chat", "-p", "aria"),
+            package_sources=("runtime", "packages/aria_sdk", "apps/cli/providers/runtime_bridge.py"),
+            mcp_tools=("aria.agent.run", "aria.tools.execute"),
+            next_step="/architecture --gaps 查看 runtime cutover 状态",
+        ),
+        ServiceUsageSpec(
+            name="settings_config",
+            purpose="模型配置、provider key、权限模式、网络开关、语言和 UI 偏好",
+            cli_entrypoints=("/config", "/model", "/apikey", "/setup"),
+            package_sources=("apps/cli/config_store.py", "apps/cli/config_paths.py", "config"),
+            mcp_tools=(),
+            next_step="/config list 或 /setup",
+        ),
+        ServiceUsageSpec(
+            name="context_memory",
+            purpose="上下文压力检测、自动压缩、会话恢复和用户偏好记忆",
+            cli_entrypoints=("/compact", "/memory", "/session"),
+            package_sources=("packages/aria_services/context.py", "apps/cli/message_processing.py"),
+            mcp_tools=("aria.context.compact",),
+            next_step="/status 查看 auto compact 状态",
+        ),
+        ServiceUsageSpec(
+            name="tool_registry",
+            purpose="本地工具、MCP 工具、schema、权限和 deterministic 输出封装",
+            cli_entrypoints=("/tools", "/mcp", "!shell"),
+            package_sources=("packages/aria_tools", "packages/aria_mcp", "runtime/tool_executor.py"),
+            mcp_tools=("read_file", "run_command", "broker_order"),
+            next_step="/tools 或 /packages tools arthera",
+        ),
+        ServiceUsageSpec(
             name="market_data",
             purpose="行情、历史K线、技术指标、数据质量标记",
             cli_entrypoints=("/quote", "/market", "/ta", "/chart"),
@@ -82,6 +114,22 @@ def list_service_usage_specs() -> tuple[ServiceUsageSpec, ...]:
             package_sources=("packages/quant_engine/mcp_server.py",),
             mcp_tools=("calculate_factors", "run_backtest", "price_option", "execution_schedule"),
             next_step="/packages connect arthera --reload",
+        ),
+        ServiceUsageSpec(
+            name="safety_policy",
+            purpose="文件、shell、网络、券商交易和隐私反馈的统一权限/审计边界",
+            cli_entrypoints=("/permissions", "/trade preview", "/feedback"),
+            package_sources=("safety", "runtime/approval.py", "command_safety.py", "privacy"),
+            mcp_tools=("run_command", "broker_order"),
+            next_step="/permissions 或 /trade mode",
+        ),
+        ServiceUsageSpec(
+            name="observability",
+            purpose="doctor、架构覆盖、数据源健康、trace、manifest 和支持包",
+            cli_entrypoints=("/doctor", "/architecture", "/packages doctor"),
+            package_sources=("packages/aria_infra", "packages/aria_services/provider_health.py"),
+            mcp_tools=("aria.health", "aria.manifest.export"),
+            next_step="/doctor 或 /architecture --gaps",
         ),
     )
 

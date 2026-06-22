@@ -106,11 +106,15 @@ _ARCHITECTURE_LAYERS: Tuple[ArchitectureLayer, ...] = (
         name="services",
         responsibility="Product service boundaries for data, reports, brokers, skills, channels, and gateway.",
         target_state="Business logic lives behind services; CLI, daemon, MCP, and webhooks are adapters.",
-        current_state="Service specs are registered, but several implementations still sit in legacy modules.",
+        current_state="Required service specs now cover gateway, runtime, settings, context, tools, data, reports, brokers, skills, MCP, safety, and observability; several implementations still sit in legacy modules.",
         status=LayerStatus.PARTIAL,
-        source_paths=("packages/aria_services/", "docs/architecture/service_boundaries.md"),
+        source_paths=(
+            "packages/aria_services/",
+            "docs/architecture/service_boundaries.md",
+            "docs/architecture/claude_code_parity_gap_analysis.md",
+        ),
         depends_on=("settings", "runtime", "tools"),
-        next_steps=("Move data, report, broker, and TradingView workflows behind service facades incrementally.",),
+        next_steps=("Extract concrete SettingsService, SafetyService, ReportService, GatewayService, and ObservabilityService implementations behind the registered service manifests.",),
     ),
     ArchitectureLayer(
         name="mcp",
