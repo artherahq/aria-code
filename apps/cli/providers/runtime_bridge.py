@@ -94,7 +94,7 @@ async def run_chat_via_runtime(
     """
     from runtime import AgentOptions, run_agent
     from runtime.agent_loop import (
-        AgentEventError, AgentEventStatus, AgentEventToken,
+        AgentEventComplete, AgentEventError, AgentEventStatus, AgentEventToken,
         AgentEventToolCall, AgentEventToolResult,
     )
 
@@ -106,6 +106,7 @@ async def run_chat_via_runtime(
     executor = build_tool_executor(local_tools, config)
 
     text = ""
+    final = None
     async for ev in run_agent(
         prompt, history, provider_fn=provider_fn, tool_executor=executor,
         options=AgentOptions(max_rounds=max_rounds, tool_schemas=list(tool_schemas)),
@@ -124,6 +125,11 @@ async def run_chat_via_runtime(
         elif isinstance(ev, AgentEventStatus):
             if on_status:
                 on_status(getattr(ev, "phase", "") or "", ev.message)
+        elif isinstance(ev, AgentEventComplete):
+            final = ev.result
         elif isinstance(ev, AgentEventError):
             break
+    # Prefer streamed tokens; fall back to the turn result's authoritative text.
+    if not text and final is not None:
+        text = getattr(final, "final_text", "") or ""
     return text
