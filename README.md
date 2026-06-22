@@ -37,7 +37,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/assets/demo.gif" alt="Aria Code demo" width="860"/>
+  <img src="docs/assets/demo-2026-06-22.gif" alt="Aria Code demo" width="860"/>
 </p>
 
 ---
@@ -183,7 +183,7 @@ mindmap
 No Node.js, Python, or Xcode required. One command handles everything:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/artherahq/aria-code/main/bootstrap.sh | bash
+curl -fsSL https://raw.githubusercontent.com/artherahq/aria-code/aria-code/bootstrap.sh | bash
 ```
 
 What it does automatically:
