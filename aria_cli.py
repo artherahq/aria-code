@@ -5679,7 +5679,8 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
         "/write":     ("Usage: /write [--stage] <file_path>", ["/write report.py", "/write --stage strategy.py"]),
         # ── Financial analysis ──────────────────────────────────────────────
         "/team":      ("Usage: /team [SYMBOL] [--agents a,b] [--full]", ["/team NVDA", "/team AAPL --agents technical,risk", "/team watchlist", "/team SPY --full"]),
-        "/deep":      ("Usage: /deep [SYMBOL] [--brief|--deep] [--agents a,b]", ["/deep NVDA", "/deep AAPL --deep", "/deep 000333 --brief", "/deep TSLA --agents technical,risk,macro"]),
+        "/deep":      ("Usage: /deep [SYMBOL] [--brief|--deep] [--agents a,b]", ["/deep NVDA", "/deep AAPL --deep", "/deep 000333 --brief", "/deep TSLA --agents technical,risk,macro", "/deep calibrate"]),
+        "/architecture": ("Usage: /architecture [--gaps]", ["/architecture", "/architecture --gaps"]),
         "/ta":        ("Usage: /ta [SYMBOL] [days=N]", ["/ta AAPL", "/ta NVDA days=60"]),
         "/signal":    ("Usage: /signal [SYMBOL] [market]", ["/signal AAPL", "/signal sh600519 CN"]),
             "/predict":   ("Usage: /predict [SYMBOL...]", ["/predict sh600519 sh601318"]),
