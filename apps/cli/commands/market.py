@@ -9,7 +9,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Mapping
 
-from apps.cli.utils.market_detect import _extract_market_symbol, _extract_market_symbols
+from apps.cli.utils.market_detect import (
+    _extract_market_symbol,
+    _extract_market_symbols,
+    _is_blocked_market_symbol_candidate,
+)
 
 
 TOP_LEVEL_ROUTES: Mapping[str, str] = {
@@ -77,6 +81,11 @@ _TRADINGVIEW_ANALYSIS_HINTS = (
 )
 
 _ROUTE_SYMBOL_BLOCKLIST = {"K", "LINE", "CHART", "PLOT"}
+_CHART_CONTEXT_TOKEN_BLOCKLIST = {
+    "ABOVE", "BELOW", "INC", "TTM", "RATIO", "SIGNAL", "SUPPORT", "RESIST",
+    "RESISTANCE", "LEVEL", "LEVELS", "HIGH", "LOW", "OPEN", "CLOSE", "AVG",
+    "AVERAGE", "RETURN", "RETURNS", "TREND", "MOMENTUM",
+}
 
 
 def _news_topic(text: str, symbols: list[str]) -> str:
@@ -95,7 +104,11 @@ def _route_symbols(text: str, *, limit: int = 6) -> list[str]:
     for source in (text, text.upper()):
         for symbol in _extract_market_symbols(source, limit=limit):
             normalized = str(symbol or "").upper()
-            if not normalized or normalized in _ROUTE_SYMBOL_BLOCKLIST:
+            if (
+                not normalized
+                or normalized in _ROUTE_SYMBOL_BLOCKLIST
+                or _is_blocked_market_symbol_candidate(normalized)
+            ):
                 continue
             if len(normalized) == 1 and "." not in normalized:
                 continue
@@ -106,7 +119,12 @@ def _route_symbols(text: str, *, limit: int = 6) -> list[str]:
                     return out
     single = _extract_market_symbol(text) or _extract_market_symbol(text.upper())
     normalized = str(single or "").upper()
-    if normalized and normalized not in seen and normalized not in _ROUTE_SYMBOL_BLOCKLIST:
+    if (
+        normalized
+        and normalized not in seen
+        and normalized not in _ROUTE_SYMBOL_BLOCKLIST
+        and not _is_blocked_market_symbol_candidate(normalized)
+    ):
         out.append(normalized)
     return out
 
@@ -125,6 +143,79 @@ class RoutedCommand:
 class TechnicalArgs:
     symbol: str
     days: int = 120
+
+
+@dataclass(frozen=True)
+class AnalysisArgs:
+    symbol: str
+    focus: str = ""
+    lang: str = ""
+
+
+_ANALYSIS_FOCUS_HINTS: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("成交量", "交易量", "量价", "放量", "缩量", "volume", "volumes"), "volume"),
+    (("市值", "market cap", "marketcap", "capitalization"), "market_cap"),
+    (("基本面", "fundamental", "fundamentals", "valuation", "估值"), "fundamentals"),
+    (("技术面", "technical", "rsi", "macd", "支撑", "阻力"), "technical"),
+)
+
+
+def _analysis_focus_from_text(text: str) -> str:
+    low = text.lower()
+    for keywords, focus in _ANALYSIS_FOCUS_HINTS:
+        if any(k in low for k in keywords):
+            return focus
+    return ""
+
+
+def parse_analysis_args(args: str, *, default_symbol: str = "AAPL") -> AnalysisArgs:
+    """Resolve natural-language /analyze args to one clean symbol plus focus."""
+    raw = (args or "").strip()
+    focus = ""
+    lang = ""
+    parts = raw.split()
+    cleaned_parts: list[str] = []
+    skip_next = False
+    for idx, part in enumerate(parts):
+        if skip_next:
+            skip_next = False
+            continue
+        token = part.strip()
+        low = token.lower()
+        if low.startswith("--focus="):
+            focus = low.split("=", 1)[1].strip()
+            continue
+        if low == "--focus" and idx + 1 < len(parts):
+            focus = parts[idx + 1].strip().lower()
+            skip_next = True
+            continue
+        if low.startswith("--lang="):
+            lang = low.split("=", 1)[1].strip().lower()
+            continue
+        if low == "--lang" and idx + 1 < len(parts):
+            lang = parts[idx + 1].strip().lower()
+            skip_next = True
+            continue
+        cleaned_parts.append(token)
+
+    cleaned = " ".join(cleaned_parts).strip()
+    if not focus:
+        focus = _analysis_focus_from_text(raw)
+
+    symbols = _route_symbols(cleaned or raw, limit=1)
+    symbol = symbols[0] if symbols else ""
+    if not symbol:
+        symbol = _extract_market_symbol(cleaned) or _extract_market_symbol((cleaned or raw).upper())
+    if not symbol:
+        for token in cleaned_parts:
+            candidate = token.strip(",，.。:：;；()（）[]【】").upper()
+            if candidate and not candidate.startswith("-") and not _is_blocked_market_symbol_candidate(candidate):
+                symbol = candidate
+                break
+    if lang not in ("zh", "en"):
+        zh_chars = sum(1 for c in raw if "\u4e00" <= c <= "\u9fff")
+        lang = "zh" if zh_chars else ""
+    return AnalysisArgs(symbol=(symbol or default_symbol).upper(), focus=focus, lang=lang)
 
 
 def route_top_level_text(user_input: str, available_commands: set[str]) -> RoutedCommand | None:
@@ -217,12 +308,48 @@ def route_top_level_text(user_input: str, available_commands: set[str]) -> Route
     command = TOP_LEVEL_ROUTES.get(keyword)
     if not command or command not in available_commands:
         return None
+    if command == "/analyze":
+        parsed = parse_analysis_args(rest)
+        focus_arg = f" --focus {parsed.focus}" if parsed.focus else ""
+        zh_chars = sum(1 for c in stripped if "\u4e00" <= c <= "\u9fff")
+        lang_arg = f" --lang {'zh' if zh_chars else 'en'}"
+        return RoutedCommand(command=command, args=f"{parsed.symbol}{focus_arg}{lang_arg}".strip())
     return RoutedCommand(command=command, args=rest)
 
 
 def parse_symbols(args: str, fallback: list[str] | tuple[str, ...]) -> list[str]:
     symbols = [part.upper() for part in args.split() if part.strip()]
     return symbols or [str(item).upper() for item in fallback]
+
+
+def sanitize_chart_symbol_args(raw_symbols: list[str] | tuple[str, ...]) -> list[str]:
+    """Drop analysis words that sometimes leak into chart symbol arguments."""
+    cleaned = [str(item or "").strip().strip(",，") for item in raw_symbols]
+    cleaned = [item for item in cleaned if item]
+    if not cleaned:
+        return []
+    if len(cleaned) == 1:
+        upper = cleaned[0].upper()
+        return [] if _is_blocked_market_symbol_candidate(upper) else cleaned
+
+    upper_tokens = [item.upper() for item in cleaned]
+    has_context_noise = any(
+        token in _CHART_CONTEXT_TOKEN_BLOCKLIST or _is_blocked_market_symbol_candidate(token)
+        for token in upper_tokens
+    )
+
+    out: list[str] = []
+    for raw, upper in zip(cleaned, upper_tokens):
+        if upper in _CHART_CONTEXT_TOKEN_BLOCKLIST:
+            continue
+        if _is_blocked_market_symbol_candidate(upper):
+            continue
+        # MA is a valid ticker (Mastercard), but in noisy generated chart args it
+        # usually comes from moving-average text next to TTM/above/below terms.
+        if upper == "MA" and has_context_noise and len(cleaned) > 2:
+            continue
+        out.append(raw)
+    return out
 
 
 def parse_technical_args(args: str, *, default_symbol: str = "AAPL", default_days: int = 120) -> TechnicalArgs:

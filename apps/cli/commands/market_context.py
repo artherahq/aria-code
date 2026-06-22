@@ -7,6 +7,8 @@ import logging
 import time
 from typing import Any, Callable, Optional
 
+from apps.cli.prompts.system_prompts import build_response_style_rule
+
 
 TA_SESSION_CACHE: dict[str, dict[str, Any]] = {}
 TA_SESSION_CACHE_TTL = 600
@@ -24,19 +26,21 @@ def _store_ta(symbol: str, data: dict[str, Any]) -> None:
         TA_SESSION_CACHE[symbol] = {"data": data, "ts": time.time()}
 
 
-def build_analyze_prompt(symbol: str, context: str, is_cn: bool) -> str:
+def build_analyze_prompt(symbol: str, context: str, is_cn: bool, response_lang: str | None = None) -> str:
     """Build the LLM prompt for /analyze from a prepared market context."""
 
     symbol = symbol.upper()
+    lang = response_lang if response_lang in ("zh", "en") else ("zh" if is_cn else "en")
     _no_explain = (
         "注意：如某字段数据缺失，请直接省略该项，不要写'数据缺失'或'未提供'的说明文字。"
         "对于无数据的章节整体跳过即可。\n"
-        if is_cn else
+        if lang == "zh" else
         "Note: If any data field is missing, skip that item entirely. Do not write 'data unavailable' or explain why it is missing.\n"
     )
-    if is_cn:
+    if lang == "zh":
         return (
             f"{context}\n\n"
+            f"{build_response_style_rule('zh')}"
             f"请对以上 {symbol} 进行综合分析，包括：\n"
             f"1. 技术面分析（趋势判断、支撑/阻力、指标信号）\n"
             f"2. 基本面评估（估值合理性、盈利能力）\n"
@@ -46,6 +50,7 @@ def build_analyze_prompt(symbol: str, context: str, is_cn: bool) -> str:
         )
     return (
         f"{context}\n\n"
+        f"{build_response_style_rule('en')}"
         f"Please provide a comprehensive analysis of {symbol}, covering:\n"
         f"1. Technical analysis (trend, support/resistance, indicator signals)\n"
         f"2. Fundamentals (valuation, profitability — only if data is available)\n"

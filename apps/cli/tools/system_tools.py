@@ -559,11 +559,104 @@ def tool_github(
         number = params.get("number") or params.get("pr")
         return _gh(f"gh pr checks {number or ''}")
 
+    if action in ("git_status", "status"):
+        return tool_run_command(
+            {"command": "git status --short && echo '---' && git log --oneline -5",
+             "cwd": cwd, "policy": policy},
+            console=console, has_rich=has_rich,
+        )
+
+    if action in ("commit_and_push", "commit", "push"):
+        message   = params.get("message", "")
+        branch    = params.get("branch", "")
+        add_files = params.get("files", [])
+        repo      = params.get("repo", "")    # e.g. "artherahq/aria-code"
+        coauthor  = params.get("coauthor", "")
+
+        if not message:
+            return {"success": False, "error": "Missing 'message' for commit_and_push"}
+
+        # ── Aria Code[bot] identity via GitHub App ─────────────────────────────
+        try:
+            from apps.cli.github_app_auth import (
+                get_installation_token, get_aria_git_url,
+                aria_bot_env, ARIA_BOT_NAME, ARIA_BOT_EMAIL,
+            )
+            owner = (repo.split("/")[0] if repo else None) or "artherahq"
+            token = get_installation_token(owner)
+            bot_env = aria_bot_env()
+            auth_available = True
+        except Exception as _auth_err:
+            # Fall back to local git credentials if App not configured
+            token = None
+            bot_env = {
+                "GIT_AUTHOR_NAME":     "Aria Code",
+                "GIT_AUTHOR_EMAIL":    "aria-code[bot]@artherahq.com",
+                "GIT_COMMITTER_NAME":  "Aria Code",
+                "GIT_COMMITTER_EMAIL": "aria-code[bot]@artherahq.com",
+            }
+            auth_available = False
+            ARIA_BOT_NAME  = "Aria Code"
+            ARIA_BOT_EMAIL = "aria-code[bot]@artherahq.com"
+
+        env_prefix = " ".join(f'{k}="{v}"' for k, v in bot_env.items()) + " "
+
+        # ── Build commit message with co-author attribution ────────────────────
+        body = message
+        if coauthor:
+            body += f"\n\nCo-Authored-By: {coauthor}"
+        user_name  = tool_run_command({"command": "git config user.name",  "policy": "safe", "cwd": cwd}).get("output", "").strip()
+        user_email = tool_run_command({"command": "git config user.email", "policy": "safe", "cwd": cwd}).get("output", "").strip()
+        if user_name and user_email and user_email != ARIA_BOT_EMAIL:
+            body += f"\n\nCo-Authored-By: {user_name} <{user_email}>"
+
+        # ── Stage ──────────────────────────────────────────────────────────────
+        stage_cmd = ("git add " + " ".join(shlex.quote(f) for f in add_files)) if add_files else "git add -A"
+        stage_result = tool_run_command(
+            {"command": stage_cmd, "cwd": cwd, "policy": policy},
+            console=console, has_rich=has_rich,
+        )
+        if not stage_result.get("success"):
+            return stage_result
+
+        # ── Commit ─────────────────────────────────────────────────────────────
+        safe_body = body.replace('"', '\\"').replace('$', '\\$')
+        commit_result = tool_run_command(
+            {"command": f'{env_prefix}git commit -m "{safe_body}"',
+             "cwd": cwd, "policy": policy},
+            console=console, has_rich=has_rich,
+        )
+        if not commit_result.get("success"):
+            return commit_result
+
+        # ── Push (use App token remote if available) ───────────────────────────
+        push_branch = branch or tool_run_command(
+            {"command": "git rev-parse --abbrev-ref HEAD", "policy": "safe", "cwd": cwd}
+        ).get("output", "").strip() or "main"
+
+        if auth_available and token and repo:
+            auth_url   = get_aria_git_url(repo, token)
+            push_cmd   = f"git push {shlex.quote(auth_url)} {shlex.quote(push_branch)}"
+        else:
+            push_cmd   = f"git push origin {shlex.quote(push_branch)}"
+
+        push_result = tool_run_command(
+            {"command": push_cmd, "cwd": cwd, "policy": policy, "timeout": 60},
+            console=console, has_rich=has_rich,
+        )
+        return {
+            **push_result,
+            "committed_as": f"{ARIA_BOT_NAME} <{ARIA_BOT_EMAIL}>",
+            "branch": push_branch,
+            "app_auth": auth_available,
+        }
+
     return {
         "success": False,
         "error": (
             f"Unknown GitHub action: '{action}'. "
             "Use: list_prs, list_issues, view_pr, view_issue, create_pr, "
-            "list_commits, search, read_file, pr_diff, pr_checks"
+            "list_commits, search, read_file, pr_diff, pr_checks, "
+            "git_status, commit_and_push"
         ),
     }

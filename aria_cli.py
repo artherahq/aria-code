@@ -77,7 +77,14 @@ from runtime import (
 from workspace import VerificationPlanner, WorkspaceFiles, WorkspaceSecurity
 from apps.cli.commands.catalog import VISIBLE_SLASH_COMMANDS
 from apps.cli.commands.market_context import build_analyze_context, build_analyze_prompt
-from apps.cli.commands.market import parse_symbols, parse_technical_args, route_top_level_text, try_top_level_route
+from apps.cli.commands.market import (
+    parse_analysis_args,
+    parse_symbols,
+    parse_technical_args,
+    route_top_level_text,
+    sanitize_chart_symbol_args,
+    try_top_level_route,
+)
 from apps.cli.providers.base import AriaSSEProvider, OllamaProvider
 from apps.cli.preflight import build_intent_preflight, format_preflight_plain
 from apps.cli.runtime_consumer import TerminalApprovalEventConsumer, TerminalRuntimeEventConsumer
@@ -162,6 +169,7 @@ from apps.cli.utils.market_detect import (  # noqa: F401 — re-exported
     _BROKER_INTENT_KW, _is_broker_intent,
     _is_broker_guide_intent, _is_broker_setup_intent, _detect_broker_type,
     _FINANCIAL_TERMS_BLOCKLIST,
+    _is_blocked_market_symbol_candidate,
     _extract_market_symbol, _extract_market_symbols, _extract_symbol_from_history,
     _is_stock_chart_analysis_request,
     _UNRESOLVED_CO_INDICATORS, _has_unresolved_company_mention,
@@ -2117,7 +2125,7 @@ LOCAL_TOOLS = {
     "run_command":    (_tool_run_command,    "Execute a shell command"),
     # ── Extended tools (Claude Code parity) ─────────────────────────────────
     "web_fetch":      (_tool_web_fetch,      "Fetch a URL and return page text"),
-    "github":         (_tool_github,         "GitHub API/CLI: PRs, issues, diffs, search"),
+    "github":         (_tool_github,         "GitHub API/CLI: PRs, issues, diffs, search, git_status, commit_and_push (commits as Aria bot)"),
     "glob":           (_tool_glob,           "Fast glob file-pattern search"),
     "notebook_read":  (_tool_notebook_read,  "Read a Jupyter notebook (.ipynb)"),
     "notebook_edit":  (_tool_notebook_edit,  "Edit a cell in a Jupyter notebook"),
@@ -3075,10 +3083,10 @@ def _build_analysis_system_prompt() -> str:
 ANALYSIS_SYSTEM_PROMPT = _build_analysis_system_prompt()
 
 
-def _build_prefetched_analysis_prompt(nano: bool = False) -> str:
+def _build_prefetched_analysis_prompt(nano: bool = False, user_message: str = "") -> str:
     """Thin shim — implementation in apps/cli/prompts/system_prompts.py."""
     from apps.cli.prompts.system_prompts import build_prefetched_analysis_prompt as _f
-    return _f(nano=nano)
+    return _f(nano=nano, user_message=user_message)
 
 
 # ── LaTeX → plain-text converter ────────────────────────────────────────────
@@ -3839,6 +3847,8 @@ def _resolve_market_arg_symbol(raw: str) -> str:
     token = str(raw or "").strip().strip(",，")
     upper = token.upper()
     if not upper:
+        return ""
+    if _is_blocked_market_symbol_candidate(upper):
         return ""
     if re.match(r"^\^[A-Z0-9]{2,12}$", upper):
         return upper
@@ -7982,7 +7992,7 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
                 period = p.lower()
             else:
                 symbol_parts.append(p.strip(",，"))
-        raw_symbols = symbol_parts or ["AAPL"]
+        raw_symbols = sanitize_chart_symbol_args(symbol_parts) or ["AAPL"]
         symbols = []
         seen_symbols = set()
         for raw_symbol in raw_symbols:
@@ -9060,6 +9070,15 @@ class ArtheraTerminal:
             and self._project_session is None
             and not getattr(self, "_send_message_route_active", False)
         ):
+            routed = route_top_level_text(message, set(self.commands.commands))
+            if routed is not None:
+                self._send_message_route_active = True
+                try:
+                    self._maybe_show_intent_preflight(routed.text)
+                    await self.commands.execute(routed.text)
+                finally:
+                    self._send_message_route_active = False
+                return
             routed = _natural_language_visual_artifact_route(message, set(self.commands.commands))
             if routed is not None:
                 self._send_message_route_active = True

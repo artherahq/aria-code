@@ -91,6 +91,19 @@ class InstallPlan:
         return bool(self.pip_packages or self.command_hints or self.env_hints)
 
 
+@dataclass(frozen=True)
+class InstallSelection:
+    """Resolved user selection for Python package installation."""
+
+    pip_packages: tuple[str, ...]
+    skipped_packages: tuple[str, ...] = ()
+    mode: str = "all"
+
+    @property
+    def has_packages(self) -> bool:
+        return bool(self.pip_packages)
+
+
 _PY_REQS: Mapping[str, PythonRequirement] = {
     "aiohttp": PythonRequirement("aiohttp", "aiohttp", "异步 HTTP 请求"),
     "requests": PythonRequirement("requests", "requests", "HTTP 请求"),
@@ -395,6 +408,48 @@ def build_install_plan(report: IntentPreflight) -> InstallPlan:
     )
 
 
+def select_install_packages(
+    plan: InstallPlan,
+    report: IntentPreflight | None = None,
+    *,
+    mode: str = "all",
+    custom: Iterable[str] | None = None,
+) -> InstallSelection:
+    """Resolve selector choices into concrete pip packages.
+
+    Modes:
+    - all: install every missing Python package in the plan
+    - required: install only required Python packages
+    - optional: install only optional Python packages
+    - custom: install only packages named in ``custom`` if present in the plan
+    - skip/plan: install nothing
+    """
+    available = list(plan.pip_packages)
+    normalized_mode = (mode or "all").strip().lower()
+    if normalized_mode in {"skip", "none", "cancel", "plan", "dry-run", "dry_run"}:
+        return InstallSelection((), tuple(available), normalized_mode)
+
+    if normalized_mode == "required" and report is not None:
+        selected = [
+            req.package for req in report.missing_python
+            if req.required and req.package in available
+        ]
+    elif normalized_mode == "optional" and report is not None:
+        selected = [
+            req.package for req in report.missing_python
+            if not req.required and req.package in available
+        ]
+    elif normalized_mode == "custom":
+        wanted = {str(item).strip() for item in (custom or []) if str(item).strip()}
+        selected = [pkg for pkg in available if pkg in wanted]
+    else:
+        selected = available
+
+    selected = list(dict.fromkeys(selected))
+    skipped = [pkg for pkg in available if pkg not in selected]
+    return InstallSelection(tuple(selected), tuple(skipped), normalized_mode)
+
+
 def format_preflight_plain(report: IntentPreflight) -> str:
     """Return a concise plain-text preflight message."""
     if not report.has_findings:
@@ -413,7 +468,7 @@ def format_preflight_plain(report: IntentPreflight) -> str:
             envs = ", ".join(plan.env_hints)
             lines.append("可选环境变量: " + envs)
         if plan.pip_command:
-            lines.append("安装: /install --auto 或 " + plan.pip_command)
+            lines.append("选择安装: /install --auto（all/required/optional/custom/plan/skip）或 " + plan.pip_command)
         elif plan.has_actions:
             lines.append("配置: 按上方提示手动配置，或用 /setup 查看配置向导。")
         return "\n".join(lines)
@@ -436,7 +491,7 @@ def format_preflight_plain(report: IntentPreflight) -> str:
         lines.append("可选环境变量未配置: " + envs)
     if plan.has_actions:
         if plan.pip_packages:
-            lines.append("一键安装: 运行 /install --auto （会先确认再安装），或 /install 扫描全部缺失。")
+            lines.append("选择安装: 运行 /install --auto 进入选择器，或 /install 扫描全部缺失。")
         else:
             lines.append("Aria 不会自动安装；按上方提示手动配置，或用 /setup 查看配置向导。")
     return "\n".join(lines)

@@ -8,9 +8,11 @@ from apps.cli.commands.catalog import DIRECT_COMMAND_MAP, VISIBLE_SLASH_COMMANDS
 from apps.cli.commands.market_context import build_analyze_context, build_analyze_prompt
 from apps.cli.message_processing import context_compaction_decision, estimate_message_tokens
 from apps.cli.commands.market import (
+    parse_analysis_args,
     parse_symbols,
     parse_technical_args,
     route_top_level_text,
+    sanitize_chart_symbol_args,
     try_top_level_route,
 )
 from apps.cli.commands.market_cmds import _is_probable_football_query, _parse_nl_team_pair, _rss_items_from_xml
@@ -18,6 +20,7 @@ from apps.cli.handlers.strategy_advice import handle_strategy_advice, is_strateg
 from apps.cli.commands.market_render import compact_quote_market_cap, render_quote_plain, render_ta_plain
 from apps.cli.utils.market_detect import (
     _detect_broker_type,
+    _extract_market_symbols,
     _is_broker_guide_intent,
     _is_broker_setup_intent,
 )
@@ -254,6 +257,19 @@ def test_market_command_parsers_are_ui_free_and_stable():
     assert parse_symbols("", ["aapl", "nvda"]) == ["AAPL", "NVDA"]
     assert parse_symbols("aapl msft", ["NVDA"]) == ["AAPL", "MSFT"]
 
+    parsed = parse_analysis_args("Apple volume")
+    assert parsed.symbol == "AAPL"
+    assert parsed.focus == "volume"
+    assert parsed.lang == ""
+    parsed_zh = parse_analysis_args("苹果 成交量")
+    assert parsed_zh.symbol == "AAPL"
+    assert parsed_zh.focus == "volume"
+    assert parsed_zh.lang == "zh"
+    assert _extract_market_symbols("analysis Apple volume DATA QUOTE YAHOO STOOQ") == ["AAPL"]
+    assert sanitize_chart_symbol_args(["AAPL", "MA", "TTM", "INC", "BELOW", "ABOVE"]) == ["AAPL"]
+    assert sanitize_chart_symbol_args(["AAPL", "MA"]) == ["AAPL", "MA"]
+    assert sanitize_chart_symbol_args(["TTM"]) == ["TTM"]
+
     assert parse_technical_args("NVDA days=60").symbol == "NVDA"
     assert parse_technical_args("NVDA days=60").days == 60
     assert parse_technical_args("TSLA --days 90").days == 90
@@ -267,7 +283,11 @@ def test_top_level_market_router_maps_bare_text_to_slash_commands():
 
     routed = route_top_level_text("分析 AAPL", available)
     assert routed is not None
-    assert routed.text == "/analyze AAPL"
+    assert routed.text == "/analyze AAPL --lang zh"
+
+    routed = route_top_level_text("analysis Apple volume", available)
+    assert routed is not None
+    assert routed.text == "/analyze AAPL --focus volume --lang en"
 
     routed = route_top_level_text("backtest momentum NVDA", available)
     assert routed is not None
@@ -428,7 +448,7 @@ async def test_try_top_level_route_executes_command_object():
     commands = _Commands()
 
     assert await try_top_level_route("analyze AAPL", commands) is True
-    assert commands.executed == ["/analyze AAPL"]
+    assert commands.executed == ["/analyze AAPL --lang en"]
     assert await try_top_level_route("market AAPL", commands) is False
 
 
@@ -488,13 +508,15 @@ def test_quote_plain_renderer_and_market_cap_formatting():
 def test_build_analyze_prompt_templates_are_shared():
     cn = build_analyze_prompt("600519", "CTX", True)
     en = build_analyze_prompt("aapl", "CTX", False)
+    zh_us = build_analyze_prompt("aapl", "CTX", False, response_lang="zh")
 
-    assert cn.startswith("CTX\n\n请对以上 600519")
+    assert cn.startswith("CTX\n\n## 终端回答风格")
     assert "技术面分析" in cn
     assert "风险提示" in cn
-    assert en.startswith("CTX\n\nPlease provide a comprehensive analysis of AAPL")
+    assert en.startswith("CTX\n\n## Terminal Answer Style")
     assert "Technical analysis" in en
     assert "Risk assessment" in en
+    assert "请对以上 AAPL" in zh_us
 
 
 def test_report_args_parser_handles_format_type_pdf_and_output():
@@ -660,7 +682,7 @@ async def test_run_team_analysis_captures_noisy_output_and_sanitizes(monkeypatch
     assert calls["team"]["data_router"] == "router"
     assert calls["team"]["on_token"] is None
     assert calls["team"]["market_context"]["quote"]["price"] == 100
-    assert "price=100" in calls["team"]["market_context"]["market_data_block"]
+    assert "price=USD 100" in calls["team"]["market_context"]["market_data_block"]
 
 
 def test_team_report_builder_and_save_write_quality_metadata(monkeypatch, tmp_path):

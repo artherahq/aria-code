@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+from apps.cli.commands.market import parse_analysis_args
+
 
 class AnalysisCommandsMixin:
     """Mixin: market analysis and technical indicator commands."""
 
     async def cmd_analyze(self, args: str):
         """Deep analysis: fetch real quote + TA + fundamentals, then ask LLM."""
-        symbol = args.strip().upper() or "AAPL"
+        parsed = parse_analysis_args(args)
+        symbol = parsed.symbol
         is_cn = _is_ashare_symbol(symbol)
+        response_lang = parsed.lang or ("zh" if is_cn else "en")
 
         if HAS_RICH:
             with console.status(f"[dim]正在获取 {symbol} 数据...[/dim]", spinner="dots"):
@@ -18,7 +22,25 @@ class AnalysisCommandsMixin:
             print(f"Fetching data for {symbol}...")
             ctx = await self._build_analyze_context(symbol, is_cn)
 
-        await self.terminal.send_message(build_analyze_prompt(symbol, ctx, is_cn))
+        if parsed.focus == "volume":
+            if response_lang == "en":
+                ctx += (
+                    "\n\n### User Focus\n"
+                    "- Focus on volume, price-volume confirmation, and volume versus recent average. "
+                    "If volume is unavailable, state that the source did not return it and do not invent values."
+                )
+            else:
+                ctx += (
+                    "\n\n### 用户关注\n"
+                    "- 重点分析成交量、量价关系、成交量相对近期均量的变化；"
+                    "若成交量数据不可用，请直接说明来源未返回成交量，不要编造数值。"
+                )
+        elif parsed.focus:
+            heading = "User Focus" if response_lang == "en" else "用户关注"
+            label = "Focus on" if response_lang == "en" else "重点分析"
+            ctx += f"\n\n### {heading}\n- {label}: {parsed.focus}"
+
+        await self.terminal.send_message(build_analyze_prompt(symbol, ctx, is_cn, response_lang=response_lang))
         try:
             _resp = next((m["content"] for m in reversed(self.terminal.conversation)
                           if m.get("role") == "assistant" and m.get("content")), "")

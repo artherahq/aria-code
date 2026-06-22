@@ -90,7 +90,7 @@ class DiagnosticOpsCommandsMixin:
         env = (f"v{__version__} · {_pf.system()} · py{_pf.python_version()} · "
                f"model={self.terminal.config.get('model','')}")
         self.terminal._record_feedback("bug", ctx, comment=f"{desc}\n\n[env] {env}")
-        gh = "https://github.com/Cinsoul/Aria-Code/issues"
+        gh = "https://github.com/artherahq/aria-code/issues"
         if HAS_RICH:
             console.print("  [#C08050]✓ 已记录问题（本地）[/#C08050]")
             console.print(f"  [dim]上传需 /privacy opt-in · 或直接提 issue: {gh}[/dim]")
@@ -419,6 +419,8 @@ class DiagnosticOpsCommandsMixin:
           /install <pkg> [pkg]  直接安装指定 Python 包
           /install --auto       根据最近一次提问的意图检测缺失项
           /install --required   仅安装"必需"包，跳过可选项
+          /install --plan       只展示安装计划，不安装
+          /install --yes        非交互确认，直接安装选中包
         """
         import shlex as _shlex
         import subprocess as _sp
@@ -428,6 +430,7 @@ class DiagnosticOpsCommandsMixin:
             build_intent_preflight,
             build_install_plan,
             package_to_module,
+            select_install_packages,
         )
 
         raw = (args or "").strip()
@@ -504,18 +507,90 @@ class DiagnosticOpsCommandsMixin:
                               if HAS_RICH else "Install CLI tools manually (see hints above)")
             return
 
+        # ── Select packages ───────────────────────────────────────────────────
+        if report:
+            if "--plan" in flags:
+                selection = select_install_packages(plan, report, mode="plan")
+            elif "--yes" in flags:
+                _mode = "required" if "--required" in flags else "all"
+                selection = select_install_packages(plan, report, mode=_mode)
+            else:
+                required_pkgs = [
+                    r.package for r in report.missing_python
+                    if r.required and r.package in pip_packages
+                ]
+                optional_pkgs = [
+                    r.package for r in report.missing_python
+                    if not r.required and r.package in pip_packages
+                ]
+                if HAS_RICH:
+                    console.print("[bold]选择安装范围[/bold]")
+                    console.print("  [cyan]all[/cyan]      安装全部缺失 Python 包")
+                    console.print("  [cyan]required[/cyan]  只安装必需包")
+                    console.print("  [cyan]optional[/cyan]  只安装可选增强包")
+                    console.print("  [cyan]custom[/cyan]    手动输入包名或编号")
+                    console.print("  [cyan]plan[/cyan]      只显示计划，不安装")
+                    console.print("  [cyan]skip[/cyan]      跳过")
+                    for idx, pkg in enumerate(pip_packages, 1):
+                        kind = "required" if pkg in required_pkgs else "optional"
+                        console.print(f"    [dim]{idx}.[/dim] {pkg} [dim]({kind})[/dim]")
+                else:
+                    print("Select install scope: all | required | optional | custom | plan | skip")
+                    for idx, pkg in enumerate(pip_packages, 1):
+                        kind = "required" if pkg in required_pkgs else "optional"
+                        print(f"  {idx}. {pkg} ({kind})")
+                default_mode = "required" if required_pkgs and optional_pkgs else "all"
+                try:
+                    choice = console.input(f"安装范围 [{default_mode}]: ") if HAS_RICH else input(f"Install scope [{default_mode}]: ")
+                except (EOFError, KeyboardInterrupt):
+                    console.print("\n[dim]已取消[/dim]" if HAS_RICH else "Cancelled")
+                    return
+                choice = (choice or default_mode).strip().lower()
+                custom_items: list[str] = []
+                if choice == "custom":
+                    try:
+                        raw_custom = console.input("输入包名或编号（空格/逗号分隔）: ") if HAS_RICH else input("Packages or numbers: ")
+                    except (EOFError, KeyboardInterrupt):
+                        console.print("\n[dim]已取消[/dim]" if HAS_RICH else "Cancelled")
+                        return
+                    for item in raw_custom.replace(",", " ").split():
+                        if item.isdigit():
+                            idx = int(item)
+                            if 1 <= idx <= len(pip_packages):
+                                custom_items.append(pip_packages[idx - 1])
+                        else:
+                            custom_items.append(item)
+                selection = select_install_packages(
+                    plan, report, mode=choice, custom=custom_items
+                )
+            pip_packages = list(selection.pip_packages)
+            if selection.mode in {"plan", "dry-run", "dry_run"}:
+                console.print("[dim]已生成安装计划，未执行安装。[/dim]" if HAS_RICH else "Install plan only; no changes made.")
+                return
+            if not pip_packages:
+                console.print("[dim]没有选择任何 Python 包，未安装。[/dim]" if HAS_RICH else "No packages selected.")
+                return
+            if selection.skipped_packages and HAS_RICH:
+                console.print(f"[dim]跳过: {', '.join(selection.skipped_packages)}[/dim]")
+        elif "--plan" in flags:
+            console.print("[dim]显式包安装计划已显示，未执行安装。[/dim]" if HAS_RICH else "Install plan only; no changes made.")
+            return
+
         # ── Confirm ───────────────────────────────────────────────────────────
         pip_cmd = [_sys.executable, "-m", "pip", "install", *pip_packages]
         pretty = " ".join(_shlex.quote(c) for c in pip_cmd)
-        prompt = f"将运行: {pretty}\n确认安装? [y/N]: "
-        try:
-            answer = console.input(prompt) if HAS_RICH else input(prompt)
-        except (EOFError, KeyboardInterrupt):
-            console.print("\n[dim]已取消[/dim]" if HAS_RICH else "Cancelled")
-            return
-        if answer.strip().lower() not in {"y", "yes"}:
-            console.print("[dim]已取消，未安装任何包[/dim]" if HAS_RICH else "Cancelled")
-            return
+        if "--yes" not in flags:
+            prompt = f"将运行: {pretty}\n确认安装? [y/N]: "
+            try:
+                answer = console.input(prompt) if HAS_RICH else input(prompt)
+            except (EOFError, KeyboardInterrupt):
+                console.print("\n[dim]已取消[/dim]" if HAS_RICH else "Cancelled")
+                return
+            if answer.strip().lower() not in {"y", "yes"}:
+                console.print("[dim]已取消，未安装任何包[/dim]" if HAS_RICH else "Cancelled")
+                return
+        elif HAS_RICH:
+            console.print(f"[dim]Auto install: {pretty}[/dim]")
 
         # ── Install ───────────────────────────────────────────────────────────
         console.print(f"\n[dim]⏳ 安装中: {' '.join(pip_packages)}…[/dim]" if HAS_RICH

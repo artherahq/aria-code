@@ -162,7 +162,7 @@ class DataRouter:
                     return result
             except Exception as e:
                 logger.debug(f"[{src_name}] quote {symbol} 异常: {e}")
-        logger.warning(f"所有数据源均无法获取 {symbol} 行情")
+        logger.debug(f"所有数据源均无法获取 {symbol} 行情")
         return None
 
     def history(

@@ -281,12 +281,17 @@ def build_team_llm_provider(config: dict[str, Any]) -> Any:
 
 
 async def fetch_team_data_bundle(symbol: str) -> Any:
-    from datasources.router import get_router
     from packages.aria_services.data import DataService
+    try:
+        from datasources.router import get_router
+        router = get_router()
+    except Exception as exc:
+        logger.debug("team data router unavailable, using market client only: %s", exc)
+        router = False
 
     return await asyncio.get_event_loop().run_in_executor(
         None,
-        lambda: DataService(router=get_router()).bundle(symbol),
+        lambda: DataService(router=router).bundle(symbol),
     )
 
 
@@ -300,7 +305,12 @@ async def run_team_analysis(
     on_agent_done: Callable[[str, Any], None] | None = None,
 ) -> TeamAnalysisResult:
     from agents.team import run_team
-    from datasources.router import get_router
+    try:
+        from datasources.router import get_router
+        data_router = get_router()
+    except Exception as exc:
+        logger.debug("team data router unavailable for agents: %s", exc)
+        data_router = None
 
     llm_provider = build_team_llm_provider(config)
     data_bundle = None
@@ -336,7 +346,7 @@ async def run_team_analysis(
                 symbol=symbol,
                 agents=args.agent_names,
                 llm_provider=llm_provider,
-                data_router=get_router(),
+                data_router=data_router,
                 on_token=None,
                 on_agent_done=_agent_done_proxy if on_agent_done else None,
                 on_synthesis_start=None,
