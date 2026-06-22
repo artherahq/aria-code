@@ -6,9 +6,74 @@ import asyncio
 import json
 import pathlib
 
+# Status glyph + colour per architecture-layer status.
+_ARCH_ICON = {
+    "done":    ("✓", "#3fb950"),
+    "partial": ("◐", "#d29922"),
+    "planned": ("○", "dim"),
+    "blocked": ("✗", "#f85149"),
+}
+
+
+def format_architecture_report(layers, counts, *, gaps_only: bool = False,
+                               rich: bool = True) -> list:
+    """Render the architecture contract as display lines (pure / testable).
+
+    ``layers`` are ArchitectureLayer objects; ``counts`` is the status→n map.
+    With ``gaps_only`` the DONE layers are dropped so only work-to-do shows.
+    """
+    total = sum(counts.values()) or len(layers)
+    done = counts.get("done", 0)
+    lines = []
+    if rich:
+        lines.append(f"[bold]架构契约[/bold]  [dim]{done}/{total} 层完成[/dim]")
+        lines.append("  " + "   ".join(
+            f"[{_ARCH_ICON[s][1]}]{_ARCH_ICON[s][0]}[/{_ARCH_ICON[s][1]}] {s} {counts.get(s, 0)}"
+            for s in ("done", "partial", "planned", "blocked")
+        ))
+    else:
+        lines.append(f"架构契约  {done}/{total} 层完成")
+    lines.append("")
+    for layer in layers:
+        st = getattr(layer.status, "value", str(layer.status))
+        if gaps_only and st == "done":
+            continue
+        icon, color = _ARCH_ICON.get(st, ("•", "dim"))
+        if rich:
+            lines.append(f"[{color}]{icon}[/{color}] [bold]{layer.name}[/bold]  "
+                         f"[dim]{layer.responsibility}[/dim]")
+        else:
+            lines.append(f"{icon} {layer.name}  {layer.responsibility}")
+        if st != "done":
+            for ns in (layer.next_steps or [])[:2]:
+                lines.append(f"    → {ns}")
+            for bl in (layer.blockers or [])[:1]:
+                lines.append(f"    [#f85149]⚠ {bl}[/#f85149]" if rich else f"    ⚠ {bl}")
+    return lines
+
 
 class DiagnosticOpsCommandsMixin:
     """Mixin: diagnostics, feedback, usage, and source inspection commands."""
+
+    def cmd_architecture(self, args: str):
+        """显示分层架构契约(各层状态 + 每层下一步)。用法: /architecture [--gaps]"""
+        try:
+            from packages.aria_core import (
+                list_architecture_layers, architecture_status_counts)
+        except Exception as exc:  # pragma: no cover - import guard
+            msg = f"架构契约不可用: {exc}"
+            console.print(f"[red]{msg}[/red]") if HAS_RICH else print(msg)
+            return
+        gaps_only = "gap" in args.lower()
+        lines = format_architecture_report(
+            list_architecture_layers(), architecture_status_counts(),
+            gaps_only=gaps_only, rich=HAS_RICH)
+        if HAS_RICH:
+            console.print(Panel("\n".join(lines), title="[bold]Aria 架构[/bold]",
+                                border_style="#C08050", box=rich_box.ROUNDED,
+                                padding=(0, 1)))
+        else:
+            print("\n".join(lines))
 
     def cmd_bug(self, args: str):
         desc = args.strip()

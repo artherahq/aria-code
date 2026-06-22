@@ -689,6 +689,114 @@ class PortfolioCommandsMixin:
                 print(f"Plan completed ({len(plan)} steps)")
             self.terminal.pending_plan = []
 
+    async def cmd_deep(self, args: str):
+        """
+        深度多层研究（Claude-Code 架构 P0–P3）：
+        团队并行 → 主题分组 → 工具深挖 → 量化融合+置信度校准 → Critic 自检 → 分级报告
+        Usage: /deep NVDA            ← 标准档
+               /deep AAPL --deep     ← 深度档（含量化地面真值/自检/数据血缘）
+               /deep 000333 --brief  ← 简报档
+               /deep TSLA --agents technical,risk,macro
+               /deep calibrate       ← 用真实价回评历史预测，更新置信度校准
+        """
+        def _latest_close(symbol: str):
+            try:
+                import data_cleaner
+                df, _ = data_cleaner.get_clean_prices(symbol, period="5d")
+                if df is not None and len(df):
+                    for col in ("close", "Close", "adj_close", "收盘"):
+                        if col in df.columns:
+                            return float(df[col].iloc[-1])
+            except Exception:
+                pass
+            return None
+
+        # /deep calibrate — score logged predictions against realised price (P2 loop)
+        if args.strip().lower().startswith(("calibrate", "校准")):
+            from agents.deep.calibration_loop import (
+                PredictionLog, evaluate_due, evaluate_from_ledger)
+            from agents.deep.quant_fusion import CalibrationStore
+            store, log = CalibrationStore(), PredictionLog()
+            led_res = {"evaluated": 0, "hits": 0}
+            try:  # actual realised P&L first — the strongest ground truth
+                from portfolio_ledger import PortfolioLedger
+                led_res = evaluate_from_ledger(store, log, PortfolioLedger())
+            except Exception:
+                pass
+            px_res = evaluate_due(store, log, _latest_close)   # market price for the rest
+            total = led_res["evaluated"] + px_res["evaluated"]
+            hits = led_res["hits"] + px_res["hits"]
+            if total:
+                msg = (f"校准完成：评估 {total} 条（实盘 {led_res['evaluated']} + "
+                       f"市价 {px_res['evaluated']}），命中 {hits}，"
+                       f"命中率 {hits / total:.0%}（置信度校准已更新）")
+            else:
+                msg = "暂无到期预测可校准（先用 /deep 跑几次分析积累预测）。"
+            console.print(f"[green]✓[/green] {msg}") if HAS_RICH else print(msg)
+            return
+
+        team_args = parse_team_args(args)
+        symbols = resolve_team_symbols(team_args, self.terminal.config)
+        agent_names = team_agent_names(team_args)
+        _low = args.lower()
+        tier = ("deep" if ("--deep" in _low or "--full" in _low)
+                else "brief" if "--brief" in _low else "standard")
+        _zh = sum(1 for c in args if '一' <= c <= '鿿')
+        _lang = "zh" if _zh / max(len(args), 1) > 0.15 else "en"
+
+        from agents.deep.tiers import render_tier
+        from ui.render.team import render_agent_tree_root, render_agent_node
+
+        for sym in symbols:
+            def _on_agent_done(name, result):
+                _kps = getattr(result, "key_points", None)
+                _kp = (_kps[0] if isinstance(_kps, (list, tuple)) and _kps else "")
+                if HAS_RICH:
+                    render_agent_node(
+                        console, name, getattr(result, "signal", None), _kp,
+                        success=bool(getattr(result, "success", True)),
+                        error=getattr(result, "error", None),
+                    )
+                else:
+                    print(f"  ⎿ {name}  {getattr(result, 'signal', '')}  {_kp[:50]}")
+
+            if HAS_RICH:
+                render_agent_tree_root(console, sym, len(agent_names), lang=_lang)
+            else:
+                print(f"\n  ⏺ 深度分析 {sym}  {len(agent_names)} 个分析师")
+
+            try:
+                result = await run_deep_cli(
+                    symbol=sym, args=team_args, config=self.terminal.config,
+                    lang=_lang, on_agent_done=_on_agent_done,
+                )
+            except Exception as e:
+                _print_error(str(e), "deep")
+                continue
+
+            md = render_tier(result, tier)
+            if HAS_RICH:
+                from rich import box as _box
+                from rich.markdown import Markdown
+                from rich.panel import Panel
+                console.print(Panel(
+                    Markdown(md), border_style="dim", box=_box.ROUNDED,
+                    title=f"[bold]深度研究 · {sym}[/bold] [dim]({tier})[/dim]",
+                    title_align="left", padding=(1, 2),
+                ))
+            else:
+                print("\n" + md)
+
+            # P2 closed loop: log the verdict so /deep calibrate can score it later
+            try:
+                from agents.deep.calibration_loop import PredictionLog
+                _p = _latest_close(sym)
+                if _p and result.final_signal:
+                    PredictionLog().log(sym, result.final_signal,
+                                        result.calibrated_confidence, _p)
+            except Exception:
+                pass
+
     async def cmd_team(self, args: str):
         """
         多 Agent 金融研究团队：宏观 + 基本面 + 技术 + 风控 → 综合报告
@@ -815,22 +923,12 @@ class PortfolioCommandsMixin:
                 except Exception:
                     pass
 
-            except ImportError:
-                # ── 旧 Ollama Agent（兜底）────────────────────────────────
-                ollama_url = self.terminal.config.get("ollama_url", "http://localhost:11434")
-                model      = self.terminal.config.get("model", "qwen2.5:7b")
-                tokens = []
-                def on_token(tok):
-                    tokens.append(tok)
-                    _sys.stdout.write(tok); _sys.stdout.flush()
-                try:
-                    result = await _run_team(
-                        symbol=sym, ollama_url=ollama_url, model=model,
-                        portfolio_symbols=self.terminal.config.get("watchlist",[]),
-                        on_token=on_token,
-                    )
-                except Exception as e:
-                    print(f"\n  Error: {e}")
+            except ImportError as _imp_err:
+                # agents 包不可用 — 不再回退到已废弃的 financial_agents
+                _m = (f"多代理分析模块加载失败：{_imp_err}。"
+                      "请确认 agents 包完整（/install 或 pip install -e .）。")
+                console.print(f"\n  [red]{_m}[/red]") if HAS_RICH else print(f"\n  {_m}")
+                continue
             except Exception as e:
                 msg = f"团队分析失败: {e}"
                 console.print(f"\n  [red]{msg}[/red]") if HAS_RICH else print(f"\n  {msg}")
