@@ -605,6 +605,13 @@ def tool_github(
         body = message
         if coauthor:
             body += f"\n\nCo-Authored-By: {coauthor}"
+        # Always credit the Aria GitHub account so it appears in Contributors
+        if auth_available:
+            try:
+                from apps.cli.github_app_auth import ARIA_GITHUB_LOGIN, ARIA_GITHUB_EMAIL
+                body += f"\n\nCo-Authored-By: {ARIA_GITHUB_LOGIN} <{ARIA_GITHUB_EMAIL}>"
+            except ImportError:
+                pass
         user_name  = tool_run_command({"command": "git config user.name",  "policy": "safe", "cwd": cwd}).get("output", "").strip()
         user_email = tool_run_command({"command": "git config user.email", "policy": "safe", "cwd": cwd}).get("output", "").strip()
         if user_name and user_email and user_email != ARIA_BOT_EMAIL:
