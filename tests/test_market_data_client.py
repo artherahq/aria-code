@@ -11,11 +11,21 @@ if _CLI_DIR not in sys.path:
 
 
 @pytest.fixture(autouse=True)
-def _clear_market_data_cache():
-    """The module-level quote/history cache is process-global; clear it around
-    every test so a cached result from one test can't leak into the next."""
+def _isolate_market_data(monkeypatch):
+    """Isolate the A-share data-client tests:
+    - clear the process-global quote/history cache (no cross-test leakage);
+    - block the no-proxy fallback session so a reachable Eastmoney host can't
+      turn a 'should fail' case into a flaky pass via a real network call.
+    """
     import market_data_client
+
+    class _NoNetSession:
+        def get(self, *_a, **_k):
+            raise OSError("network disabled in tests")
+
     market_data_client._cache._store.clear()
+    monkeypatch.setattr(market_data_client, "_session_no_proxy",
+                        lambda *_a, **_k: _NoNetSession(), raising=False)
     yield
     market_data_client._cache._store.clear()
 
