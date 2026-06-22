@@ -4,6 +4,11 @@ import sys
 from pathlib import Path
 
 import pandas as pd
+import pytest
+
+# The inline-JS assertions require the plotly package (plotly_html falls back to a
+# CDN <script> when it's absent); skip rather than false-fail where it isn't.
+pytest.importorskip("plotly")
 
 
 def _sample_frame(rows: int = 30) -> pd.DataFrame:

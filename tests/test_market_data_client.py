@@ -2,15 +2,32 @@ import builtins
 import pathlib
 import sys
 
+import pytest
+
 
 _CLI_DIR = str(pathlib.Path(__file__).parents[1])
 if _CLI_DIR not in sys.path:
     sys.path.insert(0, _CLI_DIR)
 
 
+@pytest.fixture(autouse=True)
+def _clear_market_data_cache():
+    """The module-level quote/history cache is process-global; clear it around
+    every test so a cached result from one test can't leak into the next."""
+    import market_data_client
+    market_data_client._cache._store.clear()
+    yield
+    market_data_client._cache._store.clear()
+
+
 class _FakeResponse:
+    status_code = 200
+
     def __init__(self, payload):
         self._payload = payload
+
+    def raise_for_status(self):
+        return None
 
     def json(self):
         return self._payload
