@@ -1,5 +1,5 @@
 {
-  "name": "aria-code",
+  "name": "@artheras/aria-code",
   "version": "4.1.0",
   "description": "AI-powered financial terminal — local LLM + 19+ cloud providers + real-time market data",
   "keywords": [
