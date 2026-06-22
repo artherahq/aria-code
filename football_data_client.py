@@ -850,6 +850,92 @@ def _find_fifa_rating(team_name: str) -> Optional[Dict]:
     return None
 
 
+def _title_team_name(name: str) -> str:
+    small_words = {"and", "of", "the"}
+    return " ".join(
+        word if word in small_words else word.capitalize()
+        for word in str(name or "").replace("_", " ").split()
+    )
+
+
+def team_display_name(team_name: Any, locale: str = "zh") -> str:
+    """Return a stable display name for a team in the requested output locale."""
+    raw = str(team_name or "").strip()
+    if not raw:
+        return "-"
+    low = raw.lower()
+    want_en = str(locale or "zh").lower().startswith("en")
+
+    try:
+        cn_map = _CN_TEAM_MAP
+    except NameError:
+        cn_map = {}
+
+    if want_en:
+        if raw in cn_map:
+            return _title_team_name(cn_map[raw])
+        if low in _FIFA_RATINGS:
+            return _title_team_name(low)
+        for cn, en in cn_map.items():
+            if low == str(en).lower() or raw == cn:
+                return _title_team_name(en)
+        for key, val in _FIFA_RATINGS.items():
+            if low == key.lower() or raw == str(val.get("name", "")):
+                return _title_team_name(key)
+        return _title_team_name(raw)
+
+    if raw in cn_map:
+        return raw
+    for cn, en in cn_map.items():
+        if low == str(en).lower():
+            return cn
+    rating = _find_fifa_rating(raw)
+    if rating and rating.get("name"):
+        return str(rating["name"])
+    return raw
+
+
+def football_prediction_quality(pred: Dict[str, Any]) -> Dict[str, Any]:
+    """Summarize visible data quality for football predictions."""
+    missing: list[str] = []
+    if pred.get("home_ranking") in (None, "", "?"):
+        missing.append("home_fifa_ranking")
+    if pred.get("away_ranking") in (None, "", "?"):
+        missing.append("away_fifa_ranking")
+    if pred.get("home_form") in (None, "", "?????") or pred.get("away_form") in (None, "", "?????"):
+        missing.append("recent_form")
+    if not (pred.get("h2h_advantage") or pred.get("total_matches")):
+        missing.append("h2h")
+    if not pred.get("calibrated_matches"):
+        missing.append("wc_calibration")
+    missing = list(dict.fromkeys(missing))
+    return {
+        "status": "estimated" if missing else "complete",
+        "missing": missing,
+        "basis": "FIFA/Elo strength + Poisson estimate" if missing else "calibrated football data + Poisson",
+    }
+
+
+def football_quality_missing_labels(missing: List[str], locale: str = "zh") -> List[str]:
+    if str(locale or "zh").lower().startswith("en"):
+        labels = {
+            "home_fifa_ranking": "home FIFA ranking",
+            "away_fifa_ranking": "away FIFA ranking",
+            "recent_form": "recent form",
+            "h2h": "head-to-head",
+            "wc_calibration": "WC calibration sample",
+        }
+    else:
+        labels = {
+            "home_fifa_ranking": "主队 FIFA 排名",
+            "away_fifa_ranking": "客队 FIFA 排名",
+            "recent_form": "近期战绩",
+            "h2h": "历史交锋",
+            "wc_calibration": "世界杯样本校准",
+        }
+    return [labels.get(item, item) for item in missing or []]
+
+
 def predict_wc_match(
     home_team: str,
     away_team: str,
@@ -926,12 +1012,15 @@ def predict_wc_match(
         # 补充 format_prediction_block 需要的旧格式字段
         hr = _find_fifa_rating(home_team) or {}
         ar = _find_fifa_rating(away_team) or {}
-        result.setdefault("home_name_cn", hr.get("name", home_team))
-        result.setdefault("away_name_cn", ar.get("name", away_team))
+        result.setdefault("home_name_cn", team_display_name(hr.get("name", home_team), "zh"))
+        result.setdefault("away_name_cn", team_display_name(ar.get("name", away_team), "zh"))
+        result.setdefault("home_name_en", team_display_name(home_team, "en"))
+        result.setdefault("away_name_en", team_display_name(away_team, "en"))
         result.setdefault("home_ranking",  hr.get("ranking", "?"))
         result.setdefault("away_ranking",  ar.get("ranking", "?"))
         result.setdefault("calibrated_matches", 0)
         result.setdefault("home_adv", 1.0 if neutral_venue else 1.12)
+        result["data_quality"] = football_prediction_quality(result)
         result["implied_odds"] = result.get("implied_odds", {
             "home": round(1/result["home_win"], 2) if result["home_win"] > 0.01 else 99,
             "draw": round(1/result["draw"], 2) if result["draw"] > 0.01 else 99,
@@ -980,11 +1069,11 @@ def predict_wc_match(
     ar = _find_fifa_rating(away_team)
 
     # Default to "average team" if not in table
-    default_r = {"attack": 1.20, "defense": 0.87, "ranking": 70, "name": home_team, "key": home_team}
+    default_r = {"attack": 1.20, "defense": 0.87, "ranking": "?", "name": "", "key": home_team}
     if not hr:
-        hr = {**default_r, "name": home_team, "key": home_team.lower()}
+        hr = {**default_r, "name": team_display_name(home_team, "zh"), "key": home_team.lower()}
     if not ar:
-        ar = {**default_r, "name": away_team, "key": away_team.lower()}
+        ar = {**default_r, "name": team_display_name(away_team, "zh"), "key": away_team.lower()}
 
     # Try to calibrate from actual WC results if available
     wc_data = _get("/competitions/WC/matches", {"status": "FINISHED"})
@@ -1060,11 +1149,13 @@ def predict_wc_match(
     def implied(p: float) -> float:
         return round(1 / p, 2) if p > 0.01 else 99.0
 
-    return {
+    result = {
         "home_team":    home_team,
         "away_team":    away_team,
-        "home_name_cn": hr.get("name", home_team),
-        "away_name_cn": ar.get("name", away_team),
+        "home_name_cn": team_display_name(hr.get("name", home_team), "zh"),
+        "away_name_cn": team_display_name(ar.get("name", away_team), "zh"),
+        "home_name_en": team_display_name(home_team, "en"),
+        "away_name_en": team_display_name(away_team, "en"),
         "home_ranking": hr.get("ranking", "?"),
         "away_ranking": ar.get("ranking", "?"),
         "home_attack":  round(hr["attack"], 2),
@@ -1102,6 +1193,8 @@ def predict_wc_match(
             for (hg, ag), p in ht_top
         ],
     }
+    result["data_quality"] = football_prediction_quality(result)
+    return result
 
 
 def format_prediction_block(pred: Dict, match_info: Optional[Dict] = None) -> str:
@@ -1111,8 +1204,8 @@ def format_prediction_block(pred: Dict, match_info: Optional[Dict] = None) -> st
     """
     ht = pred["home_team"]
     at = pred["away_team"]
-    ht_cn = pred.get("home_name_cn", ht)
-    at_cn = pred.get("away_name_cn", at)
+    ht_cn = team_display_name(pred.get("home_name_cn", ht), "zh")
+    at_cn = team_display_name(pred.get("away_name_cn", at), "zh")
     lh = pred["lambda_home"]
     la = pred["lambda_away"]
     hw = pred["home_win"]
@@ -1172,6 +1265,10 @@ def format_prediction_block(pred: Dict, match_info: Optional[Dict] = None) -> st
     lines.append(f"  模型: {model_tag}")
     if not has_form:
         lines.append("  ⚠ 无近期战绩数据，预测基于 Elo 排名强度估算")
+    quality = pred.get("data_quality") or football_prediction_quality(pred)
+    if quality.get("missing"):
+        labels = football_quality_missing_labels(quality["missing"], "zh")
+        lines.append(f"  数据质量: {quality.get('status', 'estimated')} · 缺失/估算: {', '.join(labels)}")
     lines.append("")
 
     # ── 队伍强度行（含 Elo）────────────────────────────────────────────────────
@@ -1188,8 +1285,11 @@ def format_prediction_block(pred: Dict, match_info: Optional[Dict] = None) -> st
         except Exception:
             return str(v)
 
-    lines.append(f"  主队 {_pad(ht_cn, 12)}  进攻 {_fmt_val(pred.get('home_attack','?'))}  防守 {_fmt_val(pred.get('home_defense','?'))}  FIFA #{hr_num}{elo_h}")
-    lines.append(f"  客队 {_pad(at_cn, 12)}  进攻 {_fmt_val(pred.get('away_attack','?'))}  防守 {_fmt_val(pred.get('away_defense','?'))}  FIFA #{ar_num}{elo_a}")
+    def _rank_text(v) -> str:
+        return f"FIFA #{v}" if v not in (None, "", "?") else "FIFA 排名缺失"
+
+    lines.append(f"  主队 {_pad(ht_cn, 12)}  进攻 {_fmt_val(pred.get('home_attack','?'))}  防守 {_fmt_val(pred.get('home_defense','?'))}  {_rank_text(hr_num)}{elo_h}")
+    lines.append(f"  客队 {_pad(at_cn, 12)}  进攻 {_fmt_val(pred.get('away_attack','?'))}  防守 {_fmt_val(pred.get('away_defense','?'))}  {_rank_text(ar_num)}{elo_a}")
     lines.append(f"  预期进球: {ht_cn} {lh:.2f} | {at_cn} {la:.2f}  (赛事场均 {pred.get('league_avg_goals', 1.35):.2f} 球)")
     lines.append("")
 

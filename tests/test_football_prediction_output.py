@@ -1,4 +1,9 @@
-from football_data_client import format_prediction_block, predict_match
+from football_data_client import (
+    football_prediction_quality,
+    format_prediction_block,
+    predict_match,
+    team_display_name,
+)
 from apps.cli.providers.llm.ollama_stream import _recent_sports_quant_context
 
 
@@ -49,6 +54,60 @@ def test_format_prediction_block_marks_poisson_quant_context():
     assert "【泊松模型量化预测" in block
     assert "1-1" in block
     assert "提示：准确比分概率通常较分散" in block
+
+
+def test_team_display_name_localizes_known_english_key():
+    assert team_display_name("jordan", "zh") == "约旦"
+    assert team_display_name("约旦", "en") == "Jordan"
+
+
+def test_format_prediction_block_localizes_missing_fifa_team_name():
+    block = format_prediction_block({
+        "home_team": "jordan",
+        "away_team": "algeria",
+        "home_name_cn": "jordan",
+        "away_name_cn": "阿尔及利亚",
+        "home_ranking": "?",
+        "away_ranking": 53,
+        "home_attack": 1.05,
+        "away_attack": 1.45,
+        "home_defense": 0.81,
+        "away_defense": 0.63,
+        "home_elo": 1490,
+        "away_elo": 1717,
+        "lambda_home": 0.86,
+        "lambda_away": 1.61,
+        "home_win": 0.21,
+        "draw": 0.23,
+        "away_win": 0.56,
+        "btts": 0.46,
+        "league_avg_goals": 1.35,
+        "top_scorelines": [
+            {"score": "1-1", "prob": 12.71},
+            {"score": "0-1", "prob": 12.25},
+        ],
+        "implied_odds": {"home": 4.74, "draw": 4.39, "away": 1.78},
+    })
+
+    assert "约旦 vs 阿尔及利亚" in block
+    assert "FIFA 排名缺失" in block
+    assert "数据质量: estimated" in block
+    assert "主队 FIFA 排名" in block
+    assert "jordan" not in block.lower()
+
+
+def test_football_prediction_quality_marks_visible_estimates():
+    quality = football_prediction_quality({
+        "home_ranking": "?",
+        "away_ranking": 53,
+        "home_form": "?????",
+        "away_form": "L",
+        "calibrated_matches": 0,
+    })
+
+    assert quality["status"] == "estimated"
+    assert "home_fifa_ranking" in quality["missing"]
+    assert "recent_form" in quality["missing"]
 
 
 def test_recent_sports_quant_context_supports_scoreline_followups():

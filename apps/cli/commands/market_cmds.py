@@ -577,10 +577,16 @@ class MarketCommandsMixin:
 
         if _is_wc:
             try:
-                from football_data_client import predict_wc_match, _find_fifa_rating
+                from football_data_client import (
+                    predict_wc_match,
+                    _find_fifa_rating,
+                    team_display_name,
+                    football_prediction_quality,
+                    football_quality_missing_labels,
+                )
                 raw = predict_wc_match(home, away, neutral_venue=True)
-                _h_cn = raw.get("home_name_cn", home)
-                _a_cn = raw.get("away_name_cn", away)
+                _h_cn = team_display_name(raw.get("home_name_cn", home), "zh")
+                _a_cn = team_display_name(raw.get("away_name_cn", away), "zh")
                 # Build strength facts for display
                 _h_rank = raw.get("home_ranking", "?")
                 _a_rank = raw.get("away_ranking", "?")
@@ -594,8 +600,11 @@ class MarketCommandsMixin:
                 _a_form = raw.get("away_form", "")
                 _cal    = raw.get("calibrated_matches", 0)
 
+                def _rank_label(value):
+                    return f"#{value}" if value not in (None, "", "?") else "排名缺失"
+
                 _strength_facts = [
-                    f"FIFA排名: {_h_cn} #{_h_rank} · {_a_cn} #{_a_rank}",
+                    f"FIFA排名: {_h_cn} {_rank_label(_h_rank)} · {_a_cn} {_rank_label(_a_rank)}",
                 ]
                 if _h_elo and _a_elo:
                     _strength_facts.append(f"Elo评分: {_h_cn} {_h_elo:.0f} · {_a_cn} {_a_elo:.0f}")
@@ -610,6 +619,12 @@ class MarketCommandsMixin:
                     f"数据基础: {_cal} 场已完赛 WC 数据校准" if _cal > 0
                     else "数据基础: FIFA排名 + Poisson引擎估算"
                 )
+                _quality = raw.get("data_quality") or football_prediction_quality(raw)
+                if _quality.get("missing"):
+                    _missing_labels = football_quality_missing_labels(_quality["missing"], "zh")
+                    _strength_facts.append(
+                        f"数据质量: {_quality.get('status', 'estimated')} · 缺失/估算 {', '.join(_missing_labels)}"
+                    )
 
                 pred = types.SimpleNamespace(
                     home_win          = raw["home_win"],
@@ -626,6 +641,7 @@ class MarketCommandsMixin:
                     away_form         = _a_form,
                     home_elo          = _h_elo,
                     away_elo          = _a_elo,
+                    data_quality       = _quality,
                     analysis          = "",
                     verdict           = (
                         f"[green]预测: {_h_cn} 获胜 ({raw['home_win']:.0%})[/green]" if raw["home_win"] > raw["away_win"] + 0.05
@@ -720,8 +736,16 @@ class MarketCommandsMixin:
         # ── display ──────────────────────────────────────────────────────────
         from rich.columns import Columns
         from rich.text import Text
+        try:
+            from football_data_client import team_display_name as _football_display_name
+        except Exception:
+            def _football_display_name(value, locale="zh"):
+                return str(value or "-")
 
         # Probability bars
+        _home_display = _football_display_name(getattr(pred, "home_name_cn", home), "zh")
+        _away_display = _football_display_name(getattr(pred, "away_name_cn", away), "zh")
+
         def pct_bar(val: float, width: int = 12) -> str:
             filled = int(val * width)
             return "█" * filled + "░" * (width - filled)
@@ -737,7 +761,7 @@ class MarketCommandsMixin:
         prob_table.add_column("", width=8)
 
         prob_table.add_row(
-            f"[{hw_color}]{home}[/{hw_color}]",
+            f"[{hw_color}]{_home_display}[/{hw_color}]",
             f"[{hw_color}]{pct_bar(pred.home_win)}[/{hw_color}]",
             f"[{hw_color}]{pred.home_win:.0%}[/{hw_color}]",
             f"[dim]赔率 {pred.implied_odds['home']}[/dim]",
@@ -749,26 +773,26 @@ class MarketCommandsMixin:
             f"[dim]赔率 {pred.implied_odds['draw']}[/dim]",
         )
         prob_table.add_row(
-            f"[{aw_color}]{away}[/{aw_color}]",
+            f"[{aw_color}]{_away_display}[/{aw_color}]",
             f"[{aw_color}]{pct_bar(pred.away_win)}[/{aw_color}]",
             f"[{aw_color}]{pred.away_win:.0%}[/{aw_color}]",
             f"[dim]赔率 {pred.implied_odds['away']}[/dim]",
         )
 
-        title = f"⚽ {home} vs {away}  [{league.upper()}]"
-        console.print(Panel(prob_table, title=f"[bold green]{title}[/bold green]", border_style="green"))
+        title = f"⚽ {_home_display} vs {_away_display}  [{league.upper()}]"
+        console.print(Panel(prob_table, title=f"[bold #3fb950]{title}[/bold #3fb950]", border_style="#3fb950"))
 
-        console.print(f"  [#57606a]预期进球: {home} {pred.lambda_home:.2f} / {away} {pred.lambda_away:.2f}"
+        console.print(f"  [#57606a]预期进球: {_home_display} {pred.lambda_home:.2f} / {_away_display} {pred.lambda_away:.2f}"
                       f"  │  双方均进球: {pred.btts:.0%}[/#57606a]")
 
         # Top scorelines — show up to 8, colour-coded by outcome
-        _h_name = getattr(pred, "home_name_cn", home)
-        _a_name = getattr(pred, "away_name_cn", away)
+        _h_name = _home_display
+        _a_name = _away_display
         if getattr(pred, "top_scores", None):
             score_table = Table(box=rich_box.SIMPLE, show_header=True, padding=(0, 2))
-            score_table.add_column("可能比分", style="bold", width=14)
-            score_table.add_column("概率", justify="right", width=7)
-            score_table.add_column("结果", width=10)
+            score_table.add_column("可能比分", style="bold", width=12, no_wrap=True)
+            score_table.add_column("概率", justify="right", width=8, no_wrap=True)
+            score_table.add_column("结果", width=16, no_wrap=True)
             for s in pred.top_scores[:8]:
                 _sc = s["score"]
                 _pr = s["prob"]
@@ -778,10 +802,10 @@ class MarketCommandsMixin:
                 except Exception:
                     _hg, _ag = 0, 0
                 if _hg > _ag:
-                    _label = f"[green]{_h_name} 胜[/green]"
+                    _label = f"[#3fb950]{_h_name}胜[/#3fb950]"
                     _sc_fmt = f"[green]{_sc}[/green]"
                 elif _ag > _hg:
-                    _label = f"[red]{_a_name} 胜[/red]"
+                    _label = f"[#f85149]{_a_name}胜[/#f85149]"
                     _sc_fmt = f"[red]{_sc}[/red]"
                 else:
                     _label = "[yellow]平局[/yellow]"
@@ -792,7 +816,8 @@ class MarketCommandsMixin:
         # Half-time / second-half breakdown
         if getattr(pred, "ht_lambda_home", 0) > 0:
             _h_lbl = getattr(pred, "home_name_cn", home)
-            _a_lbl = getattr(pred, "away_name_cn", away)
+            _h_lbl = _football_display_name(_h_lbl, "zh")
+            _a_lbl = _football_display_name(getattr(pred, "away_name_cn", away), "zh")
             _ht_best = pred.ht_top_scorelines[0]["score"] if pred.ht_top_scorelines else "0-0"
             _ht_best_p = pred.ht_top_scorelines[0]["prob"] if pred.ht_top_scorelines else 0
             _st_best_lh = getattr(pred, "st_lambda_home", 0)
@@ -819,8 +844,8 @@ class MarketCommandsMixin:
             console.print()
 
         # ── 实力对比 & 近期表现 ───────────────────────────────────────────────
-        _h_name_d = getattr(pred, "home_name_cn", home)
-        _a_name_d = getattr(pred, "away_name_cn", away)
+        _h_name_d = _home_display
+        _a_name_d = _away_display
         _hform = getattr(pred, "home_form", "")
         _aform = getattr(pred, "away_form", "")
 
