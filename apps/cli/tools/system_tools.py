@@ -559,11 +559,86 @@ def tool_github(
         number = params.get("number") or params.get("pr")
         return _gh(f"gh pr checks {number or ''}")
 
+    if action in ("git_status", "status"):
+        return tool_run_command(
+            {"command": "git status --short && echo '---' && git log --oneline -5",
+             "cwd": cwd, "policy": policy},
+            console=console, has_rich=has_rich,
+        )
+
+    if action in ("commit_and_push", "commit", "push"):
+        import shutil
+        message   = params.get("message", "")
+        branch    = params.get("branch", "")
+        add_files = params.get("files", [])   # list of paths, or [] for "git add -A"
+        coauthor  = params.get("coauthor", "")
+
+        if not message:
+            return {"success": False, "error": "Missing 'message' for commit_and_push"}
+
+        # ── Aria bot identity ──────────────────────────────────────────────────
+        aria_name  = "Aria"
+        aria_email = "aria-code[bot]@artherahq.com"
+        env_prefix = (
+            f'GIT_AUTHOR_NAME="{aria_name}" '
+            f'GIT_AUTHOR_EMAIL="{aria_email}" '
+            f'GIT_COMMITTER_NAME="{aria_name}" '
+            f'GIT_COMMITTER_EMAIL="{aria_email}" '
+        )
+
+        # ── Build commit body ──────────────────────────────────────────────────
+        body = message
+        if coauthor:
+            body += f"\n\nCo-Authored-By: {coauthor}"
+        # Always attribute to the human user too, if git user is configured
+        user_name  = tool_run_command({"command": "git config user.name",  "policy": "safe", "cwd": cwd}).get("output", "").strip()
+        user_email = tool_run_command({"command": "git config user.email", "policy": "safe", "cwd": cwd}).get("output", "").strip()
+        if user_name and user_email and user_email != aria_email:
+            body += f"\n\nCo-Authored-By: {user_name} <{user_email}>"
+
+        # ── Stage files ────────────────────────────────────────────────────────
+        if add_files:
+            stage_cmd = "git add " + " ".join(shlex.quote(f) for f in add_files)
+        else:
+            stage_cmd = "git add -A"
+        stage_result = tool_run_command(
+            {"command": stage_cmd, "cwd": cwd, "policy": policy},
+            console=console, has_rich=has_rich,
+        )
+        if not stage_result.get("success"):
+            return stage_result
+
+        # ── Commit ─────────────────────────────────────────────────────────────
+        safe_body = body.replace('"', '\\"').replace('$', '\\$')
+        commit_result = tool_run_command(
+            {"command": f'{env_prefix}git commit -m "{safe_body}"',
+             "cwd": cwd, "policy": policy},
+            console=console, has_rich=has_rich,
+        )
+        if not commit_result.get("success"):
+            return commit_result
+
+        # ── Push ───────────────────────────────────────────────────────────────
+        push_branch = branch or tool_run_command(
+            {"command": "git rev-parse --abbrev-ref HEAD", "policy": "safe", "cwd": cwd}
+        ).get("output", "").strip() or "main"
+        push_result = tool_run_command(
+            {"command": f"git push origin {shlex.quote(push_branch)}",
+             "cwd": cwd, "policy": policy, "timeout": 60},
+            console=console, has_rich=has_rich,
+        )
+        return {
+            **push_result,
+            "committed_as": f"{aria_name} <{aria_email}>",
+            "branch": push_branch,
+        }
+
     return {
         "success": False,
         "error": (
             f"Unknown GitHub action: '{action}'. "
             "Use: list_prs, list_issues, view_pr, view_issue, create_pr, "
-            "list_commits, search, read_file, pr_diff, pr_checks"
+            "list_commits, search, read_file, pr_diff, pr_checks, "
+            "git_status, commit_and_push"
         ),
     }

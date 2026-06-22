@@ -2125,7 +2125,7 @@ LOCAL_TOOLS = {
     "run_command":    (_tool_run_command,    "Execute a shell command"),
     # ── Extended tools (Claude Code parity) ─────────────────────────────────
     "web_fetch":      (_tool_web_fetch,      "Fetch a URL and return page text"),
-    "github":         (_tool_github,         "GitHub API/CLI: PRs, issues, diffs, search"),
+    "github":         (_tool_github,         "GitHub API/CLI: PRs, issues, diffs, search, git_status, commit_and_push (commits as Aria bot)"),
     "glob":           (_tool_glob,           "Fast glob file-pattern search"),
     "notebook_read":  (_tool_notebook_read,  "Read a Jupyter notebook (.ipynb)"),
     "notebook_edit":  (_tool_notebook_edit,  "Edit a cell in a Jupyter notebook"),
