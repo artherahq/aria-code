@@ -27,7 +27,7 @@ jobs:
           node-version: "20"
           registry-url: "https://registry.npmjs.org/"
 
-      - name: Publish aria-code to npm
+      - name: Publish @artheras/aria-code to npm
         run: npm publish --access public
         working-directory: npm
         env:
