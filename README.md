@@ -37,7 +37,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/assets/demo.gif" alt="Aria Code demo" width="860"/>
+  <img src="docs/assets/demo-2026-06-22.gif" alt="Aria Code demo" width="860"/>
 </p>
 
 ---
