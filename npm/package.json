@@ -1,5 +1,5 @@
 {
-  "name": "@artherahq/aria-code",
+  "name": "aria-code",
   "version": "4.1.0",
   "description": "AI-powered financial terminal — local LLM + 19+ cloud providers + real-time market data",
   "keywords": [
@@ -31,5 +31,9 @@
     "bin/",
     "lib/",
     "scripts/"
-  ]
+  ],
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public"
+  }
 }
