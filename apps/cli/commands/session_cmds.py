@@ -99,6 +99,37 @@ class SessionCommandsMixin:
         else:
             _print_error(f"Session not found: {session_id}", "session")
 
+    def cmd_recall(self, args: str):
+        """Full-text search across all saved sessions: /recall <query>"""
+        query = args.strip()
+        if not query:
+            console.print("[dim]Usage: /recall <query>[/dim]" if HAS_RICH else "Usage: /recall <query>")
+            return
+        results = self.terminal.session_mgr.search_sessions(query)
+        if not results:
+            msg = f"No sessions found matching '{query}'"
+            console.print(f"[dim]{msg}[/dim]" if HAS_RICH else msg)
+            return
+        if HAS_RICH:
+            console.print()
+            console.print(f"  [bold]Recall[/bold]  [dim]{len(results)} session(s) match '{query}'[/dim]")
+            console.print()
+            for r in results[:10]:
+                updated = r["updated"][:16] if r["updated"] else ""
+                console.print(
+                    f"  [bold]{r['title']}[/bold]  "
+                    f"[dim]{r['id'][:8]}  {r['match_count']} hit(s)  {updated}[/dim]"
+                )
+                preview = r["preview"].replace("\n", " ")[:100]
+                console.print(f"    [dim]…{preview}…[/dim]")
+                console.print()
+            console.print("  [dim]Use /load <id> to resume a session[/dim]")
+        else:
+            print(f"\n{len(results)} session(s) found:")
+            for r in results[:10]:
+                print(f"  [{r['id'][:8]}] {r['title']} ({r['match_count']} hits)")
+                print(f"    ...{r['preview'][:80]}...")
+
     async def cmd_export(self, args: str):
         parts = args.split()
         fmt = parts[0].lower() if parts else "json"

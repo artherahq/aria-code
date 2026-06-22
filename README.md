@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/aria-code"><img src="https://img.shields.io/npm/v/aria-code?style=for-the-badge&logo=npm&color=cb3837&label=npm" alt="npm"/></a>
+  <a href="https://www.npmjs.com/package/@artheras/aria-code"><img src="https://img.shields.io/npm/v/@artheras/aria-code?style=for-the-badge&logo=npm&color=cb3837&label=npm" alt="npm"/></a>
   <img src="https://img.shields.io/badge/Python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="python"/>
   <img src="https://img.shields.io/badge/Ollama-Local_LLM-black?style=for-the-badge&logo=llama&logoColor=white" alt="ollama"/>
   <img src="https://img.shields.io/badge/Providers-19+_Cloud-f59e0b?style=for-the-badge" alt="providers"/>
@@ -200,7 +200,7 @@ What it does automatically:
 If you already have [Node.js](https://nodejs.org) installed, the npm installer handles Python, Xcode CLT, and Homebrew automatically:
 
 ```bash
-npm install -g aria-code
+npm install -g @artheras/aria-code
 aria-code
 ```
 
@@ -209,18 +209,24 @@ What happens under the hood:
 - ✅ Detects / installs Homebrew (macOS)
 - ✅ Detects / installs Python 3.12 if missing
 - ✅ Clones Aria Code into `~/.aria-code/`
-- ✅ Creates a venv and installs all Python dependencies
+- ✅ Uses **uv** to create a venv and install dependencies from `pyproject.toml` (falls back to pip)
 
-Update: `npm update -g aria-code`
+Update: `npm update -g @artheras/aria-code`
 
-Repair if broken: `npm explore -g aria-code -- npm run repair`
+Repair if broken: `npm explore -g @artheras/aria-code -- npm run repair`
 
-### Option 3: Git clone (if Python 3.10+ is already installed)
+### Option 3: Git clone
+
+`install.sh` is **uv-powered** — it installs [uv](https://docs.astral.sh/uv/) if
+missing and lets uv download a managed Python automatically, so you don't need
+Python pre-installed. Dependencies come from `pyproject.toml`.
 
 ```bash
 git clone https://github.com/artherahq/aria-code.git
-cd Aria-Code
-bash install.sh
+cd aria-code
+bash install.sh              # full install (recommended)
+# bash install.sh --core     # slim core only — add features later
+# bash install.sh --dev      # everything incl. brokers + dev tools
 ```
 
 Add to PATH (if prompted):
@@ -229,21 +235,42 @@ Add to PATH (if prompted):
 echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc
 ```
 
-### Option 3: Windows
+### Option 4: Windows
 
 ```powershell
 git clone https://github.com/artherahq/aria-code.git
-cd Aria-Code
+cd aria-code
 .\install.ps1
 ```
 
-### Option 4: Run directly (no install)
+### Option 5: PyPI (pip / uv / pipx)
+
+Aria Code ships a proper Python package, so any standard tool works:
+
+```bash
+uv tool install aria-code          # isolated, fast (recommended)
+pipx install aria-code             # isolated alternative
+pip install aria-code              # into the current environment
+```
+
+This installs the **slim core** (CLI + yfinance). Add features with extras:
+
+```bash
+uv tool install "aria-code[full]"      # all data sources + files + charts + SQL
+pip install "aria-code[cn]"            # + China A-share data (akshare)
+pip install "aria-code[files]"         # + PDF/Word/Excel parsing
+pip install "aria-code[all]"           # + brokers + backtest + dev tools
+```
+
+Available extras: `cn` · `crypto` · `charts` · `data` · `files` · `web` ·
+`browser` · `desktop` · `sports` · `lsp` · `brokers` · `backtest` · `full` · `all`.
+
+### Option 6: Run directly (no install)
 
 ```bash
 git clone https://github.com/artherahq/aria-code.git
-cd Aria-Code
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+cd aria-code
+uv venv && uv pip install -e ".[full]"   # uv (fast); or use python -m venv + pip
 python3 aria_cli.py
 ```
 

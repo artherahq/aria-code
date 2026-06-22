@@ -68,7 +68,7 @@ def _write_cache(data: dict) -> None:
 # ── Notice builder ────────────────────────────────────────────────────────────
 
 def _build_notice(latest: str, current: str, lang: str) -> str:
-    cmd = "npm update -g aria-code"
+    cmd = "npm update -g @artheras/aria-code"
     if lang == "zh":
         return (
             f"[yellow]⬆  新版本可用[/yellow] "

@@ -432,3 +432,237 @@ class OpsCommandsMixin:
         else:
             console.print(f"[dim]Unknown /gh sub-command: {sub}. Try /gh help[/dim]" if HAS_RICH
                           else f"Unknown /gh sub-command: {sub}. Try /gh help")
+
+    def cmd_lsp(self, args: str):
+        """Language-server diagnostics for code files.
+
+        /lsp                — show which language servers are installed
+        /lsp <file>         — run diagnostics (errors/warnings) on a file
+        """
+        try:
+            from runtime.lsp import available_servers, server_for, get_diagnostics
+        except ImportError as _e:
+            console.print(f"[red]runtime.lsp not available: {_e}[/red]") if HAS_RICH else print(f"Error: {_e}")
+            return
+
+        target = args.strip().strip('"\'')
+
+        # No arg or "status" → show installed servers
+        if not target or target.lower() == "status":
+            servers = available_servers()
+            if HAS_RICH:
+                console.print()
+                console.print("  [bold]Language Servers[/bold]  [dim]on-demand diagnostics[/dim]")
+                console.print()
+                _hints = {
+                    "pylsp": "pip install 'python-lsp-server[all]'",
+                    "typescript-language-server": "npm i -g typescript-language-server typescript",
+                }
+                for exe, installed in servers.items():
+                    if installed:
+                        console.print(f"  [green]●[/green] [bold]{exe}[/bold]  [dim]installed[/dim]")
+                    else:
+                        console.print(f"  [dim]○ {exe}  not installed — {_hints.get(exe, '')}[/dim]")
+                console.print()
+                console.print("  [dim]/lsp <file>  — run diagnostics on a file[/dim]")
+                console.print()
+            else:
+                print("\n  Language Servers:")
+                for exe, installed in servers.items():
+                    print(f"  {'OK' if installed else '--'}  {exe}")
+            return
+
+        # File path → run diagnostics
+        import pathlib
+        p = pathlib.Path(target).expanduser()
+        if not p.exists():
+            console.print(f"[red]File not found: {p}[/red]" if HAS_RICH else f"File not found: {p}")
+            return
+        if not server_for(p):
+            msg = f"No language server installed for '{p.suffix}' files"
+            console.print(f"[yellow]{msg}[/yellow]" if HAS_RICH else msg)
+            return
+
+        if HAS_RICH:
+            with console.status(f"[dim]Analyzing {p.name}…[/dim]", spinner="dots"):
+                diags = get_diagnostics(p)
+        else:
+            print(f"  Analyzing {p.name}…")
+            diags = get_diagnostics(p)
+
+        if not diags:
+            console.print(f"[green]✓ No diagnostics — {p.name} is clean[/green]" if HAS_RICH
+                          else f"No diagnostics for {p.name}")
+            return
+
+        errors = sum(1 for d in diags if d["severity"] == "error")
+        warnings = sum(1 for d in diags if d["severity"] == "warning")
+        if HAS_RICH:
+            from rich.table import Table
+            from rich import box as _rbox
+            console.print()
+            console.print(f"  [bold]{p.name}[/bold]  "
+                          f"[red]{errors} error(s)[/red] · [yellow]{warnings} warning(s)[/yellow]")
+            console.print()
+            t = Table(box=_rbox.SIMPLE, padding=(0, 1), show_header=True)
+            t.add_column("Loc", style="dim", justify="right", min_width=7)
+            t.add_column("Severity", min_width=8)
+            t.add_column("Message")
+            _sev_color = {"error": "red", "warning": "yellow", "info": "cyan", "hint": "dim"}
+            for d in diags[:40]:
+                color = _sev_color.get(d["severity"], "white")
+                src = f" [dim]({d['source']})[/dim]" if d["source"] else ""
+                t.add_row(
+                    f"{d['line']}:{d['col']}",
+                    f"[{color}]{d['severity']}[/{color}]",
+                    f"{d['message']}{src}",
+                )
+            console.print(t)
+            console.print()
+        else:
+            print(f"\n  {p.name}: {errors} errors, {warnings} warnings")
+            for d in diags[:40]:
+                print(f"  {d['line']}:{d['col']}  {d['severity']:8s} {d['message']}")
+
+    def cmd_completions(self, args: str):
+        """Generate shell completion script for aria-code slash commands.
+
+        /completions           — show instructions
+        /completions bash      — output bash completion snippet
+        /completions zsh       — output zsh completion snippet
+        /completions install   — write and source the completion script
+        """
+        # NOTE: this method's __globals__ are rebound to aria_cli's namespace by
+        # _rebind_mixin_globals(), so module-level names from this file (Path and
+        # the _build_*/_detect_user_shell helpers) must be imported locally.
+        from pathlib import Path
+        from apps.cli.commands.ops_cmds import (
+            _build_bash_completion, _build_zsh_completion, _detect_user_shell,
+        )
+
+        shell = args.strip().lower() or "show"
+
+        # Build sorted slash command list from VISIBLE_SLASH_COMMANDS
+        try:
+            from apps.cli.commands.catalog import VISIBLE_SLASH_COMMANDS
+            cmds = sorted(VISIBLE_SLASH_COMMANDS)
+        except ImportError:
+            cmds = ["/help", "/model", "/config", "/recall", "/permissions", "/deep", "/quote"]
+
+        if shell == "bash":
+            script = _build_bash_completion(cmds)
+            console.print(script if not HAS_RICH else f"[dim]{script}[/dim]")
+            return
+
+        if shell == "zsh":
+            script = _build_zsh_completion(cmds)
+            console.print(script if not HAS_RICH else f"[dim]{script}[/dim]")
+            return
+
+        if shell == "install":
+            import subprocess as _sp
+            import shutil as _sh
+            detected = _detect_user_shell()
+            if detected == "zsh":
+                script = _build_zsh_completion(cmds)
+                target = Path.home() / ".zsh" / "_aria-code"
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(script)
+                rc = Path.home() / ".zshrc"
+                fpath_line = f'fpath=("{target.parent}" $fpath)'
+                if rc.exists():
+                    existing = rc.read_text()
+                    if str(target.parent) not in existing:
+                        rc.write_text(existing.rstrip("\n") + f"\n{fpath_line}\nautoload -U compinit && compinit\n")
+                msg = f"Zsh completion installed → {target}\nRestart your shell or run: source ~/.zshrc"
+            else:
+                script = _build_bash_completion(cmds)
+                target = Path.home() / ".bash_completion.d" / "aria-code"
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(script)
+                rc = Path.home() / ".bashrc"
+                source_line = f'[ -f "{target}" ] && source "{target}"'
+                if rc.exists():
+                    existing = rc.read_text()
+                    if str(target) not in existing:
+                        rc.write_text(existing.rstrip("\n") + f"\n{source_line}\n")
+                msg = f"Bash completion installed → {target}\nRestart your shell or run: source ~/.bashrc"
+            if HAS_RICH:
+                console.print(f"[green]✓[/green]  {msg}")
+            else:
+                print(msg)
+            return
+
+        # Default: instructions
+        detected = _detect_user_shell()
+        if HAS_RICH:
+            console.print()
+            console.print("  [bold]Shell Completions[/bold]  [dim]aria-code slash commands[/dim]")
+            console.print()
+            console.print(f"  Detected shell: [bold]{detected}[/bold]")
+            console.print()
+            console.print("  [dim]/completions bash     — print bash completion script[/dim]")
+            console.print("  [dim]/completions zsh      — print zsh completion script[/dim]")
+            console.print("  [dim]/completions install  — auto-install for your shell[/dim]")
+            console.print()
+            console.print(f"  [dim]{len(cmds)} slash commands registered[/dim]")
+            console.print()
+        else:
+            print(f"\n  Shell: {detected}  |  {len(cmds)} commands registered")
+            print("  /completions bash|zsh|install")
+
+
+def _detect_user_shell() -> str:
+    import os as _os
+    shell = _os.environ.get("SHELL", "").lower()
+    if "zsh" in shell:
+        return "zsh"
+    if "fish" in shell:
+        return "fish"
+    return "bash"
+
+
+def _build_bash_completion(cmds: list) -> str:
+    cmd_list = " ".join(cmds)
+    return f"""# aria-code bash completion
+# Add to ~/.bashrc:  source ~/.bash_completion.d/aria-code
+_aria_code_complete() {{
+    local cur prev words
+    COMPREPLY=()
+    cur="${{COMP_WORDS[COMP_CWORD]}}"
+    # Complete slash commands when passed via -p flag
+    if [[ "${{cur}}" == /* ]]; then
+        COMPREPLY=( $(compgen -W "{cmd_list}" -- "${{cur}}") )
+        return 0
+    fi
+    # Complete top-level flags
+    COMPREPLY=( $(compgen -W "--help --version --print -p --no-color" -- "${{cur}}") )
+}}
+complete -F _aria_code_complete aria-code
+complete -F _aria_code_complete aria_cli.py
+"""
+
+
+def _build_zsh_completion(cmds: list) -> str:
+    lines = ["#compdef aria-code aria_cli.py", "", "_aria_code() {", "  local -a slash_cmds", "  slash_cmds=("]
+    for cmd in cmds:
+        lines.append(f"    '{cmd}'")
+    lines += [
+        "  )",
+        "  _arguments \\",
+        "    '(-h --help)'{-h,--help}'[show help]' \\",
+        "    '(-v --version)'{-v,--version}'[show version]' \\",
+        "    '(-p --print)'{-p,--print}'[non-interactive mode]:prompt:->prompt' \\",
+        "    '*: :->args'",
+        "  case $state in",
+        "    prompt|args)",
+        "      if [[ $PREFIX == /* ]]; then",
+        "        _values 'slash command' $slash_cmds",
+        "      fi",
+        "      ;;",
+        "  esac",
+        "}",
+        "",
+        "_aria_code",
+    ]
+    return "\n".join(lines) + "\n"

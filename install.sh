@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
 # ============================================================
-#  Aria Code — One-command installer
+#  Aria Code — One-command installer (uv-powered)
 #  Usage:
 #    bash install.sh             # full install (recommended)
-#    bash install.sh --core      # core + data only (no file parsers)
-#    bash install.sh --dev       # full + dev/test tools
+#    bash install.sh --core      # slim core only (no file/cn/crypto/charts)
+#    bash install.sh --dev       # everything incl. brokers + dev tools
 #    bash install.sh --upgrade   # upgrade all installed packages
 #    bash install.sh --no-wizard # skip setup wizard at the end
+#
+#  Dependencies come from pyproject.toml (single source of truth):
+#    (no flag)  →  .[full]   core + cn + crypto + charts + data + files
+#    --core     →  .         slim core only
+#    --dev      →  .[all]    full + brokers + backtest + dev
 # ============================================================
 set -euo pipefail
 
@@ -38,51 +43,6 @@ LINK_PATH="$BIN_DIR/aria-code"
 ALIAS_PATH="$BIN_DIR/aria"
 PYTHON="${ARIA_PYTHON:-python3}"
 
-# ── Pre-flight: ensure git & python exist before anything else ─
-_OS="$(uname -s)"
-_preflight_ok=1
-
-if ! command -v git &>/dev/null; then
-    err "git not found."
-    if [[ "$_OS" == "Darwin" ]]; then
-        echo
-        echo -e "  Run ${CYAN}xcode-select --install${NC} and try again."
-        echo -e "  Or run our bootstrap instead:"
-        echo -e "  ${CYAN}bash bootstrap.sh${NC}"
-    else
-        echo -e "  Run: sudo apt-get install git  (Debian/Ubuntu)"
-        echo -e "       sudo yum install git       (RHEL/CentOS)"
-    fi
-    _preflight_ok=0
-fi
-
-if ! command -v python3 &>/dev/null && ! command -v python &>/dev/null; then
-    err "Python 3 not found."
-    if [[ "$_OS" == "Darwin" ]]; then
-        echo
-        if command -v brew &>/dev/null; then
-            echo -e "  Run: ${CYAN}brew install python@3.12${NC}"
-        else
-            echo -e "  Run our bootstrap (handles everything automatically):"
-            echo -e "  ${CYAN}bash bootstrap.sh${NC}"
-            echo
-            echo -e "  Or install manually:"
-            echo -e "    1. xcode-select --install"
-            echo -e "    2. /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
-            echo -e "    3. brew install python@3.12"
-        fi
-    else
-        echo -e "  Run: sudo apt-get install python3.12 python3.12-venv"
-    fi
-    _preflight_ok=0
-fi
-
-if [[ "$_preflight_ok" -eq 0 ]]; then
-    echo
-    err "Pre-flight checks failed. Fix the issues above and re-run."
-    exit 1
-fi
-
 # ── Parse flags ───────────────────────────────────────────────
 MODE="full"
 UPGRADE=0
@@ -94,10 +54,10 @@ for arg in "$@"; do
         --upgrade) UPGRADE=1 ;;
         --no-wizard) NO_WIZARD=1 ;;
         --help|-h)
-            echo "Usage: bash install.sh [--core|--dev|--upgrade]"
-            echo "  (no flag)    Full install: core + file parsers + data analysis"
-            echo "  --core       Minimal: CLI + market data only"
-            echo "  --dev        Full + pytest/dev tools"
+            echo "Usage: bash install.sh [--core|--dev|--upgrade|--no-wizard]"
+            echo "  (no flag)    Full install: core + data sources + files + charts"
+            echo "  --core       Slim: CLI + yfinance only (pip install aria-code)"
+            echo "  --dev        Full + brokers + backtest + pytest/dev tools"
             echo "  --upgrade    Upgrade all existing packages"
             echo "  --no-wizard  Skip interactive setup wizard"
             exit 0 ;;
@@ -105,125 +65,107 @@ for arg in "$@"; do
     esac
 done
 
-# ── Python version check ──────────────────────────────────────
-step "1 / 7  Checking Python"
-if ! command -v "$PYTHON" &>/dev/null; then
-    err "Python 3 not found. Install from https://python.org and re-run."
-    exit 1
-fi
-PY_VER=$("$PYTHON" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-PY_MAJOR=$("$PYTHON" -c "import sys; print(sys.version_info.major)")
-PY_MINOR=$("$PYTHON" -c "import sys; print(sys.version_info.minor)")
-if [[ "$PY_MAJOR" -lt 3 ]] || [[ "$PY_MAJOR" -eq 3 && "$PY_MINOR" -lt 10 ]]; then
-    err "Python $PY_VER found, but Aria Code requires Python 3.10+."
-    exit 1
-fi
-ok "Python $PY_VER"
+# Map mode → pyproject extra
+case "$MODE" in
+    core) EXTRA="" ;;
+    dev)  EXTRA="all" ;;
+    *)    EXTRA="full" ;;
+esac
 
-# ── Virtual environment ───────────────────────────────────────
-step "2 / 7  Setting up virtual environment"
-if [[ ! -d "$VENV_DIR" ]]; then
-    info "Creating venv at $VENV_DIR ..."
-    "$PYTHON" -m venv "$VENV_DIR"
-    ok "Virtual environment created"
+# ── Step 1: package manager (uv preferred) ────────────────────
+step "1 / 5  Setting up package manager"
+USE_UV=0
+if command -v uv &>/dev/null; then
+    ok "uv found: $(uv --version 2>/dev/null || echo uv)"
+    USE_UV=1
 else
-    ok "Virtual environment exists: $VENV_DIR"
+    info "Installing uv (fast Python package manager)…"
+    if command -v curl &>/dev/null && curl -LsSf https://astral.sh/uv/install.sh | sh; then
+        # uv installs to ~/.local/bin (or ~/.cargo/bin on older versions)
+        export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+    fi
+    if command -v uv &>/dev/null; then
+        ok "uv installed: $(uv --version 2>/dev/null || echo uv)"
+        USE_UV=1
+    else
+        warn "uv unavailable — falling back to python venv + pip"
+    fi
 fi
 
-PIP="$VENV_DIR/bin/pip"
+# ── Step 2: virtual environment ───────────────────────────────
+step "2 / 5  Creating virtual environment"
+if [[ "$USE_UV" -eq 1 ]]; then
+    # uv downloads a managed CPython if no suitable interpreter (≥3.10) exists,
+    # so there's no "please install Python first" prerequisite.
+    if [[ ! -d "$VENV_DIR" ]]; then
+        uv venv "$VENV_DIR" --python 3.12 --seed 2>/dev/null \
+            || uv venv "$VENV_DIR" --seed
+        ok "Virtual environment created (uv)"
+    else
+        ok "Virtual environment exists: $VENV_DIR"
+    fi
+else
+    if ! command -v "$PYTHON" &>/dev/null; then
+        err "Neither uv nor python3 is available."
+        echo -e "  Install uv:    ${CYAN}curl -LsSf https://astral.sh/uv/install.sh | sh${NC}"
+        echo -e "  Or install Python 3.10+ from https://python.org and re-run."
+        exit 1
+    fi
+    PY_VER=$("$PYTHON" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+    PY_MAJOR=$("$PYTHON" -c "import sys; print(sys.version_info.major)")
+    PY_MINOR=$("$PYTHON" -c "import sys; print(sys.version_info.minor)")
+    if [[ "$PY_MAJOR" -lt 3 ]] || [[ "$PY_MAJOR" -eq 3 && "$PY_MINOR" -lt 10 ]]; then
+        err "Python $PY_VER found, but Aria Code requires Python 3.10+."
+        exit 1
+    fi
+    ok "Python $PY_VER"
+    if [[ ! -d "$VENV_DIR" ]]; then
+        "$PYTHON" -m venv "$VENV_DIR"
+        ok "Virtual environment created (venv)"
+    else
+        ok "Virtual environment exists: $VENV_DIR"
+    fi
+fi
+
 VENV_PY="$VENV_DIR/bin/python"
 
-info "Upgrading pip..."
-"$PIP" install --quiet --upgrade pip
+# ── Step 3: dependencies (from pyproject.toml) ────────────────
+step "3 / 5  Installing dependencies"
+if [[ -n "$EXTRA" ]]; then
+    dim "  target: aria-code[$EXTRA]  (editable)"
+    TARGET="${CLI_DIR}[$EXTRA]"
+else
+    dim "  target: aria-code  (slim core, editable)"
+    TARGET="${CLI_DIR}"
+fi
 
-# ── Core packages ────────────────────────────────────────────
-step "3 / 7  Installing core packages"
-dim "  aiohttp · rich · prompt_toolkit · PyYAML · requests · httpx · websockets"
-
-CORE_PKGS=(
-    "aiohttp>=3.9.0"
-    "rich>=13.7.0"
-    "prompt_toolkit>=3.0.43"
-    "PyYAML>=6.0.2"
-    "requests>=2.32.0"
-    "httpx[http2]>=0.27.0"
-    "PyJWT>=2.8.0"
-    "apscheduler>=3.10.0"
-    "aiofiles>=23.2.0"
-    "websockets>=12.0"
-    "numpy>=1.26.0"
-    "pandas>=2.2.0"
-    "scipy>=1.13.0"
-    "yfinance>=0.2.55"
-    "akshare>=1.14.68"
-    "ccxt>=4.4.0"
-    "pandas_ta>=0.3.14b"
-    "mplfinance>=0.12.9"
-)
-
-install_group() {
-    local label="$1"; shift
-    local pkgs=("$@")
-    local failed=()
-    for pkg in "${pkgs[@]}"; do
-        local name="${pkg%%[>=<!]*}"
-        printf "  %-36s" "$name"
-        if "$PIP" install --quiet ${UPGRADE:+--upgrade} "$pkg" 2>/dev/null; then
-            echo -e "${GREEN}✓${NC}"
-        else
-            echo -e "${YELLOW}⚠ skipped${NC}"
-            failed+=("$pkg")
-        fi
-    done
-    if [[ ${#failed[@]} -gt 0 ]]; then
-        warn "$label: ${#failed[@]} package(s) skipped — ${failed[*]}"
-        warn "Run manually: $PIP install ${failed[*]}"
+install_pkgs() {
+    local target="$1"
+    if [[ "$USE_UV" -eq 1 ]]; then
+        uv pip install --python "$VENV_PY" ${UPGRADE:+--upgrade} -e "$target"
+    else
+        "$VENV_DIR/bin/pip" install --quiet --upgrade pip
+        "$VENV_DIR/bin/pip" install ${UPGRADE:+--upgrade} -e "$target"
     fi
 }
 
-install_group "core" "${CORE_PKGS[@]}"
-ok "Core packages done"
-
-# ── File analysis packages ────────────────────────────────────
-if [[ "$MODE" != "core" ]]; then
-    step "4 / 7  Installing file analysis packages"
-    dim "  PDF · Word · Excel · HTML · Images · DuckDB SQL"
-
-    FILE_PKGS=(
-        "pdfplumber>=0.11.0"
-        "pypdf>=4.3.0"
-        "python-docx>=1.1.2"
-        "openpyxl>=3.1.5"
-        "beautifulsoup4>=4.12.3"
-        "Pillow>=10.4.0"
-        "duckdb>=0.10.3"
-    )
-    install_group "file-analysis" "${FILE_PKGS[@]}"
-    ok "File analysis packages done"
+if install_pkgs "$TARGET"; then
+    ok "Dependencies installed"
 else
-    step "4 / 7  Skipping file analysis packages (--core mode)"
-    dim "  Run 'bash install.sh' without --core to enable /file /data commands"
+    warn "Full install failed — retrying with slim core so the CLI still works…"
+    if install_pkgs "$CLI_DIR"; then
+        ok "Core installed (some optional features unavailable — use /install later)"
+    else
+        err "Dependency install failed. Try: $VENV_DIR/bin/pip install -e \"$TARGET\""
+        exit 1
+    fi
 fi
 
-# ── Dev packages ─────────────────────────────────────────────
-if [[ "$MODE" == "dev" ]]; then
-    step "5 / 7  Installing dev/test packages"
-    DEV_PKGS=(
-        "pytest>=8.2.0"
-        "pytest-asyncio>=0.23.7"
-    )
-    install_group "dev" "${DEV_PKGS[@]}"
-    ok "Dev packages done"
-else
-    step "5 / 7  Skipping dev packages (use --dev to include)"
-fi
-
-# ── Ollama (local LLM) ────────────────────────────────────────
-step "6 / 7  Checking Ollama (local LLM runtime)"
+# ── Step 4: Ollama (local LLM) ────────────────────────────────
+step "4 / 5  Checking Ollama (local LLM runtime)"
 if command -v ollama &>/dev/null; then
     OLLAMA_VER=$(ollama --version 2>/dev/null | head -1 || echo "unknown")
     ok "Ollama installed: $OLLAMA_VER"
-    # Show available models
     MODELS=$(ollama list 2>/dev/null | tail -n +2 | awk '{print $1}' | tr '\n' '  ' || true)
     if [[ -n "$MODELS" ]]; then
         dim "  Available models: $MODELS"
@@ -252,17 +194,20 @@ else
     fi
 fi
 
-# ── CLI launcher symlink ──────────────────────────────────────
-step "7 / 7  Registering aria-code launcher"
+# ── Step 5: CLI launcher ──────────────────────────────────────
+step "5 / 5  Registering aria-code launcher"
 mkdir -p "$BIN_DIR"
 
+ENTRYPOINT="$VENV_DIR/bin/aria-code"   # created by the editable install's [project.scripts]
 LAUNCHER="$CLI_DIR/aria-code"
-if [[ -f "$LAUNCHER" ]]; then
+if [[ -x "$ENTRYPOINT" ]]; then
+    ln -sf "$ENTRYPOINT" "$LINK_PATH"
+    ln -sf "$ENTRYPOINT" "$ALIAS_PATH"
+elif [[ -f "$LAUNCHER" ]]; then
     chmod +x "$LAUNCHER"
     ln -sf "$LAUNCHER" "$LINK_PATH"
     ln -sf "$LAUNCHER" "$ALIAS_PATH"
 else
-    # No launcher script — create one
     cat > "$VENV_DIR/bin/aria-code-launcher" <<EOF
 #!/bin/bash
 exec "$VENV_DIR/bin/python" "$CLI_DIR/aria_cli.py" "\$@"
@@ -294,19 +239,15 @@ checks = [
     ('aiohttp',        'import aiohttp'),
     ('prompt_toolkit', 'import prompt_toolkit'),
     ('yfinance',       'import yfinance'),
-    ('akshare',        'import akshare'),
     ('pandas',         'import pandas'),
     ('numpy',          'import numpy'),
 ]
 if '${MODE}' != 'core':
     checks += [
+        ('akshare',       'import akshare'),
         ('pdfplumber',    'import pdfplumber'),
-        ('pypdf',         'import pypdf'),
-        ('python-docx',   'import docx'),
-        ('openpyxl',      'import openpyxl'),
-        ('beautifulsoup4','from bs4 import BeautifulSoup'),
-        ('Pillow',        'from PIL import Image'),
         ('duckdb',        'import duckdb'),
+        ('mplfinance',    'import mplfinance'),
     ]
 for name, stmt in checks:
     try:
@@ -334,15 +275,9 @@ echo -e "  ${CYAN}aria-code${NC}                   # interactive REPL"
 echo -e "  ${CYAN}aria-code -p \"AAPL 分析\"${NC}    # one-shot query"
 echo -e "  ${CYAN}aria-code --help${NC}             # all options"
 echo
-echo -e "  ${BOLD}File analysis:${NC}"
-echo -e "  ${CYAN}/file load ~/report.pdf${NC}      # load any document"
-echo -e "  ${CYAN}/file analyze all${NC}            # 4-layer deep analysis"
-echo -e "  ${CYAN}/file ask <question>${NC}         # multi-turn Q&A"
-echo
-echo -e "  ${BOLD}Market data:${NC}"
-echo -e "  ${CYAN}/realty market 北京 上海${NC}     # 房价指数"
-echo -e "  ${CYAN}/corr AAPL MSFT TSLA SPY${NC}     # 相关性矩阵"
-echo -e "  ${CYAN}/ptbt AAPL MSFT GOOG 2y${NC}      # 组合回测"
+echo -e "  ${BOLD}Add a feature later:${NC} ${DIM}(if you used --core)${NC}"
+echo -e "  ${CYAN}$VENV_DIR/bin/pip install -e \"$CLI_DIR[files]\"${NC}   # /file commands"
+echo -e "  ${CYAN}$VENV_DIR/bin/pip install -e \"$CLI_DIR[cn]\"${NC}      # A-share data"
 echo
 if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
     echo -e "  ${YELLOW}Remember to add $BIN_DIR to your PATH!${NC}"

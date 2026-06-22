@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/aria-code"><img src="https://img.shields.io/npm/v/aria-code?style=for-the-badge&logo=npm&color=cb3837&label=npm" alt="npm"/></a>
+  <a href="https://www.npmjs.com/package/@artheras/aria-code"><img src="https://img.shields.io/npm/v/@artheras/aria-code?style=for-the-badge&logo=npm&color=cb3837&label=npm" alt="npm"/></a>
   <img src="https://img.shields.io/badge/Python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="python"/>
   <img src="https://img.shields.io/badge/Ollama-本地大模型-black?style=for-the-badge&logo=llama&logoColor=white" alt="ollama"/>
   <img src="https://img.shields.io/badge/云端-19+供应商-f59e0b?style=for-the-badge" alt="providers"/>
@@ -145,7 +145,7 @@ curl -fsSL https://raw.githubusercontent.com/artherahq/aria-code/aria-code/boots
 已安装 [Node.js](https://nodejs.org) 的用户，npm 安装器会自动处理 Python、Xcode CLT 和 Homebrew：
 
 ```bash
-npm install -g aria-code
+npm install -g @artheras/aria-code
 aria-code
 ```
 
@@ -156,9 +156,9 @@ aria-code
 - ✅ 克隆 Aria Code 到 `~/.aria-code/`
 - ✅ 创建 venv 并安装所有 Python 依赖
 
-更新：`npm update -g aria-code`
+更新：`npm update -g @artheras/aria-code`
 
-修复：`npm explore -g aria-code -- npm run repair`
+修复：`npm explore -g @artheras/aria-code -- npm run repair`
 
 ### 方式三：Git Clone（已安装 Python 3.10+）
 

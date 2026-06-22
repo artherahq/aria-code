@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to publish (e.g. 4.1.0)"
+        description: "Version to publish (e.g. 4.1.1)"
         required: false
 
 jobs:
@@ -32,6 +32,40 @@ jobs:
         working-directory: npm
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  publish-pypi:
+    name: Publish to PyPI
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # enables PyPI Trusted Publishing (OIDC) as an alternative
+    env:
+      # Graceful skip if the token secret isn't configured yet (referencing a
+      # secret in env is allowed; referencing one in a job-level `if` is not).
+      HAS_PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Build sdist + wheel
+        if: env.HAS_PYPI_TOKEN == 'true'
+        run: uv build
+
+      - name: Check distribution metadata
+        if: env.HAS_PYPI_TOKEN == 'true'
+        run: uvx twine check dist/*
+
+      - name: Publish to PyPI
+        if: env.HAS_PYPI_TOKEN == 'true'
+        env:
+          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+        run: uv publish
+
+      - name: Skipped notice
+        if: env.HAS_PYPI_TOKEN != 'true'
+        run: echo "PYPI_API_TOKEN secret not set — skipping PyPI publish. Add it in repo Settings → Secrets, or configure PyPI Trusted Publishing."
 
   publish-github-packages:
     name: Publish to GitHub Packages

@@ -1119,6 +1119,102 @@ class ModelCommandsMixin:
             print(f"  Data:  {st['data_url']} ({st['data_cb']})")
             print(f"  Token: {'set' if st['has_token'] else 'not set'}")
 
+    def cmd_permissions(self, args: str):
+        """Tool permission policy manager.
+
+        /permissions              — show current policy table
+        /permissions allow <tool> — auto-approve this tool forever
+        /permissions deny  <tool> — permanently block this tool
+        /permissions ask   <tool> — always prompt before this tool
+        /permissions reset        — clear all custom rules
+        /permissions remove <tool>— remove this tool from policy
+        """
+        try:
+            from runtime.tool_policy import (
+                load_tool_policy, save_tool_policy,
+                add_to_policy, remove_from_policy,
+            )
+        except ImportError as _e:
+            console.print(f"[red]runtime.tool_policy not available: {_e}[/red]") if HAS_RICH else print(f"Error: {_e}")
+            return
+
+        parts = args.strip().split(maxsplit=1)
+        sub = parts[0].lower() if parts else "show"
+
+        if sub in ("allow", "deny", "ask"):
+            if len(parts) < 2:
+                msg = f"Usage: /permissions {sub} <tool_name>"
+                console.print(f"[dim]{msg}[/dim]") if HAS_RICH else print(msg)
+                return
+            tool = parts[1].strip()
+            add_to_policy(tool, sub)
+            labels = {"allow": ("[green]✓ 白名单[/green]", "auto-approve"), "deny": ("[red]✗ 黑名单[/red]", "block"), "ask": ("[yellow]? 询问[/yellow]", "ask-always")}
+            rich_label, plain_label = labels[sub]
+            if HAS_RICH:
+                console.print(f"  {rich_label}  [bold]{tool}[/bold]  [dim]已更新[/dim]")
+            else:
+                print(f"  {plain_label}: {tool}")
+            return
+
+        if sub == "reset":
+            save_tool_policy({"allowed": [], "denied": [], "ask_always": []})
+            msg = "✓ 工具权限策略已重置"
+            console.print(f"[green]{msg}[/green]") if HAS_RICH else print(msg)
+            return
+
+        if sub in ("remove", "rm"):
+            if len(parts) < 2:
+                msg = "Usage: /permissions remove <tool_name>"
+                console.print(f"[dim]{msg}[/dim]") if HAS_RICH else print(msg)
+                return
+            tool = parts[1].strip()
+            if remove_from_policy(tool):
+                msg = f"✓ '{tool}' 已从策略中移除"
+                console.print(f"[green]{msg}[/green]") if HAS_RICH else print(msg)
+            else:
+                msg = f"'{tool}' 不在任何策略列表中"
+                console.print(f"[dim]{msg}[/dim]") if HAS_RICH else print(msg)
+            return
+
+        # Default: show policy table
+        policy = load_tool_policy()
+        allowed   = policy.get("allowed", [])
+        denied    = policy.get("denied", [])
+        ask_always = policy.get("ask_always", [])
+
+        if HAS_RICH:
+            from rich.table import Table
+            from rich import box as _rbox
+            console.print()
+            console.print("  [bold]Tool Permissions[/bold]  [dim](~/.arthera/tool_policy.json)[/dim]")
+            console.print()
+            t = Table(box=_rbox.SIMPLE, padding=(0, 1), show_header=True)
+            t.add_column("Tool", style="bold", min_width=22)
+            t.add_column("Policy", min_width=12)
+            t.add_column("Effect", style="dim")
+            for tool in sorted(allowed):
+                t.add_row(tool, "[green]✓ allow[/green]", "auto-approve, never prompt")
+            for tool in sorted(denied):
+                t.add_row(tool, "[red]✗ deny[/red]", "always reject, never run")
+            for tool in sorted(ask_always):
+                t.add_row(tool, "[yellow]? ask[/yellow]", "always prompt even in auto mode")
+            if not (allowed or denied or ask_always):
+                t.add_row("[dim]— no custom rules —[/dim]", "", "")
+            console.print(t)
+            console.print("  [dim]/permissions allow <tool>   — 白名单（自动批准）[/dim]")
+            console.print("  [dim]/permissions deny  <tool>   — 黑名单（始终拒绝）[/dim]")
+            console.print("  [dim]/permissions ask   <tool>   — 始终询问[/dim]")
+            console.print("  [dim]/permissions remove <tool>  — 移除规则[/dim]")
+            console.print("  [dim]/permissions reset           — 清空所有规则[/dim]")
+            console.print()
+        else:
+            print("\n  Tool Permissions  (~/.arthera/tool_policy.json)")
+            print(f"  Allow:    {', '.join(allowed) or 'none'}")
+            print(f"  Deny:     {', '.join(denied) or 'none'}")
+            print(f"  Ask:      {', '.join(ask_always) or 'none'}")
+            print()
+            print("  Usage: /permissions allow|deny|ask|remove|reset <tool>")
+
     def cmd_config(self, args: str):
         """Show or set CLI configuration."""
         from apps.cli.config_paths import config_snapshot
@@ -1133,7 +1229,7 @@ class ModelCommandsMixin:
                 snap = config_snapshot()
                 for key in ("api_url", "ollama_url", "model", "thinking_mode",
                             "command_policy", "permission_mode", "network_enabled",
-                            "write_policy", "input_style", "input_theme",
+                            "write_policy", "lsp_autocheck", "input_style", "input_theme",
                             "response_footer", "auto_compact_context",
                             "auto_compact_threshold", "auto_save_sessions"):
                     val = cfg.get(key, "-")
@@ -1179,7 +1275,7 @@ class ModelCommandsMixin:
             else:
                 for key in ("api_url", "ollama_url", "model", "thinking_mode",
                             "command_policy", "permission_mode", "network_enabled",
-                            "write_policy", "input_style", "input_theme",
+                            "write_policy", "lsp_autocheck", "input_style", "input_theme",
                             "response_footer", "auto_compact_context",
                             "auto_compact_threshold"):
                     print(f"  {key}: {cfg.get(key, '-')}")
@@ -1237,6 +1333,15 @@ class ModelCommandsMixin:
                         val = False
                     else:
                         msg = "auto_compact_context must be: true | false"
+                        console.print(f"[red]{msg}[/red]" if HAS_RICH else msg)
+                        return
+                elif key == "lsp_autocheck":
+                    if val.lower() in {"true", "1", "yes", "on"}:
+                        val = True
+                    elif val.lower() in {"false", "0", "no", "off"}:
+                        val = False
+                    else:
+                        msg = "lsp_autocheck must be: true | false"
                         console.print(f"[red]{msg}[/red]" if HAS_RICH else msg)
                         return
                 elif key == "auto_compact_threshold":

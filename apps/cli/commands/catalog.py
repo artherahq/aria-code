@@ -60,9 +60,9 @@ VISIBLE_SLASH_COMMANDS: FrozenSet[str] = frozenset({
     "/help", "/clear", "/compact", "/cost", "/status", "/health",
     "/regen", "/undo", "/copy", "/recap", "/btw",
     # Sessions
-    "/save", "/load", "/sessions", "/export",
+    "/save", "/load", "/sessions", "/recall", "/export",
     # Config
-    "/model", "/thinking", "/config", "/privacy",
+    "/model", "/thinking", "/config", "/permissions", "/privacy",
     # Setup & discovery
     "/setup", "/apikey", "/doctor", "/architecture", "/mcp", "/skills", "/tools", "/packages",
     # Auth
@@ -72,7 +72,7 @@ VISIBLE_SLASH_COMMANDS: FrozenSet[str] = frozenset({
     # Broker
     "/broker", "/account", "/positions", "/orders", "/paper", "/trade",
     # Code & project
-    "/project", "/init", "/review", "/code", "/plan", "/run", "/tasks",
+    "/project", "/init", "/review", "/code", "/plan", "/run", "/tasks", "/completions", "/lsp",
     # Research
     "/team", "/deep",
     # Quant

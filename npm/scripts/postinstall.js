@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * postinstall.js — runs automatically after `npm install -g aria-code`
+ * postinstall.js — runs automatically after `npm install -g @artheras/aria-code`
  *
  * Handles the full bootstrap chain on a fresh machine:
  *   macOS  : Xcode CLT → Homebrew → Python 3.10+ → git clone → venv → pip
@@ -229,9 +229,9 @@ function ensureGit() {
   }
   err("git not found.");
   if (PLATFORM === "darwin")
-    err("Run: xcode-select --install  then re-run: npm install -g aria-code");
+    err("Run: xcode-select --install  then re-run: npm install -g @artheras/aria-code");
   else
-    err("Run: sudo apt-get install git  then re-run: npm install -g aria-code");
+    err("Run: sudo apt-get install git  then re-run: npm install -g @artheras/aria-code");
   process.exit(1);
 }
 
@@ -261,8 +261,41 @@ function ensureRepo() {
 
 // ── Step 6: Virtual environment + pip ────────────────────────────────────────
 
+// ── uv helpers (fast Python package manager) ─────────────────────────────────
+
+function uvLocalPath() {
+  const home = process.env.HOME || process.env.USERPROFILE || "";
+  return path.join(home, ".local", "bin", PLATFORM === "win32" ? "uv.exe" : "uv");
+}
+
+function findUv() {
+  if (which("uv")) return "uv";
+  const local = uvLocalPath();
+  if (fs.existsSync(local)) return local;
+  return null;
+}
+
+function installUv() {
+  info("Installing uv (fast Python package manager)…");
+  let r;
+  if (PLATFORM === "win32") {
+    r = spawnSync("powershell", ["-ExecutionPolicy", "ByPass", "-c",
+      "irm https://astral.sh/uv/install.ps1 | iex"], { stdio: "inherit" });
+  } else {
+    r = spawnSync("/bin/bash", ["-c",
+      "curl -LsSf https://astral.sh/uv/install.sh | sh"], { stdio: "inherit" });
+  }
+  if (r && r.status === 0) {
+    const uv = findUv();
+    if (uv) ok("uv installed");
+    return uv;
+  }
+  warn("uv install failed — falling back to python venv + pip");
+  return null;
+}
+
 function ensureVenv(python) {
-  step(6, "Python virtual environment");
+  step(6, "Python environment + dependencies");
 
   const venvDir  = path.join(INSTALL_DIR, ".venv");
   const venvPy   = PLATFORM === "win32"
@@ -272,6 +305,37 @@ function ensureVenv(python) {
     ? path.join(venvDir, "Scripts", "pip.exe")
     : path.join(venvDir, "bin", "pip");
 
+  // Editable install of the cloned repo with the "full" feature set; deps come
+  // from pyproject.toml (single source of truth) rather than requirements.txt.
+  const fullSpec = `${INSTALL_DIR}[full]`;
+
+  const uv = findUv() || installUv();
+
+  if (uv) {
+    if (!fs.existsSync(venvPy)) {
+      info("Creating virtual environment (uv downloads Python if needed)…");
+      let r = run(uv, ["venv", venvDir, "--python", "3.12", "--seed"]);
+      if (r.status !== 0) r = run(uv, ["venv", venvDir, "--seed"]);
+      if (r.status !== 0) { err("uv venv failed."); process.exit(1); }
+      ok(`venv created at ${venvDir}`);
+    } else {
+      ok(`venv exists: ${venvDir}`);
+    }
+
+    info("Installing dependencies (uv, from pyproject.toml)…");
+    let r = run(uv, ["pip", "install", "--python", venvPy, "-e", fullSpec]);
+    if (r.status !== 0) {
+      warn("Full install failed — retrying with slim core so the CLI still works…");
+      r = run(uv, ["pip", "install", "--python", venvPy, "-e", INSTALL_DIR]);
+      if (r.status === 0) ok("Core installed (optional features via /install later)");
+      else warn("Some packages failed — basic features may still work.");
+    } else {
+      ok("All dependencies installed (uv)");
+    }
+    return { venvPy, venvPip, venvDir };
+  }
+
+  // ── pip fallback (no uv available) ──────────────────────────────────────────
   if (!fs.existsSync(venvPy)) {
     info("Creating virtual environment…");
     const r = run(python.cmd, ["-m", "venv", venvDir]);
@@ -287,17 +351,15 @@ function ensureVenv(python) {
   info("Upgrading pip…");
   run(venvPip, ["install", "--quiet", "--upgrade", "pip"]);
 
-  const reqFile = path.join(INSTALL_DIR, "requirements.txt");
-  if (fs.existsSync(reqFile)) {
-    info("Installing Python dependencies (this may take 3–5 minutes)…");
-    const r = run(venvPip, ["install", "--quiet", "-r", reqFile]);
-    if (r.status !== 0) {
-      warn("Some packages failed — check output above. Basic features still work.");
-    } else {
-      ok("All Python dependencies installed");
-    }
+  info("Installing dependencies (pip, from pyproject.toml — may take 3–5 min)…");
+  let r = run(venvPip, ["install", "-e", fullSpec]);
+  if (r.status !== 0) {
+    warn("Full install failed — retrying with slim core…");
+    r = run(venvPip, ["install", "-e", INSTALL_DIR]);
+    if (r.status === 0) ok("Core installed (optional features via /install later)");
+    else warn("Some packages failed — basic features may still work.");
   } else {
-    warn("requirements.txt not found — skipping pip install");
+    ok("All Python dependencies installed");
   }
 
   return { venvPy, venvPip, venvDir };

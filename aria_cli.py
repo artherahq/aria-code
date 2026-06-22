@@ -1025,6 +1025,7 @@ _ACTIVE_COMMAND_POLICY = ["safe"]
 _ACTIVE_PERMISSION_MODE = ["workspace-write"]
 _PERMISSION_CYCLE = ["read-only", "workspace-write", "full-access"]
 _ACTIVE_NETWORK_ENABLED = [True]
+_ACTIVE_LSP_AUTOCHECK = [False]  # opt-in: run LSP diagnostics after each edit
 
 
 def _sync_write_policy(config: dict):
@@ -1033,6 +1034,7 @@ def _sync_write_policy(config: dict):
     _ACTIVE_COMMAND_POLICY[0] = config.get("command_policy", "safe")
     _ACTIVE_PERMISSION_MODE[0] = config.get("permission_mode", "workspace-write")
     _ACTIVE_NETWORK_ENABLED[0] = bool(config.get("network_enabled", True))
+    _ACTIVE_LSP_AUTOCHECK[0] = bool(config.get("lsp_autocheck", False))
 
 
 def _run_event_hook(event: str, env_extra: dict = None):
@@ -2147,6 +2149,15 @@ except Exception as _exc:
     logger.debug("Subagent tools init error: %s", _exc)
     SUBAGENT_SCHEMAS: list = []
 
+# ── Register LSP diagnostics tool ─────────────────────────────────────────────
+try:
+    from runtime.lsp import LSP_TOOLS, LSP_SCHEMAS
+    LOCAL_TOOLS.update(LSP_TOOLS)
+    logger.info("Registered %d LSP tools", len(LSP_TOOLS))
+except Exception as _exc:
+    logger.debug("LSP tools init error: %s", _exc)
+    LSP_SCHEMAS: list = []
+
 # ── Register computer-use tools (browser automation + desktop control) ──────
 _HAS_COMPUTER_USE = False
 try:
@@ -2569,6 +2580,28 @@ LOCAL_TOOL_SCHEMAS.extend([
 # Append computer-use schemas if the module loaded successfully
 if _HAS_COMPUTER_USE:
     LOCAL_TOOL_SCHEMAS.extend(_CU_SCHEMAS)
+
+
+def _wrap_bare_schemas(bare: list) -> list:
+    """Convert Anthropic-style {name, description, parameters} schemas into the
+    OpenAI {type:function, function:{…}} envelope used by LOCAL_TOOL_SCHEMAS.
+
+    The subagent and LSP modules declare schemas in the bare form; without this
+    wrapping their tools execute but are invisible to the model (it is never
+    told they exist).
+    """
+    wrapped = []
+    for s in bare or []:
+        if "function" in s:          # already enveloped
+            wrapped.append(s)
+        else:
+            wrapped.append({"type": "function", "function": s})
+    return wrapped
+
+
+# Make spawn_task / task_* and lsp_diagnostics visible to the model.
+LOCAL_TOOL_SCHEMAS.extend(_wrap_bare_schemas(SUBAGENT_SCHEMAS))
+LOCAL_TOOL_SCHEMAS.extend(_wrap_bare_schemas(LSP_SCHEMAS))
 
 
 def _dedup_tool_schemas() -> None:
@@ -5477,11 +5510,13 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
             "/load":      (self.cmd_load,     "Load session: /load <id>"),
             "/rename":    (self.cmd_rename,   'Rename session: /rename "title"'),
             "/sessions":  (self.cmd_sessions, "List/search sessions: /sessions [keyword]"),
+            "/recall":    (self.cmd_recall,   "Full-text session search: /recall <query>"),
             "/export":    (self.cmd_export,   "Export: /export json|csv|md|sft|bundle [file]"),
             # ── Config / mode ─────────────────────────────────────────────────
             "/model":     (self.cmd_model,    "Switch AI model (interactive picker)"),
             "/thinking":  (self.cmd_thinking, "Toggle extended thinking: /thinking on|off"),
             "/config":    (self.cmd_config,   "Show/set config: /config set key=value"),
+            "/permissions":(self.cmd_permissions, "Tool permissions: /permissions [allow|deny|ask|reset]"),
             "/input":     (self.cmd_input,    "UI theme: /input theme auto|dark|light"),
             "/privacy":   (self.cmd_privacy,  "Privacy: /privacy status|opt-in|opt-out"),
             "/local":     (self.cmd_local,    "Toggle local-only mode: /local [on|off]"),
@@ -5529,12 +5564,14 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
             "/scaffold":  (self.cmd_scaffold, "Scaffold: /scaffold <name> [--template strategy]"),
             "/plan":      (self.cmd_plan,     "Draft plan: /plan step1 ; step2"),
             "/run":       (self.cmd_run,      "Run shell command: /run <command>"),
+            "/completions":(self.cmd_completions, "Shell completions: /completions [bash|zsh|install]"),
             "/read":      (self.cmd_read,     "Read file: /read <path> [offset] [limit]"),
             "/write":     (self.cmd_write,    "Write file: /write [--stage] <path>"),
             "/edit":      (self.cmd_edit,     "Edit file: /edit <path>"),
             "/ls":        (self.cmd_ls,       "List files: /ls [path] [pattern]"),
             "/search":    (self.cmd_search,   "Search code: /search <pattern> [path] [glob]"),
             "/verify":    (self.cmd_verify,   "Run checks: /verify [--dry-run] [paths...]"),
+            "/lsp":       (self.cmd_lsp,      "Language-server diagnostics: /lsp [file|status]"),
             "/changes":   (self.cmd_changes,  "List staged file changes"),
             "/apply-change": (self.cmd_apply_change,  "Apply staged change: /apply-change <id>"),
             "/reject-change":(self.cmd_reject_change, "Reject staged change: /reject-change <id>"),

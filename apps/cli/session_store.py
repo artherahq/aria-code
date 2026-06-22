@@ -63,6 +63,47 @@ class SessionManager:
                 break
         return sessions
 
+    def search_sessions(self, query: str, limit: int = 20) -> list:
+        """Full-text search through session message content."""
+        q = query.lower()
+        results = []
+        for path in sorted(self.root.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+            try:
+                with open(path, encoding="utf-8") as f:
+                    data = json.load(f)
+                messages = data.get("messages", [])
+                hits = []
+                for msg in messages:
+                    content = msg.get("content", "")
+                    if isinstance(content, str):
+                        if q in content.lower():
+                            idx = content.lower().index(q)
+                            start = max(0, idx - 20)
+                            end = min(len(content), idx + len(q) + 80)
+                            hits.append(content[start:end])
+                    elif isinstance(content, list):
+                        for block in content:
+                            if isinstance(block, dict):
+                                text = block.get("text", "")
+                                if text and q in text.lower():
+                                    idx = text.lower().index(q)
+                                    start = max(0, idx - 20)
+                                    end = min(len(text), idx + len(q) + 80)
+                                    hits.append(text[start:end])
+                if hits:
+                    results.append({
+                        "id": data.get("id", path.stem),
+                        "title": data.get("metadata", {}).get("title", "Untitled"),
+                        "updated": data.get("updated_at", ""),
+                        "match_count": len(hits),
+                        "preview": hits[0],
+                    })
+            except Exception:
+                continue
+            if len(results) >= limit:
+                break
+        return sorted(results, key=lambda r: r["match_count"], reverse=True)
+
     def delete_session(self, session_id: str) -> bool:
         path = self._path(session_id)
         if path.exists():

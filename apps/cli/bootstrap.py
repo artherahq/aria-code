@@ -85,6 +85,7 @@ def default_config() -> dict:
         "data_sharing": False,
         "feedback_upload": False,
         "write_policy": "desktop_only",
+        "lsp_autocheck": False,
         "input_style": "panel",
         "input_theme": "auto",
         "response_footer": "compact",

@@ -93,10 +93,10 @@ if (!python) {
 ${C.red}  aria-code: Python not found.${C.reset}
 
   Run the installer to set up Python automatically:
-    ${C.cyan}npm install -g aria-code${C.reset}
+    ${C.cyan}npm install -g @artheras/aria-code${C.reset}
 
   Or repair the installation:
-    ${C.cyan}node $(npm root -g)/aria-code/scripts/postinstall.js${C.reset}
+    ${C.cyan}npm explore -g @artheras/aria-code -- npm run repair${C.reset}
 
   Runtime path:
     ${C.dim}${installDir}${C.reset}
@@ -110,7 +110,7 @@ if (!ariaCli) {
 ${C.red}  aria-code: aria_cli.py not found at ${installDir}${C.reset}
 
   Repair the installation:
-    ${C.cyan}node $(npm root -g)/aria-code/scripts/postinstall.js${C.reset}
+    ${C.cyan}npm explore -g @artheras/aria-code -- npm run repair${C.reset}
 
   You can override the runtime path with:
     ${C.cyan}ARIA_HOME=/path/to/aria-code aria${C.reset}

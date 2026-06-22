@@ -65,6 +65,58 @@ def _write_policy():
     return _ac()._ACTIVE_WRITE_POLICY
 
 
+def _lsp_autocheck(path: "pathlib.Path") -> "tuple[str | None, list]":
+    """Optionally run language-server diagnostics after a write/edit.
+
+    Gated on config flag `lsp_autocheck` (default off) so the common edit path
+    pays zero cost. When on, this surfaces real diagnostics — undefined names,
+    type errors, unused imports — that the syntax compile-check can't catch, the
+    way Claude Code injects LSP feedback after edits. Returns (summary, diags);
+    summary is None when there's nothing to report. Never raises.
+    """
+    try:
+        if not _ac()._ACTIVE_LSP_AUTOCHECK[0]:
+            return None, []
+    except Exception:
+        return None, []
+    try:
+        from runtime.lsp import server_for, get_diagnostics
+        if not server_for(path):
+            return None, []
+        diags = get_diagnostics(path, timeout=6.0)
+    except Exception:
+        return None, []
+    if not diags:
+        return None, []
+    errors = sum(1 for d in diags if d["severity"] == "error")
+    warnings = sum(1 for d in diags if d["severity"] == "warning")
+    if errors == 0 and warnings == 0:
+        return None, diags
+    head = diags[0]
+    summary = (
+        f"LSP 诊断: {errors} error / {warnings} warning. "
+        f"首条 — 第 {head['line']} 行: {head['message'][:120]}"
+    )
+    return summary, diags
+
+
+def _print_lsp_diags(diags: list, console, has_rich: bool, limit: int = 6) -> None:
+    """Print a compact diagnostics list after an auto-checked edit."""
+    if not (diags and console):
+        return
+    _color = {"error": "red", "warning": "yellow", "info": "cyan", "hint": "dim"}
+    for d in diags[:limit]:
+        if has_rich:
+            c = _color.get(d["severity"], "white")
+            console.print(f"  [{c}]●[/{c}] [dim]{d['line']}:{d['col']}[/dim] "
+                          f"{d['message'][:100]}")
+        else:
+            print(f"  {d['line']}:{d['col']} {d['severity']}: {d['message'][:100]}")
+    if len(diags) > limit:
+        extra = len(diags) - limit
+        console.print(f"  [dim]… +{extra} more[/dim]") if has_rich else print(f"  ... +{extra} more")
+
+
 def _is_safe(p: pathlib.Path) -> bool:
     return _ac()._is_safe_path(p)
 
@@ -453,6 +505,12 @@ def tool_write_file(params: dict) -> dict:
         if _syntax_warn:
             _wdata["syntax_check"] = "failed"
             return {"success": True, "data": _wdata, "warning": _syntax_warn}
+
+        _lsp_warn, _lsp_diags = _lsp_autocheck(p)
+        if _lsp_warn:
+            _print_lsp_diags(_lsp_diags, _console2, _has_rich2)
+            _wdata["diagnostics"] = _lsp_diags
+            return {"success": True, "data": _wdata, "warning": _lsp_warn}
         return {"success": True, "data": _wdata}
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -537,6 +595,13 @@ def tool_edit_file(params: dict) -> dict:
         if _syntax_warn:
             _data["syntax_check"] = "failed"
             return {"success": True, "data": _data, "warning": _syntax_warn}
+
+        # Opt-in LSP diagnostics (catches what the syntax check can't)
+        _lsp_warn, _lsp_diags = _lsp_autocheck(p)
+        if _lsp_warn:
+            _print_lsp_diags(_lsp_diags, console, has_rich)
+            _data["diagnostics"] = _lsp_diags
+            return {"success": True, "data": _data, "warning": _lsp_warn}
         return {"success": True, "data": _data}
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -639,6 +704,12 @@ def tool_multi_edit(params: dict) -> dict:
         if _syntax_warn:
             _data["syntax_check"] = "failed"
             return {"success": True, "data": _data, "warning": _syntax_warn}
+
+        _lsp_warn, _lsp_diags = _lsp_autocheck(p)
+        if _lsp_warn:
+            _print_lsp_diags(_lsp_diags, console, has_rich)
+            _data["diagnostics"] = _lsp_diags
+            return {"success": True, "data": _data, "warning": _lsp_warn}
         return {"success": True, "data": _data}
     except Exception as e:
         return {"success": False, "error": str(e)}

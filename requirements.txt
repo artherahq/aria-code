@@ -1,9 +1,14 @@
-# Aria Code CLI — dependency manifest
-# =====================================
-# Install:  pip install -r requirements.txt
-# Or run:   bash install.sh   (creates isolated venv automatically)
+# Aria Code CLI — dependency manifest (legacy / convenience)
+# ==========================================================
+# NOTE: pyproject.toml is the single source of truth for dependencies.
+#   The installers (install.sh / install.ps1 / npm) install from pyproject via
+#   uv:  uv pip install -e ".[full]"   (extras: cn crypto charts data files web …)
+#   This flat list is kept for `pip install -r requirements.txt` and CI, and
+#   mirrors pyproject's full+all set. Prefer editing pyproject.toml.
 #
-# All packages are grouped by function.
+# Install:  pip install -r requirements.txt   (everything, flat)
+# Or run:   bash install.sh                   (uv venv + pyproject, recommended)
+#
 # "Optional" means graceful fallback exists — Aria Code still starts without them,
 # but the tagged features will be unavailable.
 
