@@ -192,6 +192,12 @@ exclude = [
 select = ["E9", "F821", "F823", "F811", "W191"]
 ignore = ["E501", "F401", "E402", "F811"]
 
+[tool.ruff.lint.per-file-ignores]
+# Mixin command files rely on globals injected by aria_cli.py (console, HAS_RICH, etc.)
+# F821 is suppressed here because the names are valid at runtime via the main module's namespace.
+"apps/cli/commands/*.py" = ["F821"]
+"apps/cli/providers/llm/ollama_stream.py" = ["F821"]
+
 # ── Black (optional local use) ─────────────────────────────────────────────────
 [tool.black]
 line-length = 120

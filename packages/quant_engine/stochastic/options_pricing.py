@@ -532,7 +532,7 @@ def delta_hedge_ratio(
 
 def iv_surface(
     S: float,
-    calls: "pd.DataFrame",    # columns: expiry(年), strike, price
+    calls: "pd.DataFrame",    # columns: expiry(年), strike, price  # noqa: F821
     r: float = 0.05,
     q: float = 0.0,
 ) -> VolSurface:

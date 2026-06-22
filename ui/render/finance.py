@@ -13,6 +13,15 @@ No imports from aria_cli.py — dependency flows one way only.
 from __future__ import annotations
 
 import json
+import logging
+
+logger = logging.getLogger(__name__)
+
+try:
+    from rich.text import Text
+    HAS_RICH = True
+except ImportError:
+    HAS_RICH = False
 
 
 def _clean_error_msg(error: object) -> str:

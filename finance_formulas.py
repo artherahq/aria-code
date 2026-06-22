@@ -354,7 +354,7 @@ def strip_latex_for_cli(text: str) -> str:
         return text
 
     # Display math $$...$$ → "  ▶ <plain formula>"
-    def _render_display(m: re.Match) -> str:
+    def _render_display(m: _re.Match) -> str:
         inner = m.group(1).strip()
         plain = formula_to_plaintext(f"$${inner}$$")
         return f"\n  ▶ {plain}\n"
@@ -362,7 +362,7 @@ def strip_latex_for_cli(text: str) -> str:
     text = _re.sub(r'\$\$(.+?)\$\$', _render_display, text, flags=_re.DOTALL)
 
     # Inline math $...$ → plain
-    def _render_inline(m: re.Match) -> str:
+    def _render_inline(m: _re.Match) -> str:
         inner = m.group(1).strip()
         return formula_to_plaintext(f"${inner}$")
 
@@ -376,7 +376,7 @@ def strip_latex_for_cli(text: str) -> str:
     )
 
     # Display blocks \[...\] → "  ▶ <plain formula>"
-    def _render_block(m: re.Match) -> str:
+    def _render_block(m: _re.Match) -> str:
         inner = m.group(1).strip()
         plain = formula_to_plaintext(inner)
         return f"\n  ▶ {plain}\n"
