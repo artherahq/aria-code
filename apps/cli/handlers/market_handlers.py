@@ -38,6 +38,8 @@ def _detect_lang(text: str) -> str:
 # ── TA session cache (populated during prefetch, read during snapshot) ────────
 _TA_SESSION_CACHE: dict = {}
 _TA_SESSION_CACHE_TTL = 600  # 10 minutes
+_LEVEL_HISTORY_CACHE: dict = {}
+_LEVEL_HISTORY_CACHE_TTL = 300  # 5 minutes
 
 
 def _fmt_int(value) -> str:
@@ -144,6 +146,341 @@ def _support_resistance_for_row(currency: str, price, ma20, ma60, bb_lower, bb_u
     support_str = ", ".join(f"{currency} {v:,.2f}" for v in supports)
     resistance_str = ", ".join(f"{currency} {v:,.2f}" for v in resistances)
     return support_str, resistance_str
+
+
+def _history_records(history_result) -> list[dict]:
+    """Return normalized OHLC records from a market_data_client history result."""
+    if not isinstance(history_result, dict) or not history_result.get("success"):
+        return []
+    records = history_result.get("data") or []
+    out: list[dict] = []
+    for row in records:
+        if not isinstance(row, dict):
+            continue
+        close = _num_or_none(row.get("close") or row.get("Close"))
+        high = _num_or_none(row.get("high") or row.get("High") or close)
+        low = _num_or_none(row.get("low") or row.get("Low") or close)
+        open_ = _num_or_none(row.get("open") or row.get("Open") or close)
+        if close is None or high is None or low is None:
+            continue
+        out.append({
+            "date": row.get("date") or row.get("datetime") or row.get("time") or "",
+            "open": open_ if open_ is not None else close,
+            "high": high,
+            "low": low,
+            "close": close,
+            "volume": _num_or_none(row.get("volume") or row.get("Volume")),
+        })
+    return out
+
+
+def _cached_history_records(mdc, symbol: str, days: int, interval: str) -> list[dict]:
+    if mdc is None or not hasattr(mdc, "history"):
+        return []
+    import time as _time
+    key = (str(symbol).upper(), int(days), str(interval))
+    now = _time.time()
+    cached = _LEVEL_HISTORY_CACHE.get(key)
+    if cached and now - cached.get("ts", 0) < _LEVEL_HISTORY_CACHE_TTL:
+        return cached.get("records", [])[:]
+    try:
+        records = _history_records(mdc.history(symbol, days=days, interval=interval))
+    except Exception:
+        records = []
+    if records:
+        _LEVEL_HISTORY_CACHE[key] = {"ts": now, "records": records}
+    return records
+
+
+def _aggregate_ohlc(records: list[dict], bars: int) -> list[dict]:
+    """Aggregate chronological OHLC records into fixed-size bars."""
+    if bars <= 1 or len(records) < bars:
+        return records[:]
+    out: list[dict] = []
+    for i in range(0, len(records), bars):
+        chunk = records[i:i + bars]
+        if len(chunk) < bars:
+            continue
+        out.append({
+            "date": chunk[-1].get("date") or "",
+            "open": chunk[0]["open"],
+            "high": max(float(r["high"]) for r in chunk),
+            "low": min(float(r["low"]) for r in chunk),
+            "close": chunk[-1]["close"],
+            "volume": sum(float(r.get("volume") or 0) for r in chunk),
+        })
+    return out
+
+
+def _rolling_mean_from_records(records: list[dict], n: int) -> float | None:
+    if len(records) < n:
+        return None
+    vals = [_num_or_none(r.get("close")) for r in records[-n:]]
+    vals = [v for v in vals if v is not None]
+    if len(vals) < n:
+        return None
+    return sum(vals) / len(vals)
+
+
+def _bollinger_from_records(records: list[dict], n: int = 20) -> tuple[float | None, float | None]:
+    if len(records) < n:
+        return None, None
+    vals = [_num_or_none(r.get("close")) for r in records[-n:]]
+    vals = [v for v in vals if v is not None]
+    if len(vals) < n:
+        return None, None
+    mean = sum(vals) / len(vals)
+    if len(vals) < 2:
+        return None, None
+    variance = sum((v - mean) ** 2 for v in vals) / (len(vals) - 1)
+    std = variance ** 0.5
+    return mean + 2 * std, mean - 2 * std
+
+
+def _nearest_levels(
+    records: list[dict],
+    price,
+    *,
+    window: int,
+    extra_levels=(),
+    max_levels: int = 3,
+) -> tuple[list[float], list[float]]:
+    """Find nearest support/resistance using swing points plus dynamic levels."""
+    p = _num_or_none(price)
+    if p is None:
+        return [], []
+    highs = [_num_or_none(r.get("high")) for r in records]
+    lows = [_num_or_none(r.get("low")) for r in records]
+    closes = [_num_or_none(r.get("close")) for r in records]
+    usable = [
+        (h, l, c)
+        for h, l, c in zip(highs, lows, closes)
+        if h is not None and l is not None and c is not None
+    ]
+    if len(usable) < max(5, window * 2 + 1):
+        candidates = [_num_or_none(v) for v in extra_levels]
+    else:
+        highs = [float(h) for h, _l, _c in usable]
+        lows = [float(l) for _h, l, _c in usable]
+        candidates: list[float | None] = []
+        for i in range(window, len(usable) - window):
+            hi_slice = highs[i - window:i + window + 1]
+            lo_slice = lows[i - window:i + window + 1]
+            if highs[i] == max(hi_slice):
+                candidates.append(highs[i])
+            if lows[i] == min(lo_slice):
+                candidates.append(lows[i])
+        candidates.extend(_num_or_none(v) for v in extra_levels)
+
+    support = sorted(
+        {round(float(v), 2) for v in candidates if v is not None and float(v) < p},
+        reverse=True,
+    )[:max_levels]
+    resistance = sorted(
+        {round(float(v), 2) for v in candidates if v is not None and float(v) > p},
+    )[:max_levels]
+    return support, resistance
+
+
+def _format_levels(currency: str, levels: list[float]) -> str:
+    return ", ".join(f"{currency} {v:,.2f}" for v in levels) if levels else "—"
+
+
+def _level_action_line(
+    name: str,
+    support: list[float],
+    resistance: list[float],
+    currency: str,
+    *,
+    english: bool = False,
+) -> str:
+    sup = f"{currency} {support[0]:,.2f}" if support else ""
+    res = f"{currency} {resistance[0]:,.2f}" if resistance else ""
+    if english:
+        if name.startswith("4H"):
+            if sup and res:
+                return f"Short-term: break {res} to chase strength; lose {sup} to reduce risk."
+            return "Short-term: wait for a cleaner nearby level."
+        if name.startswith("Daily"):
+            if sup and res:
+                return f"Swing: hold {sup}; reclaim {res} for daily repair."
+            return "Swing: level data is incomplete."
+        if sup and res:
+            return f"Position: {sup} is the structural line; {res} is the next supply zone."
+        return "Position: structural levels are incomplete."
+    if name.startswith("4H"):
+        if sup and res:
+            return f"短线：上破 {res} 转强；跌破 {sup} 降风险。"
+        return "短线：近端关键位不足，先等价格走出区间。"
+    if name.startswith("日线"):
+        if sup and res:
+            return f"波段：守住 {sup} 结构未破；站回 {res} 修复。"
+        return "波段：日线关键位不足，需结合成交量确认。"
+    if sup and res:
+        return f"长线：{sup} 是结构防线；{res} 是上方供给/趋势压力。"
+    return "长线：结构位不足，暂不做长期突破判断。"
+
+
+def _timeframe_display_name(name: str, *, english: bool = False) -> str:
+    if not english:
+        return name
+    if name.startswith("4H"):
+        return "4H/Short-term"
+    if name.startswith("日线"):
+        return "Daily/Swing"
+    if name.startswith("周线"):
+        return "Weekly/Position"
+    return name
+
+
+def _timeframe_source_label(source: str, *, english: bool = False) -> str:
+    if english:
+        return {
+            "1h→4h": "1h aggregated to 4H",
+            "near-term daily": "near-term daily fallback",
+            "daily swings + MA/BOLL": "daily swings + MA/BOLL",
+            "daily→weekly swings": "daily aggregated to weekly",
+            "MA/BOLL fallback": "MA/BOLL fallback",
+        }.get(source, source)
+    return {
+        "1h→4h": "1小时线聚合",
+        "near-term daily": "近端日线替代",
+        "daily swings + MA/BOLL": "日线摆动 + 均线/布林",
+        "daily→weekly swings": "日线聚合周线",
+        "MA/BOLL fallback": "均线/布林兜底",
+    }.get(source, source)
+
+
+def _append_timeframe_levels(
+    lines: list[str],
+    timeframe_levels: list[dict],
+    currency: str,
+    *,
+    english: bool = False,
+) -> None:
+    """Append narrow-terminal friendly multi-timeframe levels.
+
+    A Markdown table with five columns truncates the long "Use" text in 80-col
+    terminals. Blocks keep every level visible and let Rich wrap text naturally.
+    """
+    if not timeframe_levels:
+        return
+
+    lines.append("")
+    lines.append(f"**{'Multi-timeframe key levels' if english else '多周期关键位'}**")
+    for row in timeframe_levels[:3]:
+        raw_name = str(row.get("name") or "—")
+        name = _timeframe_display_name(raw_name, english=english)
+        source = _timeframe_source_label(str(row.get("source") or ""), english=english)
+        horizon = str(row.get("horizon") or "—")
+        support = row.get("support") or []
+        resistance = row.get("resistance") or []
+        action = _level_action_line(name, support, resistance, currency, english=english)
+
+        if english:
+            meta = f"For: {horizon}"
+            if source:
+                meta += f" · Source: {source}"
+            lines.append(f"- **{name}** — {meta}")
+            lines.append(f"  - Support: {_format_levels(currency, support)}")
+            lines.append(f"  - Resistance: {_format_levels(currency, resistance)}")
+            lines.append(f"  - Use: {action}")
+        else:
+            meta = f"适合：{horizon}"
+            if source:
+                meta += f" · 来源：{source}"
+            lines.append(f"- **{name}** — {meta}")
+            lines.append(f"  - 支撑：{_format_levels(currency, support)}")
+            lines.append(f"  - 压力：{_format_levels(currency, resistance)}")
+            lines.append(f"  - 用法：{action}")
+
+
+def _build_timeframe_levels(
+    mdc,
+    symbol: str,
+    price,
+    currency: str,
+    *,
+    ma20=None,
+    ma60=None,
+    bb_lower=None,
+    bb_upper=None,
+    fallback_supports: list[float] | None = None,
+    fallback_resistances: list[float] | None = None,
+) -> list[dict]:
+    """Build 4H/short, daily, and weekly/position support-resistance levels."""
+    p = _num_or_none(price)
+    if p is None:
+        return []
+    fallback_supports = fallback_supports or []
+    fallback_resistances = fallback_resistances or []
+    rows: list[dict] = []
+
+    daily_records = _cached_history_records(mdc, symbol, 370, "1d")
+    intraday_records = _cached_history_records(mdc, symbol, 30, "1h")
+
+    short_source = "1h→4h" if len(intraday_records) >= 24 else "near-term daily"
+    short_records = _aggregate_ohlc(intraday_records, 4) if len(intraday_records) >= 24 else daily_records[-30:]
+    if short_records:
+        short_ma20 = _rolling_mean_from_records(short_records, 20)
+        short_sup, short_res = _nearest_levels(
+            short_records,
+            p,
+            window=2 if len(short_records) < 60 else 3,
+            extra_levels=(short_ma20, *fallback_supports, *fallback_resistances),
+        )
+        rows.append({
+            "name": "4H/短线",
+            "horizon": "1-5 日",
+            "source": short_source,
+            "support": short_sup,
+            "resistance": short_res,
+        })
+
+    if daily_records:
+        day_bbu, day_bbl = _bollinger_from_records(daily_records, 20)
+        day_sup, day_res = _nearest_levels(
+            daily_records[-180:],
+            p,
+            window=5,
+            extra_levels=(ma20, ma60, bb_lower, bb_upper, day_bbl, day_bbu),
+        )
+        rows.append({
+            "name": "日线/波段",
+            "horizon": "1-8 周",
+            "source": "daily swings + MA/BOLL",
+            "support": day_sup,
+            "resistance": day_res,
+        })
+
+        weekly_records = _aggregate_ohlc(daily_records[-260:], 5)
+        weekly_ma20 = _rolling_mean_from_records(weekly_records, 20)
+        weekly_ma40 = _rolling_mean_from_records(weekly_records, 40)
+        long_high = max((float(r["high"]) for r in daily_records[-260:] if r.get("high") is not None), default=None)
+        long_low = min((float(r["low"]) for r in daily_records[-260:] if r.get("low") is not None), default=None)
+        long_sup, long_res = _nearest_levels(
+            weekly_records,
+            p,
+            window=3,
+            extra_levels=(weekly_ma20, weekly_ma40, long_high, long_low),
+        )
+        rows.append({
+            "name": "周线/长线",
+            "horizon": "2-12 月",
+            "source": "daily→weekly swings",
+            "support": long_sup,
+            "resistance": long_res,
+        })
+
+    if not rows and (fallback_supports or fallback_resistances):
+        rows.append({
+            "name": "近端关键位",
+            "horizon": "快照",
+            "source": "MA/BOLL fallback",
+            "support": fallback_supports[:3],
+            "resistance": fallback_resistances[:3],
+        })
+    return rows
 
 
 def _is_market_share_request(message: str) -> bool:
@@ -1118,6 +1455,7 @@ def _try_handle_market_snapshot_analysis(message: str, history: list = None) -> 
                 "*提示：如需全局搜索，可输入 `/ta <代码>` 获取完整技术分析。*"
             ),
             "tools_used": ["market_snapshot"],
+            "analysis_complete": True,
         }
 
     symbol = _msg_sym or _hist_sym or "AAPL"
@@ -1139,6 +1477,7 @@ def _try_handle_market_snapshot_analysis(message: str, history: list = None) -> 
                 f"可运行 `/quote {symbol}` 重试。"
             ),
             "tools_used": ["market_snapshot"],
+            "analysis_complete": True,
         }
 
     import time as _time_snap
@@ -1341,6 +1680,7 @@ def _try_handle_market_snapshot_analysis(message: str, history: list = None) -> 
             ),
             "tools_used": ["market_snapshot"],
             "rate_limited": is_rate_limit,
+            "analysis_complete": True,
         }
 
     name = quote.get("name") or symbol
@@ -1625,6 +1965,18 @@ def _try_handle_market_snapshot_analysis(message: str, history: list = None) -> 
     resistances = sorted(set(round(v, 2) for v in resistances))[:3]
     support_str = ", ".join(f"{currency} {v:,.2f}" for v in supports)
     resistance_str = ", ".join(f"{currency} {v:,.2f}" for v in resistances)
+    timeframe_levels = _build_timeframe_levels(
+        locals().get("mdc"),
+        symbol,
+        price,
+        currency,
+        ma20=ma20,
+        ma60=ma60,
+        bb_lower=bbl,
+        bb_upper=bbu,
+        fallback_supports=supports,
+        fallback_resistances=resistances,
+    )
 
     # ── Signal logic ──────────────────────────────────────────────────────────
     _enough_data = (rsi is not None) or (mhist is not None)
@@ -1799,10 +2151,10 @@ def _try_handle_market_snapshot_analysis(message: str, history: list = None) -> 
         "timeout_warn": "Data source request timed out" if _en else "数据源请求超时",
         "nodata_warn":  "No data available for this symbol" if _en else "该标的暂无数据",
         "next_hdr":     "**Next steps**" if _en else "**下一步**",
-        "team_desc":    "AI multi-factor analysis (fundamental + technical)" if _en else "AI 综合分析（基本面 + 技术面）",
-        "ta_desc":      "Full technical indicator chart" if _en else "完整技术指标图表",
+        "team_desc":    "Deep analysis (fundamental + technical)" if _en else "深度分析（基本面 + 技术面）",
+        "ta_desc":      "Open full technical chart" if _en else "打开完整技术图表",
         "report_desc":  "Generate institutional research report" if _en else "生成机构级研究报告",
-        "backtest_desc":"Backtest momentum strategy" if _en else "回测动量策略",
+        "backtest_desc":"Backtest 1y momentum strategy" if _en else "回测 1 年动量策略",
         "pos_high":     "Upper range" if _en else "日内高位",
         "pos_low":      "Lower range" if _en else "日内低位",
         "pos_mid":      "Mid range" if _en else "日内中段",
@@ -1820,6 +2172,93 @@ def _try_handle_market_snapshot_analysis(message: str, history: list = None) -> 
 
     session_note = _L["after_hours"] if weekday >= 5 else _L["market_open"]
 
+    def _money(v: float | int | None) -> str:
+        try:
+            return f"{currency} {float(v):,.2f}"
+        except Exception:
+            return "—"
+
+    if _enough_data:
+        if _sig_key in ("STRONG_BUY", "BUY", "HOLD+"):
+            _bias_label = "bullish" if _en else "偏强"
+        elif _sig_key in ("STRONG_SELL", "SELL", "HOLD−"):
+            _bias_label = "bearish" if _en else "偏弱"
+        else:
+            _bias_label = "range-bound" if _en else "震荡"
+    else:
+        _bias_label = "insufficient TA data" if _en else "指标不足"
+
+    _trend_bits = []
+    if ma20 is not None:
+        _trend_bits.append(("above MA20" if price > ma20 else "below MA20") if _en else ("站上 MA20" if price > ma20 else "低于 MA20"))
+    if ma60 is not None:
+        _trend_bits.append(("above MA60" if price > ma60 else "below MA60") if _en else ("站上 MA60" if price > ma60 else "低于 MA60"))
+    if mhist is not None:
+        _trend_bits.append(("MACD positive" if mhist > 0 else "MACD negative") if _en else ("MACD 偏多" if mhist > 0 else "MACD 偏空"))
+    if rsi is not None:
+        if rsi >= 70:
+            _trend_bits.append("RSI overbought" if _en else "RSI 超买")
+        elif rsi <= 30:
+            _trend_bits.append("RSI oversold" if _en else "RSI 超卖")
+        else:
+            _trend_bits.append(f"RSI {rsi:.1f} neutral" if _en else f"RSI {rsi:.1f} 中性")
+
+    _watch_supports = next((row.get("support") or [] for row in timeframe_levels if row.get("support")), supports)
+    _watch_resistances = next((row.get("resistance") or [] for row in timeframe_levels if row.get("resistance")), resistances)
+    _nearest_support = _watch_supports[0] if _watch_supports else None
+    _nearest_resistance = _watch_resistances[0] if _watch_resistances else None
+    if _en:
+        _summary_line = f"{symbol} is currently {str(_bias_label)}"
+        if _trend_bits:
+            _summary_line += " — " + ", ".join(_trend_bits[:3]) + "."
+        else:
+            _summary_line += "."
+        if _nearest_support is not None and _nearest_resistance is not None:
+            _watch_line = (
+                f"Watch {_money(_nearest_resistance)} for a bullish break; "
+                f"losing {_money(_nearest_support)} raises downside risk."
+            )
+        elif _nearest_resistance is not None:
+            _watch_line = f"Watch {_money(_nearest_resistance)} as the next resistance."
+        elif _nearest_support is not None:
+            _watch_line = f"Watch {_money(_nearest_support)} as the nearest support."
+        else:
+            _watch_line = "No reliable support/resistance from current data."
+    else:
+        _summary_line = f"{symbol} 当前{_bias_label}"
+        if _trend_bits:
+            _summary_line += "，" + "，".join(_trend_bits[:3]) + "。"
+        else:
+            _summary_line += "。"
+        if _nearest_support is not None and _nearest_resistance is not None:
+            _watch_line = f"上破 {_money(_nearest_resistance)} 才能转强；跌破 {_money(_nearest_support)} 风险放大。"
+        elif _nearest_resistance is not None:
+            _watch_line = f"重点观察 {_money(_nearest_resistance)} 阻力。"
+        elif _nearest_support is not None:
+            _watch_line = f"重点观察 {_money(_nearest_support)} 支撑。"
+        else:
+            _watch_line = "当前数据不足以给出可靠支撑/阻力。"
+
+    _positive_reasons = []
+    _negative_reasons = []
+    _neutral_reasons = []
+    if ma20 is not None:
+        (_positive_reasons if price > ma20 else _negative_reasons).append("price>MA20" if _en and price > ma20 else "price<MA20" if _en else "价格高于 MA20" if price > ma20 else "价格低于 MA20")
+    if ma60 is not None:
+        (_positive_reasons if price > ma60 else _negative_reasons).append("price>MA60" if _en and price > ma60 else "price<MA60" if _en else "价格高于 MA60" if price > ma60 else "价格低于 MA60")
+    if mhist is not None:
+        (_positive_reasons if mhist > 0 else _negative_reasons).append("MACD positive" if _en and mhist > 0 else "MACD negative" if _en else "MACD 偏多" if mhist > 0 else "MACD 偏空")
+    if rsi is not None:
+        if 30 < rsi < 70:
+            _neutral_reasons.append(f"RSI {rsi:.1f} neutral" if _en else f"RSI {rsi:.1f} 中性")
+        elif rsi <= 30:
+            _positive_reasons.append("RSI oversold" if _en else "RSI 超卖")
+        elif rsi >= 70:
+            _negative_reasons.append("RSI overbought" if _en else "RSI 超买")
+
+    def _join_reasons(items: list[str]) -> str:
+        return ", ".join(items) if _en else "、".join(items)
+
     lines = []
     # ── Header ──
     _header_name = name if name and name.upper() != symbol.upper() else ""
@@ -1828,6 +2267,9 @@ def _try_handle_market_snapshot_analysis(message: str, history: list = None) -> 
     else:
         lines.append(f"## `{symbol}`")
     lines.append(f"*{data_src} · {_now_str} · {session_note} · {_L['disclaimer']}*")
+    lines.append("")
+    lines.append(f"**{'Takeaway' if _en else '结论'}**：{_summary_line}")
+    lines.append(f"**{'Watch' if _en else '观察位'}**：{_watch_line}")
     lines.append("")
 
     # ── Price table ──
@@ -1866,6 +2308,8 @@ def _try_handle_market_snapshot_analysis(message: str, history: list = None) -> 
     if resistance_str:
         lines.append(f"| {_L['resistance']} | {resistance_str} | |")
 
+    _append_timeframe_levels(lines, timeframe_levels, currency, english=_en)
+
     # ── Price-action lines (rebuild with language-aware labels) ──
     _pa_lines_l10n = []
     if _price_pos is not None:
@@ -1891,6 +2335,15 @@ def _try_handle_market_snapshot_analysis(message: str, history: list = None) -> 
             f" · 量化分 {_signal_score:+d} · 置信度 {_signal_confidence:.0%}"
         )
         lines.append(f"{_L['signal_lbl']}：`{signal}` — {signal_str}{_score_detail}")
+        _reason_parts = []
+        if _positive_reasons:
+            _reason_parts.append(("support: " if _en else "支撑：") + _join_reasons(_positive_reasons[:3]))
+        if _negative_reasons:
+            _reason_parts.append(("pressure: " if _en else "压力：") + _join_reasons(_negative_reasons[:3]))
+        if _neutral_reasons:
+            _reason_parts.append(("neutral: " if _en else "中性：") + _join_reasons(_neutral_reasons[:2]))
+        if _reason_parts:
+            lines.append(f"**{'Signal drivers' if _en else '信号拆解'}**：" + ("; ".join(_reason_parts) if _en else "；".join(_reason_parts)))
     else:
         lines.append(_L["pa_hdr"])
         for _pal in _pa_lines_l10n:
@@ -2027,4 +2480,30 @@ def _try_handle_market_snapshot_analysis(message: str, history: list = None) -> 
     else:
         lines.append(f"- `/backtest momentum {symbol} --period 1y` — {_L['backtest_desc']}")
 
-    return {"success": True, "response": "\n".join(lines), "tools_used": ["market_snapshot"]}
+    return {
+        "success": True,
+        "response": "\n".join(lines),
+        "tools_used": ["market_snapshot"],
+        "analysis_complete": True,
+        "symbol": symbol,
+        "price": price,
+        "change_pct": chg,
+        "currency": currency,
+        "name": name,
+        "signal": signal,
+        "signal_score": _signal_score,
+        "signal_confidence": _signal_confidence,
+        "rsi": rsi,
+        "macd_hist": mhist,
+        "ma20": ma20,
+        "ma60": ma60,
+        "bb_upper": bbu,
+        "bb_lower": bbl,
+        "support": support_str,
+        "resistance": resistance_str,
+        "supports": supports,
+        "resistances": resistances,
+        "timeframe_levels": timeframe_levels,
+        "data_src": data_src,
+        "as_of": _now_str,
+    }

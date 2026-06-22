@@ -98,14 +98,88 @@ def compact_market_cap(value: Any, currency: str = "USD") -> str:
         return "-"
 
 
+def _first_present(*values: Any) -> Any:
+    for value in values:
+        if value not in (None, "", [], {}):
+            return value
+    return None
+
+
+def _as_float(value: Any) -> float | None:
+    try:
+        if value in (None, ""):
+            return None
+        return float(value)
+    except Exception:
+        return None
+
+
+def _fmt_num(value: Any, digits: int = 2) -> str:
+    number = _as_float(value)
+    if number is None:
+        return "-"
+    return f"{number:.{digits}f}"
+
+
+def _fmt_pct(value: Any, digits: int = 2) -> str:
+    number = _as_float(value)
+    if number is None:
+        return "-"
+    return f"{number:+.{digits}f}%"
+
+
+def _fmt_compact_number(value: Any) -> str:
+    number = _as_float(value)
+    if number is None:
+        return "-"
+    sign = "-" if number < 0 else ""
+    number = abs(number)
+    if number >= 1e12:
+        return f"{sign}{number / 1e12:.2f}T"
+    if number >= 1e9:
+        return f"{sign}{number / 1e9:.2f}B"
+    if number >= 1e6:
+        return f"{sign}{number / 1e6:.2f}M"
+    if number >= 1e3:
+        return f"{sign}{number / 1e3:.1f}K"
+    return f"{sign}{number:.0f}"
+
+
 def team_quote_snapshot(data_bundle: Any) -> dict[str, Any]:
     quote = getattr(data_bundle, "quote", {}) or {}
+    fundamentals = getattr(data_bundle, "fundamentals", {}) or {}
+    technical = getattr(data_bundle, "technical", {}) or {}
     quality = getattr(data_bundle, "quality", {}) or {}
     return {
+        "symbol": getattr(data_bundle, "symbol", "") or quote.get("symbol"),
         "price": quote.get("price") or quote.get("current_price") or quote.get("regular_market_price"),
         "change_pct": quote.get("change_pct") or quote.get("change_percent") or quote.get("pct_change"),
         "currency": quote.get("currency") or quote.get("currency_symbol") or "USD",
-        "market_cap": quote.get("market_cap") or quote.get("marketCap"),
+        "change": quote.get("change"),
+        "volume": quote.get("volume") or technical.get("volume"),
+        "high": quote.get("high"),
+        "low": quote.get("low"),
+        "open": quote.get("open"),
+        "prev_close": quote.get("prev_close"),
+        "name": quote.get("name") or fundamentals.get("name"),
+        "sector": fundamentals.get("sector"),
+        "industry": fundamentals.get("industry"),
+        "market_cap": quote.get("market_cap") or quote.get("marketCap") or fundamentals.get("market_cap"),
+        "pe_ratio": _first_present(fundamentals.get("pe_ratio"), fundamentals.get("pe_ttm"), quote.get("pe_ttm")),
+        "fwd_pe": fundamentals.get("fwd_pe"),
+        "eps": _first_present(fundamentals.get("eps"), fundamentals.get("fwd_eps")),
+        "roe": fundamentals.get("roe"),
+        "revenue_growth": fundamentals.get("revenue_growth"),
+        "analyst_target": fundamentals.get("analyst_target"),
+        "recommendation": fundamentals.get("recommendation"),
+        "beta": fundamentals.get("beta"),
+        "rsi": technical.get("rsi"),
+        "macd_hist": technical.get("macd_hist"),
+        "ma20": technical.get("ma20"),
+        "ma60": technical.get("ma60"),
+        "support": technical.get("support") or technical.get("supports"),
+        "resistance": technical.get("resistance") or technical.get("resistances"),
+        "history_bars": technical.get("history_bars"),
         "provider_chain": getattr(data_bundle, "provider_chain", []) or [],
         "missing_fields": getattr(data_bundle, "missing_fields", []) or [],
         "warnings": getattr(data_bundle, "warnings", []) or [],
@@ -115,6 +189,82 @@ def team_quote_snapshot(data_bundle: Any) -> dict[str, Any]:
         "status": getattr(data_bundle, "status", "data_unavailable"),
         "timestamp": getattr(data_bundle, "timestamp", ""),
     }
+
+
+def build_team_market_context(data_bundle: Any) -> dict[str, Any]:
+    """Build the deterministic real-data block passed into synthesis."""
+    if not data_bundle:
+        return {}
+    snapshot = team_quote_snapshot(data_bundle)
+    quote = getattr(data_bundle, "quote", {}) or {}
+    fundamentals = getattr(data_bundle, "fundamentals", {}) or {}
+    technical = getattr(data_bundle, "technical", {}) or {}
+    quality = snapshot.get("quality") or {}
+    lines = [
+        f"data_status={snapshot.get('status') or 'unknown'}",
+        f"providers={', '.join(snapshot.get('provider_chain') or []) or 'unknown'}",
+        f"missing={', '.join(snapshot.get('missing_fields') or []) or 'none'}",
+        f"price={snapshot.get('currency') or 'USD'} {snapshot.get('price')}",
+        f"change_pct={snapshot.get('change_pct')}",
+        f"volume={snapshot.get('volume')}",
+        f"market_cap={compact_market_cap(snapshot.get('market_cap'), snapshot.get('currency') or 'USD')}",
+        f"pe={snapshot.get('pe_ratio')}",
+        f"forward_pe={snapshot.get('fwd_pe')}",
+        f"eps={snapshot.get('eps')}",
+        f"roe={snapshot.get('roe')}",
+        f"revenue_growth={snapshot.get('revenue_growth')}",
+        f"analyst_target={snapshot.get('analyst_target')}",
+        f"rsi={snapshot.get('rsi')}",
+        f"macd_hist={snapshot.get('macd_hist')}",
+        f"ma20={snapshot.get('ma20')}",
+        f"ma60={snapshot.get('ma60')}",
+        f"stale={bool(snapshot.get('stale'))}",
+    ]
+    return {
+        "quote": quote,
+        "fundamentals": fundamentals,
+        "technical": technical,
+        "data_quality": quality,
+        "market_snapshot": snapshot,
+        "market_data_block": "\n".join(lines),
+    }
+
+
+def build_team_terminal_summary(data_bundle: Any) -> str:
+    """Return compact Rich markup summary for the /team panel."""
+    if not data_bundle:
+        return "[#57606a]数据:[/#57606a] unavailable"
+    snapshot = team_quote_snapshot(data_bundle)
+    currency = snapshot.get("currency") or "USD"
+    price = snapshot.get("price")
+    price_text = f"{currency} {_fmt_num(price)}" if price is not None else "unavailable"
+    cap_text = compact_market_cap(snapshot.get("market_cap"), currency)
+    change_text = _fmt_pct(snapshot.get("change_pct"))
+    volume_text = _fmt_compact_number(snapshot.get("volume"))
+    rsi_text = _fmt_num(snapshot.get("rsi"), 1)
+    macd_text = _fmt_num(snapshot.get("macd_hist"), 4)
+    ma20_text = _fmt_num(snapshot.get("ma20"))
+    ma60_text = _fmt_num(snapshot.get("ma60"))
+    providers = ", ".join(snapshot.get("provider_chain") or []) or "unknown"
+    missing = ", ".join(snapshot.get("missing_fields") or []) or "none"
+    status = snapshot.get("status") or "unknown"
+    stale = "yes" if snapshot.get("stale") else "no"
+    return "\n".join([
+        f"[bold]{snapshot.get('name') or snapshot.get('symbol') or ''}[/bold]  "
+        f"价格 {price_text} ({change_text}) · 市值 {cap_text} · 成交量 {volume_text}",
+        f"技术面 RSI {rsi_text} · MACD hist {macd_text} · MA20 {ma20_text} · MA60 {ma60_text}",
+        f"[#57606a]数据:[/#57606a] {providers} · status {status} · stale {stale} · missing {missing}",
+    ])
+
+
+def clean_team_synthesis_text(text: str) -> str:
+    """Strip raw Markdown markers that render poorly inside terminal panels."""
+    import re
+    cleaned = str(text or "").strip()
+    cleaned = re.sub(r"\*\*([^*]+)\*\*", r"\1", cleaned)
+    cleaned = re.sub(r"(?m)^\s*-\s*$", "", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
 
 
 def build_team_llm_provider(config: dict[str, Any]) -> Any:
@@ -191,6 +341,7 @@ async def run_team_analysis(
                 on_agent_done=_agent_done_proxy if on_agent_done else None,
                 on_synthesis_start=None,
                 lang=lang,
+                market_context=build_team_market_context(data_bundle),
             )
     finally:
         for name, level in saved_levels.items():
@@ -301,7 +452,13 @@ def build_team_report_markdown(
         f"- 数据状态: `{quote_snapshot.get('status', 'unknown')}`",
         f"- 是否过期: `{'yes' if stale else 'no'}`",
         f"- 当前参考价: `{currency} {price}`" if price is not None else "- 当前参考价: `unavailable`",
+        f"- 涨跌幅: `{_fmt_pct(quote_snapshot.get('change_pct'))}`",
+        f"- 成交量: `{_fmt_compact_number(quote_snapshot.get('volume'))}`",
         f"- 市值: `{compact_market_cap(cap, currency)}`" if cap else "- 市值: `unavailable`",
+        f"- PE / Forward PE / EPS: `{_fmt_num(quote_snapshot.get('pe_ratio'))}` / `{_fmt_num(quote_snapshot.get('fwd_pe'))}` / `{_fmt_num(quote_snapshot.get('eps'))}`",
+        f"- ROE / 营收增长: `{_fmt_num(quote_snapshot.get('roe'))}%` / `{_fmt_num(quote_snapshot.get('revenue_growth'))}%`",
+        f"- 技术指标: `RSI {_fmt_num(quote_snapshot.get('rsi'), 1)} · MACD hist {_fmt_num(quote_snapshot.get('macd_hist'), 4)} · MA20 {_fmt_num(quote_snapshot.get('ma20'))} · MA60 {_fmt_num(quote_snapshot.get('ma60'))}`",
+        f"- 分析师目标价: `{currency} {_fmt_num(quote_snapshot.get('analyst_target'))}`" if quote_snapshot.get("analyst_target") is not None else "- 分析师目标价: `unavailable`",
         f"- 数据源链: `{', '.join(providers) if providers else 'unknown'}`",
         f"- 缺失字段: `{', '.join(missing) if missing else 'none'}`",
     ]
@@ -332,7 +489,7 @@ def build_team_report_markdown(
                 result.analysis or "*(该 Agent 未产生可用分析文本)*",
                 "",
             ]
-    lines += ["---", "", "## 综合结论", "", team_result.synthesis or "*(无综合结论)*", ""]
+    lines += ["---", "", "## 综合结论", "", clean_team_synthesis_text(team_result.synthesis or "*(无综合结论)*"), ""]
     return "\n".join(lines)
 
 

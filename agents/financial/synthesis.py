@@ -43,11 +43,21 @@ class SynthesisAgent(BaseAgent):
 
     async def analyze(self, symbol: str, data: Dict[str, Any]) -> AgentResult:
         agent_results: List[Dict] = data.get("agent_results", [])
+        consensus_signal = str(data.get("consensus_signal") or "HOLD").upper()
+        consensus_conf = data.get("consensus_confidence")
+        consensus_conf_num = (
+            _safe_float(consensus_conf)
+            if consensus_conf is not None else _calc_weighted_confidence(agent_results)
+        )
 
         # Check if any agent had real price data
         _quote = data.get("quote", {})
-        _price = _quote.get("price", 0) if _quote else 0
-        _data_available = bool(_price and float(_price) > 0)
+        _snapshot = data.get("market_snapshot", {}) or {}
+        _price = _snapshot.get("price") or (_quote.get("price", 0) if _quote else 0)
+        _data_available = bool(_safe_float(_price))
+        _market_block = data.get("market_data_block") or _format_market_block(data)
+        _target = _snapshot.get("analyst_target")
+        _ma60 = _snapshot.get("ma60")
 
         summary_parts = []
         for r in agent_results:
@@ -65,33 +75,46 @@ class SynthesisAgent(BaseAgent):
 
         if _data_available:
             _price_instruction = (
-                "3. Entry strategy (timing and specific price level)\n"
-                "4. Exit strategy (specific target price and stop loss)\n"
-                "FINAL: BUY/HOLD/SELL | Target: $X | Stop: $Y"
+                "3. Entry strategy using ONLY the supplied current price, MA20/MA60, RSI, MACD and analyst_target.\n"
+                "4. Target/stop rules: use analyst_target only if supplied; otherwise write Target: N/A (analyst target missing). "
+                "Use MA60 or a stated technical support from supplied data as a risk control level only; do not invent prices.\n"
+                f"FINAL: {consensus_signal} | Target: "
+                f"{'$' + str(_target) if _safe_float(_target) else 'N/A (analyst target missing)'} | "
+                f"Stop: {'below MA60 ' + str(_ma60) if _safe_float(_ma60) else 'N/A (technical stop missing)'}"
             )
         else:
             _price_instruction = (
-                "3. Entry strategy (qualitative timing only — NO specific prices, real data unavailable)\n"
-                "4. Key risks (NO stop-loss or target prices — data unavailable)\n"
-                "FINAL: BUY/HOLD/SELL | Target: N/A (no real data) | Stop: N/A"
+                "3. Entry strategy qualitative only because current price is missing.\n"
+                "4. Do not give target or stop prices.\n"
+                f"FINAL: {consensus_signal} | Target: N/A (price missing) | Stop: N/A"
             )
 
         prompt = (
             f"Symbol: {symbol}\n"
-            f"Real price data available: {'YES — price=' + str(_price) if _data_available else 'NO — do not invent prices'}\n\n"
+            f"Consensus signal: {consensus_signal}\n"
+            f"Consensus confidence: {consensus_conf_num:.0%}\n"
+            f"Real price data available: {'YES — price=' + str(_price) if _data_available else 'NO — do not invent prices'}\n"
+            f"Verified market data:\n{_market_block}\n\n"
             f"Agent Analyses:\n{summary}\n\n"
             "Provide final recommendation:\n"
-            "1. Overall investment thesis (2-3 sentences)\n"
-            "2. Key risks to monitor\n"
+            "1. Overall investment thesis (2-3 concise sentences, grounded in verified market data)\n"
+            "2. Key risks to monitor; separate structural risks from missing real-time risk data\n"
             + _price_instruction
         )
 
         analysis  = await self._call_llm(self._SYSTEM, prompt, max_tokens=600, quote=_quote)
         if not analysis:
-            analysis = _template_synthesis(symbol, agent_results)
+            analysis = _template_synthesis(symbol, agent_results, data)
+        elif _data_available:
+            analysis = (
+                analysis
+                .replace("N/A (no real data)", "N/A (analyst target missing)")
+                .replace("no real data", "analyst target missing")
+                .replace("信心 ≤40%", f"置信度 {consensus_conf_num:.0%}")
+            )
 
-        signal     = _extract_final_signal(analysis)
-        confidence = _calc_weighted_confidence(agent_results)
+        signal     = consensus_signal or _extract_final_signal(analysis)
+        confidence = consensus_conf_num
         key_points = _extract_key_points(analysis)
 
         return AgentResult(
@@ -156,10 +179,56 @@ def _extract_key_points(text: str) -> List[str]:
     return points[:4]
 
 
-def _template_synthesis(symbol: str, results: List[Dict]) -> str:
+def _safe_float(value: Any) -> float | None:
+    try:
+        if value in (None, ""):
+            return None
+        return float(value)
+    except Exception:
+        return None
+
+
+def _fmt_price(value: Any, currency: str = "USD") -> str:
+    number = _safe_float(value)
+    return f"{currency} {number:.2f}" if number is not None else "N/A"
+
+
+def _format_market_block(data: Dict[str, Any]) -> str:
+    snapshot = data.get("market_snapshot", {}) or {}
+    quote = data.get("quote", {}) or {}
+    fundamentals = data.get("fundamentals", {}) or {}
+    technical = data.get("technical", {}) or {}
+    quality = data.get("data_quality", {}) or {}
+    return "\n".join([
+        f"data_status={quality.get('status') or snapshot.get('status') or 'unknown'}",
+        f"providers={', '.join(snapshot.get('provider_chain') or quality.get('providers') or []) or 'unknown'}",
+        f"missing={', '.join(snapshot.get('missing_fields') or quality.get('missing_fields') or []) or 'none'}",
+        f"price={snapshot.get('price') or quote.get('price')}",
+        f"market_cap={snapshot.get('market_cap') or quote.get('market_cap') or fundamentals.get('market_cap')}",
+        f"pe={snapshot.get('pe_ratio') or fundamentals.get('pe_ratio') or fundamentals.get('pe_ttm')}",
+        f"analyst_target={snapshot.get('analyst_target') or fundamentals.get('analyst_target')}",
+        f"rsi={snapshot.get('rsi') or technical.get('rsi')}",
+        f"macd_hist={snapshot.get('macd_hist') or technical.get('macd_hist')}",
+        f"ma20={snapshot.get('ma20') or technical.get('ma20')}",
+        f"ma60={snapshot.get('ma60') or technical.get('ma60')}",
+    ])
+
+
+def _template_synthesis(symbol: str, results: List[Dict], data: Dict[str, Any] | None = None) -> str:
+    data = data or {}
     avg_s  = _calc_weighted_signal_score(results)
-    final  = "BUY" if avg_s > 0.4 else ("SELL" if avg_s < -0.4 else "HOLD")
-    conf   = _calc_weighted_confidence(results)
+    final  = str(data.get("consensus_signal") or ("BUY" if avg_s > 0.4 else ("SELL" if avg_s < -0.4 else "HOLD"))).upper()
+    conf   = float(data.get("consensus_confidence") or _calc_weighted_confidence(results))
+    snapshot = data.get("market_snapshot", {}) or {}
+    currency = snapshot.get("currency") or "USD"
+    price = _fmt_price(snapshot.get("price"), currency)
+    target = _fmt_price(snapshot.get("analyst_target"), currency) if _safe_float(snapshot.get("analyst_target")) else "N/A (analyst target missing)"
+    stop = (
+        f"below MA60 {_fmt_price(snapshot.get('ma60'), currency)}"
+        if _safe_float(snapshot.get("ma60")) else "N/A (technical stop missing)"
+    )
+    providers = ", ".join(snapshot.get("provider_chain") or []) or "unknown"
+    missing = ", ".join(snapshot.get("missing_fields") or []) or "none"
 
     agent_lines = "\n".join(
         f"  • {r['agent'].upper()} ({r.get('confidence', 0.5):.0%}): "
@@ -167,8 +236,9 @@ def _template_synthesis(symbol: str, results: List[Dict]) -> str:
         for r in results if not r.get("error")
     )
     return (
-        f"{symbol} 综合分析（加权汇总）:\n"
+        f"{symbol} 综合分析（真实数据加权汇总）\n"
+        f"当前价: {price}  数据源: {providers}  缺失: {missing}\n"
         f"{agent_lines}\n\n"
         f"加权信号得分: {avg_s:+.2f}  综合置信度: {conf:.0%}\n"
-        f"FINAL: {final} | 请结合个人风险承受能力制定仓位"
+        f"FINAL: {final} | Target: {target} | Stop: {stop}"
     )

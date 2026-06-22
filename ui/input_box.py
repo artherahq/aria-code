@@ -143,13 +143,13 @@ class PanelInputConfig:
             accent="#1a7f37", accent_y="#9a6700", accent_b="#0969da",
             muted="#57606a", dim="#8c959f", sep="#d0d7de",
             input_bg="default",
-            ph_color="#a8a8a8",
-            box="#bc6a2e",
-            menu_bg="#ece6da", menu_fg="#2c2c2a",
-            menu_sel_bg="#e3cda8", menu_sel_fg="#6e4420",
-            menu_meta="#6e7781", menu_meta_cur="#855f38",
-            scroll_bg="#ddd6c8", scroll_btn="#bc6a2e",
-            hi="#b5601f",
+            ph_color="#6e7781",
+            box="#9a6700",
+            menu_bg="#f2eee4", menu_fg="#24292f",
+            menu_sel_bg="#e7e1d3", menu_sel_fg="#8a5a00",
+            menu_meta="#6e7781", menu_meta_cur="#8a5a00",
+            scroll_bg="#e7e1d3", scroll_btn="#9a6700",
+            hi="#9a6700",
         )
 
 

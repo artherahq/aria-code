@@ -1,0 +1,49 @@
+name: Bug report
+description: Report a reproducible Aria Code problem
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What happened?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      description: Include the exact command or prompt when possible.
+      placeholder: |
+        1. Run `aria`
+        2. Enter `/doctor`
+        3. See ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      placeholder: v4.1.0 / git SHA
+  - type: dropdown
+    id: install
+    attributes:
+      label: Install method
+      options:
+        - npm
+        - git clone
+        - install.sh
+        - install.ps1
+        - other
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Python version, Node/npm version, and relevant `/doctor` output.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Redact API keys, tokens, and broker credentials.
+      render: shell

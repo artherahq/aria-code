@@ -22,6 +22,13 @@ from runtime import (
 )
 
 
+_REPETITION_MARKER = "*[model stopped — repetition detected]*"
+_REPETITION_NOTICE = (
+    "\n\n> 已检测到模型开始重复输出，已自动停止展开。"
+    "上方结果仍然有效；如需继续，请指定要补充的部分。"
+)
+
+
 class TerminalRuntimeEventConsumer:
     """Consume runtime/provider events and render them to a terminal."""
 
@@ -64,6 +71,8 @@ class TerminalRuntimeEventConsumer:
         self.thinking_preview_buf: list[str] = []
         self.thinking_full_buf: list[str] = []
         self.tool_start_times: dict[str, float] = {}
+        self.repetition_stopped = False
+        self.repetition_notice_printed = False
 
         self.live_display = None
         self.spinner = None
@@ -170,6 +179,17 @@ class TerminalRuntimeEventConsumer:
         self.in_latex = False
         return self.strip_latex(raw) if raw.strip() else raw
 
+    def _show_repetition_notice(self) -> None:
+        if self.repetition_notice_printed or self.use_batch_render:
+            return
+        self.repetition_notice_printed = True
+        if self.live_display and self.has_rich and self.markdown_cls is not None:
+            clean_text = self.response_text.split(_REPETITION_MARKER, 1)[0].rstrip()
+            self.live_display.update(self.markdown_cls(self.strip_latex(clean_text + _REPETITION_NOTICE)))
+            self.live_display.refresh()
+            return
+        print(_REPETITION_NOTICE, end="", flush=True)
+
     def finalize_text(self, final_text: str) -> str:
         if self.in_latex and self.latex_buf:
             leftover = self.flush_latex_buf()
@@ -239,6 +259,23 @@ class TerminalRuntimeEventConsumer:
             )
             if not token.strip():
                 return
+
+        if _REPETITION_MARKER in token:
+            if self.use_batch_render:
+                self.response_text += token
+                self.streamed_any = True
+                self.token_count += 1
+                self.repetition_stopped = True
+                return
+            before, _, _after = token.partition(_REPETITION_MARKER)
+            if before:
+                self.on_token(before)
+            self.response_text += _REPETITION_MARKER
+            self.streamed_any = True
+            self.token_count += 1
+            self.repetition_stopped = True
+            self._show_repetition_notice()
+            return
 
         self._finish_thinking()
 

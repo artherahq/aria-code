@@ -31,6 +31,8 @@ def test_run_backtest_from_history_generates_equity_curve():
     assert len(result["equity_curve"]) == result["bars"]
     assert result["total_return"] > 0
     assert "benchmark_return" in result
+    assert result["volume_summary"]["coverage"] == 1.0
+    assert result["volume_summary"]["average"] > 100000
 
 
 def test_render_backtest_html_contains_svg_and_metrics(tmp_path: Path):

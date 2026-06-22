@@ -35,7 +35,9 @@ from apps.cli.commands.report import (
     update_report_index,
 )
 from apps.cli.commands.team import (
+    build_team_market_context,
     build_team_report_markdown,
+    clean_team_synthesis_text,
     parse_team_args,
     resolve_team_symbols,
     run_team_analysis,
@@ -290,6 +292,14 @@ def test_top_level_market_router_maps_tradingview_open_to_tv_command():
     assert routed is not None
     assert routed.command == "/tv"
     assert routed.text == "/tv NVDA --open"
+
+
+def test_top_level_market_router_maps_tradingview_open_and_bullish_analysis():
+    routed = route_top_level_text("用 trading view打开苹果并且根据其的数据你觉得哪些数据看涨", {"/tv", "/chart"})
+
+    assert routed is not None
+    assert routed.command == "/tv"
+    assert routed.text == "/tv AAPL --open --bullish"
 
 
 def test_top_level_market_router_maps_tradingview_strategy_to_pine_export():
@@ -649,6 +659,8 @@ async def test_run_team_analysis_captures_noisy_output_and_sanitizes(monkeypatch
     assert calls["team"]["llm_provider"] == "llm"
     assert calls["team"]["data_router"] == "router"
     assert calls["team"]["on_token"] is None
+    assert calls["team"]["market_context"]["quote"]["price"] == 100
+    assert "price=100" in calls["team"]["market_context"]["market_data_block"]
 
 
 def test_team_report_builder_and_save_write_quality_metadata(monkeypatch, tmp_path):
@@ -697,6 +709,7 @@ def test_team_report_builder_and_save_write_quality_metadata(monkeypatch, tmp_pa
     assert "## 数据质量" in markdown
     assert "是否过期: `yes`" in markdown
     assert "当前参考价: `USD 204.87`" in markdown
+    assert "技术指标" in markdown
     assert "TECHNICAL (UNUSABLE)" in markdown
 
     saved = save_team_report(
@@ -720,6 +733,48 @@ def test_team_report_builder_and_save_write_quality_metadata(monkeypatch, tmp_pa
     assert metadata["data"]["failed_agents"] == ["technical"]
     assert metadata["data"]["quote"]["price"] == 204.87
     assert raw_data["data_bundle"]["provider_chain"] == ["finnhub", "yfinance"]
+
+
+def test_build_team_market_context_extracts_real_snapshot_fields():
+    bundle = SimpleNamespace(
+        symbol="AAPL",
+        quote={
+            "price": 298.01,
+            "change_pct": 0.7,
+            "currency": "USD",
+            "volume": 55_000_000,
+            "market_cap": 4_380_000_000_000,
+        },
+        fundamentals={
+            "pe_ratio": 31.2,
+            "eps": 9.55,
+            "roe": 147.3,
+            "revenue_growth": 5.1,
+            "analyst_target": 310.0,
+        },
+        technical={"rsi": 39.1, "macd_hist": -2.018, "ma20": 303.4, "ma60": 282.91},
+        provider_chain=["finnhub", "yfinance", "local_pandas"],
+        missing_fields=[],
+        warnings=[],
+        errors=[],
+        quality={"status": "complete", "stale": False},
+        status="complete",
+    )
+
+    context = build_team_market_context(bundle)
+
+    assert context["quote"]["price"] == 298.01
+    assert context["market_snapshot"]["analyst_target"] == 310.0
+    assert "providers=finnhub, yfinance, local_pandas" in context["market_data_block"]
+    assert "rsi=39.1" in context["market_data_block"]
+
+
+def test_clean_team_synthesis_text_removes_raw_markdown_noise():
+    text = clean_team_synthesis_text("**结论**\n-\nFINAL: HOLD | Target: N/A")
+
+    assert "**" not in text
+    assert "\n-\n" not in text
+    assert "结论" in text
 
 
 def test_markdown_report_prompt_uses_real_fields_and_disallows_placeholders():

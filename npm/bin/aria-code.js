@@ -2,8 +2,8 @@
 /**
  * aria-code — global CLI launcher
  *
- * Reads ~/.aria-code/.npm-install-info.json (written by postinstall.js)
- * to find the correct Python venv and aria_cli.py path, then delegates.
+ * Reads install metadata (written by postinstall.js) to find the correct
+ * Python venv and aria_cli.py path, then delegates.
  *
  * Fallback chain:
  *   1. venv python from install-info
@@ -15,12 +15,11 @@
 
 const { spawnSync } = require("child_process");
 const fs   = require("fs");
-const os   = require("os");
 const path = require("path");
+const { resolveAriaPaths } = require("../lib/paths");
 
-const PLATFORM   = os.platform();
-const INFO_FILE  = path.join(os.homedir(), ".aria-code", ".npm-install-info.json");
-const INSTALL_DIR = path.join(os.homedir(), ".aria-code");
+const PLATFORM = process.platform;
+const PATHS = resolveAriaPaths();
 
 const C = {
   reset: "\x1b[0m", bold: "\x1b[1m", dim: "\x1b[2m",
@@ -30,11 +29,19 @@ const C = {
 // ── Read install info ─────────────────────────────────────────────────────────
 
 function readInstallInfo() {
-  try {
-    if (fs.existsSync(INFO_FILE)) {
-      return JSON.parse(fs.readFileSync(INFO_FILE, "utf8"));
+  for (const file of PATHS.infoCandidates) {
+    try {
+      if (fs.existsSync(file)) {
+        const info = JSON.parse(fs.readFileSync(file, "utf8"));
+        if (info && typeof info === "object") {
+          info._infoFile = file;
+          return info;
+        }
+      }
+    } catch (_) {
+      // Try the next candidate.
     }
-  } catch (_) {}
+  }
   return null;
 }
 
@@ -57,9 +64,12 @@ function findPython(info) {
 // ── Find aria_cli.py ──────────────────────────────────────────────────────────
 
 function findAriaCli(info) {
+  const installDir = info && info.installDir ? info.installDir : PATHS.installDir;
   const candidates = [
     info && info.ariaCli,
-    path.join(INSTALL_DIR, "aria_cli.py"),
+    path.join(installDir, "aria_cli.py"),
+    path.join(PATHS.installDir, "aria_cli.py"),
+    path.join(PATHS.legacyInstallDir, "aria_cli.py"),
     // bundled alongside this script (dev/test only)
     path.join(__dirname, "..", "..", "aria_cli.py"),
   ].filter(Boolean);
@@ -76,6 +86,7 @@ const info    = readInstallInfo();
 const python  = findPython(info);
 const ariaCli = findAriaCli(info);
 const args    = process.argv.slice(2);
+const installDir = (info && info.installDir) || PATHS.installDir;
 
 if (!python) {
   process.stderr.write(`
@@ -87,18 +98,24 @@ ${C.red}  aria-code: Python not found.${C.reset}
   Or repair the installation:
     ${C.cyan}node $(npm root -g)/aria-code/scripts/postinstall.js${C.reset}
 
-`);
+  Runtime path:
+    ${C.dim}${installDir}${C.reset}
+
+  `);
   process.exit(1);
 }
 
 if (!ariaCli) {
   process.stderr.write(`
-${C.red}  aria-code: aria_cli.py not found at ${INSTALL_DIR}${C.reset}
+${C.red}  aria-code: aria_cli.py not found at ${installDir}${C.reset}
 
   Repair the installation:
     ${C.cyan}node $(npm root -g)/aria-code/scripts/postinstall.js${C.reset}
 
-`);
+  You can override the runtime path with:
+    ${C.cyan}ARIA_HOME=/path/to/aria-code aria${C.reset}
+
+  `);
   process.exit(1);
 }
 

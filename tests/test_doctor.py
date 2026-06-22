@@ -1,6 +1,6 @@
 import tomllib
 
-from doctor import format_doctor_plain, provider_health_checks, provider_health_summary, run_doctor
+from doctor import format_doctor_plain, npm_runtime_checks, provider_health_checks, provider_health_summary, run_doctor
 from packages.aria_services.provider_health import summarize_provider_health
 
 
@@ -27,6 +27,61 @@ def test_format_doctor_plain_includes_summary(monkeypatch, tmp_path):
     assert text.startswith("Aria Code doctor")
     assert "artifact_root" in text
     assert "passed" in text
+
+
+def test_npm_runtime_checks_report_custom_paths(monkeypatch, tmp_path):
+    runtime = tmp_path / "runtime"
+    config = tmp_path / "config"
+    cache = tmp_path / "cache"
+    venv_bin = runtime / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    config.mkdir()
+    cache.mkdir()
+    (runtime / "aria_cli.py").write_text("print('aria')\n", encoding="utf-8")
+    (venv_bin / "python").write_text("#!/usr/bin/env python\n", encoding="utf-8")
+    (runtime / ".npm-install-info.json").write_text("{}", encoding="utf-8")
+
+    monkeypatch.setenv("ARIA_HOME", str(runtime))
+    monkeypatch.setenv("ARIA_CONFIG_DIR", str(config))
+    monkeypatch.setenv("ARIA_CACHE_DIR", str(cache))
+
+    checks = {check.name: check for check in npm_runtime_checks()}
+
+    assert checks["npm_runtime:install_dir"].status == "ok"
+    assert str(runtime) in checks["npm_runtime:install_dir"].detail
+    assert "source=env:ARIA_HOME" in checks["npm_runtime:install_dir"].detail
+    assert checks["npm_runtime:aria_cli"].status == "ok"
+    assert checks["npm_runtime:venv"].status == "ok"
+    assert checks["npm_runtime:install_info"].status == "ok"
+    assert checks["npm_runtime:config_dir"].status == "ok"
+    assert checks["npm_runtime:cache_dir"].status == "ok"
+
+
+def test_npm_runtime_checks_treat_source_checkout_as_valid(monkeypatch, tmp_path):
+    runtime = tmp_path / "missing-runtime"
+    config = tmp_path / "config"
+    cache = tmp_path / "cache"
+    venv_bin = tmp_path / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    config.mkdir()
+    cache.mkdir()
+    (tmp_path / "aria_cli.py").write_text("print('aria')\n", encoding="utf-8")
+    (venv_bin / "python").write_text("#!/usr/bin/env python\n", encoding="utf-8")
+
+    monkeypatch.setenv("ARIA_HOME", str(runtime))
+    monkeypatch.setenv("ARIA_CONFIG_DIR", str(config))
+    monkeypatch.setenv("ARIA_CACHE_DIR", str(cache))
+    monkeypatch.delenv("ARIA_CODE_HOME", raising=False)
+    monkeypatch.delenv("npm_config_aria_code_home", raising=False)
+    monkeypatch.delenv("npm_config_aria_home", raising=False)
+    monkeypatch.delenv("npm_config_ariacode_home", raising=False)
+
+    checks = {check.name: check for check in npm_runtime_checks(cwd=tmp_path)}
+
+    assert checks["npm_runtime:install_dir"].status == "warn"
+    assert "source_checkout" in checks["npm_runtime:install_dir"].detail
+    assert checks["npm_runtime:aria_cli"].status == "ok"
+    assert checks["npm_runtime:venv"].status == "ok"
 
 
 def test_provider_health_checks_report_cooldown_and_auth_failures():

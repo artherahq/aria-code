@@ -69,6 +69,12 @@ _REPORT_TYPE_HINTS: tuple[tuple[tuple[str, ...], str], ...] = (
 
 _TRADINGVIEW_HINTS = ("tradingview", "trading view", "pine")
 _TRADINGVIEW_ZH_HINTS = ("用tradingview", "打开tradingview", "tradingview打开", "用 tv", "tv打开", "pine脚本")
+_TRADINGVIEW_BULLISH_HINTS = ("看涨", "偏多", "多头", "上涨", "bullish", "bull", "upside")
+_TRADINGVIEW_BEARISH_HINTS = ("看跌", "偏空", "空头", "下跌", "bearish", "bear", "downside")
+_TRADINGVIEW_ANALYSIS_HINTS = (
+    "分析", "怎么看", "怎么判断", "哪些数据", "根据其的数据", "根据数据",
+    "指标", "信号", "analyze", "analysis", "data", "indicator", "signal",
+)
 
 _ROUTE_SYMBOL_BLOCKLIST = {"K", "LINE", "CHART", "PLOT"}
 
@@ -150,6 +156,13 @@ def route_top_level_text(user_input: str, available_commands: set[str]) -> Route
                 opts.append("--txt")
             if any(k in low for k in ("打开", "open")) and "--pine" not in opts:
                 opts.append("--open")
+            if "--pine" not in opts:
+                if any(k in low for k in _TRADINGVIEW_BULLISH_HINTS):
+                    opts.append("--bullish")
+                elif any(k in low for k in _TRADINGVIEW_BEARISH_HINTS):
+                    opts.append("--bearish")
+                elif any(k in low for k in _TRADINGVIEW_ANALYSIS_HINTS):
+                    opts.append("--analyze")
             return RoutedCommand(command="/tv", args=" ".join([symbol, *opts]).strip())
     for keywords, command in _VISUAL_ROUTE_PATTERNS:
         if command not in available_commands:

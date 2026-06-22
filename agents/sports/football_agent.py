@@ -128,6 +128,10 @@ def _fallback_analysis(raw: Dict) -> str:
 
 
 def _build_analysis_prompt(raw: Dict, h_stats: Optional[Dict], a_stats: Optional[Dict]) -> str:
+    top_scores = "、".join(
+        f"{s['score']}({s['prob']}%)"
+        for s in raw.get("top_scorelines", [])[:5]
+    )
     return f"""你是一位专业足球分析师。根据以下泊松预测模型数据，用中文分析这场比赛：
 
 【比赛】{raw['home_team']} vs {raw['away_team']}
@@ -136,6 +140,7 @@ def _build_analysis_prompt(raw: Dict, h_stats: Optional[Dict], a_stats: Optional
 主队胜: {raw['home_win']:.1%}  平局: {raw['draw']:.1%}  客队胜: {raw['away_win']:.1%}
 预期进球: 主队 {raw['lambda_home']:.2f} / 客队 {raw['lambda_away']:.2f}
 最可能比分: {raw['most_likely_score']}
+候选比分（按模型概率降序）: {top_scores}
 双方均进球: {raw['btts']:.1%}
 
 【近期战绩】
@@ -146,6 +151,11 @@ def _build_analysis_prompt(raw: Dict, h_stats: Optional[Dict], a_stats: Optional
 1. 比赛走势分析（3-4句）
 2. 关键影响因素（2-3条）
 3. 预测建议（1句话结论）
+
+规则:
+- 必须按“候选比分”概率顺序讨论比分，不要把低概率比分排到第一。
+- 不要编造射正率、历史交锋、最近5场客场等输入数据之外的具体数字。
+- 如果给出多个准确比分，直接引用候选比分及概率。
 
 简洁专业，不超过200字。"""
 

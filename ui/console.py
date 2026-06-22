@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -27,6 +28,7 @@ try:
     from rich.panel import Panel
     from rich.rule import Rule
     from rich import box as rich_box
+    from rich.theme import Theme
     HAS_RICH = True
 except ImportError:
     HAS_RICH = False
@@ -47,8 +49,91 @@ except ImportError:
 
 _SYNTAX_THEME: str = "monokai"
 
+
+def _detect_terminal_theme() -> str:
+    """Return a best-effort terminal theme: ``dark`` or ``light``."""
+    explicit = os.getenv("ARIA_RICH_THEME", os.getenv("ARIA_INPUT_THEME", "")).strip().lower()
+    if explicit in {"dark", "light"}:
+        return explicit
+    colorfgbg = os.getenv("COLORFGBG", "")
+    if colorfgbg:
+        try:
+            return "dark" if int(colorfgbg.split(";")[-1]) < 8 else "light"
+        except ValueError:
+            pass
+    if os.uname().sysname == "Darwin":
+        try:
+            r = subprocess.run(
+                ["defaults", "read", "-g", "AppleInterfaceStyle"],
+                capture_output=True, text=True, timeout=0.2, check=False,
+            )
+            return "dark" if (r.returncode == 0 and "dark" in r.stdout.lower()) else "light"
+        except Exception:
+            pass
+    return "dark"
+
+
+def _build_rich_theme(theme: str) -> "Theme":
+    """Build a Markdown palette with enough contrast for the terminal theme."""
+    if theme == "light":
+        return Theme({
+            "markdown.h1": "bold #24292f",
+            "markdown.h2": "bold #24292f",
+            "markdown.h3": "bold #8a5a00",
+            "markdown.h4": "bold #8a5a00",
+            "markdown.h5": "bold #8a5a00",
+            "markdown.h6": "bold #8a5a00",
+            "markdown.heading": "bold #24292f",
+            "markdown.code": "bold #8a5a00",
+            "markdown.code_inline": "bold #8a5a00",
+            "markdown.link": "underline #0969da",
+            "markdown.link_url": "underline #57606a",
+            "markdown.item.bullet": "bold #8a5a00",
+            "markdown.item.number": "bold #8a5a00",
+            "markdown.table.header": "bold #8a5a00",
+            "markdown.table.border": "#8c959f",
+            "markdown.hr": "#8c959f",
+            "markdown.strong": "bold #1f2328",
+            "markdown.em": "italic #57606a",
+            "markdown.block_quote": "#6e7781",
+        })
+    return Theme({
+        # Keep Markdown close to the terminal palette: neutral text, copper
+        # accents, no blue/purple headings, and no black inline-code blocks.
+        "markdown.h1": "bold #e8e0d4",
+        "markdown.h2": "bold #e8e0d4",
+        "markdown.h3": "bold #d6ba8e",
+        "markdown.h4": "bold #d6ba8e",
+        "markdown.h5": "bold #d6ba8e",
+        "markdown.h6": "bold #d6ba8e",
+        "markdown.heading": "bold #e8e0d4",
+        "markdown.code": "bold #c08050",
+        "markdown.code_inline": "bold #c08050",
+        "markdown.link": "underline #c08050",
+        "markdown.link_url": "underline #8f867a",
+        "markdown.item.bullet": "bold #d6ba8e",
+        "markdown.item.number": "bold #d6ba8e",
+        "markdown.table.header": "bold #d6ba8e",
+        "markdown.table.border": "#6f675d",
+        "markdown.hr": "#6f675d",
+        "markdown.strong": "bold #e8e0d4",
+        "markdown.em": "italic #c7beb2",
+        "markdown.block_quote": "#a8a096",
+    })
+
+
 if HAS_RICH:
-    console = Console(highlight=False)
+    ARIA_RICH_THEME_NAME = _detect_terminal_theme()
+    ARIA_RICH_THEME = _build_rich_theme(ARIA_RICH_THEME_NAME)
+    console = Console(highlight=False, theme=ARIA_RICH_THEME)
+
+    def make_markdown(markup: str) -> Markdown:
+        """Create Markdown with Aria's low-saturation terminal theme."""
+        return Markdown(
+            markup,
+            code_theme="bw",
+            inline_code_theme="bw",
+        )
 else:
     class _FallbackConsole:
         def print(self, *a, **kw):
@@ -69,6 +154,9 @@ else:
             return _Ctx()
 
     console = _FallbackConsole()
+
+    def make_markdown(markup: str) -> str:
+        return markup
 
 # ── termios / raw-mode availability ───────────────────────────────────────────
 

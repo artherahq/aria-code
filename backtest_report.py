@@ -140,6 +140,8 @@ def run_backtest_from_history(history: Sequence[Dict[str, Any]], config: Backtes
 
     dates = [str(r["date"]) for r in rows]
     closes = [float(r["close"]) for r in rows]
+    volumes = [_as_float(r.get("volume")) for r in rows]
+    valid_volumes = [v for v in volumes if v is not None and v >= 0]
     signals = _signals(config.strategy, closes, config.fast_period, config.slow_period, config.momentum_period)
 
     initial = float(config.initial_capital or 100000.0)
@@ -203,6 +205,13 @@ def run_backtest_from_history(history: Sequence[Dict[str, Any]], config: Backtes
         "sharpe_ratio": round(sharpe, 4),
         "win_rate": round(win_rate, 4),
         "total_trades": trades,
+        "volume_summary": {
+            "last": round(valid_volumes[-1], 2) if valid_volumes else None,
+            "average": round(sum(valid_volumes) / len(valid_volumes), 2) if valid_volumes else None,
+            "min": round(min(valid_volumes), 2) if valid_volumes else None,
+            "max": round(max(valid_volumes), 2) if valid_volumes else None,
+            "coverage": round(len(valid_volumes) / len(rows), 4) if rows else 0.0,
+        },
         "equity_curve": curve,
     }
 

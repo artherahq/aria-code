@@ -36,6 +36,17 @@ class _SnapshotMDC:
 
     def technical_indicators(self, *_args, **_kwargs):
         symbol = _args[0] if _args else ""
+        if symbol == "AAPL":
+            return {
+                "success": True,
+                "provider": "local_pandas",
+                "rsi": 42.0,
+                "macd_hist": -0.18,
+                "ma20": 198.4,
+                "ma60": 188.7,
+                "bb_upper": 207.5,
+                "bb_lower": 184.2,
+            }
         if symbol == "300806":
             return {
                 "success": True,
@@ -48,6 +59,32 @@ class _SnapshotMDC:
                 "bb_lower": 10.4,
             }
         return {"success": False, "error": "history unavailable"}
+
+    def history(self, symbol, days=252, interval="1d"):
+        if symbol != "AAPL":
+            return {"success": False, "error": "history unavailable"}
+        count = 96 if interval == "1h" else 260
+        records = []
+        for i in range(count):
+            if interval == "1h":
+                close = 191.0 + (i % 24) * 0.25 + (i // 24) * 0.35
+            else:
+                close = 165.0 + i * 0.14 + ((i % 18) - 9) * 0.22
+            high = close + 1.1
+            low = close - 1.2
+            if i % 17 == 0:
+                high += 2.4
+            if i % 19 == 0:
+                low -= 2.2
+            records.append({
+                "date": f"2026-01-{(i % 28) + 1:02d}",
+                "open": round(close - 0.3, 4),
+                "high": round(high, 4),
+                "low": round(low, 4),
+                "close": round(close, 4),
+                "volume": 1_000_000 + i,
+            })
+        return {"success": True, "symbol": symbol, "data": records, "provider": "test_history"}
 
 
 def test_market_snapshot_output_avoids_na_placeholders(monkeypatch):
@@ -69,7 +106,20 @@ def test_market_snapshot_output_avoids_na_placeholders(monkeypatch):
 
     assert result["success"] is True
     assert "最新价" in result["response"]
+    assert "结论" in result["response"]
+    assert "观察位" in result["response"]
+    assert "多周期关键位" in result["response"]
+    assert "4H/短线" in result["response"]
+    assert "日线/波段" in result["response"]
+    assert "周线/长线" in result["response"]
+    assert "| 周期 | 适合 | 支撑 | 压力 | 用法 |" not in result["response"]
+    assert "- **4H/短线**" in result["response"]
+    assert "  - 支撑：" in result["response"]
+    assert "  - 压力：" in result["response"]
+    assert "  - 用法：" in result["response"]
     assert "N/A" not in result["response"]
+    assert result.get("analysis_complete") is True
+    assert result.get("timeframe_levels")
 
 
 def test_market_snapshot_handles_multi_symbol_company_names(monkeypatch):
@@ -113,6 +163,71 @@ def test_market_snapshot_resolves_sidike_without_inheriting_previous_symbol(monk
     assert "`300806`" in text
     assert "601899" not in text
     assert "预测参考" in text
+    assert "信号拆解" in text
+
+
+def test_market_snapshot_repeat_notice_compresses_identical_cache():
+    import aria_cli
+
+    result = {
+        "symbol": "AAPL",
+        "name": "Apple Inc",
+        "price": 195.2,
+        "change_pct": 0.8,
+        "currency": "USD",
+        "signal": "NEUTRAL",
+        "support": "USD 190.00",
+        "resistance": "USD 200.00",
+        "as_of": "2026-06-21",
+    }
+    previous = aria_cli._market_snapshot_cache_entry(result, now=100.0)
+
+    notice = aria_cli._build_market_snapshot_repeat_notice(result, previous, now=120.0)
+
+    assert "行情未变化" in notice
+    assert "已省略完整表格" in notice
+    assert "`/quote AAPL`" in notice
+
+
+def test_market_snapshot_repeat_notice_expires_after_ttl():
+    import aria_cli
+
+    result = {"symbol": "AAPL", "price": 195.2, "change_pct": 0.8, "signal": "NEUTRAL"}
+    previous = aria_cli._market_snapshot_cache_entry(result, now=100.0)
+
+    assert aria_cli._build_market_snapshot_repeat_notice(result, previous, now=200.0) == ""
+
+
+def test_tradingview_indicator_readout_explains_bullish_and_bearish_drivers():
+    import aria_cli
+
+    readout = aria_cli._build_tradingview_indicator_readout(
+        {
+            "symbol": "AAPL",
+            "name": "Apple Inc",
+            "currency": "USD",
+            "price": 298.01,
+            "change_pct": 0.7,
+            "signal": "NEUTRAL",
+            "signal_confidence": 0.46,
+            "rsi": 39.1,
+            "macd_hist": -2.018,
+            "ma20": 303.4,
+            "ma60": 282.91,
+            "supports": [287.43, 282.91],
+            "resistances": [303.4, 319.37],
+        },
+        tv_symbol="NASDAQ:AAPL",
+        mode="bullish",
+    )
+
+    assert "TradingView 已作为图表界面打开" in readout
+    assert "不直接抓取 TradingView 页面数据" in readout
+    assert "看涨数据" in readout
+    assert "价格高于 MA60" in readout
+    assert "看跌/需要确认" in readout
+    assert "价格低于 MA20" in readout
+    assert "NASDAQ:AAPL" in readout
 
 
 def test_lvmh_prefetch_normalizes_symbol_name_and_currency(monkeypatch):

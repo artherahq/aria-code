@@ -885,7 +885,12 @@ class PortfolioCommandsMixin:
                     # Synthesis in a Panel for visual separation
                     from rich import box as _rbox_team
                     from ui.render.team import SIGNAL_COLORS as _SC, VERDICT_STYLE as _VS
-                    _syn      = team_result.synthesis or "*(无综合结论)*"
+                    from apps.cli.commands.team import (
+                        build_team_terminal_summary as _team_terminal_summary,
+                        clean_team_synthesis_text as _clean_team_synthesis,
+                    )
+                    _syn      = _clean_team_synthesis(team_result.synthesis or "*(无综合结论)*")
+                    _market_summary = _team_terminal_summary(_data_bundle)
                     _elapsed  = f"  [dim]耗时 {team_result.elapsed_sec:.1f}s[/dim]"
                     _sig_str  = team_result.final_signal or ""
                     _conf_str = (f"  [dim]置信度 {team_result.confidence:.0%}[/dim]"
@@ -895,7 +900,7 @@ class PortfolioCommandsMixin:
                     _footer    = (f"[{_sig_color}]{_sig_icon} {_sig_str}[/{_sig_color}]"
                                   f"{_conf_str}{_elapsed}")
                     console.print(Panel(
-                        f"{_syn}\n\n{_footer}",
+                        f"{_market_summary}\n\n{_syn}\n\n{_footer}",
                         title="[bold]综合结论[/bold]",
                         box=_rbox_team.ROUNDED,
                         border_style="#C08050",
@@ -906,7 +911,13 @@ class PortfolioCommandsMixin:
                     if _quality_notes:
                         print("  数据质量警告: " + "; ".join(_quality_notes[:3]))
                     print("\n  ── 综合结论 ──")
-                    print(team_result.synthesis or "*(无综合结论)*")
+                    from apps.cli.commands.team import (
+                        build_team_terminal_summary as _team_terminal_summary,
+                        clean_team_synthesis_text as _clean_team_synthesis,
+                    )
+                    print(_team_terminal_summary(_data_bundle))
+                    print()
+                    print(_clean_team_synthesis(team_result.synthesis or "*(无综合结论)*"))
                     print(f"\n  耗时 {team_result.elapsed_sec:.1f}s  "
                           f"Signal: {team_result.final_signal}  "
                           f"置信度: {team_result.confidence:.0%}")
@@ -942,5 +953,10 @@ class PortfolioCommandsMixin:
             data_bundle=data_bundle,
             quality_notes=quality_notes,
         )
-        msg = f"  📄 报告已保存: {saved.path}"
+        try:
+            parts = saved.path.parts
+            short_path = "/".join(parts[-5:]) if len(parts) > 5 else str(saved.path)
+        except Exception:
+            short_path = str(saved.path)
+        msg = f"  报告已保存: .../{short_path}"
         console.print(f"  [dim]{msg}[/dim]") if HAS_RICH else print(msg)

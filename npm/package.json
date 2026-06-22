@@ -29,6 +29,7 @@
   "preferGlobal": true,
   "files": [
     "bin/",
+    "lib/",
     "scripts/"
   ]
 }

@@ -400,6 +400,24 @@ def format_preflight_plain(report: IntentPreflight) -> str:
     if not report.has_findings:
         return ""
     plan = build_install_plan(report)
+
+    if not report.has_required_findings:
+        lines = ["依赖提示：可选增强能力缺失，当前会使用内置/降级实现。"]
+        if report.missing_python:
+            reqs = ", ".join(f"{r.package}({r.purpose})" for r in report.missing_python)
+            lines.append("可选 Python 包: " + reqs)
+        if report.missing_commands:
+            tools = ", ".join(plan.command_hints)
+            lines.append("可选工具: " + tools)
+        if report.missing_env:
+            envs = ", ".join(plan.env_hints)
+            lines.append("可选环境变量: " + envs)
+        if plan.pip_command:
+            lines.append("安装: /install --auto 或 " + plan.pip_command)
+        elif plan.has_actions:
+            lines.append("配置: 按上方提示手动配置，或用 /setup 查看配置向导。")
+        return "\n".join(lines)
+
     lines = ["依赖预检：当前请求可能需要补充本机能力"]
     if report.intents:
         lines.append("意图: " + ", ".join(report.intents))

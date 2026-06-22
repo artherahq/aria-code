@@ -30,7 +30,6 @@ __version__ = "4.1.0"
 
 import sys
 import os
-os.environ.setdefault("TQDM_DISABLE", "1")
 import asyncio
 import json
 import argparse
@@ -46,55 +45,17 @@ from datetime import datetime
 from typing import Optional, Dict, Any, List, Callable
 
 from apps.cli.plotly_html import plotly_script_tag
-from apps.cli.config_paths import resolve_paths
-def _load_aria_env() -> None:
-    """Load ~/.aria/.env into os.environ so API keys set via /config persist across restarts."""
-    _env_file = pathlib.Path.home() / ".aria" / ".env"
-    if _env_file.exists():
-        try:
-            for _line in _env_file.read_text(encoding="utf-8").splitlines():
-                _line = _line.strip()
-                if _line and not _line.startswith("#") and "=" in _line:
-                    _k, _, _v = _line.partition("=")
-                    _k, _v = _k.strip(), _v.strip()
-                    if _k and _v:
-                        os.environ.setdefault(_k, _v)
-        except Exception:
-            pass
+from apps.cli.bootstrap import (
+    default_config,
+    disable_broken_proxy as _disable_broken_proxy,
+    initialize_cli_environment,
+    load_aria_env as _load_aria_env,
+    runtime_paths,
+)
+from apps.cli.config_store import load_cli_config, save_cli_config
+from apps.cli.lifecycle_hooks import run_event_hook
 
-_load_aria_env()
-
-
-def _disable_broken_proxy() -> None:
-    """Drop HTTP(S)_PROXY env vars when the configured proxy is unreachable.
-
-    A dead/misconfigured proxy makes every data source fail with ProxyError
-    even though the sources are directly reachable. If a proxy is set but we
-    cannot open a TCP connection to it, unset the proxy vars so requests/akshare
-    fall back to direct connections. (If the proxy is alive we leave it alone.)
-    """
-    import socket
-    import urllib.parse as _up
-    _proxy = (os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
-              or os.environ.get("HTTP_PROXY") or os.environ.get("http_proxy"))
-    if not _proxy:
-        return
-    try:
-        _u = _up.urlparse(_proxy if "://" in _proxy else f"http://{_proxy}")
-        _host, _port = _u.hostname, _u.port or 80
-        if not _host:
-            return
-        _s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        _s.settimeout(1.5)
-        _alive = _s.connect_ex((_host, _port)) == 0
-        _s.close()
-    except Exception:
-        _alive = False
-    if not _alive:
-        for _v in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy"):
-            os.environ.pop(_v, None)
-
-_disable_broken_proxy()
+initialize_cli_environment()
 
 from change_store import ChangeConflictError, GLOBAL_CHANGE_STORE
 from safety import evaluate_command_policy
@@ -136,6 +97,7 @@ from apps.cli.commands.report import (
 from apps.cli.commands.team import (
     parse_team_args,
     resolve_team_symbols,
+    run_deep_cli,
     run_team_analysis,
     save_team_report,
     team_agent_names,
@@ -266,11 +228,7 @@ except ImportError:
 _TA_SESSION_CACHE: dict = {}
 _TA_SESSION_CACHE_TTL = 600  # 10 minutes
 
-try:
-    from financial_agents import run_team_analysis as _run_team
-    _HAS_AGENTS = True
-except ImportError:
-    _HAS_AGENTS = False
+# (legacy financial_agents fallback removed — the agents/ package is the sole path)
 
 try:
     from strategy_vault import get_vault as _get_vault, ai_review_strategy as _ai_review
@@ -331,14 +289,13 @@ logging.getLogger("curl_cffi").setLevel(logging.CRITICAL)
 
 # ── UI layer — console, flags, ESC watcher ────────────────────────────────────
 from ui.console import (
-    console, HAS_RICH, HAS_PT, _SYNTAX_THEME,
+    console, HAS_RICH, HAS_PT, _SYNTAX_THEME, make_markdown,
     _EscWatcher, _esc_watcher, _HAS_TERMIOS,
 )
 from ui.robot import RobotState, set_robot_state
 # Rich re-exports (used directly in this file)
 if HAS_RICH:
     from rich.console import Console
-    from rich.markdown import Markdown
     from rich.live import Live
     from rich.text import Text
     from rich.status import Status
@@ -366,7 +323,7 @@ from ui.picker import arrow_select as _arrow_select, run_picker_in_thread as _ru
 # ============================================================================
 # Configuration & Persistent Memory
 # ============================================================================
-_PATHS = resolve_paths()
+_PATHS = runtime_paths()
 CONFIG_DIR = _PATHS.config_dir
 CONFIG_FILE = _PATHS.config_file
 HISTORY_FILE = _PATHS.history_file
@@ -1049,35 +1006,7 @@ def _get_provider_key(provider: str) -> str:
         pass
     return ""
 
-DEFAULT_CONFIG = {
-    "api_url": os.getenv(
-        "ARTHERA_API_URL",
-        "http://localhost:8000"  # 直接运行时用 8000；Docker 模式设 ARTHERA_API_URL=http://localhost:8100
-    ),
-    "local_url": "http://localhost:8000",  # quant engine is the unified service
-    "ollama_url": os.getenv("OLLAMA_URL", "http://localhost:11434"),
-    "model": "qwen2.5-coder:1.5b",  # smallest available local model; upgrade chain handles coding tasks
-    "thinking_mode": "auto",
-    "watchlist": ["AAPL", "MSFT", "GOOGL", "TSLA", "NVDA"],
-    "auth_token": None,
-    "user_id": None,
-    "last_session_id": None,
-    "auto_save_sessions": True,
-    "auto_compact_context": True,
-    "auto_compact_threshold": 0.78,
-    "command_policy": "safe",   # safe | balanced | full
-    "permission_mode": "workspace-write",  # read-only | workspace-write | full-access
-    "network_enabled": True,
-    "data_sharing": False,
-    "feedback_upload": False,
-    "write_policy": "desktop_only",  # desktop_only | confirm_outside | always_confirm
-    "input_style": "panel",    # panel | box | plain
-    "input_theme": "auto",     # auto | dark | light
-    "response_footer": "compact",  # compact | full | off
-    "local_mode": False,        # True = skip AWS, always use Ollama
-    "conversation_history": [],
-    "ui_lang": "",              # "" = auto-detect from OS locale on first run; "zh" | "en"
-}
+DEFAULT_CONFIG = default_config()
 
 # Module-level write/command policies — updated whenever config is loaded/changed.
 # Used by standalone tool functions without terminal access.
@@ -1097,82 +1026,16 @@ def _sync_write_policy(config: dict):
 
 
 def _run_event_hook(event: str, env_extra: dict = None):
-    """Execute hook scripts for a given lifecycle event.
-
-    Looks in ~/.arthera/hooks/<event>.sh and .aria/hooks/<event>.sh.
-    Passes ARIA_* env vars to the script. Silently skips if not found.
-    Inspired by Claude Code's hooks system (PreToolUse / PostToolUse / etc.).
-
-    Events: prompt_submit, response_done, compact, session_start, session_end
-    """
-    import subprocess as _sp, os as _os
-    dirs = [
-        CONFIG_DIR / "hooks",
-        pathlib.Path.cwd() / ".aria" / "hooks",
-    ]
-    env = dict(_os.environ)
-    env["ARIA_EVENT"] = event
-    if env_extra:
-        env.update(env_extra)
-    for hdir in dirs:
-        script = hdir / f"{event}.sh"
-        if script.exists() and script.stat().st_size > 0:
-            try:
-                _sp.run(
-                    [str(script)], env=env, timeout=10,
-                    capture_output=True, text=True, check=False
-                )
-            except Exception:
-                pass
+    """Compatibility wrapper for legacy call sites."""
+    run_event_hook(event, config_dir=CONFIG_DIR, env_extra=env_extra)
 
 
 def load_config() -> dict:
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
-    if CONFIG_FILE.exists():
-        try:
-            with open(CONFIG_FILE) as f:
-                saved = json.load(f)
-            merged = {**DEFAULT_CONFIG, **saved}
-            saved_model = merged.get("model", "")
-            # Only reset stale aria-* model names that no longer exist in Ollama.
-            # Community models (llama3.2:3b, mistral:7b, etc.) are kept as-is.
-            _stale_prefixes = ("aria-opus", "aria-prelude", "aria-sonata:3", "aria-sonata:4")
-            if any(saved_model.startswith(p) for p in _stale_prefixes):
-                merged["model"] = DEFAULT_CONFIG["model"]
-            # Detect system language on first run (ui_lang not yet written to config)
-            if not merged.get("ui_lang"):
-                try:
-                    from apps.cli.i18n import detect_system_lang as _dsl
-                    merged["ui_lang"] = _dsl()
-                except Exception:
-                    merged["ui_lang"] = "en"
-            _sync_write_policy(merged)
-            return merged
-        except Exception:
-            pass
-    # ── First run: no config file yet ────────────────────────────────────────
-    cfg = dict(DEFAULT_CONFIG)
-    # Auto-detect system language
-    try:
-        from apps.cli.i18n import detect_system_lang as _dsl, auto_select_model as _asm
-        cfg["ui_lang"] = _dsl()
-        # Auto-select best installed Ollama model
-        ollama_url = cfg.get("ollama_url", "http://localhost:11434")
-        best = _asm(ollama_url, fallback=DEFAULT_CONFIG["model"])
-        cfg["model"] = best
-    except Exception:
-        cfg["ui_lang"] = "en"
-    _sync_write_policy(cfg)
-    return cfg
+    return load_cli_config(_PATHS, DEFAULT_CONFIG, sync_policy=_sync_write_policy)
 
 
 def save_config(cfg: dict):
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    exclude = {"conversation_history"}
-    to_save = {k: v for k, v in cfg.items() if k not in exclude}
-    with open(CONFIG_FILE, "w") as f:
-        json.dump(to_save, f, indent=2, ensure_ascii=False)
+    save_cli_config(_PATHS, cfg)
 
 
 # ============================================================================
@@ -3714,6 +3577,245 @@ def _recover_repetition_stopped_text(text: str) -> str:
     return (clean + note).strip()
 
 
+def _is_market_snapshot_refresh_request(message: str) -> bool:
+    low = (message or "").lower()
+    return any(k in low for k in ("刷新", "重试", "重新", "更新", "强制", "refresh", "retry", "reload", "force"))
+
+
+def _market_snapshot_cache_entry(result: dict, now: float | None = None) -> dict | None:
+    symbol = str(result.get("symbol") or "").strip().upper()
+    price = result.get("price")
+    if not symbol or price in (None, "", "N/A", "—"):
+        return None
+    try:
+        price_key = round(float(price), 4)
+    except Exception:
+        return None
+    change = result.get("change_pct")
+    try:
+        change_key = round(float(change), 4) if change is not None else None
+    except Exception:
+        change_key = None
+    signature = (
+        symbol,
+        price_key,
+        change_key,
+        str(result.get("signal") or ""),
+        str(result.get("support") or ""),
+        str(result.get("resistance") or ""),
+    )
+    return {
+        "ts": time.time() if now is None else now,
+        "signature": signature,
+        "symbol": symbol,
+        "name": result.get("name") or symbol,
+        "currency": result.get("currency") or "USD",
+        "price": price_key,
+        "change_pct": change_key,
+        "signal": result.get("signal") or "—",
+        "support": result.get("support") or "—",
+        "resistance": result.get("resistance") or "—",
+        "as_of": result.get("as_of") or datetime.now().strftime("%Y-%m-%d"),
+    }
+
+
+def _build_market_snapshot_repeat_notice(
+    result: dict,
+    previous: dict | None,
+    *,
+    now: float | None = None,
+    ttl_seconds: int = 60,
+) -> str:
+    current = _market_snapshot_cache_entry(result, now=now)
+    if not current or not previous:
+        return ""
+    now_ts = time.time() if now is None else now
+    if now_ts - float(previous.get("ts") or 0) > ttl_seconds:
+        return ""
+    if current.get("signature") != previous.get("signature"):
+        return ""
+
+    symbol = current["symbol"]
+    name = current.get("name") or symbol
+    currency = current.get("currency") or "USD"
+    change = current.get("change_pct")
+    change_text = "—" if change is None else f"{float(change):+.2f}%"
+    return "\n".join([
+        f"## {name}  `{symbol}`",
+        "",
+        f"**行情未变化**：过去 {ttl_seconds} 秒内已查询过，价格、信号和关键位与上一条一致，已省略完整表格。",
+        "",
+        f"- 最新价：**{currency} {float(current['price']):,.2f}**  `{change_text}`",
+        f"- 信号：`{current.get('signal') or '—'}`",
+        f"- 支撑：{current.get('support') or '—'}",
+        f"- 阻力：{current.get('resistance') or '—'}",
+        f"- 数据日期：{current.get('as_of') or '—'}",
+        "",
+        "**下一步**",
+        f"- 查看完整快照：`/quote {symbol}`",
+        f"- 深度分析：`/team {symbol}`",
+        f"- 打开图表：`/ta {symbol}`",
+    ])
+
+
+def _fmt_tv_num(value: Any, digits: int = 2) -> str:
+    try:
+        if value in (None, "", "N/A", "—"):
+            return "—"
+        return f"{float(value):,.{digits}f}"
+    except Exception:
+        return "—"
+
+
+def _fmt_tv_money(currency: str, value: Any) -> str:
+    num = _fmt_tv_num(value, 2)
+    return "—" if num == "—" else f"{currency} {num}"
+
+
+def _build_tradingview_indicator_readout(snapshot: dict, *, tv_symbol: str = "", mode: str = "analyze") -> str:
+    """Build a compact analysis block after opening TradingView.
+
+    TradingView is only used as the chart surface here.  The indicator values
+    come from Aria's market snapshot pipeline so the user does not get the
+    false impression that we scraped the TradingView chart.
+    """
+    symbol = str(snapshot.get("symbol") or "").strip().upper() or "AAPL"
+    name = snapshot.get("name") or symbol
+    currency = snapshot.get("currency") or "USD"
+    price = snapshot.get("price")
+    change = snapshot.get("change_pct")
+    rsi = snapshot.get("rsi")
+    macd_hist = snapshot.get("macd_hist")
+    ma20 = snapshot.get("ma20")
+    ma60 = snapshot.get("ma60")
+    signal = snapshot.get("signal") or "—"
+    confidence = snapshot.get("signal_confidence")
+    supports = snapshot.get("supports") or []
+    resistances = snapshot.get("resistances") or []
+    support = supports[0] if supports else None
+    resistance = resistances[0] if resistances else None
+
+    bullish: list[str] = []
+    bearish: list[str] = []
+    confirm: list[str] = []
+
+    try:
+        price_f = float(price)
+    except Exception:
+        price_f = None
+    try:
+        chg_f = float(change)
+    except Exception:
+        chg_f = None
+    try:
+        rsi_f = float(rsi)
+    except Exception:
+        rsi_f = None
+    try:
+        macd_f = float(macd_hist)
+    except Exception:
+        macd_f = None
+    try:
+        ma20_f = float(ma20)
+    except Exception:
+        ma20_f = None
+    try:
+        ma60_f = float(ma60)
+    except Exception:
+        ma60_f = None
+
+    if chg_f is not None:
+        if chg_f > 0:
+            bullish.append(f"当日涨幅 `{chg_f:+.2f}%`，短线有回升迹象。")
+        elif chg_f < 0:
+            bearish.append(f"当日跌幅 `{chg_f:+.2f}%`，短线承压。")
+    if price_f is not None and ma20_f is not None:
+        if price_f > ma20_f:
+            bullish.append(f"价格高于 MA20（{_fmt_tv_money(currency, ma20_f)}），短线趋势偏强。")
+        else:
+            bearish.append(f"价格低于 MA20（{_fmt_tv_money(currency, ma20_f)}），短线仍受压。")
+    if price_f is not None and ma60_f is not None:
+        if price_f > ma60_f:
+            bullish.append(f"价格高于 MA60（{_fmt_tv_money(currency, ma60_f)}），中期支撑仍在。")
+        else:
+            bearish.append(f"价格低于 MA60（{_fmt_tv_money(currency, ma60_f)}），中期趋势偏弱。")
+    if macd_f is not None:
+        if macd_f > 0:
+            bullish.append(f"MACD hist `{macd_f:.4f}` 为正，多头动能占优。")
+        elif macd_f < 0:
+            bearish.append(f"MACD hist `{macd_f:.4f}` 为负，动能仍偏空。")
+    if rsi_f is not None:
+        if 30 < rsi_f < 70:
+            bullish.append(f"RSI `{rsi_f:.1f}` 未超买，若价格企稳仍有反弹空间。")
+        elif rsi_f <= 30:
+            bullish.append(f"RSI `{rsi_f:.1f}` 接近/进入超卖，可能出现技术反弹。")
+        elif rsi_f >= 70:
+            bearish.append(f"RSI `{rsi_f:.1f}` 接近/进入超买，追高风险上升。")
+
+    if resistance is not None:
+        confirm.append(f"上破 `{_fmt_tv_money(currency, resistance)}`，看涨信号才更可靠。")
+    if support is not None:
+        confirm.append(f"跌破 `{_fmt_tv_money(currency, support)}`，下行风险会放大。")
+    if not confirm:
+        confirm.append("当前数据不足以给出明确确认位，建议先看完整技术图表。")
+
+    positive_signals = {"STRONG_BUY", "BUY", "HOLD+"}
+    negative_signals = {"STRONG_SELL", "SELL", "HOLD−", "HOLD-"}
+    if signal in positive_signals:
+        verdict = "偏多，但仍需确认突破是否有效。"
+    elif signal in negative_signals:
+        verdict = "偏弱，暂不适合直接按看涨处理。"
+    else:
+        verdict = "不是明确看涨，更接近震荡观察；需要价格重新站上关键阻力后再确认。"
+
+    if mode == "bullish":
+        lead_title = "看涨数据"
+        lead_items = bullish or ["当前快照没有明显看涨证据。"]
+        secondary_title = "看跌/需要确认"
+        secondary_items = bearish or ["暂无明显看跌信号，但仍需等待突破确认。"]
+    elif mode == "bearish":
+        lead_title = "看跌数据"
+        lead_items = bearish or ["当前快照没有明显看跌证据。"]
+        secondary_title = "看涨/支撑因素"
+        secondary_items = bullish or ["暂无明显看涨支撑。"]
+    else:
+        lead_title = "看涨数据"
+        lead_items = bullish or ["当前快照没有明显看涨证据。"]
+        secondary_title = "看跌/需要确认"
+        secondary_items = bearish or ["暂无明显看跌信号，但仍需等待突破确认。"]
+
+    confidence_text = ""
+    try:
+        confidence_text = f" · 置信度 {float(confidence):.0%}"
+    except Exception:
+        pass
+
+    lines = [
+        "",
+        f"### TradingView 旁路分析  `{symbol}`",
+        f"*TradingView 已作为图表界面打开；以下分析基于 Aria 当前行情与技术指标，不直接抓取 TradingView 页面数据。*",
+        "",
+        f"**结论**：{verdict} 当前信号 `{signal}`{confidence_text}。",
+        f"**现价**：{_fmt_tv_money(currency, price)}  `{float(chg_f):+.2f}%`" if chg_f is not None else f"**现价**：{_fmt_tv_money(currency, price)}",
+        "",
+        f"**{lead_title}**",
+    ]
+    lines.extend(f"- {item}" for item in lead_items[:4])
+    lines += ["", f"**{secondary_title}**"]
+    lines.extend(f"- {item}" for item in secondary_items[:4])
+    lines += ["", "**确认条件**"]
+    lines.extend(f"- {item}" for item in confirm[:3])
+    lines += [
+        "",
+        "**下一步**",
+        f"- 图表细看：`/ta {symbol}`",
+        f"- 深度分析：`/team {symbol}`",
+    ]
+    if tv_symbol:
+        lines.append(f"- TradingView 标的：`{tv_symbol}`")
+    return "\n".join(lines)
+
+
 
 
 def _generate_chart_sync(symbol: str, period: str = "1y") -> dict:
@@ -4538,13 +4640,13 @@ def _render_answer_block(text: str) -> None:
     Markdown body is indented past it — Claude Code's hanging-indent look.
     """
     if _ARIA_BOT_MODE:
-        console.print(Markdown(_strip_latex(text)))
+        console.print(make_markdown(_strip_latex(text)))
         return
     if not HAS_RICH:
         print(f"\n  ⏺  {text}")
         return
     from rich.padding import Padding
-    console.print(Padding(Markdown(_strip_latex(text)), (0, 0, 0, 4)))
+    console.print(Padding(make_markdown(_strip_latex(text)), (0, 0, 0, 4)))
 
 
 def _print_tool_call(tool_name: str, params: dict):
@@ -5334,6 +5436,7 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
             "/setup":     (self.cmd_setup,    "First-run wizard: /setup [mcp|feishu|telegram]"),
             "/apikey":    (self.cmd_apikey,   "API key wizard: /apikey [list|test|remove]"),
             "/doctor":    (self.cmd_doctor,   "Diagnose install, models, API keys"),
+            "/architecture": (self.cmd_architecture, "Show layered architecture contract: /architecture [--gaps]"),
             "/install":   (self.cmd_install,  "Detect & install missing deps: /install [pkg|--auto|--required]"),
             "/mcp":       (self.cmd_mcp,      "MCP servers: /mcp status|tools|reload"),
             "/providers": (self.cmd_providers,"List local LLM backends and status"),
@@ -5398,13 +5501,14 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
             "/auto-strategy":(self.cmd_auto_strategy,"Auto-optimize strategy: /auto-strategy momentum SPY"),
             "/execution": (self.cmd_execution,"Algo execution compare: /execution AAPL buy 100000"),
             "/chart":     (self.cmd_chart,    "Chart artifact: /chart AAPL [period]"),
-            "/tv":        (self.cmd_tv,       "TradingView chart/Pine: /tv AAPL [--open] [--pine --copy --reveal --txt]"),
+            "/tv":        (self.cmd_tv,       "TradingView chart/Pine: /tv AAPL [--open] [--analyze|--bullish|--bearish] [--pine]"),
             "/dashboard": (self.cmd_dashboard,"Dashboard artifact: /dashboard [brief|market|portfolio|full]"),
             "/report":    (self.cmd_report,   "Research report artifact: /report AAPL [--format html|md]"),
             # ── Market data / analysis (direct, no LLM loop) ────────────────
             "/quote":     (self.cmd_quote,    "Quote: /quote AAPL [MSFT...]"),
             "/analyze":   (self.cmd_analyze,  "Deep market analysis: /analyze AAPL"),
             "/team":      (self.cmd_team,     "Multi-agent research team: /team AAPL [--full]"),
+            "/deep":      (self.cmd_deep,     "Deep layered research (P0–P3): /deep AAPL [--deep|--brief]"),
             "/ta":        (self.cmd_ta,       "Technical indicators: /ta AAPL [days=120]"),
             "/market":    (self.cmd_market,   "Market overview: /market [indices|sectors]"),
             "/macro":     (self.cmd_macro,    "Macro data: /macro [us|cn|rates|calendar]"),
@@ -5532,7 +5636,7 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
         "/backtest":  ("Usage: /backtest [strategy] [symbol] [start] [end] [--period 1y] [--fast 20 --slow 60] [--output ./aria-output]", ["/backtest momentum SPY --period 1y", "/backtest sma_cross AAPL --fast 20 --slow 60 --output ./reports"]),
         "/wf":        ("Usage: /wf [symbol] [strategy] [method]", ["/wf SPY momentum rolling", "/wf QQQ breakout anchored"]),
         "/compare":   ("Usage: /compare [symbol] [start] [end]", ["/compare SPY", "/compare AAPL 2022-01-01 2025-01-01"]),
-        "/tv":        ("Usage: /tv SYMBOL [--open] [--interval 60] [--pine] [--copy] [--reveal] [--txt]", ["/tv NVDA", "/tv NVDA --open", "/tv NVDA --pine --copy --reveal"]),
+        "/tv":        ("Usage: /tv SYMBOL [--open] [--interval 60] [--analyze|--bullish|--bearish] [--pine] [--copy] [--reveal] [--txt]", ["/tv NVDA", "/tv NVDA --open --bullish", "/tv NVDA --pine --copy --reveal"]),
         "/watch":     ("Usage: /watch [add|remove|list] [SYMBOL]", ["/watch add AAPL", "/watch remove TSLA", "/watch list"]),
         "/crypto":    ("Usage: /crypto [SYMBOL...]", ["/crypto BTC", "/crypto ETH SOL"]),
         "/forex":     ("Usage: /forex [PAIR...]", ["/forex EUR/USD", "/forex GBP/USD JPY/USD"]),
@@ -5575,6 +5679,7 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
         "/write":     ("Usage: /write [--stage] <file_path>", ["/write report.py", "/write --stage strategy.py"]),
         # ── Financial analysis ──────────────────────────────────────────────
         "/team":      ("Usage: /team [SYMBOL] [--agents a,b] [--full]", ["/team NVDA", "/team AAPL --agents technical,risk", "/team watchlist", "/team SPY --full"]),
+        "/deep":      ("Usage: /deep [SYMBOL] [--brief|--deep] [--agents a,b]", ["/deep NVDA", "/deep AAPL --deep", "/deep 000333 --brief", "/deep TSLA --agents technical,risk,macro"]),
         "/ta":        ("Usage: /ta [SYMBOL] [days=N]", ["/ta AAPL", "/ta NVDA days=60"]),
         "/signal":    ("Usage: /signal [SYMBOL] [market]", ["/signal AAPL", "/signal sh600519 CN"]),
             "/predict":   ("Usage: /predict [SYMBOL...]", ["/predict sh600519 sh601318"]),
@@ -7712,6 +7817,10 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
         copy_pine = any(p in {"--copy", "copy", "复制"} for p in parts)
         reveal_file = any(p in {"--reveal", "reveal", "finder", "访达", "目录"} for p in parts)
         txt_copy = any(p in {"--txt", "txt", "文本"} for p in parts)
+        bullish_analysis = any(p in {"--bullish", "bullish", "看涨", "偏多"} for p in parts)
+        bearish_analysis = any(p in {"--bearish", "bearish", "看跌", "偏空"} for p in parts)
+        general_analysis = any(p in {"--analyze", "--analysis", "analyze", "analysis", "分析"} for p in parts)
+        tv_analysis_mode = "bullish" if bullish_analysis else ("bearish" if bearish_analysis else ("analyze" if general_analysis else ""))
         interval = None
         symbol_parts = []
         skip_next = False
@@ -7723,7 +7832,9 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
             if low in {
                 "--open", "-o", "open", "--pine", "pine", "--strategy", "strategy", "策略",
                 "--copy", "copy", "复制", "--reveal", "reveal", "finder", "访达", "目录",
-                "--txt", "txt", "文本",
+                "--txt", "txt", "文本", "--bullish", "bullish", "看涨", "偏多",
+                "--bearish", "bearish", "看跌", "偏空", "--analyze", "--analysis",
+                "analyze", "analysis", "分析",
             }:
                 continue
             if low.startswith("--interval="):
@@ -7816,6 +7927,29 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
                 console.print("  [green]✓[/green] opened in browser" if opened else f"  [yellow]open failed:[/yellow] {open_err}")
             else:
                 print("opened in browser" if opened else f"open failed: {open_err}")
+
+        if tv_analysis_mode:
+            snapshot = _src_market_snapshot_analysis(f"分析 {symbol} 股票")
+            if snapshot.get("success"):
+                readout = _build_tradingview_indicator_readout(
+                    snapshot,
+                    tv_symbol=tv_symbol,
+                    mode=tv_analysis_mode,
+                )
+                if HAS_RICH:
+                    console.print(make_markdown(_strip_latex(readout)))
+                else:
+                    print(readout)
+                self.terminal._last_response = readout
+            else:
+                msg = (
+                    f"TradingView 已打开，但当前无法生成 {symbol} 的指标分析："
+                    f"{snapshot.get('error') or '行情数据不可用'}"
+                )
+                if HAS_RICH:
+                    console.print(f"  [yellow]{msg}[/yellow]")
+                else:
+                    print(msg)
 
     async def cmd_chart(self, args: str):
         """
@@ -8554,6 +8688,7 @@ class ArtheraTerminal:
         self._session_thinking_tokens: int = 0
         self._session_turns: int = 0           # number of exchange pairs
         self._last_response: str = ""          # last assistant message text (for /copy)
+        self._last_market_snapshot_cache: Optional[dict] = None
         self._last_turn_envelope: Optional[AgentTurnEnvelope] = None
         self._forks: List[dict] = []           # forked conversation snapshots
         self._pending_image: Optional[dict] = None  # pending vision content block
@@ -9016,7 +9151,7 @@ class ArtheraTerminal:
             action_summary = _handle_pending_artifact_action(pending_artifact, message)
             if HAS_RICH:
                 console.print("\n[bold]Aria[/bold]\n")
-                console.print(Markdown(_strip_latex(action_summary)))
+                console.print(make_markdown(_strip_latex(action_summary)))
                 console.print()
             else:
                 print("\nAria\n")
@@ -9084,6 +9219,25 @@ class ArtheraTerminal:
                     "html_path": deterministic.get("chart_path", ""),
                     "command": f"/chart {_chart_symbol or 'AAPL'} 1y",
                 }
+            if _tools and _tools[0] == "market_snapshot":
+                _snapshot_now = time.time()
+                if not _is_market_snapshot_refresh_request(message):
+                    _repeat_notice = _build_market_snapshot_repeat_notice(
+                        deterministic,
+                        self._last_market_snapshot_cache,
+                        now=_snapshot_now,
+                    )
+                    if _repeat_notice:
+                        final_text = _repeat_notice
+                        deterministic = dict(
+                            deterministic,
+                            response=final_text,
+                            analysis_complete=True,
+                            compressed_repeat=True,
+                        )
+                _cache_entry = _market_snapshot_cache_entry(deterministic, now=_snapshot_now)
+                if _cache_entry:
+                    self._last_market_snapshot_cache = _cache_entry
             # For snapshot + "分析" queries: show data then continue to LLM for deep analysis
             _det_wants_analysis = (
                 not bool(deterministic.get("analysis_complete"))
@@ -9094,10 +9248,13 @@ class ArtheraTerminal:
                 # ⏺/✓ workflow indicator — mirrors LLM tool call display style
                 _t_icon = _tools[0] if _tools else "local"
                 console.print(f"\n  [#C08050]⏺[/#C08050]  [bold]{_t_icon}[/bold]")
-                _done_label = "已生成" if _tools and _tools[0] == "strategy_advice" else "数据已获取"
+                _done_label = (
+                    "未变化" if deterministic.get("compressed_repeat")
+                    else ("已生成" if _tools and _tools[0] == "strategy_advice" else "数据已获取")
+                )
                 console.print(f"  [green]✓[/green]  [dim]{_tool_label} {_done_label}[/dim]")
                 console.print()
-                console.print(Markdown(_strip_latex(final_text)))
+                console.print(make_markdown(_strip_latex(final_text)))
                 _disclaimer = "" if _tools and _tools[0] == "strategy_advice" else " · 本内容不构成投资建议"
                 console.print(f"\n[dim]{_tool_label}{_disclaimer}[/dim]{_rl_note}\n")
             else:
@@ -9105,6 +9262,7 @@ class ArtheraTerminal:
                 print(final_text)
                 print(f"\n市场快照 · 本内容不构成投资建议\n")
             self.conversation.append({"role": "assistant", "content": final_text})
+            self._last_response = final_text
             if not _det_wants_analysis:
                 return
             # Analysis query: fall through to LLM for deep commentary on the snapshot data
@@ -9248,7 +9406,7 @@ class ArtheraTerminal:
                 terminal=self,
                 console=console,
                 has_rich=HAS_RICH,
-                markdown_cls=Markdown,
+                markdown_cls=make_markdown,
                 live_cls=Live,
                 strip_latex=_strip_latex,
                 set_robot_state=set_robot_state,
@@ -9274,6 +9432,37 @@ class ArtheraTerminal:
             on_tool_call = stream_consumer.on_tool_call
             on_tool_result = stream_consumer.on_tool_result
             on_status = stream_consumer.on_status
+
+            # ── P3 (opt-in): route this turn through the shared runtime.run_agent ──
+            # `config use_runtime_loop=true` makes the CLI use the same tested agent
+            # loop the SDK uses, keeping aria_cli as orchestration glue. Off by
+            # default; on ANY failure (or empty result) we fall through to the
+            # proven inline loop below — enabling it can never strand the user.
+            if self.config.get("use_runtime_loop"):
+                try:
+                    from apps.cli.providers.runtime_bridge import run_chat_via_runtime
+                    _rt_text = await run_chat_via_runtime(
+                        prompt=current_message, history=self.conversation,
+                        local_tools=LOCAL_TOOLS, tool_schemas=LOCAL_TOOL_SCHEMAS,
+                        model=model, config=self.config, api_url=self.api_url,
+                        ollama_url=self.config.get("ollama_url", "http://localhost:11434"),
+                        cancel_event=self.cancel_event,
+                        on_token=on_token, on_tool_call=on_tool_call,
+                        on_tool_result=on_tool_result, on_status=on_status,
+                        thinking_mode=thinking_mode, user_context=user_context,
+                        auth_token=auth_token, project_context=_PROJECT_CONTEXT,
+                    )
+                    if (_rt_text or "").strip():
+                        self.conversation.append({"role": "assistant", "content": _rt_text})
+                        try:
+                            _stop_live(discard=True)
+                        except Exception:
+                            pass
+                        self._last_provider = "runtime"
+                        return
+                    # empty → fall through to the proven inline loop
+                except Exception as _rt_err:
+                    logger.warning("use_runtime_loop failed, using inline loop: %s", _rt_err)
 
             # Route: local_mode → Ollama directly; otherwise AWS first → Ollama fallback
             local_mode = self.config.get("local_mode", False)
@@ -9358,11 +9547,16 @@ class ArtheraTerminal:
                     return False
 
                 # If backend failed OR returned placeholder, fallback chain:
-                # Ollama (if running) → DeepSeek cloud → OpenAI → error
-                _should_fallback = (
-                    _is_ollama_model
-                    or (not result.get("success") and not result.get("cancelled"))
-                    or _is_placeholder_response(result)
+                # Ollama (if running) → DeepSeek cloud → OpenAI → error.
+                # Route-aware: fall back only when the primary round did NOT really
+                # generate. The old first term `_is_ollama_model` discarded GOOD
+                # backend answers for ollama-named models under backend_chat
+                # (re-run / hang on the self-host path); keying on the route fixes it.
+                from apps.cli.providers.chat_routing import should_fallback as _route_should_fallback
+                _primary_route = "skip" if (_is_ollama_model and not _force_backend) else "cloud"
+                _should_fallback = _route_should_fallback(
+                    _primary_route, result,
+                    is_placeholder=_is_placeholder_response(result),
                 )
                 if _should_fallback:
                     # Discard any in-progress Live display without rendering it —
@@ -9682,7 +9876,7 @@ class ArtheraTerminal:
                 # can see partial output rather than a blank screen.
                 if turn_result.final_text and _use_batch_render[0]:
                     _stop_spinner()
-                    console.print(Markdown(_strip_latex(turn_result.final_text)))
+                    console.print(make_markdown(_strip_latex(turn_result.final_text)))
                 console.print("\n[dim]Cancelled[/dim]")
                 console.print(Rule(style="dim"))
             else:
@@ -10702,7 +10896,7 @@ class ArtheraTerminal:
             # in interactive use.  When piped/redirected, fall back to plain text
             # for scripting compatibility.
             if HAS_RICH and fmt == "table" and sys.stdout.isatty() and result.get("success"):
-                console.print(Markdown(_strip_latex(content)))
+                console.print(make_markdown(_strip_latex(content)))
             else:
                 print(content)
 

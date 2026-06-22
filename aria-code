@@ -54,6 +54,12 @@ ensure_venv() {
 }
 
 ensure_runtime_deps() {
+  # Optional: Pillow powers the image-mascot banner and /vision. Install it
+  # best-effort and NEVER block startup on it (|| true) — terminals without it
+  # simply fall back to the block-art mascot.
+  "$VENV_PY" -c "import PIL" >/dev/null 2>&1 || \
+    "$VENV_PY" -m pip install --quiet "Pillow>=10.4.0" >/dev/null 2>&1 || true
+
   "$VENV_PY" - <<'PY' >/dev/null 2>&1 && return
 import aiohttp
 import requests

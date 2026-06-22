@@ -500,9 +500,8 @@ def predict_match(
     # -- top 5 most likely scorelines
     top_scores = sorted(score_probs.items(), key=lambda x: -x[1])[:5]
 
-    # -- most likely individual scores
-    ml_home = round(lambda_home)
-    ml_away = round(lambda_away)
+    # -- most likely scoreline from the probability matrix, not rounded lambdas
+    ml_home, ml_away = top_scores[0][0] if top_scores else (round(lambda_home), round(lambda_away))
 
     # -- 1X2 odds (implied, decimal)
     def implied_odds(p: float) -> float:
@@ -1169,7 +1168,7 @@ def format_prediction_block(pred: Dict, match_info: Optional[Dict] = None) -> st
         # strip absent modules from tag to avoid misleading claim
         model_tag = "Elo+Dixon-Coles"
 
-    lines.append(f"\n【量化预测 — {ht_cn} vs {at_cn}】")
+    lines.append(f"\n【泊松模型量化预测 — {ht_cn} vs {at_cn}】")
     lines.append(f"  模型: {model_tag}")
     if not has_form:
         lines.append("  ⚠ 无近期战绩数据，预测基于 Elo 排名强度估算")
@@ -1204,7 +1203,7 @@ def format_prediction_block(pred: Dict, match_info: Optional[Dict] = None) -> st
     lines.append("")
 
     # ── 比分概率条形图 ────────────────────────────────────────────────────────
-    lines.append("  最可能比分:")
+    lines.append("  候选比分（top_scorelines，按概率降序）:")
     top_prob = max((sc["prob"] for sc in pred["top_scorelines"]), default=1)
     for sc in pred["top_scorelines"]:
         bar_len = max(1, round(sc["prob"] / top_prob * 14))
@@ -1264,7 +1263,7 @@ def format_prediction_block(pred: Dict, match_info: Optional[Dict] = None) -> st
     lines.append(f"\n  【预测结论】{outlook}")
     if data_note:
         lines.append(f"  {data_note}")
-    lines.append("  △ 注：量化预测基于历史统计规律，实际结果受伤病/临场状态等影响。")
+    lines.append("  提示：准确比分概率通常较分散，请按候选区间参考，不构成投注建议。")
 
     return "\n".join(lines)
 

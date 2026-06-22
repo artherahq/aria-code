@@ -101,6 +101,7 @@ class AgentTeam:
         self,
         symbol: str,
         agents: Optional[List[str]] = None,
+        market_context: Optional[Dict[str, Any]] = None,
     ) -> TeamResult:
         """并行运行所有 agent，等待全部完成后汇总。"""
         names_to_run = agents or DEFAULT_TEAM
@@ -155,6 +156,8 @@ class AgentTeam:
             except Exception:
                 pass
 
+        final_signal, confidence = _vote_signal(results)
+
         # synthesis — 把 agent 结果打包进 data，直接调 analyze() 而非 run()
         synthesis_text = ""
         if "synthesis" in names_to_run or len(agent_objects) >= 2:
@@ -165,7 +168,13 @@ class AgentTeam:
                     data_router=self.data,
                     on_token=self.on_token,
                 )
-                synth_data = {"agent_results": [r.to_dict() for r in results]}
+                synth_data = {
+                    "agent_results": [r.to_dict() for r in results],
+                    "consensus_signal": final_signal,
+                    "consensus_confidence": confidence,
+                }
+                if market_context:
+                    synth_data.update(market_context)
                 try:
                     synth_result = await asyncio.wait_for(
                         synth_agent.analyze(symbol, synth_data),
@@ -179,8 +188,6 @@ class AgentTeam:
                 synthesis_text = _template_synthesis(results)
         else:
             synthesis_text = _template_synthesis(results)
-
-        final_signal, confidence = _vote_signal(results)
 
         return TeamResult(
             symbol       = symbol,
@@ -204,6 +211,7 @@ async def run_team(
     on_agent_done: Optional[Callable] = None,
     on_synthesis_start: Optional[Callable] = None,
     lang: str = "zh",
+    market_context: Optional[Dict[str, Any]] = None,
 ) -> TeamResult:
     """
     便捷函数，替代原 financial_agents.run_team_analysis()。
@@ -221,7 +229,7 @@ async def run_team(
         on_synthesis_start=on_synthesis_start,
         lang=lang,
     )
-    return await team.run(symbol, agents=agents)
+    return await team.run(symbol, agents=agents, market_context=market_context)
 
 
 # ── 内部工具 ──────────────────────────────────────────────────────────────────

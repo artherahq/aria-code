@@ -569,7 +569,7 @@ class MarketCommandsMixin:
         from rich import box as rich_box
         import types
 
-        console.print(f"[dim]⚽ 分析 {home} vs {away} ({league.upper()})…[/dim]")
+        console.print(f"[#57606a]⚽ 分析 {home} vs {away} ({league.upper()})…[/#57606a]")
 
         # WC / national team prediction path
         _wc_leagues = {"wc", "worldcup", "世界杯", "world_cup", "ca", "ec", "afc"}
@@ -658,13 +658,19 @@ class MarketCommandsMixin:
                 # Try LLM enhancement
                 if hasattr(self, 'terminal') and self.terminal:
                     try:
+                        _score_candidates = "、".join(
+                            f"{s['score']}({s['prob']}%)"
+                            for s in getattr(pred, "top_scores", [])[:5]
+                        )
                         llm_prompt = (
                             f"你是专业足球分析师。简洁分析这场比赛（中文，不超过150字）:\n"
                             f"{home} vs {away}\n"
                             f"主队胜: {pred.home_win:.0%}  平: {pred.draw:.0%}  客队胜: {pred.away_win:.0%}\n"
                             f"预期进球: {pred.lambda_home:.1f} - {pred.lambda_away:.1f}\n"
                             f"最可能比分: {pred.most_likely}\n"
-                            f"关键因素: {'; '.join(pred.key_factors)}"
+                            f"候选比分（按概率降序）: {_score_candidates}\n"
+                            f"关键因素: {'; '.join(pred.key_factors)}\n"
+                            "规则: 只引用上方概率和候选比分，不要编造射正率、历史交锋、近5场客场等具体数据。"
                         )
                         analysis_text = await asyncio.wait_for(
                             self.terminal._query_llm_async(llm_prompt),
@@ -752,8 +758,8 @@ class MarketCommandsMixin:
         title = f"⚽ {home} vs {away}  [{league.upper()}]"
         console.print(Panel(prob_table, title=f"[bold green]{title}[/bold green]", border_style="green"))
 
-        console.print(f"  [dim]预期进球: {home} {pred.lambda_home:.2f} / {away} {pred.lambda_away:.2f}"
-                      f"  │  双方均进球: {pred.btts:.0%}[/dim]")
+        console.print(f"  [#57606a]预期进球: {home} {pred.lambda_home:.2f} / {away} {pred.lambda_away:.2f}"
+                      f"  │  双方均进球: {pred.btts:.0%}[/#57606a]")
 
         # Top scorelines — show up to 8, colour-coded by outcome
         _h_name = getattr(pred, "home_name_cn", home)
@@ -798,17 +804,17 @@ class MarketCommandsMixin:
                 f"  │  最可能: [bold]{_ht_best}[/bold] ({_ht_best_p}%)"
             )
             console.print(
-                f"  [dim]上半场胜/平/负: {pred.ht_home_win:.0%} / {pred.ht_draw:.0%} / {pred.ht_away_win:.0%}[/dim]"
+                f"  [#57606a]上半场胜/平/负: {pred.ht_home_win:.0%} / {pred.ht_draw:.0%} / {pred.ht_away_win:.0%}[/#57606a]"
             )
             _ht_scores_str = "  ".join(
                 f"[cyan]{s['score']}[/cyan] {s['prob']}%" for s in pred.ht_top_scorelines[:4]
             )
             if _ht_scores_str:
-                console.print(f"  [dim]比分分布: {_ht_scores_str}[/dim]")
+                console.print(f"  [#57606a]比分分布: {_ht_scores_str}[/#57606a]")
             console.print(
                 f"  [bold]下半场[/bold]  预期进球 {_h_lbl} [green]{_st_best_lh:.2f}[/green] / "
                 f"{_a_lbl} [green]{_st_best_la:.2f}[/green]"
-                f"  [dim](全场 − 上半场)[/dim]"
+                f"  [#57606a](全场 − 上半场)[/#57606a]"
             )
             console.print()
 
@@ -821,7 +827,7 @@ class MarketCommandsMixin:
         if pred.key_factors:
             console.print(f"\n  [bold]实力对比[/bold]")
             for f_ in pred.key_factors:
-                console.print(f"  [dim]  • {f_}[/dim]")
+                console.print(f"  [#57606a]  • {f_}[/#57606a]")
 
         # Form strings (W/D/L) from live API — only show when available
         if _hform and _hform not in ("?????", ""):
@@ -842,12 +848,12 @@ class MarketCommandsMixin:
             console.print(Panel(
                 pred.analysis,
                 title="[bold]量化分析[/bold]",
-                border_style="dim",
+                border_style="#8c959f",
                 padding=(0, 2),
             ))
 
         console.print(f"\n  [bold green]{pred.verdict}[/bold green]")
-        console.print(f"  [dim]⚠ 基于 Poisson 概率模型，仅供参考，不构成投注建议[/dim]\n")
+        console.print(f"  [#6e7781]提示：准确比分概率通常较分散，请按候选区间参考，不构成投注建议。[/#6e7781]\n")
 
     async def cmd_screen(self, args: str):
         """股票筛选: CN → screen_ashare; US → yfinance 大盘成分筛选."""

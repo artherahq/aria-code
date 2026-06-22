@@ -5,6 +5,24 @@ shim in aria_cli.py after import, so all bare name references resolve correctly.
 """
 from __future__ import annotations
 import asyncio
+from datetime import datetime
+
+
+def _recent_sports_quant_context(history: list, max_chars: int = 5000) -> str:
+    """Return the latest sports quant block from chat history for follow-ups."""
+    markers = (
+        "【泊松模型量化预测",
+        "【量化预测",
+        "最可能比分",
+        "可能比分",
+    )
+    for msg in reversed(history or []):
+        content = str(msg.get("content", "")) if isinstance(msg, dict) else ""
+        if not content:
+            continue
+        if "预期进球" in content and any(marker in content for marker in markers):
+            return content[-max_chars:]
+    return ""
 
 
 async def stream_ollama(ollama_url: str, message: str, history: list,
@@ -399,8 +417,13 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
     # ── 体育赛事数据预取：sports query → inject live scores / WC data + Poisson ─
     if _is_general and _is_sports_query(message):
         _sports_ctx = _try_prefetch_sports_data(message)
+        if not _sports_ctx:
+            _sports_ctx = _recent_sports_quant_context(history)
         if _sports_ctx:
-            _has_quant = "泊松模型量化预测" in _sports_ctx
+            _has_quant = (
+                "泊松模型量化预测" in _sports_ctx
+                or ("预期进球" in _sports_ctx and "可能比分" in _sports_ctx)
+            )
             if HAS_RICH:
                 _label = "[bold #50A0C0]sports_data+quant[/bold #50A0C0]" if _has_quant else "[bold #50A0C0]sports_data[/bold #50A0C0]"
                 console.print(f"  {_label} [dim]赛事数据{'+ 泊松预测 ' if _has_quant else ''}已注入[/dim]")
@@ -419,15 +442,17 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
                             "\n---\n"
                             "## 数据说明\n"
                             "以上数据来自 football-data.org 实时 API + 泊松量化模型（Aria 本地计算）。\n"
-                            "【比赛信息】块 = API 真实赛程数据，今天是 2026-06-12，世界杯已于 2026-06-11 开幕。\n"
+                            f"【比赛信息】块 = API 真实赛程数据，今天是 {datetime.now().strftime('%Y-%m-%d')}，世界杯已于 2026-06-11 开幕。\n"
                             "【泊松模型量化预测】块 = Aria 使用 Dixon-Coles 泊松分布对此场比赛运行的算法结果。\n\n"
                             "## 你的任务\n"
                             "1. **直接引用预测数据中的概率数字**（如「加拿大胜率 42.4%」），不要说你没有数据\n"
                             "2. 解释为什么会有这样的概率分布（结合两队 FIFA 排名、进攻/防守强度）\n"
-                            "3. 分析最可能的比分区间（高频比分说明比赛预计紧张/单方碾压）\n"
-                            "4. 给出你对比赛走势的综合判断（战术层面、关键球员、历史对阵）\n"
-                            "5. 不要重新声明世界杯未开始或没有数据——上方数据证明它已经开始了\n"
-                            "6. **严禁**在回复末尾添加任何类似以下内容的免责声明：\n"
+                            "3. 如果用户要“一个以上/多个/最准比分”，必须按 `top_scorelines` 概率降序列出候选比分和概率\n"
+                            "4. 分析最可能的比分区间（高频比分说明比赛预计紧张/单方碾压）\n"
+                            "5. 可以给出走势判断，但不要编造射正率、最近5场客场数据、历史交锋次数等输入数据之外的具体事实\n"
+                            "6. 注意区分胜平负概率和准确比分概率：热门球队胜率最高，不代表最可能的单一比分一定是该队获胜\n"
+                            "7. 不要重新声明世界杯未开始或没有数据——上方数据证明它已经开始了\n"
+                            "8. **严禁**在回复末尾添加任何类似以下内容的免责声明：\n"
                             "   - 「以上预测基于历史...并不包含实时数据」\n"
                             "   - 「不包含实时数据或赛前最新信息」\n"
                             "   - 「若需赛前最新数据，请使用 /football 命令」\n"

@@ -32,6 +32,62 @@ def format_backtest_data_error(
     )
 
 
+def _bt_num(value, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except Exception:
+        return default
+
+
+def _bt_pct(value, digits: int = 1, signed: bool = False) -> str:
+    number = _bt_num(value)
+    sign = "+" if signed and number >= 0 else ""
+    return f"{sign}{number * 100:.{digits}f}%"
+
+
+def _bt_money(value, currency: str = "USD") -> str:
+    number = _bt_num(value)
+    return f"{currency} {number:,.0f}" if abs(number) >= 1000 else f"{currency} {number:,.2f}"
+
+
+def _bt_int(value, default: int = 0) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return default
+
+
+def _bt_trade_count(data: dict) -> int:
+    for key in ("total_trades", "num_trades", "n_trades", "trades"):
+        if key in data and data.get(key) is not None:
+            return _bt_int(data.get(key))
+    return 0
+
+
+def _bt_value(data: dict, *keys, default=None):
+    for key in keys:
+        if key in data and data.get(key) is not None:
+            return data.get(key)
+    return default
+
+
+def _bt_volume_summary(data: dict) -> dict:
+    summary = data.get("volume_summary")
+    return summary if isinstance(summary, dict) else {}
+
+
+def _bt_result_summary(data: dict) -> str:
+    total = _bt_num(data.get("total_return"))
+    benchmark = _bt_num(_bt_value(data, "buy_hold_return", "benchmark_return", default=0))
+    sharpe = _bt_num(data.get("sharpe_ratio"))
+    max_dd = _bt_num(data.get("max_drawdown"))
+    relation = "高于" if total > benchmark else "低于" if total < benchmark else "持平"
+    return (
+        f"结论：策略收益 {_bt_pct(total)}，{relation}买入持有 {_bt_pct(benchmark)}；"
+        f"Sharpe {sharpe:.2f}，最大回撤 {_bt_pct(max_dd)}。"
+    )
+
+
 class BacktestCommandsMixin:
     """Mixin providing backtest, strategy, factor-lab, and scaffold commands."""
 
@@ -285,6 +341,8 @@ class BacktestCommandsMixin:
                         for i in range(0, len(_portfolio), _step)
                     ]
                     _win_trades = sum(1 for i in range(1, len(_portfolio)) if _portfolio[i] > _portfolio[i-1])
+                    _vol = _df["Volume"].dropna() if "Volume" in _df else []
+                    _vol_count = len(_vol) if hasattr(_vol, "__len__") else 0
                     return {
                         "success": True,
                         "symbol": symbol,
@@ -303,6 +361,13 @@ class BacktestCommandsMixin:
                         "end_date": end_date,
                         "initial_capital": float(_initial_capital),
                         "bars": n,
+                        "volume_summary": {
+                            "last": round(float(_vol.iloc[-1]), 2) if _vol_count else None,
+                            "average": round(float(_vol.mean()), 2) if _vol_count else None,
+                            "min": round(float(_vol.min()), 2) if _vol_count else None,
+                            "max": round(float(_vol.max()), 2) if _vol_count else None,
+                            "coverage": round(_vol_count / max(len(_df), 1), 4),
+                        },
                     }
 
                 yf_result = await asyncio.get_event_loop().run_in_executor(None, _run_yf_backtest)
@@ -371,31 +436,69 @@ class BacktestCommandsMixin:
             if HAS_RICH:
                 from rich.table import Table
                 tbl = Table(title=f"[bold]{symbol} · {strategy.upper()}[/bold]", show_header=True, header_style="bold")
-                tbl.add_column("Metric", style="dim")
+                tbl.add_column("Metric", style="#57606a")
                 tbl.add_column("Value", justify="right")
-                tbl.add_column("vs B&H", justify="right", style="dim")
-                bh = d.get("buy_hold_return", d.get("benchmark_return", 0))
+                tbl.add_column("vs B&H", justify="right", style="#57606a")
+                bh = _bt_num(_bt_value(d, "buy_hold_return", "benchmark_return", default=0))
+                trades = _bt_trade_count(d)
                 rows = [
-                    ("Total Return", f"{d.get('total_return', 0)*100:.1f}%", f"{bh*100:.1f}%"),
-                    ("Ann. Return",  f"{d.get('annualized_return', 0)*100:.1f}%", ""),
-                    ("Sharpe Ratio", f"{d.get('sharpe_ratio', 0):.2f}", ""),
-                    ("Max Drawdown", f"{d.get('max_drawdown', 0)*100:.1f}%", ""),
-                    ("Win Rate",     f"{d.get('win_rate', 0)*100:.1f}%", ""),
-                    ("# Trades",     str(d.get('num_trades', d.get('n_trades', 0))), ""),
+                    ("Total Return", _bt_pct(d.get("total_return")), _bt_pct(bh)),
+                    ("Ann. Return",  _bt_pct(_bt_value(d, "annualized_return", "annual_return", default=0)), ""),
+                    ("Sharpe Ratio", f"{_bt_num(d.get('sharpe_ratio')):.2f}", ""),
+                    ("Max Drawdown", _bt_pct(d.get("max_drawdown")), ""),
+                    ("Win Rate",     _bt_pct(d.get("win_rate")), ""),
+                    ("# Trades",     str(trades), ""),
                 ]
                 if d.get("calmar_ratio"):
                     rows.append(("Calmar Ratio", f"{d['calmar_ratio']:.2f}", ""))
                 if d.get("sortino_ratio"):
                     rows.append(("Sortino Ratio", f"{d['sortino_ratio']:.2f}", ""))
-                if d.get("report_path"):
-                    rows.append(("HTML Report", str(d["report_path"]), ""))
                 for r in rows:
                     tbl.add_row(*r)
                 console.print(tbl)
-                console.print(f"  [dim]source: {src} · {start_date} → {end_date}[/dim]")
+                console.print(f"  [bold]{_bt_result_summary(d)}[/bold]")
+
+                actual_start = _bt_value(d, "start", "start_date", default=start_date)
+                actual_end = _bt_value(d, "end", "end_date", default=end_date)
+                bars = _bt_int(d.get("bars"))
+                initial = _bt_money(d.get("initial_capital", _initial_capital))
+                console.print(
+                    f"  [#57606a]source:[/#57606a] {src}"
+                    f"  [#57606a]period:[/#57606a] {actual_start} → {actual_end}"
+                    f"  [#57606a]bars:[/#57606a] {bars}"
+                    f"  [#57606a]capital:[/#57606a] {initial}"
+                )
+                console.print(
+                    f"  [#57606a]params:[/#57606a] "
+                    f"momentum={_momentum_period} fast={_fast_period} slow={_slow_period}"
+                )
                 if d.get("provider_chain"):
                     chain = " → ".join(str(x) for x in d.get("provider_chain") or [])
-                    console.print(f"  [dim]data: {chain}[/dim]")
+                    status = d.get("data_status") or "complete"
+                    missing = ", ".join(str(x) for x in (d.get("missing_fields") or [])) or "none"
+                    console.print(
+                        f"  [#57606a]data:[/#57606a] {chain}"
+                        f"  [#57606a]status:[/#57606a] {status}"
+                        f"  [#57606a]missing:[/#57606a] {missing}"
+                    )
+                vol = _bt_volume_summary(d)
+                if vol:
+                    avg = vol.get("average")
+                    last = vol.get("last")
+                    coverage = _bt_num(vol.get("coverage"))
+                    console.print(
+                        f"  [#57606a]volume:[/#57606a] "
+                        f"avg {avg:,.0f} · last {last:,.0f} · coverage {coverage:.0%}"
+                        if avg is not None and last is not None
+                        else f"  [#57606a]volume:[/#57606a] unavailable"
+                    )
+                if d.get("report_path"):
+                    console.print(f"  [#57606a]report:[/#57606a] {d['report_path']}")
+                if trades == 0:
+                    console.print(
+                        "  [yellow]注意:[/yellow] # Trades 为 0，表示本次规则没有触发入场；"
+                        "收益可能来自全程空仓/持仓逻辑或上游交易统计口径。"
+                    )
             else:
                 print(f"Total Return: {d.get('total_return',0)*100:.1f}%  Sharpe: {d.get('sharpe_ratio',0):.2f}  MaxDD: {d.get('max_drawdown',0)*100:.1f}%")
                 if d.get("report_path"):
@@ -407,7 +510,7 @@ class BacktestCommandsMixin:
                 if strat_vals:
                     spark = format_sparkline(strat_vals)
                     if spark:
-                        console.print(f"  [dim]Equity:[/dim] [green]{spark}[/green]" if HAS_RICH else f"  Equity: {spark}")
+                        console.print(f"  [#57606a]Equity:[/#57606a] [green]{spark}[/green]" if HAS_RICH else f"  Equity: {spark}")
             await self._print_backtest_broker_plan(d)
         else:
             _print_error(f"Backtest failed: {result.get('error', 'Unknown')}", "tool")

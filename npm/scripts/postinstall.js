@@ -7,17 +7,17 @@
  *   Linux  : git + python3 check → git clone → venv → pip
  *   Windows: Python check → git clone → venv → pip
  *
- * Install target: ~/.aria-code/  (stable; survives npm reinstalls)
+ * Install target is resolved by ../lib/paths.js:
+ *   ARIA_HOME / npm config > existing ~/.aria-code > platform data directory.
  */
 
 "use strict";
 
-const { spawnSync, execSync } = require("child_process");
-const https    = require("https");
+const { spawnSync } = require("child_process");
 const fs       = require("fs");
-const os       = require("os");
 const path     = require("path");
 const readline = require("readline");
+const { resolveAriaPaths } = require("../lib/paths");
 
 // ── Colours ──────────────────────────────────────────────────────────────────
 const C = {
@@ -38,10 +38,11 @@ const info  = (m) => log(`${C.cyan}▸${C.reset}  ${m}`);
 const step  = (n, t) => process.stdout.write(`\n${C.bold}── Step ${n}: ${t}${C.reset}\n`);
 const hr    = () => log(`${C.dim}${"─".repeat(44)}${C.reset}`);
 
-const PLATFORM = os.platform();   // darwin | linux | win32
+const PLATFORM = process.platform;   // darwin | linux | win32
 const REPO_URL  = "https://github.com/Cinsoul/Aria-Code.git";
-const INSTALL_DIR = path.join(os.homedir(), ".aria-code");
-const INFO_FILE   = path.join(INSTALL_DIR, ".npm-install-info.json");
+const PATHS = resolveAriaPaths();
+const INSTALL_DIR = PATHS.installDir;
+const INFO_FILE   = PATHS.infoFile;
 const MIN_PY = [3, 10];
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -81,6 +82,11 @@ function ask(question) {
 
 function ensureDir(p) {
   if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true });
+}
+
+function writeJson(file, data) {
+  ensureDir(path.dirname(file));
+  fs.writeFileSync(file, JSON.stringify(data, null, 2));
 }
 
 // ── Step 1: Xcode Command Line Tools (macOS only) ─────────────────────────────
@@ -234,6 +240,7 @@ function ensureGit() {
 function ensureRepo() {
   step(5, "Aria Code repository");
   ensureDir(INSTALL_DIR);
+  info(`Runtime path: ${INSTALL_DIR} (${PATHS.installDirSource})`);
 
   const gitDir = path.join(INSTALL_DIR, ".git");
   if (fs.existsSync(gitDir)) {
@@ -302,17 +309,26 @@ function writeInstallInfo(python, venv) {
   step(7, "Saving install configuration");
 
   const info_data = {
+    schemaVersion: 2,
     installDir: INSTALL_DIR,
+    installDirSource: PATHS.installDirSource,
     venvDir:    venv.venvDir,
     venvPy:     venv.venvPy,
     ariaCli:    path.join(INSTALL_DIR, "aria_cli.py"),
+    configDir:  PATHS.configDir,
+    cacheDir:   PATHS.cacheDir,
+    infoFile:   INFO_FILE,
+    configInfoFile: PATHS.configInfoFile,
+    legacyInstallDir: PATHS.legacyInstallDir,
     pythonVersion: python.version,
     installedAt:   new Date().toISOString(),
     platform:      PLATFORM,
   };
 
-  fs.writeFileSync(INFO_FILE, JSON.stringify(info_data, null, 2));
+  writeJson(INFO_FILE, info_data);
+  writeJson(PATHS.configInfoFile, info_data);
   ok(`Config saved → ${INFO_FILE}`);
+  ok(`Config mirror → ${PATHS.configInfoFile}`);
   return info_data;
 }
 
@@ -327,6 +343,10 @@ ${C.green}╔══════════════════════�
   ${C.bold}Start:${C.reset}       ${C.cyan}aria-code${C.reset}
   ${C.bold}One-shot:${C.reset}    ${C.cyan}aria-code -p "AAPL 分析"${C.reset}
   ${C.bold}Help:${C.reset}        ${C.cyan}aria-code --help${C.reset}
+
+  ${C.bold}Runtime:${C.reset}     ${INSTALL_DIR}
+  ${C.bold}Config:${C.reset}      ${PATHS.configDir}
+  ${C.bold}Cache:${C.reset}       ${PATHS.cacheDir}
 
   ${C.dim}Tip: Pull a free local model for offline use:${C.reset}
   ${C.cyan}ollama pull qwen2.5:7b${C.reset}

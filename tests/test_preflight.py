@@ -77,6 +77,22 @@ def test_file_analysis_preflight_lists_parser_packages_without_paths():
     assert "/Users/" not in text
 
 
+def test_optional_only_backtest_preflight_is_compact_hint():
+    report = build_intent_preflight(
+        "/backtest momentum AAPL --period 1y",
+        module_available=_modules_available("pandas", "numpy", "yfinance"),
+        command_available=_commands_available(),
+    )
+
+    text = format_preflight_plain(report)
+
+    assert report.has_findings
+    assert not report.has_required_findings
+    assert "依赖提示：可选增强能力缺失" in text
+    assert "vectorbt" in text
+    assert "意图:" not in text
+
+
 def test_install_plan_deduplicates_packages_and_keeps_tool_hints_structured():
     report = build_intent_preflight(
         "/browser screenshot https://example.com",

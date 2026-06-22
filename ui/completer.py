@@ -332,13 +332,13 @@ if HAS_PT:
             tb_fg="#8b949e", tb_bg="#161b22",
         ),
         "light": dict(
-            bg="#ece6da", fg="#2c2c2a",                   # deeper warm — lifts off white
-            sel_bg="#e3cda8", sel_fg="#6e4420",           # stronger copper selection
-            meta="#6e7781", meta_cur="#855f38",
-            scroll_bg="#ddd6c8", scroll_btn="#bc6a2e",    # copper position handle
-            hi="#b5601f", cat="#9a958c",
-            base_bg="default", prompt="#57606a", ph="#a8a8a8",
-            tb_fg="#57606a", tb_bg="#ddd6c8",
+            bg="#f2eee4", fg="#24292f",                   # warm surface, high contrast
+            sel_bg="#e7e1d3", sel_fg="#8a5a00",           # stronger copper selection
+            meta="#6e7781", meta_cur="#8a5a00",
+            scroll_bg="#e7e1d3", scroll_btn="#9a6700",    # copper position handle
+            hi="#9a6700", cat="#6e7781",
+            base_bg="default", prompt="#57606a", ph="#6e7781",
+            tb_fg="#57606a", tb_bg="#e7e1d3",
         ),
     }
 
