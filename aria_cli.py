@@ -154,9 +154,10 @@ from apps.cli.tools.notebook_tools import (
     tool_notebook_edit as _src_notebook_edit,
 )
 from apps.cli.tools.market_tools import (
-    tool_get_market_data as _src_get_market_data,
-    tool_broker_query    as _src_broker_query,
-    tool_broker_order    as _src_broker_order,
+    tool_get_market_data    as _src_get_market_data,
+    tool_get_market_history as _src_get_market_history,
+    tool_broker_query       as _src_broker_query,
+    tool_broker_order       as _src_broker_order,
 )
 from apps.cli.handlers.broker_handlers import handle_broker_query as _src_handle_broker_query
 from apps.cli.handlers.realty_handlers import handle_realty_query as _src_handle_realty_query
@@ -2114,6 +2115,10 @@ def _tool_get_market_data(params: dict) -> dict:
     return _src_get_market_data(params)
 
 
+def _tool_get_market_history(params: dict) -> dict:
+    return _src_get_market_history(params)
+
+
 # Local tool registry: name → (handler, description, for display)
 LOCAL_TOOLS = {
     # ── Core file tools ──────────────────────────────────────────────────────
@@ -2135,6 +2140,7 @@ LOCAL_TOOLS = {
     "notebook_edit":  (_tool_notebook_edit,  "Edit a cell in a Jupyter notebook"),
     # ── Market data ─────────────────────────────────────────────────────────
     "get_market_data": (_tool_get_market_data, "Fetch real-time quote + technical indicators for any stock/ETF/crypto"),
+    "get_market_history": (_tool_get_market_history, "Fetch OHLC price history (compact summary + recent candles) for any stock/ETF/index/crypto"),
     # ── Broker account data ──────────────────────────────────────────────────
     "broker_query": (_tool_broker_query, "Query connected broker: account balance, positions, or orders"),
     "broker_order": (_tool_broker_order, "Propose a trade order — requires explicit user confirmation before execution"),
@@ -2481,6 +2487,42 @@ LOCAL_TOOL_SCHEMAS.extend([
                             "For A-shares use the 6-digit code without exchange suffix. "
                             "Do NOT guess — if unsure about a ticker, say so and ask the user."
                         ),
+                    },
+                },
+                "required": ["symbol"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_market_history",
+            "description": (
+                "Fetch OHLC price history for a stock, ETF, index, or cryptocurrency. "
+                "Returns a COMPACT summary (period high/low, start/end close, % change, "
+                "avg volume, MA5/MA20/MA60) plus the most recent ~30 candles — not the "
+                "full series. Use this whenever you need historical prices, trend, or to "
+                "compute your own indicators. A-shares (6-digit code) route through the "
+                "user's configured Tushare first (if set), then Eastmoney/Sina/AKShare; "
+                "HK (0700.HK) and US/global route through yfinance. "
+                "IMPORTANT: prefer this tool over writing your own akshare/tushare/yfinance "
+                "scripts — it handles source fallback and never depends on the local Python env."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "symbol": {
+                        "type": "string",
+                        "description": "Ticker, e.g. AAPL, 600519, 0700.HK, BTC. A-shares: 6-digit code, no suffix.",
+                    },
+                    "days": {
+                        "type": "integer",
+                        "description": "Lookback window in calendar days (default 120, max 1000).",
+                    },
+                    "interval": {
+                        "type": "string",
+                        "enum": ["1d", "1w", "1mo"],
+                        "description": "Candle interval (default '1d'). Tushare path supports daily only.",
                     },
                 },
                 "required": ["symbol"],
@@ -3042,7 +3084,7 @@ def _run_hook(hook_type: str, tool_name: str, params: dict, result: dict = None)
 # TTL cache for read-only tool responses
 _TOOL_CACHE: Dict[str, tuple] = {}  # key -> (result, timestamp)
 _CACHE_TTL = {
-    "get_market_data": 30, "get_crypto_data": 30, "get_forex_data": 30,
+    "get_market_data": 30, "get_market_history": 300, "get_crypto_data": 30, "get_forex_data": 30,
     "get_commodities_data": 60, "get_bonds_data": 60, "get_futures_data": 60,
     "get_news": 300, "get_sector_performance": 60, "get_market_overview": 60,
 }
@@ -4619,7 +4661,7 @@ def _format_tool_params(tool_name: str, params: dict) -> str:
         return "file tool"
     if tool_name == "search_code":
         return "file tool"
-    if tool_name in ("get_market_data", "get_crypto_data", "get_forex_data",
+    if tool_name in ("get_market_data", "get_market_history", "get_crypto_data", "get_forex_data",
                       "get_commodities_data", "get_futures_data", "get_bonds_data"):
         return params.get("symbol", params.get("symbols", ""))
     if tool_name == "backtest_strategy":
@@ -4643,6 +4685,7 @@ def _format_tool_params(tool_name: str, params: dict) -> str:
 _TOOL_ACTION_LABELS: dict = {
     # Market data
     "get_market_data":           "loading market data",
+    "get_market_history":        "loading price history",
     "get_quote":                 "fetching quote",
     "get_ohlcv":                 "loading price history",
     "get_fundamental_data":      "loading fundamentals",

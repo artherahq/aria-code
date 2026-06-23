@@ -244,6 +244,86 @@ def tool_get_market_data(params: dict) -> dict:
     return result
 
 
+def tool_get_market_history(params: dict) -> dict:
+    """Fetch OHLC price history for any stock/ETF/index/crypto.
+
+    Returns a *compact* summary (period stats + the most recent candles), NOT
+    the full series, so the model can reason about trends without flooding the
+    context window. Routes through MarketDataClient, which uses the user's
+    configured Tushare for A-shares (if a token is set), then Eastmoney/Sina/
+    AKShare, and yfinance for HK/US/global.
+
+    Use this instead of writing ad-hoc akshare/tushare scripts: it handles
+    symbol normalisation, source fallback, and is environment-independent.
+    """
+    symbol = str(params.get("symbol", "")).strip().upper()
+    if not symbol:
+        return {"success": False, "error": "symbol is required"}
+    try:
+        days = int(params.get("days", 120) or 120)
+    except (TypeError, ValueError):
+        days = 120
+    days = max(5, min(days, 1000))
+    interval = str(params.get("interval", "1d") or "1d").lower()
+
+    if not (_HAS_MDC and _get_mdc is not None):
+        return {"success": False, "symbol": symbol,
+                "error": "market data client unavailable"}
+
+    try:
+        hist = _get_mdc().history(symbol, days=days, interval=interval)
+    except Exception as exc:
+        return {"success": False, "symbol": symbol, "error": str(exc)}
+
+    if not hist.get("success") or not hist.get("data"):
+        return {
+            "success": False,
+            "symbol": symbol,
+            "provider_chain": hist.get("provider_chain") or ["eastmoney", "sina", "akshare", "yfinance"],
+            "error": hist.get("error") or "历史行情数据源暂时不可用，请稍后重试。",
+        }
+
+    rows = hist["data"]  # ascending by date: [{date,open,high,low,close,volume},...]
+    closes = [r["close"] for r in rows if r.get("close")]
+    if not closes:
+        return {"success": False, "symbol": symbol, "error": "history contained no usable closes"}
+
+    def _ma(n: int):
+        return round(sum(closes[-n:]) / n, 4) if len(closes) >= n else None
+
+    start_close = closes[0]
+    end_close = closes[-1]
+    period_high = max(r["high"] for r in rows if r.get("high"))
+    period_low = min(r["low"] for r in rows if r.get("low"))
+    vols = [r["volume"] for r in rows if r.get("volume")]
+
+    # Only the most recent candles travel back to the model — the rest is
+    # summarised. Keeps the payload small regardless of `days`.
+    recent_n = min(30, len(rows))
+    return {
+        "success":     True,
+        "symbol":      hist.get("symbol") or symbol,
+        "name":        hist.get("name") or symbol,
+        "provider":    hist.get("provider"),
+        "interval":    interval,
+        "total_points": len(rows),
+        "summary": {
+            "start_date":   rows[0].get("date"),
+            "end_date":     rows[-1].get("date"),
+            "start_close":  round(start_close, 4),
+            "end_close":    round(end_close, 4),
+            "change_pct":   round((end_close - start_close) / start_close * 100, 2) if start_close else None,
+            "period_high":  round(period_high, 4),
+            "period_low":   round(period_low, 4),
+            "avg_volume":   int(sum(vols) / len(vols)) if vols else None,
+            "ma5":          _ma(5),
+            "ma20":         _ma(20),
+            "ma60":         _ma(60),
+        },
+        "recent_candles": rows[-recent_n:],
+    }
+
+
 def tool_broker_query(params: dict) -> dict:
     """Query a connected broker account (read-only): balance, positions, orders."""
     if not _HAS_BROKERS:

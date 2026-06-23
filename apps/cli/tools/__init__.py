@@ -7,7 +7,12 @@ from .notebook_tools import (
     tool_notebook_read,
     tool_notebook_edit,
 )
-from .market_tools import tool_get_market_data, tool_broker_query, tool_broker_order
+from .market_tools import (
+    tool_get_market_data,
+    tool_get_market_history,
+    tool_broker_query,
+    tool_broker_order,
+)
 from .write_tools import tool_write_file, tool_edit_file
 
 __all__ = [
@@ -29,6 +34,7 @@ __all__ = [
     "tool_notebook_edit",
     # market / broker tools
     "tool_get_market_data",
+    "tool_get_market_history",
     "tool_broker_query",
     "tool_broker_order",
 ]

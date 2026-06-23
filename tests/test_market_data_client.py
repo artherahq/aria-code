@@ -26,6 +26,17 @@ def _isolate_market_data(monkeypatch):
     market_data_client._cache._store.clear()
     monkeypatch.setattr(market_data_client, "_session_no_proxy",
                         lambda *_a, **_k: _NoNetSession(), raising=False)
+
+    # Tushare is now tried first for A-shares when a token is configured.
+    # Keep the HTTP-chain tests deterministic regardless of any local
+    # TUSHARE_TOKEN: default to "no tushare" unless a test explicitly injects
+    # a fake via ``client._ts_source = ...``.
+    def _isolated_tushare(self):
+        src = getattr(self, "_ts_source", market_data_client._UNSET)
+        return None if src is market_data_client._UNSET else src
+    monkeypatch.setattr(market_data_client.MarketDataClient, "_tushare",
+                        _isolated_tushare, raising=False)
+
     yield
     market_data_client._cache._store.clear()
 
@@ -219,6 +230,74 @@ def test_ashare_history_failure_returns_friendly_error(monkeypatch):
     assert hist["provider_chain"] == ["eastmoney", "sina", "akshare", "yfinance"]
     assert "已尝试 Eastmoney -> 新浪 -> AKShare -> Yahoo Finance" in hist["error"]
     assert "curl" not in hist["error"].lower()
+
+
+class _FakeQuoteResult:
+    def __init__(self):
+        self.symbol = "600519"
+        self.name = "贵州茅台"
+        self.price = 1500.0
+        self.change = 10.0
+        self.change_pct = 0.67
+        self.volume = 12345
+        self.timestamp = "20260623"
+
+
+class _FakeHistoryResult:
+    def __init__(self, df):
+        self.symbol = "600519"
+        self.data = df
+        self.source = "tushare"
+        self.interval = "1d"
+
+
+class _FakeTushareSource:
+    """Minimal stand-in for datasources TushareSource."""
+    def quote(self, code):
+        return _FakeQuoteResult()
+
+    def history(self, code, days=90):
+        import pandas as pd
+        idx = pd.to_datetime(["2026-06-20", "2026-06-21", "2026-06-22"])
+        df = pd.DataFrame(
+            {"open": [1, 2, 3], "high": [2, 3, 4], "low": [0.5, 1.5, 2.5],
+             "close": [1.5, 2.5, 3.5], "volume": [100, 200, 300]},
+            index=idx,
+        )
+        return _FakeHistoryResult(df)
+
+
+def test_ashare_quote_uses_tushare_when_configured():
+    """A configured Tushare source is preferred over the HTTP chain."""
+    from market_data_client import MarketDataClient
+
+    client = MarketDataClient()
+    client._sess = _EastmoneySession()      # would otherwise win
+    client._ts_source = _FakeTushareSource()  # explicit injection (token present)
+
+    quote = client._quote_ashare("600519")
+
+    assert quote["success"] is True
+    assert quote["provider"] == "tushare"
+    assert quote["provider_chain"] == ["tushare"]
+    assert quote["name"] == "贵州茅台"
+    assert quote["price"] == 1500.0
+
+
+def test_ashare_history_uses_tushare_when_configured():
+    from market_data_client import MarketDataClient
+
+    client = MarketDataClient()
+    client._sess = _EastmoneyHistorySession()  # would otherwise win
+    client._ts_source = _FakeTushareSource()
+
+    hist = client._history_ashare("600519", days=30, interval="1d")
+
+    assert hist["success"] is True
+    assert hist["provider"] == "tushare"
+    assert hist["provider_chain"] == ["tushare"]
+    assert hist["data"][-1]["close"] == 3.5
+    assert hist["data"][0]["date"] == "2026-06-20"
 
 
 def test_global_history_falls_back_to_stooq(monkeypatch):

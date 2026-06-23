@@ -798,12 +798,36 @@ async def execute_tool_turn(
     )
 
 
+# Cap each tool result so a single large output (a long pip-install log, a big
+# data dump, a verbose traceback) cannot blow past the model's context window.
+# Without this, one oversized result is appended verbatim, the next provider
+# call exceeds num_ctx, the prompt is truncated, and the model loses the task
+# mid-run. Head+tail keeps the actionable parts (what ran / the final error)
+# and drops the noisy middle.
+_MAX_TOOL_RESULT_CHARS = 6000
+
+
+def _truncate_tool_result(text: str, limit: int = _MAX_TOOL_RESULT_CHARS) -> str:
+    if len(text) <= limit:
+        return text
+    head = limit * 2 // 3
+    tail = limit - head
+    omitted = len(text) - head - tail
+    return (
+        text[:head]
+        + f"\n\n… [已截断 {omitted:,} 字符 — 输出过长，仅保留首尾以保护上下文] …\n\n"
+        + text[-tail:]
+    )
+
+
 def build_tool_followup(tool_results: Sequence[dict]) -> str:
     """Build a structured follow-up message from tool results.
 
     Each result block is labelled with its tool name and a success/error
     status so the model can clearly distinguish outcomes and respond
-    appropriately to failures rather than silently ignoring them.
+    appropriately to failures rather than silently ignoring them. Each result
+    is size-capped (see ``_truncate_tool_result``) so a single huge output
+    cannot overflow the context window and cut the task short.
     """
     if not tool_results:
         return "No tool results. Continue with what you know or ask the user for clarification."
@@ -814,7 +838,7 @@ def build_tool_followup(tool_results: Sequence[dict]) -> str:
     for item in tool_results:
         tool = item.get("tool", "unknown")
         result = item.get("result", "")
-        result_str = str(result)
+        result_str = _truncate_tool_result(str(result))
 
         is_error = (
             result_str.startswith("Error") or
@@ -823,11 +847,10 @@ def build_tool_followup(tool_results: Sequence[dict]) -> str:
             "traceback" in result_str[:200].lower() or
             "exception" in result_str[:200].lower()
         )
+        status = "❌ Error" if is_error else "✓ Success"
         if is_error:
             error_tools.append(tool)
-            blocks.append(f"[{tool}]: {result_str}\n\n### [{tool}] ❌ Error\n{result_str}")
-        else:
-            blocks.append(f"[{tool}]: {result_str}\n\n### [{tool}] ✓ Success\n{result_str}")
+        blocks.append(f"### [{tool}] {status}\n{result_str}")
 
     followup = "## Tool Results\n\n" + "\n\n---\n\n".join(blocks)
 

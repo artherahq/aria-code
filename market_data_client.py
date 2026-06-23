@@ -44,6 +44,8 @@ logger = logging.getLogger(__name__)
 logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 logging.getLogger("curl_cffi").setLevel(logging.CRITICAL)
 
+_UNSET = object()  # sentinel: "not yet resolved" (distinct from a resolved None)
+
 # 东方财富 API 公开默认令牌（非个人凭证，各开源项目通用值）
 # 可通过环境变量覆盖：export EASTMONEY_UT=your_token
 _EM_UT = os.environ.get("EASTMONEY_UT", "bd1d9ddb04089700cf9c27f6f7426281")
@@ -202,6 +204,27 @@ class MarketDataClient:
         self._sess_np = None  # lazy no-proxy session for proxy-bypass fallback
         self._av_key = alpha_vantage_key or os.getenv("ALPHA_VANTAGE_KEY", "")
         self._fh_key = self._load_finnhub_key()
+        self._ts_source = _UNSET  # lazy Tushare source (None once resolved & unconfigured)
+
+    def _tushare(self):
+        """Lazily resolve the user's configured Tushare source.
+
+        Returns a ``TushareSource`` only when TUSHARE_TOKEN is set (env or
+        ~/.aria|.arthera/.env); otherwise ``None``. Users who never configured
+        Tushare pay nothing — the A-share chain falls straight through to the
+        free HTTP sources. When a token *is* present we honour it as the
+        preferred A-share source (it is the user's explicit, reliable choice,
+        especially behind the GFW where Eastmoney/AKShare can be flaky).
+        """
+        if self._ts_source is _UNSET:
+            try:
+                from datasources.sources.tushare_source import TushareSource
+                src = TushareSource()
+                self._ts_source = src if src.is_configured() else None
+            except Exception as e:
+                logger.debug("Tushare source unavailable: %s", e)
+                self._ts_source = None
+        return self._ts_source
 
     def _em_get_json(self, url: str, params: dict, timeout: int = 8):
         """GET JSON from an eastmoney endpoint, resilient to flaky hosts/proxy.
@@ -1034,9 +1057,33 @@ class MarketDataClient:
     # ── A-share (Eastmoney push2 API) ────────────────────────────────────────
 
     def _quote_ashare(self, symbol: str) -> Dict[str, Any]:
-        """A股报价: 东方财富优先，yfinance 仅作为末级 fallback."""
+        """A股报价: 用户配置的 Tushare 优先（若有），再东方财富，yfinance 末级 fallback."""
         code = _normalise_ashare(symbol)
         errors: List[str] = []
+
+        # ── 优先路径: 用户配置的 Tushare（仅当 TUSHARE_TOKEN 已设置）──────────
+        _ts = self._tushare()
+        if _ts is not None:
+            try:
+                q = _ts.quote(code)
+                if q is not None and _is_valid_price(float(q.price or 0)):
+                    return {
+                        "success":    True,
+                        "symbol":     code,
+                        "name":       q.name or code,
+                        "price":      round(float(q.price), 4),
+                        "change":     round(float(q.change or 0), 4),
+                        "change_pct": round(float(q.change_pct or 0), 2),
+                        "volume":     int(float(q.volume or 0)),
+                        "currency":   "CNY",
+                        "market":     "CN",
+                        "provider":   "tushare",
+                        "provider_chain": ["tushare"],
+                        "timestamp":  q.timestamp or datetime.now().isoformat(),
+                    }
+            except Exception as ts_err:
+                errors.append(f"tushare: {ts_err}")
+                logger.debug("Tushare A-share quote failed %s: %s", code, ts_err)
 
         # ── 主路径: 东方财富 push2 API ─────────────────────────────────
         secid = _ashare_secid(code)
@@ -1274,6 +1321,30 @@ class MarketDataClient:
         klt_map = {"1d": 101, "1w": 102, "1mo": 103, "1h": 60, "30m": 30}
         klt = klt_map.get(interval, 101)
         end_date   = datetime.now().strftime("%Y%m%d%H%M%S")
+
+        # ── 优先路径: 用户配置的 Tushare（仅日线，仅当 TUSHARE_TOKEN 已设置）──
+        _ts = self._tushare()
+        if _ts is not None and interval == "1d":
+            try:
+                h = _ts.history(code, days=days)
+                if h is not None and h.data is not None and not h.data.empty:
+                    records = []
+                    for idx, row in h.data.iterrows():
+                        records.append({
+                            "date":   idx.strftime("%Y-%m-%d") if hasattr(idx, "strftime") else str(idx)[:10],
+                            "open":   float(row.get("open",   0) or 0),
+                            "high":   float(row.get("high",   0) or 0),
+                            "low":    float(row.get("low",    0) or 0),
+                            "close":  float(row.get("close",  0) or 0),
+                            "volume": int(float(row.get("volume", 0) or 0)),
+                        })
+                    if records:
+                        return {"success": True, "symbol": code, "name": code,
+                                "data": records, "provider": "tushare",
+                                "provider_chain": ["tushare"], "count": len(records)}
+            except Exception as ts_err:
+                errors.append(f"tushare: {ts_err}")
+                logger.debug("Tushare history failed %s: %s", code, ts_err)
 
         # ── 主路径: 东方财富历史 K线（通过系统代理）──────────────────────────
         try:

@@ -66,11 +66,24 @@ def build_coding_prompt_lite(user_message: str) -> str:
     is_chart = any(k in low for k in ("k线", "kline", "candlestick", "蜡烛", "图表", "chart", "plot", "图"))
     is_ashare = any(k in low for k in (
         "a股", "a-股", "沪深", "上交所", "深交所", "akshare",
-        "tushare", "600", "000", "300", "港股", "上证",
+        "tushare", "600", "000", "300", "上证",
     ))
+    is_hk = any(k in low for k in (".hk", "港股", "恒生", "hkex", "00700", "0700"))
 
     if is_chart:
-        if is_ashare:
+        if is_hk:
+            rules = (
+                "港股图表规则（必须遵守）:\n"
+                "- import yfinance as yf  # 港股用 yfinance，代码加 .HK 后缀（如 0700.HK）\n"
+                "- import mplfinance as mpf\n"
+                "- import matplotlib; matplotlib.use('Agg')\n"
+                "- df = yf.download('0700.HK', start='2023-01-01', progress=False, auto_adjust=True)\n"
+                "- if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.droplevel(1)\n"
+                "- ⛔ 不存在 ak.stock_zh_hk_hist；akshare 港股要用 ak.stock_hk_hist(symbol='00700')\n"
+                "- 计算 RSI/MACD 后再传给 addplot\n"
+                "- 保存到 os.path.expanduser('~/Documents/Aria Code/generated/<name>.png')\n"
+            )
+        elif is_ashare:
             rules = (
                 "A股图表规则（必须遵守）:\n"
                 "- import akshare as ak  # A股数据用 akshare\n"
@@ -95,7 +108,18 @@ def build_coding_prompt_lite(user_message: str) -> str:
                 "- Flatten MultiIndex: if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.droplevel(1)\n"
             )
     else:
-        if is_ashare:
+        if is_hk:
+            rules = (
+                "港股策略/分析脚本规则（必须遵守）:\n"
+                "- import yfinance as yf  # 港股用 yfinance，代码加 .HK 后缀（如 0700.HK）\n"
+                "- df = yf.download('0700.HK', start='2020-01-01', progress=False, auto_adjust=True)\n"
+                "- if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.droplevel(1)\n"
+                "- ⛔ 不存在 ak.stock_zh_hk_hist；akshare 港股要用 ak.stock_hk_hist(symbol='00700', adjust='qfq')\n"
+                "- 回测必须扣交易成本: 换仓时 收益 -= abs(仓位变化) * 0.002\n"
+                "- 必须输出: 总收益/年化/夏普/最大回撤/交易次数/胜率 + 同期买入持有对比\n"
+                "- 用 pandas 计算均线/因子；print() 输出清晰的结果\n"
+            )
+        elif is_ashare:
             rules = (
                 "A股策略/分析脚本规则（必须遵守）:\n"
                 "- import akshare as ak  # A股数据必须用 akshare，禁止用 pandas_datareader\n"
