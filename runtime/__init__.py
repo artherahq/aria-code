@@ -33,6 +33,7 @@ from .agent_loop import (
     run_serial_tool,
     split_tool_calls,
 )
+from .gateway import TurnResult, run_turn
 from .approval import ApprovalDecision, apply_approval_decision
 from .events import RuntimeEvent, RuntimeTrace, ToolCallRecord, TurnResultRecord
 from .tool_executor import ToolExecutor

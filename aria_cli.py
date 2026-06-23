@@ -9734,27 +9734,52 @@ class ArtheraTerminal:
             on_tool_result = stream_consumer.on_tool_result
             on_status = stream_consumer.on_status
 
-            # ── P3 (opt-in): route this turn through the shared runtime.run_agent ──
-            # `config use_runtime_loop=true` makes the CLI use the same tested agent
-            # loop the SDK uses, keeping aria_cli as orchestration glue. Off by
-            # default; on ANY failure (or empty result) we fall through to the
-            # proven inline loop below — enabling it can never strand the user.
-            if self.config.get("use_runtime_loop"):
+            # ── route this turn through the shared runtime Gateway (run_turn) ──
+            # The CLI uses the same tested agent loop the SDK/API use, keeping
+            # aria_cli as orchestration glue. ON by default now; on ANY failure
+            # (or empty result) we fall through to the proven inline loop below,
+            # so the runtime path can never strand the user. The inline loop is
+            # deliberately kept as the safety net until the runtime path is
+            # confirmed in real-world use. Force the legacy loop with
+            # `config use_runtime_loop false`.
+            if self.config.get("use_runtime_loop", True):
                 try:
                     from apps.cli.providers.runtime_bridge import run_chat_via_runtime
+                    # Parity with the inline loop's local_mode rendering: Ollama
+                    # generates with no live display — accumulate silently and
+                    # Rich-render the complete answer at the end (otherwise the
+                    # batched output would be discarded and the user sees nothing).
+                    if self.config.get("local_mode", False):
+                        _use_plain_print[0]  = True
+                        _use_batch_render[0] = True
+                    # Capture any pending system-role override WITHOUT consuming it
+                    # yet: if the runtime path falls through, the inline loop below
+                    # must still see it. Only cleared on a confirmed success.
+                    _rt_sys_ov = getattr(self, "_system_override", None)
                     _rt_text = await run_chat_via_runtime(
                         prompt=current_message, history=self.conversation,
                         local_tools=LOCAL_TOOLS, tool_schemas=LOCAL_TOOL_SCHEMAS,
                         model=model, config=self.config, api_url=self.api_url,
                         ollama_url=self.config.get("ollama_url", "http://localhost:11434"),
                         cancel_event=self.cancel_event,
-                        on_token=on_token, on_tool_call=on_tool_call,
+                        on_token=on_token, on_thinking=on_thinking,
+                        on_tool_call=on_tool_call,
                         on_tool_result=on_tool_result, on_status=on_status,
                         thinking_mode=thinking_mode, user_context=user_context,
                         auth_token=auth_token, project_context=_PROJECT_CONTEXT,
+                        system_override=_rt_sys_ov,
                     )
                     if (_rt_text or "").strip():
+                        self._system_override = None  # consumed by the successful turn
                         self.conversation.append({"role": "assistant", "content": _rt_text})
+                        # Batch-render mode buffered the answer silently — render the
+                        # complete text now; otherwise it already streamed live.
+                        if _use_batch_render[0] and HAS_RICH:
+                            try:
+                                _stop_spinner()
+                            except Exception:
+                                pass
+                            _render_answer_block(_rt_text)
                         try:
                             _stop_live(discard=True)
                         except Exception:
