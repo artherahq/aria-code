@@ -15,7 +15,7 @@
   <img src="https://img.shields.io/badge/Python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="python"/>
   <img src="https://img.shields.io/badge/Ollama-Local_LLM-black?style=for-the-badge&logo=llama&logoColor=white" alt="ollama"/>
   <img src="https://img.shields.io/badge/Providers-19+_Cloud-f59e0b?style=for-the-badge" alt="providers"/>
-  <img src="https://img.shields.io/badge/License-MIT-22c55e?style=for-the-badge" alt="license"/>
+  <img src="https://img.shields.io/badge/License-BSL%201.1-f59e0b?style=for-the-badge" alt="license"/>
   <img src="https://img.shields.io/github/stars/artherahq/aria-code?style=for-the-badge&color=f59e0b" alt="stars"/>
 </p>
 
@@ -804,7 +804,16 @@ Aria Code is designed to work as a **standalone tool** — it does not require t
 
 ## License
 
-MIT © 2025 Arthera Team — see [LICENSE](./LICENSE)
+[Business Source License 1.1](./LICENSE) © 2025–2026 Arthera.
+
+Free to use, run, modify, and self-host for personal, internal, educational,
+and research purposes — including trading your own account. Offering Aria Code
+as a hosted/managed service, or selling a competing product built on it,
+requires a commercial license (contact dev@arthera.finance). Each version
+converts to Apache 2.0 four years after release.
+
+> Versions up to and including **4.1.2** were released under MIT and remain
+> available under those terms.
 
 ---
 

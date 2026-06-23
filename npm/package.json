@@ -12,7 +12,7 @@
     "type": "git",
     "url": "git+https://github.com/artherahq/aria-code.git"
   },
-  "license": "MIT",
+  "license": "BUSL-1.1",
   "author": "Cinsoul",
   "bin": {
     "aria-code": "bin/aria-code.js",

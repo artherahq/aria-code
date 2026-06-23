@@ -7152,13 +7152,18 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
             save_config(self.terminal.config)
 
         if sub in {"status", "show"}:
+            shared_state = "ON — feedback may be shared with Arthera" if (
+                settings.data_sharing and settings.feedback_upload
+            ) else "OFF — local-only, nothing leaves this machine"
             lines = [
                 "Privacy status",
+                f"  sharing: {shared_state}",
                 f"  data_sharing: {settings.data_sharing}",
                 f"  feedback_upload: {settings.feedback_upload}",
                 f"  feedback_records: {store.count()}",
                 f"  local_feedback: {store.feedback_file}",
-                "  default: local-only; no upload unless data_sharing and feedback_upload are true",
+                "  default: local-only; no upload unless you run /privacy opt-in",
+                "  full policy: /privacy policy  (or see PRIVACY.md)",
             ]
             if HAS_RICH:
                 console.print()
@@ -7169,10 +7174,38 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
                 print("\n".join(lines))
             return
 
+        if sub == "policy":
+            url = "https://github.com/artherahq/aria-code/blob/aria-code/PRIVACY.md"
+            local = pathlib.Path(__file__).resolve().parent / "PRIVACY.md"
+            lines = [
+                "Aria Code is local-first: by default nothing is collected or uploaded.",
+                "Only `/privacy opt-in` shares feedback (rating + related message) with Arthera.",
+                "Credentials, positions, and financial data always stay on your machine.",
+                f"  full policy: {local if local.exists() else url}",
+                "  manage: /privacy opt-in | opt-out | export [path] | delete",
+            ]
+            if HAS_RICH:
+                console.print()
+                console.print("[bold]Privacy policy[/bold]")
+                for line in lines:
+                    console.print(f"[dim]{line}[/dim]")
+            else:
+                print("\n".join(lines))
+            return
+
         if sub in {"opt-in", "on", "enable"}:
             _save_settings(PrivacySettings(data_sharing=True, feedback_upload=True))
-            msg = "Data sharing enabled for feedback. Local copies are still kept."
-            console.print(f"[green]{msg}[/green]" if HAS_RICH else msg)
+            if HAS_RICH:
+                console.print("[green]Data sharing enabled.[/green]")
+                console.print("[dim]  You consent to share /feedback records (rating, the related[/dim]")
+                console.print("[dim]  model message, optional comment, model id, session id, time)[/dim]")
+                console.print("[dim]  with Arthera to improve the product. Local copies are kept.[/dim]")
+                console.print("[dim]  Credentials & financial data are never shared. Details: /privacy policy[/dim]")
+                console.print("[dim]  Withdraw any time: /privacy opt-out[/dim]")
+            else:
+                print("Data sharing enabled. You consent to share /feedback records "
+                      "(rating + related message) with Arthera. Credentials & financial "
+                      "data are never shared. Withdraw: /privacy opt-out. Details: /privacy policy")
             return
 
         if sub in {"opt-out", "off", "disable"}:
@@ -7199,7 +7232,7 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
             console.print(f"[green]{msg}[/green]" if HAS_RICH else msg)
             return
 
-        msg = "Usage: /privacy [status|opt-in|opt-out|export [path]|delete]"
+        msg = "Usage: /privacy [status|policy|opt-in|opt-out|export [path]|delete]"
         console.print(f"[dim]{msg}[/dim]" if HAS_RICH else msg)
 
     # ---- Market data commands (expose unused Aria tools) ----
