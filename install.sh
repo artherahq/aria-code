@@ -72,6 +72,20 @@ case "$MODE" in
     *)    EXTRA="full" ;;
 esac
 
+# ── China mirror support (avoids GitHub / PyPI timeouts) ──────
+# Opt in with ARIA_CN=1, or it is auto-applied as a retry when a download fails.
+ARIA_CN="${ARIA_CN:-0}"
+CN_PYPI="https://pypi.tuna.tsinghua.edu.cn/simple"
+CN_PY_REPO="https://ghfast.top/https://github.com/astral-sh/python-build-standalone/releases/download"
+enable_cn_mirror() {
+    export UV_DEFAULT_INDEX="${UV_DEFAULT_INDEX:-$CN_PYPI}"
+    export UV_PYTHON_INSTALL_MIRROR="${UV_PYTHON_INSTALL_MIRROR:-$CN_PY_REPO}"
+    export PIP_INDEX_URL="${PIP_INDEX_URL:-$CN_PYPI}"
+    ARIA_CN=1
+    info "China mirrors enabled (PyPI Tsinghua + Python build mirror)"
+}
+[[ "$ARIA_CN" == "1" ]] && enable_cn_mirror
+
 # ── Step 1: package manager (uv preferred) ────────────────────
 step "1 / 5  Setting up package manager"
 USE_UV=0
@@ -98,8 +112,16 @@ if [[ "$USE_UV" -eq 1 ]]; then
     # uv downloads a managed CPython if no suitable interpreter (≥3.10) exists,
     # so there's no "please install Python first" prerequisite.
     if [[ ! -d "$VENV_DIR" ]]; then
-        uv venv "$VENV_DIR" --python 3.12 --seed 2>/dev/null \
-            || uv venv "$VENV_DIR" --seed
+        if ! uv venv "$VENV_DIR" --python 3.12 --seed 2>/dev/null; then
+            # Python download may have timed out — try a China mirror, then bare venv
+            if [[ "$ARIA_CN" != "1" ]]; then
+                warn "Python download failed — retrying via China mirror…"
+                enable_cn_mirror
+                uv venv "$VENV_DIR" --python 3.12 --seed 2>/dev/null || uv venv "$VENV_DIR" --seed
+            else
+                uv venv "$VENV_DIR" --seed
+            fi
+        fi
         ok "Virtual environment created (uv)"
     else
         ok "Virtual environment exists: $VENV_DIR"
@@ -151,6 +173,8 @@ install_pkgs() {
 
 if install_pkgs "$TARGET"; then
     ok "Dependencies installed"
+elif [[ "$ARIA_CN" != "1" ]] && enable_cn_mirror && install_pkgs "$TARGET"; then
+    ok "Dependencies installed (via China mirror)"
 else
     warn "Full install failed — retrying with slim core so the CLI still works…"
     if install_pkgs "$CLI_DIR"; then

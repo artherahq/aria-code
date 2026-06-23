@@ -294,7 +294,24 @@ function installUv() {
   return null;
 }
 
-function ensureVenv(python) {
+// ── China mirror support (avoids GitHub / PyPI timeouts) ─────────────────────
+// Opt in with ARIA_CN=1 (or ARIA_MIRROR=cn). Also auto-applied as a retry when a
+// download times out, so users behind the Great Firewall still get a clean
+// install. Honors any UV_*/PIP_* values the user already set.
+const CN_MIRROR  = process.env.ARIA_CN === "1" || process.env.ARIA_MIRROR === "cn";
+const CN_PYPI    = "https://pypi.tuna.tsinghua.edu.cn/simple";
+const CN_PY_REPO = "https://ghfast.top/https://github.com/astral-sh/python-build-standalone/releases/download";
+
+function mirrorEnv(base) {
+  return {
+    ...base,
+    UV_DEFAULT_INDEX:         base.UV_DEFAULT_INDEX         || CN_PYPI,
+    UV_PYTHON_INSTALL_MIRROR: base.UV_PYTHON_INSTALL_MIRROR || CN_PY_REPO,
+    PIP_INDEX_URL:            base.PIP_INDEX_URL            || CN_PYPI,
+  };
+}
+
+function ensureVenv(python, uv) {
   step(6, "Python environment + dependencies");
 
   const venvDir  = path.join(INSTALL_DIR, ".venv");
@@ -309,13 +326,23 @@ function ensureVenv(python) {
   // from pyproject.toml (single source of truth) rather than requirements.txt.
   const fullSpec = `${INSTALL_DIR}[full]`;
 
-  const uv = findUv() || installUv();
+  let env = CN_MIRROR ? mirrorEnv(process.env) : { ...process.env };
+  if (CN_MIRROR) info("Using China mirrors (PyPI Tsinghua + Python build mirror)");
+
+  const venvPyVersion = () =>
+    capture(venvPy, ["-c", "import sys;print(f'{sys.version_info.major}.{sys.version_info.minor}')"])
+    || (python && python.version) || "3.12";
 
   if (uv) {
     if (!fs.existsSync(venvPy)) {
       info("Creating virtual environment (uv downloads Python if needed)…");
-      let r = run(uv, ["venv", venvDir, "--python", "3.12", "--seed"]);
-      if (r.status !== 0) r = run(uv, ["venv", venvDir, "--seed"]);
+      let r = run(uv, ["venv", venvDir, "--python", "3.12", "--seed"], { env });
+      if (r.status !== 0 && !CN_MIRROR) {
+        warn("Python download failed — retrying via China mirror…");
+        env = mirrorEnv(env);
+        r = run(uv, ["venv", venvDir, "--python", "3.12", "--seed"], { env });
+      }
+      if (r.status !== 0) r = run(uv, ["venv", venvDir, "--seed"], { env });
       if (r.status !== 0) { err("uv venv failed."); process.exit(1); }
       ok(`venv created at ${venvDir}`);
     } else {
@@ -323,16 +350,21 @@ function ensureVenv(python) {
     }
 
     info("Installing dependencies (uv, from pyproject.toml)…");
-    let r = run(uv, ["pip", "install", "--python", venvPy, "-e", fullSpec]);
+    let r = run(uv, ["pip", "install", "--python", venvPy, "-e", fullSpec], { env });
+    if (r.status !== 0 && !CN_MIRROR) {
+      warn("Install failed — retrying via China mirror (PyPI Tsinghua)…");
+      env = mirrorEnv(env);
+      r = run(uv, ["pip", "install", "--python", venvPy, "-e", fullSpec], { env });
+    }
     if (r.status !== 0) {
       warn("Full install failed — retrying with slim core so the CLI still works…");
-      r = run(uv, ["pip", "install", "--python", venvPy, "-e", INSTALL_DIR]);
+      r = run(uv, ["pip", "install", "--python", venvPy, "-e", INSTALL_DIR], { env });
       if (r.status === 0) ok("Core installed (optional features via /install later)");
       else warn("Some packages failed — basic features may still work.");
     } else {
       ok("All dependencies installed (uv)");
     }
-    return { venvPy, venvPip, venvDir };
+    return { venvPy, venvPip, venvDir, pythonVersion: venvPyVersion() };
   }
 
   // ── pip fallback (no uv available) ──────────────────────────────────────────
@@ -349,20 +381,25 @@ function ensureVenv(python) {
   }
 
   info("Upgrading pip…");
-  run(venvPip, ["install", "--quiet", "--upgrade", "pip"]);
+  run(venvPip, ["install", "--quiet", "--upgrade", "pip"], { env });
 
   info("Installing dependencies (pip, from pyproject.toml — may take 3–5 min)…");
-  let r = run(venvPip, ["install", "-e", fullSpec]);
+  let r = run(venvPip, ["install", "-e", fullSpec], { env });
+  if (r.status !== 0 && !CN_MIRROR) {
+    warn("Install failed — retrying via China mirror (PyPI Tsinghua)…");
+    env = mirrorEnv(env);
+    r = run(venvPip, ["install", "-e", fullSpec], { env });
+  }
   if (r.status !== 0) {
     warn("Full install failed — retrying with slim core…");
-    r = run(venvPip, ["install", "-e", INSTALL_DIR]);
+    r = run(venvPip, ["install", "-e", INSTALL_DIR], { env });
     if (r.status === 0) ok("Core installed (optional features via /install later)");
     else warn("Some packages failed — basic features may still work.");
   } else {
     ok("All Python dependencies installed");
   }
 
-  return { venvPy, venvPip, venvDir };
+  return { venvPy, venvPip, venvDir, pythonVersion: (python && python.version) || venvPyVersion() };
 }
 
 // ── Step 7: Write install-info ────────────────────────────────────────────────
@@ -431,12 +468,27 @@ ${C.cyan}    _         _
   hr();
 
   try {
+    // git is the only hard prerequisite (to clone the repo). On macOS the Xcode
+    // CLT provides it; uv supplies Python, so we no longer need Homebrew or a
+    // system Python install — that brew step is exactly what times out for many
+    // users behind restrictive networks.
     await ensureXcodeCLT();
-    await ensureHomebrew();
-    const python = await ensurePython();
+
+    const uv = findUv() || installUv();
+
+    let python;
+    if (uv) {
+      info("uv is available — it will manage Python (skipping Homebrew + system Python)");
+      python = { cmd: null, version: "uv-managed", path: "(uv-managed)" };
+    } else {
+      await ensureHomebrew();
+      python = await ensurePython();
+    }
+
     ensureGit();
     ensureRepo();
-    const venv = ensureVenv(python);
+    const venv = ensureVenv(python, uv);
+    if (venv.pythonVersion) python.version = venv.pythonVersion;
     writeInstallInfo(python, venv);
     printSummary();
   } catch (e) {

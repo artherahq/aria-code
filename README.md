@@ -274,6 +274,25 @@ uv venv && uv pip install -e ".[full]"   # uv (fast); or use python -m venv + pi
 python3 aria_cli.py
 ```
 
+### 🇨🇳 China / behind a firewall (network timeouts)
+
+If installs time out reaching GitHub or PyPI (e.g. `curl: (56) Recv failure`),
+set `ARIA_CN=1` — every installer then uses the Tsinghua PyPI mirror and a
+Python-build mirror. The installers also auto-retry through these mirrors if a
+download fails, so you usually don't need the flag.
+
+```bash
+ARIA_CN=1 bash install.sh                 # git clone path
+ARIA_CN=1 npm install -g @artheras/aria-code   # npm path
+```
+
+```powershell
+$env:ARIA_CN=1; .\install.ps1             # Windows
+```
+
+You can also point at your own mirrors via standard env vars:
+`UV_DEFAULT_INDEX`, `UV_PYTHON_INSTALL_MIRROR`, `PIP_INDEX_URL`.
+
 ### Step 1: Install Ollama (local LLM — free, fully offline)
 
 ```bash

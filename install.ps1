@@ -60,6 +60,18 @@ $extra = "full"
 if ($Core) { $extra = "" }
 if ($Dev)  { $extra = "all" }
 
+# ── China mirror support (avoids GitHub / PyPI timeouts) ──────────────────────
+# Opt in with $env:ARIA_CN=1, or auto-applied as a retry when a download fails.
+$script:AriaCn = ($env:ARIA_CN -eq "1")
+function Enable-CnMirror {
+    if (-not $env:UV_DEFAULT_INDEX)         { $env:UV_DEFAULT_INDEX = "https://pypi.tuna.tsinghua.edu.cn/simple" }
+    if (-not $env:UV_PYTHON_INSTALL_MIRROR) { $env:UV_PYTHON_INSTALL_MIRROR = "https://ghfast.top/https://github.com/astral-sh/python-build-standalone/releases/download" }
+    if (-not $env:PIP_INDEX_URL)            { $env:PIP_INDEX_URL = "https://pypi.tuna.tsinghua.edu.cn/simple" }
+    $script:AriaCn = $true
+    Write-Host "  China mirrors enabled (PyPI Tsinghua + Python build mirror)" -ForegroundColor DarkGray
+}
+if ($script:AriaCn) { Enable-CnMirror }
+
 # ── Step 1: package manager (uv) ──────────────────────────────────────────────
 
 Write-Step "Setting up package manager (uv)..."
@@ -153,7 +165,13 @@ function Install-Pkgs($t) {
     return $LASTEXITCODE -eq 0
 }
 
-if (Install-Pkgs $target) {
+$installed = Install-Pkgs $target
+if (-not $installed -and -not $script:AriaCn) {
+    Write-Warn "Install failed — retrying via China mirror (PyPI Tsinghua)..."
+    Enable-CnMirror
+    $installed = Install-Pkgs $target
+}
+if ($installed) {
     Write-OK "Dependencies installed"
 } else {
     Write-Warn "Full install failed — retrying slim core so the CLI still works..."
