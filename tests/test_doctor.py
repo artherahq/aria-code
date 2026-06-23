@@ -1,4 +1,7 @@
-import tomllib
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python < 3.11
+    import tomli as tomllib
 
 from doctor import format_doctor_plain, npm_runtime_checks, provider_health_checks, provider_health_summary, run_doctor
 from packages.aria_services.provider_health import summarize_provider_health

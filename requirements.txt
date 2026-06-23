@@ -138,3 +138,4 @@ ddgs>=9.0               # zero-config web search fallback (used by web_search to
 # ─────────────────────────────────────────────────────────────────────────────
 pytest>=8.2.0
 pytest-asyncio>=0.23.7
+tomli>=2.0.1; python_version < "3.11"   # tomllib backport — tests parse pyproject.toml on Python 3.10
