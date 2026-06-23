@@ -45,7 +45,7 @@ dependencies = [
     "numpy>=1.26.0",
     "pandas>=2.2.0",
     "scipy>=1.13.0",
-    "pandas_ta>=0.3.14b",
+    "pandas_ta>=0.4.67b0; python_version >= '3.12'",  # PyPI removed 0.3.x; 0.4.x is 3.12-only. Optional — code has graceful fallback (find_spec/try-except).
     "yfinance>=0.2.55",
 ]
 
