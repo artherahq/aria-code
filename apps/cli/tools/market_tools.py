@@ -28,6 +28,20 @@ except ImportError:
     _HAS_MDC = False
     _get_mdc = None  # type: ignore[assignment]
 
+# ── Unified data service (MDC primary + DataRouter fallback) ──────────────────
+# DataService bridges MarketDataClient with the configured DataRouter, which
+# honours ~/.aria/datasources.yaml (tushare / akshare / finnhub / fred / …).
+# Lazily constructed so importing this module stays cheap.
+_DATA_SERVICE = None
+
+
+def _get_data_service():
+    global _DATA_SERVICE
+    if _DATA_SERVICE is None:
+        from data_service import DataService
+        _DATA_SERVICE = DataService()
+    return _DATA_SERVICE
+
 # ── Optional: broker integration ────────────────────────────────────────────
 try:
     from brokers import (                                  # noqa: E402
@@ -133,6 +147,18 @@ def tool_get_market_data(params: dict) -> dict:
                         }
             except Exception:
                 pass
+
+    # Unified DataService fallback — reaches the user's configured DataRouter
+    # sources (tushare / akshare / finnhub / alpha_vantage / …) when both the
+    # native MDC chain and Finnhub failed. Additive: only runs on failure.
+    if not quote.get("success"):
+        try:
+            _res = _get_data_service().quote(symbol)
+            if _res.success and _res.data:
+                quote = dict(_res.data)
+                quote.setdefault("success", True)
+        except Exception:
+            pass
 
     if not quote.get("success"):
         return {
@@ -249,9 +275,9 @@ def tool_get_market_history(params: dict) -> dict:
 
     Returns a *compact* summary (period stats + the most recent candles), NOT
     the full series, so the model can reason about trends without flooding the
-    context window. Routes through MarketDataClient, which uses the user's
-    configured Tushare for A-shares (if a token is set), then Eastmoney/Sina/
-    AKShare, and yfinance for HK/US/global.
+    context window. Routes through the unified DataService: MarketDataClient
+    first (Tushare for A-shares when configured, then Eastmoney/Sina/AKShare,
+    yfinance for HK/US/global), then the configured DataRouter as fallback.
 
     Use this instead of writing ad-hoc akshare/tushare scripts: it handles
     symbol normalisation, source fallback, and is environment-independent.
@@ -266,21 +292,37 @@ def tool_get_market_history(params: dict) -> dict:
     days = max(5, min(days, 1000))
     interval = str(params.get("interval", "1d") or "1d").lower()
 
-    if not (_HAS_MDC and _get_mdc is not None):
-        return {"success": False, "symbol": symbol,
-                "error": "market data client unavailable"}
-
+    # Prefer the unified DataService (MDC + DataRouter fallback, honours the
+    # user's datasources.yaml). Fall back to MDC directly if it can't load.
+    hist = None
+    chain = None
+    err = None
     try:
-        hist = _get_mdc().history(symbol, days=days, interval=interval)
+        res = _get_data_service().history(symbol, days=days, interval=interval)
+        chain = res.provider_chain
+        if res.errors:
+            err = res.errors[0]
+        if (res.data or {}).get("data"):
+            hist = res.data
     except Exception as exc:
-        return {"success": False, "symbol": symbol, "error": str(exc)}
+        err = str(exc)
+        if _HAS_MDC and _get_mdc is not None:
+            try:
+                _h = _get_mdc().history(symbol, days=days, interval=interval)
+                if _h.get("data"):
+                    hist = _h
+                    chain = _h.get("provider_chain")
+                else:
+                    err = _h.get("error") or err
+            except Exception as exc2:
+                err = str(exc2)
 
-    if not hist.get("success") or not hist.get("data"):
+    if not hist or not hist.get("data"):
         return {
             "success": False,
             "symbol": symbol,
-            "provider_chain": hist.get("provider_chain") or ["eastmoney", "sina", "akshare", "yfinance"],
-            "error": hist.get("error") or "历史行情数据源暂时不可用，请稍后重试。",
+            "provider_chain": chain or ["eastmoney", "sina", "akshare", "yfinance"],
+            "error": err or "历史行情数据源暂时不可用，请稍后重试。",
         }
 
     rows = hist["data"]  # ascending by date: [{date,open,high,low,close,volume},...]

@@ -42,8 +42,13 @@ def _patch_mdc(monkeypatch):
     import apps.cli.tools.market_tools as mt
 
     def _install(fake):
+        # The tool now routes through DataService; wrap the fake MDC in a real
+        # DataService (router disabled) so we exercise the actual code path.
+        from data_service import DataService
+        svc = DataService(market_client=fake, router=False)
         monkeypatch.setattr(mt, "_HAS_MDC", True, raising=False)
         monkeypatch.setattr(mt, "_get_mdc", lambda: fake, raising=False)
+        monkeypatch.setattr(mt, "_get_data_service", lambda: svc, raising=False)
     return _install
 
 
