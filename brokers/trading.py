@@ -7,6 +7,7 @@ the broker config explicitly enables ``allow_live_trade``.
 from __future__ import annotations
 
 import json
+import os
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -19,6 +20,19 @@ from .planning import RiskRuleSet, StrategyIntent, plan_order, snapshot_from_bro
 
 TRADE_PREVIEWS_PATH = BROKERS_CONFIG_PATH.parent / "trade_previews.json"
 TRADE_AUDIT_PATH = BROKERS_CONFIG_PATH.parent / "trade_audit.jsonl"
+
+_DRY_RUN_VALUES = {"1", "true", "yes", "on"}
+
+
+def global_dry_run() -> bool:
+    """Global trading kill-switch.
+
+    When ``ARIA_DRY_RUN`` is truthy, ALL brokers are forced read-only regardless
+    of their per-broker config — order previews are never executable. A single
+    operational switch for demos, testing, or a risk-off freeze:
+        export ARIA_DRY_RUN=1
+    """
+    return str(os.getenv("ARIA_DRY_RUN", "")).strip().lower() in _DRY_RUN_VALUES
 
 
 @dataclass(frozen=True)
@@ -56,6 +70,8 @@ class OrderIntent:
 
 
 def resolve_trading_mode(config: Dict[str, Any], broker_type: str = "") -> str:
+    if global_dry_run():
+        return "read_only"
     explicit = str(config.get("mode", "") or "").lower()
     if explicit in {"read_only", "paper", "live"}:
         return explicit
@@ -105,6 +121,8 @@ def _audit(event: Dict[str, Any]) -> None:
 
 def _execution_blockers(policy: TradingPolicy, plan: Dict[str, Any]) -> list[str]:
     blockers: list[str] = []
+    if global_dry_run():
+        blockers.append("全局 dry-run 模式已启用 (ARIA_DRY_RUN)，所有下单被冻结")
     risk = plan.get("risk") or {}
     blockers.extend(str(item) for item in risk.get("violations") or [])
     if plan.get("action") in {"buy", "sell", "rebalance"} and not plan.get("estimated_order"):

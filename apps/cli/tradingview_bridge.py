@@ -6,7 +6,10 @@ trust TradingView data for analysis.
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
+import os
 import sqlite3
 import time
 import uuid
@@ -15,6 +18,67 @@ from typing import Any
 from urllib.parse import quote
 
 from artifacts import slugify_topic, user_generated_dir
+
+
+# ── Webhook security ──────────────────────────────────────────────────────────
+
+def _expected_webhook_secret() -> str:
+    return str(os.getenv("ARIA_WEBHOOK_SECRET", "") or "").strip()
+
+
+def _alert_passphrase(raw: dict[str, Any]) -> str:
+    """Pull the shared secret a TradingView alert body may carry.
+
+    TradingView cannot send custom HMAC headers, so the documented way to secure
+    its webhooks is a passphrase embedded in the JSON body. Accept the common
+    field names.
+    """
+    for key in ("passphrase", "secret", "token", "key", "webhook_secret"):
+        val = raw.get(key)
+        if val:
+            return str(val).strip()
+    return ""
+
+
+def verify_webhook_secret(raw: dict[str, Any]) -> bool:
+    """True if alerts are allowed through.
+
+    When ARIA_WEBHOOK_SECRET is unset, verification is disabled (open) — the
+    deployment is assumed to be localhost-only. When set, the alert body MUST
+    carry a matching passphrase (constant-time compare) or it is rejected.
+    """
+    expected = _expected_webhook_secret()
+    if not expected:
+        return True
+    provided = _alert_passphrase(raw)
+    if not provided:
+        return False
+    return hmac.compare_digest(provided, expected)
+
+
+def verify_webhook_hmac(raw_body: bytes | str, signature: str, secret: str | None = None) -> bool:
+    """Constant-time HMAC-SHA256 check for a fronting proxy/signer.
+
+    For deployments that put a signer in front of the daemon (e.g. a serverless
+    relay that can compute HMAC, unlike TradingView itself). Compares the hex
+    digest of ``raw_body`` against ``signature`` (optional ``sha256=`` prefix).
+    """
+    key = (secret if secret is not None else _expected_webhook_secret())
+    if not key:
+        return False
+    if isinstance(raw_body, str):
+        raw_body = raw_body.encode("utf-8")
+    sig = str(signature or "").strip()
+    if sig.startswith("sha256="):
+        sig = sig[7:]
+    digest = hmac.new(key.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(digest, sig)
+
+
+def _alert_dedup_key(alert: dict[str, Any]) -> str:
+    """Stable key for collapsing duplicate alerts (TV retries the same bar)."""
+    basis = "|".join(str(alert.get(k) or "") for k in ("symbol", "action", "time", "price"))
+    return hashlib.sha1(basis.encode("utf-8")).hexdigest()[:16]
 
 
 _INDEX_SYMBOLS = {
@@ -358,11 +422,29 @@ def normalize_tradingview_alert_symbol(symbol: str) -> str:
     return raw
 
 
-def enqueue_tradingview_alert(payload: dict[str, Any] | str, *, db_path: str | Path | None = None) -> dict[str, Any]:
-    """Queue a TradingView alert for the daemon webhook executor."""
+def enqueue_tradingview_alert(
+    payload: dict[str, Any] | str,
+    *,
+    db_path: str | Path | None = None,
+    dedup_window_seconds: int = 90,
+) -> dict[str, Any]:
+    """Queue a TradingView alert for the daemon webhook executor.
+
+    Security & integrity:
+      * If ARIA_WEBHOOK_SECRET is set, the alert body must carry a matching
+        passphrase, else it is rejected (prevents injected buy/sell alerts).
+      * Duplicate alerts (TradingView retries the same bar) are collapsed within
+        ``dedup_window_seconds`` so they can't create duplicate order drafts.
+    """
     alert = parse_tradingview_alert(payload)
     if not alert["symbol"]:
         return {"success": False, "error": "symbol is required", "alert": alert}
+
+    if not verify_webhook_secret(alert.get("raw") or {}):
+        return {"success": False, "error": "unauthorized: missing/invalid webhook secret",
+                "rejected": True, "alert": {"symbol": alert.get("symbol"), "action": alert.get("action")}}
+
+    dedup_key = _alert_dedup_key(alert)
     path = Path(db_path).expanduser() if db_path else Path.home() / ".aria" / "daemon.db"
     path.parent.mkdir(parents=True, exist_ok=True)
     job_id = "tv_" + uuid.uuid4().hex[:12]
@@ -378,13 +460,26 @@ def enqueue_tradingview_alert(payload: dict[str, Any] | str, *, db_path: str | P
                 result TEXT,
                 created_at TEXT DEFAULT (datetime('now')),
                 started_at TEXT,
-                done_at TEXT
+                done_at TEXT,
+                dedup_key TEXT
             )
             """
         )
+        # Older DBs may predate the dedup_key column — add it on the fly.
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(webhook_jobs)")}
+        if "dedup_key" not in cols:
+            conn.execute("ALTER TABLE webhook_jobs ADD COLUMN dedup_key TEXT")
+        existing = conn.execute(
+            "SELECT id FROM webhook_jobs WHERE dedup_key = ? "
+            "AND created_at >= datetime('now', ?) ORDER BY created_at DESC LIMIT 1",
+            (dedup_key, f"-{int(dedup_window_seconds)} seconds"),
+        ).fetchone()
+        if existing:
+            return {"success": True, "job_id": existing[0], "deduped": True, "alert": alert}
         conn.execute(
-            "INSERT INTO webhook_jobs(id, command, payload, source, status) VALUES (?, ?, ?, ?, 'pending')",
-            (job_id, "tradingview_alert", json.dumps(alert, ensure_ascii=False), "tradingview"),
+            "INSERT INTO webhook_jobs(id, command, payload, source, status, dedup_key) "
+            "VALUES (?, ?, ?, ?, 'pending', ?)",
+            (job_id, "tradingview_alert", json.dumps(alert, ensure_ascii=False), "tradingview", dedup_key),
         )
         conn.commit()
     return {"success": True, "job_id": job_id, "alert": alert}

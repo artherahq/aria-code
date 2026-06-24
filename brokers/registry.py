@@ -134,6 +134,37 @@ class BrokerRegistry:
         """按 id 获取已连接的实例。"""
         return self._instances.get(broker_id)
 
+    def ensure(self, broker_id: str) -> BrokerBase:
+        """返回可用实例，链路掉线则透明重连。长驻调用方应优先用此方法而非 get()/connect()。"""
+        inst = self._instances.get(broker_id)
+        if inst is not None:
+            try:
+                if inst.ensure_connected():
+                    return inst
+            except Exception:
+                pass
+            # 实例级重连失败 → 丢弃后整体重建
+            self._instances.pop(broker_id, None)
+        return self.connect(broker_id)
+
+    def health(self) -> List[Dict[str, Any]]:
+        """连接健康快照（供 /broker 状态展示）。"""
+        out: List[Dict[str, Any]] = []
+        for bid, inst in self._instances.items():
+            try:
+                healthy = bool(inst.is_connected and inst.ping())
+            except Exception:
+                healthy = False
+            out.append({
+                "broker_id": bid,
+                "label": getattr(inst, "label", bid),
+                "type": getattr(inst, "broker_type", ""),
+                "connected": bool(inst.is_connected),
+                "healthy": healthy,
+                "active": bid == self._active_id,
+            })
+        return out
+
     def list_connected(self) -> List[BrokerBase]:
         """返回所有已连接的券商。"""
         return [b for b in self._instances.values() if b.is_connected]

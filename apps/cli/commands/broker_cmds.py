@@ -104,6 +104,15 @@ class BrokerCommandsMixin:
 
     async def _cmd_broker_status(self):
         from aria_cli import HAS_RICH, console, _get_broker_registry
+        from brokers.trading import global_dry_run
+
+        # Risk-off banner: make a global trading freeze impossible to miss.
+        if global_dry_run():
+            if HAS_RICH:
+                console.print("[black on yellow] DRY-RUN 全局只读 (ARIA_DRY_RUN) — 所有下单已冻结 [/black on yellow]")
+            else:
+                print("[DRY-RUN] ARIA_DRY_RUN 已启用 — 所有下单已冻结")
+
         reg = _get_broker_registry()
         connected = reg.list_connected() if reg else []
         if not connected:
@@ -113,16 +122,24 @@ class BrokerCommandsMixin:
                 print("无已连接券商")
             return
         for b in connected:
+            # Heartbeat: green = live probe ok, yellow = flag set but probe failed.
+            try:
+                healthy = bool(b.is_connected and b.ping())
+            except Exception:
+                healthy = False
+            dot = "[green]●[/green]" if healthy else "[yellow]○[/yellow]"
             try:
                 acct = b.account_info()
                 line = (
-                    f"[green]●[/green] [bold]{b.label}[/bold] ({b.broker_type})"
+                    f"{dot} [bold]{b.label}[/bold] ({b.broker_type})"
                     f"  账户: {acct.masked_account}"
                     f"  总资产: [bold]{acct.currency} {acct.total_assets:,.2f}[/bold]"
                     f"  可用: {acct.cash:,.2f}"
                 )
+                if not healthy:
+                    line += "  [dim](心跳异常)[/dim]"
             except Exception as e:
-                line = f"[yellow]●[/yellow] [bold]{b.label}[/bold] ({b.broker_type})  [dim]查询失败: {e}[/dim]"
+                line = f"[yellow]○[/yellow] [bold]{b.label}[/bold] ({b.broker_type})  [dim]查询失败: {e}[/dim]"
             if HAS_RICH:
                 console.print(line)
             else:

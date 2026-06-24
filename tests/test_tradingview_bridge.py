@@ -134,3 +134,47 @@ def test_generate_and_export_pine_strategy(tmp_path):
     path = export_pine_strategy("NVDA", output_dir=tmp_path)
     assert path.suffix == ".pine"
     assert "Aria NVDA EMA RSI Strategy" in path.read_text(encoding="utf-8")
+
+
+# ── Webhook security + dedup ───────────────────────────────────────────────────
+
+def test_enqueue_open_when_no_secret(monkeypatch, tmp_path):
+    monkeypatch.delenv("ARIA_WEBHOOK_SECRET", raising=False)
+    db = tmp_path / "daemon.db"
+    r = enqueue_tradingview_alert({"symbol": "AAPL", "action": "buy", "time": "t1"}, db_path=db)
+    assert r["success"] and not r.get("deduped")
+
+
+def test_enqueue_dedupes_duplicate_bar(monkeypatch, tmp_path):
+    monkeypatch.delenv("ARIA_WEBHOOK_SECRET", raising=False)
+    db = tmp_path / "daemon.db"
+    a = enqueue_tradingview_alert({"symbol": "AAPL", "action": "buy", "time": "t1"}, db_path=db)
+    b = enqueue_tradingview_alert({"symbol": "AAPL", "action": "buy", "time": "t1"}, db_path=db)
+    assert b.get("deduped") is True and b["job_id"] == a["job_id"]
+    # A different bar is a new job.
+    c = enqueue_tradingview_alert({"symbol": "AAPL", "action": "buy", "time": "t2"}, db_path=db)
+    assert not c.get("deduped") and c["job_id"] != a["job_id"]
+
+
+def test_enqueue_rejects_without_secret(monkeypatch, tmp_path):
+    monkeypatch.setenv("ARIA_WEBHOOK_SECRET", "s3cr3t")
+    db = tmp_path / "daemon.db"
+    bad = enqueue_tradingview_alert({"symbol": "TSLA", "action": "buy", "time": "t1"}, db_path=db)
+    assert not bad["success"] and bad.get("rejected")
+    wrong = enqueue_tradingview_alert(
+        {"symbol": "TSLA", "action": "buy", "time": "t1", "passphrase": "nope"}, db_path=db)
+    assert not wrong["success"]
+    good = enqueue_tradingview_alert(
+        {"symbol": "TSLA", "action": "buy", "time": "t1", "passphrase": "s3cr3t"}, db_path=db)
+    assert good["success"]
+
+
+def test_verify_webhook_hmac_roundtrip():
+    import hashlib
+    import hmac as _hmac
+    from apps.cli.tradingview_bridge import verify_webhook_hmac
+    body = '{"symbol":"AAPL","action":"BUY"}'
+    sig = _hmac.new(b"k", body.encode(), hashlib.sha256).hexdigest()
+    assert verify_webhook_hmac(body, sig, secret="k") is True
+    assert verify_webhook_hmac(body, "sha256=" + sig, secret="k") is True
+    assert verify_webhook_hmac(body, "deadbeef", secret="k") is False

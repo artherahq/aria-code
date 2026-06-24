@@ -137,6 +137,30 @@ class BrokerBase(ABC):
     def is_connected(self) -> bool:
         return self._connected
 
+    # ── 健康检查 / 自动重连 ────────────────────────────────────────────────────
+
+    def ping(self) -> bool:
+        """轻量存活探测。默认信任连接标志；拥有实时 socket/API 的子类**应覆盖**
+        此方法做真实探测（如 ib.isConnected()、富途 context keepalive），
+        以便检测到静默断开的连接并触发重连。"""
+        return self._connected
+
+    def ensure_connected(self, retries: int = 1) -> bool:
+        """确保连接可用，断开则自动重连。返回 True 表示可用。
+
+        长驻场景（daemon）应在每次券商操作前调用：FutuOpenD / IB Gateway /
+        websocket 掉线时透明重连，而不是静默失败到下一次调用才报错。"""
+        if self._connected and self.ping():
+            return True
+        self._connected = False
+        for _ in range(max(1, retries + 1)):
+            try:
+                if self.connect():
+                    return True
+            except Exception:
+                pass
+        return False
+
     # ── 账户查询 ──────────────────────────────────────────────────────────────
 
     @abstractmethod

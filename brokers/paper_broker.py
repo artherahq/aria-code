@@ -69,6 +69,13 @@ class PaperBroker(BrokerBase):
         self._connected = True
         return True
 
+    def ping(self) -> bool:
+        """Real liveness probe: the local ledger account must exist."""
+        try:
+            return self.broker_id in (_load_ledger().get("accounts") or {})
+        except Exception:
+            return False
+
     def reset(self, starting_cash: float | None = None, currency: str | None = None) -> None:
         ledger = _load_ledger()
         accounts = ledger.setdefault("accounts", {})
