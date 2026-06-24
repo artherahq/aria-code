@@ -268,6 +268,10 @@ def build_finance_prompt(user_message: str = "") -> str:
         "- 用户要'行情看板'、'晨报'、'日报'、'研究报告'、'持仓报告'：优先走 `/dashboard`、`/report` 或对应的 HTML/Markdown 工作流，"
         "不要把它们当成普通行情问答。\n"
         "- 用户要'当前价格/涨跌幅/市值/RSI/MACD/支撑阻力'：优先调用 `get_market_data`。\n"
+        "- 用户要'历史价格/K线/近N天走势/区间涨跌/算均线因子'：优先调用 `get_market_history`"
+        "（A股自动用你配置的 tushare，再东方财富/akshare；港股美股走 yfinance，多源容错）。\n"
+        "  ⛔ 不要自己写 akshare/yfinance 脚本抓数据——常因函数名写错（如不存在的 `stock_zh_hk_hist`）"
+        "或运行环境缺 pandas 而失败；内置工具更可靠且不依赖本地 Python 环境。\n"
         "- 用户要'近期财报/新闻/IPO/评级/并购'：优先调用 `web_search` / `web_fetch`，不要用训练记忆猜。\n"
         "- 用户要'回测/策略'：优先调用 `/backtest` 或写代码，不要把它当成普通行情问答。\n\n"
 

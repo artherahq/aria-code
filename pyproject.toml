@@ -41,6 +41,7 @@ dependencies = [
     "aiofiles>=23.2.0",
     "websockets>=12.0",
     "apscheduler>=3.10.0",
+    "ddgs>=9.0",            # keyless web_search fallback — tiny, kept in core so search works even on a slim/degraded install
     # Quant core (used across indicators, risk, formatting)
     "numpy>=1.26.0",
     "pandas>=2.2.0",

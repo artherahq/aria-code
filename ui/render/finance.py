@@ -125,6 +125,59 @@ def render_finance_result(tool_name: str, result: dict, *, console=None, has_ric
             print(f"  {sym}: {px} ({chg:+.2f}%)")
         return
 
+    # ── Market history (OHLC summary + recent candles) ──────────────────
+    if tool_name == "get_market_history":
+        sym  = result.get("symbol", "")
+        name = result.get("name", "")
+        s    = result.get("summary", {}) or {}
+        chg  = s.get("change_pct") or 0
+        color = "green" if chg >= 0 else "red"
+        arrow = "▲" if chg >= 0 else "▼"
+        candles = result.get("recent_candles", []) or []
+        closes  = [c.get("close") for c in candles if c.get("close") is not None]
+        # Unicode sparkline of the recent closes
+        spark = ""
+        if len(closes) >= 2:
+            blocks = "▁▂▃▄▅▆▇█"
+            lo, hi = min(closes), max(closes)
+            rng = (hi - lo) or 1
+            spark = "".join(blocks[min(7, int((c - lo) / rng * 7))] for c in closes)
+        if has_rich:
+            from rich.table import Table
+            t = Table(show_header=False, box=None, padding=(0, 1))
+            t.add_column(style="dim", width=20)
+            t.add_column()
+            title_str = f"[bold]{sym}[/bold]" + (f"  {name}" if name and name != sym else "")
+            t.add_row("标的", title_str)
+            interval = result.get("interval", "1d")
+            n = result.get("total_points", len(candles))
+            t.add_row("区间", f"{s.get('start_date','')} → {s.get('end_date','')}  ({n} 根 · {interval})")
+            sc, ec = s.get("start_close"), s.get("end_close")
+            if sc is not None and ec is not None:
+                t.add_row("期间涨跌", f"{sc:,.4g} → {ec:,.4g}  [{color}]{arrow} {chg:+.2f}%[/{color}]")
+            ph, pl = s.get("period_high"), s.get("period_low")
+            if ph is not None and pl is not None:
+                t.add_row("期间高低", f"{pl:,.4g} — {ph:,.4g}")
+            ma_parts = []
+            for label, key in (("MA5", "ma5"), ("MA20", "ma20"), ("MA60", "ma60")):
+                v = s.get(key)
+                if v is not None:
+                    ma_parts.append(f"{label} {v:,.4g}")
+            if ma_parts:
+                t.add_row("均线", "  ".join(ma_parts))
+            av = s.get("avg_volume")
+            if av:
+                t.add_row("平均成交量", f"{int(av):,}")
+            if spark:
+                t.add_row(f"近{len(closes)}日走势", f"[{color}]{spark}[/{color}]")
+            console.print(t)
+            if prov_tag:
+                console.print(f"  {prov_tag}")
+        else:
+            print(f"  {sym} {s.get('start_date','')}→{s.get('end_date','')}: "
+                  f"{s.get('end_close')} ({chg:+.2f}%)")
+        return
+
     # ── Commodity data ─────────────────────────────────────────────────
     if tool_name == "get_commodities_data":
         sym  = result.get("symbol", "")

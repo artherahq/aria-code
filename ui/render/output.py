@@ -23,7 +23,7 @@ import time
 # ── Finance tool name registry ─────────────────────────────────────────────────
 
 FINANCE_TOOL_NAMES: frozenset = frozenset({
-    "get_market_data", "get_crypto_data", "get_forex_data",
+    "get_market_data", "get_market_history", "get_crypto_data", "get_forex_data",
     "get_commodities_data", "get_futures_data", "calculate_factors",
     "backtest_strategy", "cloud_backtest", "get_risk_metrics",
     "optimize_positions", "get_sector_performance", "get_northbound_flow",

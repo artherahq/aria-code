@@ -40,6 +40,11 @@ const hr    = () => log(`${C.dim}${"─".repeat(44)}${C.reset}`);
 
 const PLATFORM = process.platform;   // darwin | linux | win32
 const REPO_URL  = "https://github.com/artherahq/aria-code.git";
+// Pin the clone to the release tag matching THIS npm package, so users always
+// get a stable released version — never a mid-development branch HEAD.
+let PKG_VERSION = "";
+try { PKG_VERSION = (require("../package.json").version || "").trim(); } catch { /* ignore */ }
+const RELEASE_TAG = PKG_VERSION ? `v${PKG_VERSION}` : "";
 const PATHS = resolveAriaPaths();
 const INSTALL_DIR = PATHS.installDir;
 const INFO_FILE   = PATHS.infoFile;
@@ -245,17 +250,37 @@ function ensureRepo() {
   const gitDir = path.join(INSTALL_DIR, ".git");
   if (fs.existsSync(gitDir)) {
     info(`Updating existing repo at ${INSTALL_DIR} …`);
-    const r = run("git", ["-C", INSTALL_DIR, "pull", "--ff-only"]);
-    if (r.status !== 0) warn("git pull failed — using existing version");
-    else ok("Repository up to date");
+    let moved = false;
+    if (RELEASE_TAG) {
+      // Fetch just the matching release tag (shallow) and check it out.
+      const f = run("git", ["-C", INSTALL_DIR, "fetch", "--depth=1", "--force",
+                            REPO_URL, `refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}`]);
+      if (f.status === 0) {
+        const c = run("git", ["-C", INSTALL_DIR, "checkout", "--force", RELEASE_TAG]);
+        if (c.status === 0) { ok(`Updated to ${RELEASE_TAG}`); moved = true; }
+      }
+    }
+    if (!moved) {
+      const r = run("git", ["-C", INSTALL_DIR, "pull", "--ff-only"]);
+      if (r.status !== 0) warn("update failed — using existing version");
+      else ok("Repository up to date");
+    }
   } else {
     info(`Cloning Aria Code into ${INSTALL_DIR} …`);
-    const r = run("git", ["clone", "--depth=1", REPO_URL, INSTALL_DIR]);
-    if (r.status !== 0) {
-      err(`git clone failed. Try manually:\n  git clone ${REPO_URL} ${INSTALL_DIR}`);
-      process.exit(1);
+    let r = { status: 1 };
+    if (RELEASE_TAG) {
+      r = run("git", ["clone", "--depth=1", "--branch", RELEASE_TAG, REPO_URL, INSTALL_DIR]);
+      if (r.status === 0) ok(`Cloned ${RELEASE_TAG} to ${INSTALL_DIR}`);
+      else warn(`Tag ${RELEASE_TAG} not on remote yet — falling back to default branch`);
     }
-    ok(`Cloned to ${INSTALL_DIR}`);
+    if (r.status !== 0) {
+      r = run("git", ["clone", "--depth=1", REPO_URL, INSTALL_DIR]);
+      if (r.status !== 0) {
+        err(`git clone failed. Try manually:\n  git clone ${REPO_URL} ${INSTALL_DIR}`);
+        process.exit(1);
+      }
+      ok(`Cloned to ${INSTALL_DIR}`);
+    }
   }
 }
 
