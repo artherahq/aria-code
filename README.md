@@ -12,6 +12,8 @@
 
 <p align="center">
   <a href="https://www.npmjs.com/package/@artheras/aria-code"><img src="https://img.shields.io/npm/v/@artheras/aria-code?style=for-the-badge&logo=npm&color=cb3837&label=npm" alt="npm"/></a>
+  <a href="https://pypi.org/project/aria-code/"><img src="https://img.shields.io/pypi/v/aria-code?style=for-the-badge&logo=pypi&logoColor=white&label=PyPI&color=3775A9" alt="PyPI"/></a>
+  <a href="https://github.com/artherahq/aria-code/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/artherahq/aria-code/ci.yml?branch=main&style=for-the-badge&logo=githubactions&logoColor=white&label=CI" alt="CI"/></a>
   <img src="https://img.shields.io/badge/Python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="python"/>
   <img src="https://img.shields.io/badge/Ollama-Local_LLM-black?style=for-the-badge&logo=llama&logoColor=white" alt="ollama"/>
   <img src="https://img.shields.io/badge/Providers-19+_Cloud-f59e0b?style=for-the-badge" alt="providers"/>
@@ -49,7 +51,7 @@ Aria Code is a **terminal-first AI financial agent** — think of it as Claude C
 ```
 $ aria-code
 
-  ▣ Aria Code  v4.0  local-first agent
+  ▣ Aria Code  v4.1  local-first agent
   model      qwen2.5-coder:7b  local
   workspace  ~/my-portfolio
   mode       workspace-write · network on · local-only
@@ -87,6 +89,8 @@ $ aria-code
 | **MCP tools** | 5 new quantitative MCP tools in the tool registry |
 | **83 commands** | Consolidated from ~150 — removed all LLM-replaceable commands; natural language handles the rest |
 | **LLM routing fix** | Model now knows it can call real-time data tools instead of saying "I don't have live data" |
+| **Unified agent loop** | CLI, SDK and self-host backend now run the *same* tested runtime (`runtime.run_turn`) — consistent provider routing, cloud→local fallback and tool execution on every surface |
+| **One-command install** | `pip install aria-code` (PyPI) or `npm install -g @artheras/aria-code` — verified clean on Python 3.10 / 3.11 / 3.12 |
 
 See [CHANGELOG.md](CHANGELOG.md) for the full history.
 

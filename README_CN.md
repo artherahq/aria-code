@@ -12,6 +12,8 @@
 
 <p align="center">
   <a href="https://www.npmjs.com/package/@artheras/aria-code"><img src="https://img.shields.io/npm/v/@artheras/aria-code?style=for-the-badge&logo=npm&color=cb3837&label=npm" alt="npm"/></a>
+  <a href="https://pypi.org/project/aria-code/"><img src="https://img.shields.io/pypi/v/aria-code?style=for-the-badge&logo=pypi&logoColor=white&label=PyPI&color=3775A9" alt="PyPI"/></a>
+  <a href="https://github.com/artherahq/aria-code/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/artherahq/aria-code/ci.yml?branch=main&style=for-the-badge&logo=githubactions&logoColor=white&label=CI" alt="CI"/></a>
   <img src="https://img.shields.io/badge/Python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="python"/>
   <img src="https://img.shields.io/badge/Ollama-本地大模型-black?style=for-the-badge&logo=llama&logoColor=white" alt="ollama"/>
   <img src="https://img.shields.io/badge/云端-19+供应商-f59e0b?style=for-the-badge" alt="providers"/>
@@ -87,6 +89,8 @@ $ aria-code
 | **MCP 工具** | 新增 5 个量化 MCP 工具 |
 | **83 个命令** | 从 ~150 收敛到 83 个直接动作命令；其余交给 LLM 自然语言处理 |
 | **LLM 路由修复** | 模型现在知道可以调取实时数据工具，不再说"我没有实时数据" |
+| **统一 Agent 循环** | CLI、SDK 与自托管后端现在跑**同一套**经测试的 runtime（`runtime.run_turn`）——各端的 provider 路由、云端→本地回退、工具执行完全一致 |
+| **一条命令安装** | `pip install aria-code`（PyPI）或 `npm install -g @artheras/aria-code`——已在 Python 3.10 / 3.11 / 3.12 验证可干净安装 |
 
 完整历史见 [CHANGELOG.md](CHANGELOG.md)。
 
