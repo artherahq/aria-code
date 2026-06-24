@@ -447,6 +447,35 @@ async def _run_report(symbol: str) -> str:
         return f"⚠️ 分析 {symbol} 时出错: {exc}"
 
 
+def _maybe_auto_execute(preview_result: dict) -> list[str]:
+    """Opt-in controlled auto-execution. Default OFF → draft-only.
+
+    Only executes when the broker config turns on ``automation.enabled`` AND every
+    gate in brokers.automation passes (dry-run off, risk passed, value/rate limits).
+    """
+    broker_id = preview_result.get("broker_id") or ""
+    preview_id = preview_result.get("preview_id") or ""
+    if not (broker_id and preview_id):
+        return ["Webhook 只生成预览，不会自动执行实盘/仿盘订单。"]
+    try:
+        from brokers.config import get_broker_config
+        from brokers.automation import AutoExecutePolicy, run_auto_execute
+        from brokers.registry import get_registry
+
+        policy = AutoExecutePolicy.from_config(get_broker_config(broker_id) or {})
+        if not policy.enabled:
+            return ["Webhook 只生成预览，不会自动执行（automation.enabled=false）。"]
+        reg = get_registry()
+        broker = reg.get(broker_id) or reg.ensure(broker_id)
+        result = run_auto_execute(broker, preview_id, policy)
+        if result.get("auto_executed"):
+            return [f"✅ 已按自动交易策略执行 (order_id: `{result.get('order_id', '')}`)"]
+        return ["⏸ 自动执行已跳过: " + "; ".join(str(r) for r in (result.get("reasons") or [])[:3])]
+    except Exception as exc:
+        logger.warning("auto-execute check failed: %s", exc)
+        return [f"自动执行检查失败，保留为预览: `{exc}`"]
+
+
 async def _run_tradingview_alert(payload: dict) -> str:
     """Handle a TradingView alert webhook job."""
     try:
@@ -486,7 +515,7 @@ async def _run_tradingview_alert(payload: dict) -> str:
             ])
             if blockers:
                 preview_lines.append("Blockers: " + "; ".join(str(item) for item in blockers[:4]))
-            preview_lines.append("Webhook 只生成预览，不会自动执行实盘/仿盘订单。")
+            preview_lines.extend(_maybe_auto_execute(preview_result))
         elif preview_result.get("success"):
             reason = preview_result.get("reason", "no_trade_preview")
             preview_lines.extend(["", "*Trade Preview*", f"未生成订单预览: `{reason}`"])
