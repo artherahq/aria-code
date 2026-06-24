@@ -129,6 +129,12 @@ def parse_file(path_str: str, max_chars: int = MAX_TEXT_CHARS,
         "gif":   _parse_image,
         "webp":  _parse_image,
         "bmp":   _parse_image,
+        "mp4":   _parse_video,
+        "mov":   _parse_video,
+        "avi":   _parse_video,
+        "mkv":   _parse_video,
+        "webm":  _parse_video,
+        "m4v":   _parse_video,
     }
     # Code files
     _CODE_EXT = {"py","js","ts","tsx","jsx","go","java","c","cpp","h","hpp",
@@ -565,6 +571,68 @@ def _parse_image(path: Path, max_chars: int, include_images: bool) -> FileConten
             f"格式: {meta.get('format',suffix.upper())}\n"
             f"大小: {size_kb:.1f} KB")
     return FileContent(True, "image", str(path), path.name, size_kb,
+                       text, meta, images_b64=images_b64)
+
+
+def _parse_video(path: Path, max_chars: int, include_images: bool) -> FileContent:
+    """Video: metadata + evenly-spaced keyframes (base64) for vision models.
+
+    Needs opencv-python; degrades to metadata-only with an install hint when it
+    is absent (it is an optional 'video' extra, not a core dependency).
+    """
+    size_kb = path.stat().st_size / 1024
+    suffix = path.suffix.lstrip(".").lower()
+    meta: Dict[str, Any] = {"mime": f"video/{suffix}", "size_kb": round(size_kb, 1)}
+
+    try:
+        import cv2  # type: ignore
+    except Exception:
+        return FileContent(
+            True, "video", str(path), path.name, size_kb,
+            (f"[视频文件: {path.name}] {size_kb/1024:.1f} MB\n"
+             "未安装 opencv-python，无法抽帧分析。安装后重试: "
+             "pip install opencv-python  或  /install opencv-python"),
+            meta,
+        )
+
+    images_b64: List[str] = []
+    try:
+        cap = cv2.VideoCapture(str(path))
+        fps = float(cap.get(cv2.CAP_PROP_FPS) or 0)
+        frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+        duration = frames / fps if fps else 0.0
+        meta.update({"fps": round(fps, 2), "frames": frames, "width": width,
+                     "height": height, "duration_sec": round(duration, 1)})
+
+        # Sample keyframes between 10%–90% (skip black intros/outros). Only when
+        # images are requested — decoding frames is expensive.
+        if include_images and frames > 0:
+            import base64
+            n = min(4, frames)
+            if n == 1:
+                positions = [frames // 2]
+            else:
+                positions = [int(frames * (0.1 + 0.8 * i / (n - 1))) for i in range(n)]
+            for fi in positions:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, fi)
+                ok, frame = cap.read()
+                if not ok:
+                    continue
+                ok2, buf = cv2.imencode(".jpg", frame)
+                if ok2:
+                    images_b64.append("data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode())
+        cap.release()
+    except Exception as e:
+        return FileContent(True, "video", str(path), path.name, size_kb,
+                           f"[视频文件: {path.name}] 读取失败: {e}", meta)
+
+    text = (f"[视频文件: {path.name}]\n"
+            f"时长: {meta.get('duration_sec','?')} 秒  帧率: {meta.get('fps','?')} fps\n"
+            f"分辨率: {meta.get('width','?')}×{meta.get('height','?')}  总帧数: {meta.get('frames','?')}\n"
+            f"已抽取 {len(images_b64)} 个关键帧供视觉模型分析。")
+    return FileContent(True, "video", str(path), path.name, size_kb,
                        text, meta, images_b64=images_b64)
 
 

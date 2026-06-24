@@ -52,3 +52,22 @@ def test_image_queued_for_vision(tmp_path, monkeypatch):
     assert r["vision_attached"] is True
     queued = cu.pop_pending_vision_image()
     assert queued is not None and "base64," not in queued  # raw b64, prefix stripped
+
+
+def test_video_routes_and_degrades_gracefully(tmp_path):
+    # Without opencv-python, a video must still parse to metadata + an install
+    # hint (never crash).
+    f = tmp_path / "clip.mp4"
+    f.write_bytes(b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 256)
+    r = tool_analyze_file({"path": str(f)})
+    assert r["success"] is True
+    assert r["file_type"] == "video"
+
+
+def test_video_extensions_recognized(tmp_path):
+    from file_analysis_tools import parse_file
+    for ext in ("mp4", "mov", "avi", "mkv", "webm", "m4v"):
+        f = tmp_path / f"v.{ext}"
+        f.write_bytes(b"\x00" * 64)
+        fc = parse_file(str(f))
+        assert fc.file_type == "video", ext

@@ -2233,11 +2233,12 @@ LOCAL_TOOL_SCHEMAS.extend([
         "function": {
             "name": "analyze_file",
             "description": (
-                "Parse and analyze a local document or image the user uploaded/referenced. "
-                "Handles pdf, docx, xls/xlsx, csv/tsv, json, html, markdown, code, and images "
-                "(png/jpg/gif/webp/bmp). Extracts text + metadata; image files are sent to the "
-                "vision model so a vision-capable model can see them. Use this (not read_file) for "
-                "non-plain-text files like PDFs, spreadsheets, or screenshots/charts."
+                "Parse and analyze a local document, image, or video the user uploaded/referenced. "
+                "Handles pdf, docx, xls/xlsx, csv/tsv, json, html, markdown, code, images "
+                "(png/jpg/gif/webp/bmp), and video (mp4/mov/avi/mkv/webm — extracts metadata + "
+                "keyframes for the vision model). Extracts text + metadata; images/keyframes are "
+                "sent to the vision model so a vision-capable model can see them. Use this (not "
+                "read_file) for non-plain-text files like PDFs, spreadsheets, screenshots, or clips."
             ),
             "parameters": {
                 "type": "object",

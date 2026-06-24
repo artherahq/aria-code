@@ -67,6 +67,7 @@ files = [                          # /file load + /file analyze document parsing
     "beautifulsoup4>=4.12.3",
     "Pillow>=10.4.0",
 ]
+video = ["opencv-python>=4.8.0"]   # analyze_file video keyframe extraction
 
 # ── Broker connectivity ────────────────────────────────────────────────────────
 ibkr = ["ib_insync>=0.9.86"]
@@ -138,6 +139,7 @@ all = [
     "playwright>=1.44.0",
     "mss>=9.0.1",
     "pyautogui>=0.9.54",
+    "opencv-python>=4.8.0",
     "understat>=0.1.0",
     "ib_insync>=0.9.86",
     "futu-api>=9.1.5108",
