@@ -1805,6 +1805,33 @@ LOCAL_FINANCE_TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "run_portfolio_backtest",
+            "description": (
+                "Event-driven, multi-asset backtest. Unlike backtest_strategy (single-symbol "
+                "templates), this runs a strategy across a basket with next-open fills (no "
+                "look-ahead), commission+slippage, and an equal-weight buy-and-hold benchmark. "
+                "Returns total/annual return, Sharpe, max drawdown, win rate, trade count, and "
+                "alpha vs buy-hold. Use for portfolio/multi-symbol strategy evaluation."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "symbols":       {"type": "string", "description": "One or more tickers, space/comma separated (e.g. 'AAPL MSFT 600519')"},
+                    "strategy":      {"type": "string", "description": "sma_cross | buy_hold (default sma_cross)"},
+                    "days":          {"type": "integer", "description": "Lookback window in days (default 365)"},
+                    "fast":          {"type": "integer", "description": "Fast MA period for sma_cross (default 20)"},
+                    "slow":          {"type": "integer", "description": "Slow MA period for sma_cross (default 60)"},
+                    "starting_cash": {"type": "number",  "description": "Initial capital (default 100000)"},
+                    "commission":    {"type": "number",  "description": "Per-trade commission rate (default 0.0005)"},
+                    "slippage":      {"type": "number",  "description": "Per-trade slippage rate (default 0.0005)"},
+                },
+                "required": ["symbols"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_risk_metrics",
             "description": "Portfolio / stock risk metrics: VaR, CVaR, drawdown, Sharpe, Sortino, Calmar, skewness.",
             "parameters": {
@@ -3134,6 +3161,91 @@ def _web_search(params: dict) -> dict:
     }
 
 
+def _run_portfolio_backtest(params: dict) -> dict:
+    """Event-driven, multi-asset backtest via backtest_engine.
+
+    Unlike backtest_strategy (single-symbol templates), this runs a Strategy over
+    a portfolio of symbols with next-open fills (no look-ahead), commission +
+    slippage, and an equal-weight buy-hold benchmark. Returns a compact result.
+    """
+    raw = params.get("symbols") or params.get("symbol") or ""
+    if isinstance(raw, str):
+        symbols = [s.strip().upper() for s in raw.replace(",", " ").split() if s.strip()]
+    else:
+        symbols = [str(s).strip().upper() for s in (raw or []) if str(s).strip()]
+    if not symbols:
+        return {"success": False, "error": "symbols is required"}
+
+    try:
+        from backtest_engine import BacktestEngine, get_strategy, load_bars
+    except Exception as exc:
+        return {"success": False, "error": f"backtest engine unavailable: {exc}"}
+
+    strategy_name = str(params.get("strategy", "sma_cross") or "sma_cross")
+    skw: dict = {}
+    for k in ("fast", "slow"):
+        if params.get(k) is not None:
+            try:
+                skw[k] = int(params[k])
+            except (TypeError, ValueError):
+                pass
+    if params.get("weight") is not None:
+        try:
+            skw["weight"] = float(params["weight"])
+        except (TypeError, ValueError):
+            pass
+    try:
+        strategy = get_strategy(strategy_name, **skw)
+    except ValueError as e:
+        return {"success": False, "error": str(e)}
+
+    try:
+        days = max(30, min(int(params.get("days", 365) or 365), 2000))
+    except (TypeError, ValueError):
+        days = 365
+
+    data, missing = {}, []
+    for s in symbols:
+        try:
+            bars = load_bars(s, days=days)
+        except Exception:
+            bars = []
+        (data.__setitem__(s, bars) if bars else missing.append(s))
+    if not data:
+        return {"success": False, "error": "无法获取历史数据，请稍后重试",
+                "symbols": symbols, "missing": missing}
+
+    def _f(key, default):
+        try:
+            return float(params.get(key, default) or default)
+        except (TypeError, ValueError):
+            return default
+
+    eng = BacktestEngine(starting_cash=_f("starting_cash", 100000.0),
+                         commission=_f("commission", 0.0005),
+                         slippage=_f("slippage", 0.0005))
+    res = eng.run(data, strategy)
+
+    ec = res.equity_curve
+    step = max(1, len(ec) // 20)
+    sample = ec[::step]
+    if ec and sample[-1] is not ec[-1]:
+        sample.append(ec[-1])
+    return {
+        "success": True,
+        "strategy": res.strategy,
+        "symbols": res.symbols,
+        "missing": missing,
+        "starting_cash": res.starting_cash,
+        "metrics": res.metrics,
+        "benchmark": res.benchmark,
+        "alpha_vs_buyhold": round(res.metrics["total_return"] - res.benchmark.get("total_return", 0.0), 6),
+        "n_points": len(ec),
+        "equity_sample": sample,
+        "recent_trades": res.trades[-10:],
+    }
+
+
 # ---------------------------------------------------------------------------
 # Tool registry  (must be after all function definitions)
 # ---------------------------------------------------------------------------
@@ -3178,6 +3290,7 @@ LOCAL_FINANCE_TOOL_REGISTRY: Dict[str, Tuple] = {
     "get_funding_rates_compare": (_get_funding_rates_compare, "三所费率横向对比 (binance/okx/bybit): 并行查询，发现跨所套利机会"),
     # ── Portfolio / backtesting ───────────────────────────────────────────
     "walk_forward_backtest":  (_walk_forward_backtest,  "Walk-Forward 滚动回测：N个窗口验证策略泛化能力，避免过拟合"),
+    "run_portfolio_backtest": (_run_portfolio_backtest, "事件驱动多资产回测：next-open 成交(无未来函数)+成本+买入持有基准，同一策略可驱动实盘"),
     "peer_comparison":        (_peer_comparison,        "同行对比: PE/PB/ROE/市值/股息率横向比较，自动识别同行业股票"),
     # ── Web search ────────────────────────────────────────────────────────
     "web_search":             (_web_search,             "Web search via Brave Search API or DuckDuckGo fallback; set BRAVE_SEARCH_API_KEY for higher quota"),

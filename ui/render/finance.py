@@ -255,6 +255,44 @@ def render_finance_result(tool_name: str, result: dict, *, console=None, has_ric
                     print(f"  {k:<25s} {v:.5g}")
         return
 
+    # ── Portfolio backtest (event-driven, multi-asset) ──────────────────
+    if tool_name == "run_portfolio_backtest":
+        syms = ", ".join(result.get("symbols", []) or [])
+        strat = result.get("strategy", "")
+        m = result.get("metrics", {}) or {}
+        bench = (result.get("benchmark", {}) or {}).get("total_return")
+        alpha = result.get("alpha_vs_buyhold")
+        if has_rich:
+            from rich.table import Table
+            t = Table(title=f"Portfolio Backtest — {syms}  [{strat}]", show_header=True, box=None)
+            t.add_column("Metric", style="dim", width=24)
+            t.add_column("Value",  justify="right")
+            ROWS = [
+                ("total_return",  "Total Return",  lambda v: f"[{'green' if v >= 0 else 'red'}]{v:+.2%}[/]"),
+                ("annual_return", "Annual Return", lambda v: f"[{'green' if v >= 0 else 'red'}]{v:+.2%}[/]"),
+                ("sharpe",        "Sharpe",        lambda v: f"[{'green' if v >= 1 else 'yellow' if v >= 0.5 else 'red'}]{v:.3f}[/]"),
+                ("max_drawdown",  "Max Drawdown",  lambda v: f"[red]{v:.2%}[/red]"),
+                ("win_rate",      "Win Rate",      lambda v: f"{v:.1%}"),
+                ("n_trades",      "Trades",        lambda v: str(int(v))),
+            ]
+            for key, label, fmt_fn in ROWS:
+                v = m.get(key)
+                if v is not None:
+                    t.add_row(label, fmt_fn(v))
+            if bench is not None:
+                t.add_row("Benchmark (B&H)", f"{bench:+.2%}")
+            if alpha is not None:
+                t.add_row("Alpha vs B&H", f"[{'green' if alpha >= 0 else 'red'}]{alpha:+.2%}[/]")
+            console.print(t)
+            miss = result.get("missing") or []
+            if miss:
+                console.print(f"  [yellow]未获取到数据: {', '.join(miss)}[/yellow]")
+            console.print(f"  [dim]{result.get('n_points', 0)} bars[/dim]{prov_tag}")
+        else:
+            print(f"  {syms} [{strat}]: return={m.get('total_return')} sharpe={m.get('sharpe')} "
+                  f"mdd={m.get('max_drawdown')} trades={m.get('n_trades')}")
+        return
+
     # ── Backtest ───────────────────────────────────────────────────────
     if tool_name in ("backtest_strategy", "cloud_backtest"):
         sym  = result.get("symbol", result.get("symbols", ""))

@@ -25,7 +25,7 @@ import time
 FINANCE_TOOL_NAMES: frozenset = frozenset({
     "get_market_data", "get_market_history", "get_crypto_data", "get_forex_data",
     "get_commodities_data", "get_futures_data", "calculate_factors",
-    "backtest_strategy", "cloud_backtest", "get_risk_metrics",
+    "backtest_strategy", "cloud_backtest", "run_portfolio_backtest", "get_risk_metrics",
     "optimize_positions", "get_sector_performance", "get_northbound_flow",
     "screen_ashare", "get_limit_up_pool", "get_market_indices",
     "analyze_news", "get_bonds_data", "get_ai_signal",
