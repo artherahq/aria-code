@@ -13,10 +13,18 @@ on:
       - "docs/**"
       - "release/**"
       - "codex/**"
+    paths-ignore:        # docs-only changes don't need the full install + test matrix
+      - "**.md"
+      - "docs/**"
+      - "LICENSE"
   pull_request:
     branches:
       - main
       - develop
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "LICENSE"
 
 jobs:
   test:
