@@ -9692,6 +9692,7 @@ class ArtheraTerminal:
             pass
 
         round_num = 0
+        _loop_compactions = 0   # proactive mid-loop compactions done this turn
         while round_num < hard_max_rounds:
             response_text = ""
 
@@ -10161,6 +10162,34 @@ class ArtheraTerminal:
             current_message = tool_turn_result.followup
             turn_state.reset_response()
             round_num += 1
+
+            # ── Proactive context guard (mid-loop) ──────────────────────────────
+            # A long tool loop appends assistant+tool messages every round. Compact
+            # BEFORE the next model call when approaching the window, so we never
+            # send an over-limit prompt (which the provider truncates, making the
+            # model lose the task mid-run). The per-result cap in build_tool_followup
+            # bounds each result; this bounds cumulative growth across rounds.
+            if bool(self.config.get("auto_compact_context", True)) and _loop_compactions < 3:
+                try:
+                    _loop_est = sum(
+                        len(m["content"]) if isinstance(m.get("content"), str)
+                        else len(str(m.get("content", "")))
+                        for m in self.conversation
+                    ) // 3
+                    _loop_max = get_model_cfg(
+                        self.config.get("model", "qwen2.5:7b")
+                    ).get("num_ctx", 16384)
+                    _loop_thr = max(0.60, float(self.config.get("auto_compact_threshold", 0.78)))
+                    if _loop_max and (_loop_est / _loop_max) >= _loop_thr:
+                        await self.commands._smart_compact_async(silent=True)
+                        _loop_compactions += 1
+                        if HAS_RICH:
+                            console.print(
+                                f"  [dim]↩ 循环内自动压缩上下文（约 "
+                                f"{int(_loop_est / _loop_max * 100)}% 已用）[/dim]"
+                            )
+                except Exception:
+                    pass
 
             # Hard break: same call failed too many times — stop burning rounds
             if _loop_guard.should_break:
