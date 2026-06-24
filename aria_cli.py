@@ -5596,6 +5596,7 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
             "/setup":     (self.cmd_setup,    "First-run wizard: /setup [mcp|feishu|telegram]"),
             "/apikey":    (self.cmd_apikey,   "API key wizard: /apikey [list|test|remove]"),
             "/doctor":    (self.cmd_doctor,   "Diagnose install, models, API keys"),
+            "/license":   (self.cmd_license,  "Show feature license/entitlement status"),
             "/architecture": (self.cmd_architecture, "Show layered architecture contract: /architecture [--gaps]"),
             "/install":   (self.cmd_install,  "Detect & install missing deps: /install [pkg|--auto|--required]"),
             "/mcp":       (self.cmd_mcp,      "MCP servers: /mcp status|tools|reload"),
@@ -7800,6 +7801,30 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
                     print(f"  {'●' if s['running'] else '○'} {s['name']:20s} {s['tool_count']} tools")
 
     # ---- .ariarc project config ----
+
+    def cmd_license(self, args: str):
+        """Show feature license / entitlement status."""
+        try:
+            from licensing import current_license, license_status
+            current_license(refresh=True)   # re-read in case a key was just installed
+            st = license_status()
+        except Exception as e:
+            console.print(f"  [yellow]license 模块不可用: {e}[/yellow]" if HAS_RICH else f"license unavailable: {e}")
+            return
+        tier = st.get("tier", "free")
+        valid = st.get("valid", True)
+        if HAS_RICH:
+            color = "green" if (tier != "free" and valid) else "dim"
+            console.print(f"  授权等级: [{color}]{tier}[/{color}]  有效: {valid}"
+                          + (f"  到期: {st['exp']}" if st.get("exp") else ""))
+            if st.get("reason"):
+                console.print(f"  [yellow]{st['reason']}[/yellow]")
+            feats = st.get("features") or []
+            console.print(f"  已解锁: {', '.join(feats) if feats else '仅免费功能'}")
+            console.print(f"  签名校验模式: {'开启' if st.get('signed_mode') else '关闭(开发/自托管)'}")
+            console.print("  [dim]免费版含全部核心功能;专业功能配置 ARIA_LICENSE_KEY 或 ~/.arthera/license.json 解锁。[/dim]")
+        else:
+            print(f"license tier={tier} valid={valid} features={st.get('features')}")
 
     def cmd_ariarc(self, args: str):
         """Show or reload .ariarc project configuration."""
