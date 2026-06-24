@@ -1979,6 +1979,12 @@ def _is_safe_path(resolved: pathlib.Path) -> bool:
     return WorkspaceSecurity().is_safe_path(resolved)
 
 
+def _tool_analyze_file(params: dict) -> dict:
+    """Parse & analyse a local document/image (pdf/docx/xlsx/csv/image/…)."""
+    from file_analysis_tools import tool_analyze_file as _f
+    return _f(params)
+
+
 def _tool_read_file(params: dict) -> dict:
     """Read file contents with optional line range."""
     path = params.get("path", "")
@@ -2123,6 +2129,7 @@ def _tool_get_market_history(params: dict) -> dict:
 LOCAL_TOOLS = {
     # ── Core file tools ──────────────────────────────────────────────────────
     "read_file":      (_tool_read_file,      "Read a file's contents"),
+    "analyze_file":   (_tool_analyze_file,   "Parse & analyze a local document/image (pdf/docx/xlsx/csv/json/image/…); images go to the vision model"),
     "write_file":     (_tool_write_file,     "Create or overwrite a file"),
     "edit_file":      (_tool_edit_file,      "Edit a file (find & replace)"),
     "multi_edit":     (_tool_multi_edit,     "Apply multiple find/replace edits to one file atomically"),
@@ -2216,6 +2223,27 @@ LOCAL_TOOL_SCHEMAS.extend([
                     "path": {"type": "string", "description": "Absolute or relative file path"},
                     "offset": {"type": "integer", "description": "Start line (0-based), optional"},
                     "limit": {"type": "integer", "description": "Number of lines to read, optional"},
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "analyze_file",
+            "description": (
+                "Parse and analyze a local document or image the user uploaded/referenced. "
+                "Handles pdf, docx, xls/xlsx, csv/tsv, json, html, markdown, code, and images "
+                "(png/jpg/gif/webp/bmp). Extracts text + metadata; image files are sent to the "
+                "vision model so a vision-capable model can see them. Use this (not read_file) for "
+                "non-plain-text files like PDFs, spreadsheets, or screenshots/charts."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the file to analyze"},
+                    "max_chars": {"type": "integer", "description": "Max extracted text to return (default 6000; raise for long docs)"},
                 },
                 "required": ["path"],
             },
@@ -4714,6 +4742,7 @@ _TOOL_ACTION_LABELS: dict = {
     "get_north_bound_flow":      "loading north-bound capital flow",
     # File / code
     "read_file":                 "reading file",
+    "analyze_file":              "analyzing file",
     "write_file":                "writing file",
     "edit_file":                 "editing file",
     "list_files":                "listing files",

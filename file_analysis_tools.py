@@ -149,6 +149,62 @@ def parse_file(path_str: str, max_chars: int = MAX_TEXT_CHARS,
                            "", error=f"解析失败: {e}")
 
 
+# ── LLM-callable tool ─────────────────────────────────────────────────────────
+
+# Keep the returned text small so a big document can't blow the context window
+# (the agent can re-call with a larger max_chars when it needs more).
+_TOOL_MAX_CHARS = 6000
+
+
+def tool_analyze_file(params: dict) -> dict:
+    """Parse and analyse a local file so the agent can read it autonomously.
+
+    Supports pdf / docx / xls(x) / csv / json / html / markdown / code / images
+    (png·jpg·gif·webp·bmp). Image files are queued for the vision model so a
+    vision-capable model can actually see them. Returns extracted text (capped)
+    plus metadata; set ``max_chars`` higher to pull more of a long document.
+    """
+    path = str(params.get("path") or params.get("file_path") or "").strip()
+    if not path:
+        return {"success": False, "error": "path is required"}
+    try:
+        max_chars = int(params.get("max_chars", _TOOL_MAX_CHARS) or _TOOL_MAX_CHARS)
+    except (TypeError, ValueError):
+        max_chars = _TOOL_MAX_CHARS
+    max_chars = max(500, min(max_chars, MAX_TEXT_CHARS))
+
+    fc = parse_file(path, max_chars=max_chars, include_images=True)
+    if not fc.success:
+        return {"success": False, "path": path, "error": fc.error or "解析失败"}
+
+    # Queue the (first) image for vision-model injection on the next turn.
+    vision_attached = False
+    if fc.images_b64:
+        try:
+            from computer_use_tools import _store_screenshot
+            raw = fc.images_b64[0]
+            if "base64," in raw:
+                raw = raw.split("base64,", 1)[1]
+            _store_screenshot(raw)
+            vision_attached = True
+        except Exception:
+            pass
+
+    return {
+        "success": True,
+        "path": fc.path,
+        "filename": fc.filename,
+        "file_type": fc.file_type,
+        "size_kb": round(fc.size_kb, 1),
+        "char_count": fc.char_count,
+        "truncated": fc.truncated,
+        "n_tables": len(fc.tables),
+        "metadata": fc.metadata,
+        "vision_attached": vision_attached,
+        "content": fc.content,
+    }
+
+
 # ── PDF ───────────────────────────────────────────────────────────────────────
 
 def _parse_pdf(path: Path, max_chars: int, include_images: bool) -> FileContent:
