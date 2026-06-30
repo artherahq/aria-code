@@ -193,7 +193,12 @@ def winsor_z(s):
 
 def spearman_ic(f, r):
     d = pd.concat([f, r], axis=1).dropna()
-    return d.iloc[:, 0].rank().corr(d.iloc[:, 1].rank()) if len(d) >= 10 else np.nan
+    if len(d) < 10:
+        return np.nan
+    rf, rr = d.iloc[:, 0].rank(), d.iloc[:, 1].rank()
+    if rf.std() == 0 or rr.std() == 0:
+        return np.nan
+    return rf.corr(rr)
 
 
 def nw_alpha_t(y, x, lags=4):
@@ -368,6 +373,7 @@ def make_demo():
     rows = []
     for si, s in enumerate(syms):
         base = 1e9 * (1 + 0.3 * si / len(syms))
+        g_s = rng.uniform(-0.05, 0.20)                            # per-symbol annual revenue trend (cross-sectional dispersion)
         prev_ni = None
         for y in range(2016, 2024):
             for q, (ms, me) in enumerate(qtrs):
@@ -375,7 +381,7 @@ def make_demo():
                 filed = pend + pd.Timedelta(days=45)              # ~45d filing lag
                 surprise = rng.normal(0, 1)
                 ni = base * (0.1 + 0.02 * q) * (1 + 0.15 * surprise)
-                rev = base * (1 + 0.05 * q)
+                rev = base * (1 + 0.05 * q) * (1 + g_s) ** (y - 2016)
                 for concept, val in [(REVENUE, rev), (NET_INCOME, ni),
                                      (CFO, ni * 0.9), (TOTAL_ASSETS, base * 2)]:
                     pstart = "" if concept == TOTAL_ASSETS else f"{y}-{ms}"
