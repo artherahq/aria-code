@@ -195,6 +195,7 @@ from apps.cli.commands.diagnostic_cmds import DiagnosticCommandsMixin
 from apps.cli.commands.diagnostic_ops_cmds import DiagnosticOpsCommandsMixin
 from apps.cli.commands.ui_cmds import UiCommandsMixin
 from apps.cli.commands.session_ux_cmds import SessionUxCommandsMixin
+from apps.cli.commands.auth_cmds import AuthCommandsMixin
 from apps.cli.commands.workflow_cmds import WorkflowCommandsMixin
 from apps.cli.commands.business_workflow_cmds import BusinessWorkflowCommandsMixin
 from apps.cli.commands.session_cmds import SessionCommandsMixin
@@ -5518,6 +5519,7 @@ _rebind_mixin_globals(DiagnosticCommandsMixin)
 _rebind_mixin_globals(DiagnosticOpsCommandsMixin)
 _rebind_mixin_globals(UiCommandsMixin)
 _rebind_mixin_globals(SessionUxCommandsMixin)
+_rebind_mixin_globals(AuthCommandsMixin)
 _rebind_mixin_globals(WorkflowCommandsMixin)
 _rebind_mixin_globals(BusinessWorkflowCommandsMixin)
 _rebind_mixin_globals(SessionCommandsMixin)
@@ -5526,7 +5528,7 @@ _rebind_mixin_globals(ModelCommandsMixin)
 _rebind_mixin_globals(MarketCommandsMixin)
 _rebind_mixin_globals(PortfolioCommandsMixin)
 
-class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommandsMixin, DataCommandsMixin, OpsCommandsMixin, DiagnosticCommandsMixin, DiagnosticOpsCommandsMixin, UiCommandsMixin, SessionUxCommandsMixin, WorkflowCommandsMixin, BusinessWorkflowCommandsMixin, SessionCommandsMixin, WorkspaceCommandsMixin, ModelCommandsMixin, MarketCommandsMixin, PortfolioCommandsMixin):
+class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommandsMixin, DataCommandsMixin, OpsCommandsMixin, DiagnosticCommandsMixin, DiagnosticOpsCommandsMixin, UiCommandsMixin, SessionUxCommandsMixin, AuthCommandsMixin, WorkflowCommandsMixin, BusinessWorkflowCommandsMixin, SessionCommandsMixin, WorkspaceCommandsMixin, ModelCommandsMixin, MarketCommandsMixin, PortfolioCommandsMixin):
     """Claude Code-style slash command system."""
 
     def __init__(self, terminal: 'ArtheraTerminal'):
@@ -6512,130 +6514,6 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
 
 
     # ---- Provider / API Key management (Open Interpreter style) ----
-    # ---- Auth commands ----
-
-    async def cmd_login(self, args: str):
-        """Login to Arthera backend.
-
-        Usage: /login <email>           — prompts for password securely
-               /login                   — prompts for both email and password
-        """
-        import getpass as _getpass
-        import aiohttp
-
-        parts = args.split()
-        if parts:
-            email = parts[0]
-        else:
-            try:
-                prompt_fn = console.input if HAS_RICH else input
-                email = prompt_fn("  Email: ").strip()
-            except (EOFError, KeyboardInterrupt):
-                console.print("[dim]Cancelled[/dim]" if HAS_RICH else "Cancelled")
-                return
-        if not email:
-            console.print("[dim]Usage: /login <email>[/dim]" if HAS_RICH else "Usage: /login <email>")
-            return
-
-        # Always prompt for password — never accept it as a CLI argument (security)
-        try:
-            _esc_watcher.pause()
-            password = _getpass.getpass("  Password: ")
-        except (EOFError, KeyboardInterrupt):
-            console.print("[dim]Cancelled[/dim]" if HAS_RICH else "Cancelled")
-            return
-        finally:
-            _esc_watcher.resume()
-
-        if not password:
-            console.print("[red]Password cannot be empty[/red]" if HAS_RICH else "Password cannot be empty")
-            return
-
-        if HAS_RICH:
-            console.print("[dim]Authenticating...[/dim]")
-
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    f"{self.terminal.api_url}/auth/login",
-                    json={"email": email, "password": password},
-                    timeout=aiohttp.ClientTimeout(total=15)
-                ) as resp:
-                    try:
-                        data = await resp.json()
-                    except Exception:
-                        data = {}
-                    if resp.status == 200 and data.get("token"):
-                        self.terminal.config["auth_token"] = data["token"]
-                        user_id = data.get("user_id", data.get("uid", email))
-                        self.terminal.config["user_id"] = user_id
-                        # Store token expiry if provided
-                        if data.get("expires_at"):
-                            self.terminal.config["token_expires_at"] = data["expires_at"]
-                        save_config(self.terminal.config)
-                        console.print(f"[green]✓ Logged in as {user_id}[/green]" if HAS_RICH
-                                      else f"Logged in as {user_id}")
-                    elif resp.status == 401:
-                        _print_error("Invalid email or password", "login")
-                    elif resp.status == 429:
-                        _print_error("Too many login attempts — please wait before retrying", "login")
-                    else:
-                        err = data.get("error", data.get("message", f"Login failed (HTTP {resp.status})"))
-                        _print_error(err, "login")
-        except aiohttp.ClientConnectorError:
-            _print_error(
-                f"Cannot reach {self.terminal.api_url} — check your network connection or use /local on",
-                "login"
-            )
-        except asyncio.TimeoutError:
-            _print_error("Login request timed out (15s) — server may be unavailable", "login")
-        except Exception as e:
-            _print_error(f"Login error: {e}", "login")
-
-    def cmd_logout(self, args: str):
-        self.terminal.config["auth_token"] = None
-        self.terminal.config["user_id"] = None
-        self.terminal.config.pop("token_expires_at", None)
-        save_config(self.terminal.config)
-        console.print("[dim]Logged out[/dim]" if HAS_RICH else "Logged out")
-
-    def cmd_whoami(self, args: str):
-        """Show current authentication status."""
-        cfg = self.terminal.config
-        user_id = cfg.get("user_id")
-        token = cfg.get("auth_token")
-        expires = cfg.get("token_expires_at")
-
-        if not token:
-            console.print("[dim]Not logged in — use /login <email>[/dim]" if HAS_RICH
-                          else "Not logged in")
-            return
-
-        if HAS_RICH:
-            console.print()
-            console.print(f"  [dim]User:[/dim]    {user_id or 'unknown'}")
-            console.print(f"  [dim]Token:[/dim]   {token[:12]}...")
-            if expires:
-                # Check expiry
-                try:
-                    exp_dt = datetime.fromisoformat(expires.replace("Z", "+00:00"))
-                    now = datetime.now(exp_dt.tzinfo)
-                    if now > exp_dt:
-                        console.print(f"  [dim]Expires:[/dim] [red]EXPIRED ({expires[:10]})[/red]")
-                        console.print("  [dim]Run /login to refresh your session[/dim]")
-                    else:
-                        delta = exp_dt - now
-                        hours = int(delta.total_seconds() // 3600)
-                        console.print(f"  [dim]Expires:[/dim] {expires[:10]} [dim](in {hours}h)[/dim]")
-                except Exception:
-                    console.print(f"  [dim]Expires:[/dim] {expires}")
-            console.print()
-        else:
-            print(f"User: {user_id or 'unknown'}")
-            print(f"Token: {token[:12]}...")
-            if expires:
-                print(f"Expires: {expires}")
-
     # ---- File operation commands (Claude Code-style) ----
 
     def cmd_read(self, args: str):
