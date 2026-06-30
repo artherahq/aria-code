@@ -11,8 +11,25 @@ on:
         required: false
 
 jobs:
+  verify-version:
+    name: Verify version alignment
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: pyproject / package.json / aria_cli.py must agree with the tag
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            python scripts/bump_version.py --check "${{ github.ref_name }}"
+          else
+            python scripts/bump_version.py --check ${{ github.event.inputs.version }}
+          fi
+
   publish-npm:
     name: Publish to npmjs.com
+    needs: verify-version
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -35,6 +52,7 @@ jobs:
 
   publish-pypi:
     name: Publish to PyPI
+    needs: verify-version
     runs-on: ubuntu-latest
     permissions:
       contents: read
