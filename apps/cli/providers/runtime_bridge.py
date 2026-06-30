@@ -48,7 +48,7 @@ async def run_with_fallback(
     closures; injecting them keeps this orchestration unit-testable without
     real providers or network.
     """
-    if route in ("skip", "ollama"):
+    if route in ("skip", "ollama", "configured"):
         return await run_ollama(on_token)
 
     # route == "cloud": count streamed tokens so a long-but-unstreamed canned
@@ -91,7 +91,7 @@ def make_provider_fn(
     it: cloud via ``user_context['system_role_override']``, Ollama via the
     provider's ``system_override`` argument.
     """
-    from apps.cli.providers.base import AriaSSEProvider, OllamaProvider
+    from apps.cli.providers.base import AriaSSEProvider, ConfiguredProvider, OllamaProvider
     from packages.aria_sdk.streaming import stream_provider_result
 
     _cloud_uctx = dict(user_context or {})
@@ -121,8 +121,13 @@ def make_provider_fn(
             )
 
         async def run_ollama(_on_token):
+            selected = (
+                OllamaProvider(ollama_url, model, system_override=system_override)
+                if route == "ollama" else
+                ConfiguredProvider(config, model, system_override=system_override)
+            )
             return await _stream(
-                OllamaProvider(ollama_url, model, system_override=system_override),
+                selected,
                 _on_token,
             )
 
@@ -155,14 +160,17 @@ async def run_chat_via_runtime(
     project_context: Any = None,
     system_override: Optional[str] = None,
     max_rounds: int = 30,
-) -> str:
-    """Run one chat turn through the shared runtime Gateway; return the text.
+    return_result: bool = False,
+):
+    """Run one chat turn through the shared runtime Gateway.
 
     This is the CLI *adapter* for ``runtime.gateway.run_turn``: it builds the
     CLI's ``provider_fn`` (AriaSSE/Ollama selection + cloud→Ollama fallback) and
     tool executor (the LOCAL_TOOLS registry), then hands them to the neutral
-    gateway, which drives ``run_agent`` and streams via the callbacks. Returns
-    the assistant response text ("" if none).
+    gateway, which drives ``run_agent`` and streams via the callbacks. By
+    default this returns assistant text for compatibility. ``return_result``
+    exposes the gateway result so terminal adapters can preserve provider and
+    usage metadata during final rendering.
     """
     from runtime.gateway import run_turn
 
@@ -182,4 +190,4 @@ async def run_chat_via_runtime(
         on_tool_call=on_tool_call, on_tool_result=on_tool_result, on_status=on_status,
         cancel_event=cancel_event, max_rounds=max_rounds,
     )
-    return result.text
+    return result if return_result else result.text

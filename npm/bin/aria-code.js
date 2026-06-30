@@ -48,11 +48,20 @@ function readInstallInfo() {
 // ── Find python executable ────────────────────────────────────────────────────
 
 function findPython(info) {
-  // 1. Use venv python from install
+  // 1. Prefer the venv that belongs to the resolved ARIA_HOME. This prevents
+  // stale global install metadata from pairing an old environment with a new
+  // checkout when ARIA_HOME/ARIA_CODE_HOME is explicitly set.
+  const localVenvPython = PLATFORM === "win32"
+    ? path.join(PATHS.venvDir, "Scripts", "python.exe")
+    : path.join(PATHS.venvDir, "bin", "python");
+  if (fs.existsSync(localVenvPython)) {
+    return localVenvPython;
+  }
+  // 2. Use venv python from install metadata
   if (info && info.venvPy && fs.existsSync(info.venvPy)) {
     return info.venvPy;
   }
-  // 2. System python
+  // 3. System python
   for (const cmd of ["python3", "python"]) {
     const r = spawnSync(PLATFORM === "win32" ? "where" : "which", [cmd],
       { encoding: "utf8", stdio: "pipe" });
@@ -66,9 +75,9 @@ function findPython(info) {
 function findAriaCli(info) {
   const installDir = info && info.installDir ? info.installDir : PATHS.installDir;
   const candidates = [
+    path.join(PATHS.installDir, "aria_cli.py"),
     info && info.ariaCli,
     path.join(installDir, "aria_cli.py"),
-    path.join(PATHS.installDir, "aria_cli.py"),
     path.join(PATHS.legacyInstallDir, "aria_cli.py"),
     // bundled alongside this script (dev/test only)
     path.join(__dirname, "..", "..", "aria_cli.py"),

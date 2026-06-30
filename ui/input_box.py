@@ -9,10 +9,12 @@ Layout:
 
 from __future__ import annotations
 
+import asyncio
 import os
 import shutil
 import subprocess
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from typing import Callable, Optional
 
@@ -79,8 +81,9 @@ def detect_terminal_theme() -> str:
 @dataclass
 class PanelInputConfig:
     prompt: str = "› "
-    placeholder: str = "问 Aria、编辑文件、运行命令…  /命令  @文件  !shell"
+    placeholder: str = ""
     theme: str = "auto"
+    lang: str = "en"
 
     est_tokens: int = 0
     max_tokens: int = 131072
@@ -98,6 +101,12 @@ class PanelInputConfig:
     skills_count: int = 0
     ollama_status: str = ""
     pending_file: str = ""
+    permission_mode: str = "workspace-write"
+    git_branch: str = ""
+    git_dirty: bool = False
+    mcp_running: int = 0
+    mcp_total: int = 0
+    mcp_tool_count: int = 0
 
     # Resolved by .resolved()
     fg: str = ""
@@ -124,13 +133,19 @@ class PanelInputConfig:
 
     def resolved(self) -> "PanelInputConfig":
         theme = self.theme if self.theme != "auto" else detect_terminal_theme()
+        is_zh = self.lang.lower().startswith("zh")
+        placeholder = self.placeholder or (
+            "问 Aria、编辑文件或运行命令…  / 命令  @ 上下文  ! shell"
+            if is_zh
+            else "Ask Aria, edit files, or run commands…  / commands  @ context  ! shell"
+        )
         if theme == "dark":
-            return replace(self, theme=theme,
+            return replace(self, theme=theme, placeholder=placeholder,
                 fg="#c9d1d9",
                 accent="#3fb950", accent_y="#d29922", accent_b="#79c0ff",
                 muted="#6e7781", dim="#484f58", sep="#2d333b",
                 input_bg="default",   # transparent — box border defines the zone
-                ph_color="#484f58",   # dim placeholder, readable
+                ph_color="#6e7781",   # secondary text, readable on dark terminals
                 box="#C08050",        # copper — Aria's brand accent on the frame
                 menu_bg="#161b22", menu_fg="#c9d1d9",
                 menu_sel_bg="#3a2e20", menu_sel_fg="#e8c9a6",
@@ -138,7 +153,7 @@ class PanelInputConfig:
                 scroll_bg="#161b22", scroll_btn="#C08050",
                 hi="#C08050",
             )
-        return replace(self, theme="light",
+        return replace(self, theme="light", placeholder=placeholder,
             fg="#24292f",
             accent="#1a7f37", accent_y="#9a6700", accent_b="#0969da",
             muted="#57606a", dim="#8c959f", sep="#d0d7de",
@@ -245,8 +260,8 @@ def _mode_prefix(cfg: PanelInputConfig, text_getter: Callable[[], str]) -> list:
 
 
 def _status_bar(cfg: PanelInputConfig) -> list:
-    """Dim status row: [robot dot]  model · cwd [· ctx warning when >60%]"""
-    from .robot import get_status_dot, get_robot_state, RobotState
+    """Compact runtime row: model · workspace · MCP · permissions · context."""
+    from .robot import get_status_dot
 
     tick = int(time.monotonic() * 4)  # 4 fps tick without a background thread
     parts: list = []
@@ -256,44 +271,67 @@ def _status_bar(cfg: PanelInputConfig) -> list:
         parts.extend(dot_frags)
         parts.append(("class:st-sep", "  "))
 
-    if cfg.model_label:
-        parts.append(("class:st-model", cfg.model_label))
+    width = shutil.get_terminal_size((80, 24)).columns
+    model_label = cfg.model_label
+    model_limit = 24 if width >= 90 else 19
+    if len(model_label) > model_limit:
+        model_label = model_label[: model_limit - 1] + "…"
+    if model_label:
+        parts.append(("class:st-model", model_label))
 
-    if cfg.cwd:
-        if cfg.model_label:
+    workspace = cfg.git_branch or os.path.basename(cfg.cwd.rstrip(os.sep))
+    if workspace:
+        if model_label:
             parts.append(("class:st-sep", "  ·  "))
-        parts.append(("class:st-cwd", cfg.cwd))
+        if cfg.git_branch and cfg.git_dirty:
+            workspace += "*"
+        parts.append(("class:st-cwd", workspace))
 
-    # Token warning only above 60% — silent below that
-    if cfg.est_tokens > 0:
-        ratio = cfg.est_tokens / max(cfg.max_tokens, 1)
-        if ratio >= 0.60:
-            tc = "tok-crit" if ratio >= 0.85 else "tok-warn"
-            def _k(n: int) -> str:
-                return f"{n // 1000}K" if n >= 1000 else str(n)
-            parts += [
-                ("class:st-sep", "  ·  "),
-                (f"class:{tc}", f"ctx {_k(cfg.est_tokens)}/{_k(cfg.max_tokens)}"),
-            ]
+    if cfg.mcp_total:
+        mcp_label = (
+            f"MCP {cfg.mcp_tool_count}"
+            if cfg.mcp_running == cfg.mcp_total and cfg.mcp_tool_count
+            else f"MCP {cfg.mcp_running}/{cfg.mcp_total}"
+        )
+        parts += [("class:st-sep", "  ·  "), ("class:st-cwd", mcp_label)]
+
+    permission = {
+        "read-only": "ro",
+        "workspace-write": "rw",
+        "full-access": "full",
+    }.get(cfg.permission_mode, cfg.permission_mode)
+    if permission:
+        parts += [("class:st-sep", "  ·  "), ("class:st-cwd", permission)]
+
+    ratio = cfg.est_tokens / max(cfg.max_tokens, 1)
+    tc = "tok-crit" if ratio >= 0.85 else ("tok-warn" if ratio >= 0.60 else "st-cwd")
+    context_label = "ctx <1%" if cfg.est_tokens > 0 and ratio < 0.01 else f"ctx {ratio:.0%}"
+    parts += [("class:st-sep", "  ·  "), (f"class:{tc}", context_label)]
+
+    shortcuts = (
+        "? 快捷键 · / 命令 · @ 上下文 · ! shell"
+        if cfg.lang.lower().startswith("zh")
+        else "? shortcuts · / commands · @ context · ! shell"
+    )
+    used = sum(len(text) for _, text in parts)
+    if width >= 110 and used + len(shortcuts) + 4 <= width:
+        parts += [("class:st-sep", "    "), ("class:st-cwd", shortcuts)]
 
     return parts
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 
-def run_panel_input(
+def _build_panel_input_application(
     *,
     completer=None,
     history=None,
     status_text: Callable[[], str] | str = "",   # kept for compat
     config: Optional[PanelInputConfig] = None,
-) -> str:
+) -> Optional[Application]:
     cfg = (config or PanelInputConfig()).resolved()
     if not HAS_PROMPT_TOOLKIT:
-        try:
-            return input(cfg.prompt)
-        except EOFError:
-            return ""
+        return None
 
     def _accept(buf: Buffer) -> bool:
         app.exit(result=buf.text)
@@ -373,4 +411,66 @@ def run_panel_input(
         mouse_support=False,
         refresh_interval=0.25,  # drives robot dot animation at 4 fps
     )
-    return app.run() or ""
+    return app
+
+
+@contextmanager
+def _without_cpr_probe():
+    """Disable CPR for this inline panel, which owns a fixed-height layout."""
+    key = "PROMPT_TOOLKIT_NO_CPR"
+    previous = os.environ.get(key)
+    os.environ[key] = "1"
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = previous
+
+
+def run_panel_input(
+    *,
+    completer=None,
+    history=None,
+    status_text: Callable[[], str] | str = "",
+    config: Optional[PanelInputConfig] = None,
+) -> str:
+    """Run the panel synchronously for compatibility with non-async callers."""
+    app = _build_panel_input_application(
+        completer=completer,
+        history=history,
+        status_text=status_text,
+        config=config,
+    )
+    if app is None:
+        try:
+            return input((config or PanelInputConfig()).prompt)
+        except EOFError:
+            return ""
+    with _without_cpr_probe():
+        return app.run() or ""
+
+
+async def run_panel_input_async(
+    *,
+    completer=None,
+    history=None,
+    status_text: Callable[[], str] | str = "",
+    config: Optional[PanelInputConfig] = None,
+) -> str:
+    """Run the panel on the active event loop to preserve IME input state."""
+    app = _build_panel_input_application(
+        completer=completer,
+        history=history,
+        status_text=status_text,
+        config=config,
+    )
+    if app is None:
+        loop = asyncio.get_running_loop()
+        try:
+            return await loop.run_in_executor(None, input, (config or PanelInputConfig()).prompt)
+        except EOFError:
+            return ""
+    with _without_cpr_probe():
+        return (await app.run_async()) or ""

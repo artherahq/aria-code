@@ -34,6 +34,7 @@ from .picker import (
 from .input_box import (
     PanelInputConfig,
     run_panel_input,
+    run_panel_input_async,
     detect_terminal_theme,
     PromptAndPlaceholderProcessor,
     PlaceholderProcessor,
@@ -55,8 +56,10 @@ from .banner import (
     bottom_toolbar_parts,
     render_compact_banner,
     render_full_banner,
+    render_startup_dashboard,
     render_try_hints,
 )
+from .startup_dashboard import StartupDashboardViewModel, select_dashboard_layout
 
 from .render.output import (
     FINANCE_TOOL_NAMES,
@@ -82,7 +85,7 @@ __all__ = [
     "arrow_select", "run_picker_in_thread",
     "_arrow_select", "_run_picker_in_thread",
     # input panel
-    "PanelInputConfig", "run_panel_input",
+    "PanelInputConfig", "run_panel_input", "run_panel_input_async",
     "detect_terminal_theme",
     "PromptAndPlaceholderProcessor", "PlaceholderProcessor",
     # robot mascot
@@ -90,7 +93,9 @@ __all__ = [
     "get_robot_row", "get_robot_frame", "get_status_dot",
     # banner
     "privacy_status_label", "control_status_label", "ollama_status_label",
-    "bottom_toolbar_parts", "render_compact_banner", "render_full_banner", "render_try_hints",
+    "bottom_toolbar_parts", "render_compact_banner", "render_full_banner",
+    "render_startup_dashboard", "render_try_hints",
+    "StartupDashboardViewModel", "select_dashboard_layout",
     # output rendering
     "FINANCE_TOOL_NAMES", "clean_tool_error_message", "error_hint",
     "print_error", "print_tool_result",

@@ -12,11 +12,20 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 from .base import BaseLLMProvider, Message, ProviderConfig
 
 logger = logging.getLogger(__name__)
+
+
+def chat_completions_url(base_url: str) -> str:
+    """Join an OpenAI-compatible base URL without duplicating its version."""
+    base = base_url.rstrip("/")
+    if re.search(r"/v\d+(?:beta)?$", base):
+        return f"{base}/chat/completions"
+    return f"{base}/v1/chat/completions"
 
 
 class OpenAICompatProvider(BaseLLMProvider):
@@ -72,7 +81,9 @@ class OpenAICompatProvider(BaseLLMProvider):
             ]
             payload["tool_choice"] = "auto"
 
-        url   = f"{self.base_url}/v1/chat/completions"
+        # Some compatible endpoints already include their API version
+        # (Moonshot /v1, ZhiPu /v4). Avoid generating /v1/v1 or /v4/v1.
+        url = chat_completions_url(self.base_url)
         # aiohttp 不自动读系统代理，需显式传入
         proxy = (os.getenv("HTTPS_PROXY") or os.getenv("https_proxy")
                  or os.getenv("HTTP_PROXY")  or os.getenv("http_proxy"))

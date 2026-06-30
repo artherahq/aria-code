@@ -201,7 +201,7 @@ def _build_cfg(name: str, model: Optional[str] = None) -> ProviderConfig:
             "zhipu": "ZHIPUAI_API_KEY", "dashscope": "DASHSCOPE_API_KEY",
         }
         if name.lower() in _env_names:
-            logger.warning(
+            logger.debug(
                 "⚠ API key for '%s' loaded from ~/.arthera/providers.json (plaintext). "
                 "Migrate to env var: export %s=<key>  then remove api_key from providers.json.",
                 name, _env_names[name.lower()],
@@ -256,7 +256,7 @@ async def _try_provider(
                     on_token(tok)
             elif t == "error":
                 err = event.get("message")
-                logger.warning(f"[{name}] 流式错误: {err}")
+                logger.debug(f"[{name}] 流式错误: {err}")
                 health.mark_issue(classify_provider_error(name, err))
                 return None
             elif t == "done":
@@ -286,6 +286,7 @@ async def stream_cloud_fallback(
     cancel_event=None,
     *,
     health: ProviderHealthRegistry | None = None,
+    include_defaults: bool = True,
 ) -> Dict[str, Any]:
     """
     CLI fallback 入口：当 Ollama 不可用时调用。
@@ -323,18 +324,21 @@ async def stream_cloud_fallback(
         if cls and not cls.local and not health.provider_in_cooldown(name):
             cloud_specs.append(spec)
 
-    # 补充内置默认链中未出现的
-    for name, env_var, model in _DEFAULT_FALLBACK_CHAIN:
-        cls = _PROVIDER_CLASSES.get(name)
-        if not cls or cls.local:
-            continue
-        spec = f"{name}/{model}" if model else name
-        if not any(s.startswith(name) for s in cloud_specs):
-            # 环境变量 OR providers.json 任一有 key 即可
-            has_key = (env_var and os.getenv(env_var)) or \
-                      bool(_load_provider_cfg_from_file(name).get("api_key"))
-            if has_key and not health.provider_in_cooldown(name):
-                cloud_specs.append(spec)
+    # Built-in discovery is opt-in. The CLI default only follows the user's
+    # explicit fallback list, preventing a selected Ollama model from silently
+    # consuming an unrelated provider account.
+    if include_defaults:
+        for name, env_var, model in _DEFAULT_FALLBACK_CHAIN:
+            cls = _PROVIDER_CLASSES.get(name)
+            if not cls or cls.local:
+                continue
+            spec = f"{name}/{model}" if model else name
+            if not any(s.startswith(name) for s in cloud_specs):
+                # 环境变量 OR providers.json 任一有 key 即可
+                has_key = (env_var and os.getenv(env_var)) or \
+                          bool(_load_provider_cfg_from_file(name).get("api_key"))
+                if has_key and not health.provider_in_cooldown(name):
+                    cloud_specs.append(spec)
 
     if not cloud_specs:
         return {

@@ -7,16 +7,29 @@ logic; pulling it out of the streaming machinery lets it be unit-tested and
 reused as a ``provider_fn`` selector without touching the live REPL path.
 
 Routing rules (mirrors send_message):
-  • local_mode                       → always local Ollama
-  • cloud-named model ("provider/x") → cloud backend (AriaSSE)
-  • ollama-named model ("x:y")       → cloud backend ONLY if backend_chat forces
-                                       it; otherwise skip the backend stub and go
-                                       straight to the local/cloud fallback chain
+  • backend_chat                     → Aria SSE backend
+  • local_provider=ollama            → Ollama (local or Ollama Cloud)
+  • any other explicit provider      → configured local/API provider
 """
 
 from __future__ import annotations
 
 from typing import Callable, Optional
+
+
+PROVIDER_ALIASES = {
+    "lm-studio": "lmstudio",
+    "llama.cpp": "llamacpp",
+    "llama-cpp": "llamacpp",
+    "claude": "anthropic",
+    "gemini": "google",
+    "grok": "xai",
+}
+
+
+def normalize_provider_name(provider: str) -> str:
+    normalized = str(provider or "").strip().lower()
+    return PROVIDER_ALIASES.get(normalized, normalized)
 
 
 def is_cloud_model(model: str) -> bool:
@@ -36,16 +49,13 @@ def force_backend(config: dict, api_url: Optional[str]) -> bool:
 
 
 def first_round_route(model: str, config: dict, api_url: Optional[str]) -> str:
-    """Return where the first round's generation goes: ``ollama`` | ``cloud`` | ``skip``.
-
-    ``skip`` means the backend would only return a stub for this (ollama-named)
-    model, so the round is skipped and the fallback chain runs directly.
-    """
-    if config.get("local_mode", False):
-        return "ollama"
-    if is_cloud_model(model) or force_backend(config, api_url):
+    """Return ``ollama`` | ``configured`` | ``cloud`` for the first round."""
+    if force_backend(config, api_url):
         return "cloud"
-    return "skip"
+    provider = normalize_provider_name(config.get("local_provider") or "")
+    if not provider:
+        provider = model.split("/", 1)[0].lower() if is_cloud_model(model) else "ollama"
+    return "ollama" if provider == "ollama" else "configured"
 
 
 def is_placeholder_response(
@@ -73,8 +83,8 @@ def should_fallback(route: str, result: dict, *, is_placeholder: bool) -> bool:
     old ``_should_fallback`` that keyed on ``is_ollama_model`` and could discard a
     good backend answer (causing a re-run / hang).
     """
-    if route == "skip":
-        return True
+    if route in ("skip", "configured"):
+        return route == "skip"
     if not result.get("success") and not result.get("cancelled"):
         return True
     return is_placeholder

@@ -61,6 +61,10 @@ STRINGS: dict[str, dict[str, str]] = {
         "zh": "纯本地",
         "en": "local-only",
     },
+    "local_retention": {
+        "zh": "本地留存",
+        "en": "local retention",
+    },
     "cloud": {
         "zh": "云端",
         "en": "cloud",

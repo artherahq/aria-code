@@ -130,9 +130,9 @@ async def test_make_provider_fn_threads_system_override(monkeypatch):
     await pf_local("hi", [])
     assert seen["ollama_system_override"] == "ROLE-X"
 
-    # cloud-named model → cloud route → override rides inside user_context
+    # backend_chat explicitly selects Aria SSE → override rides in user_context
     pf_cloud = make_provider_fn(
-        model="anthropic/claude", config={}, api_url="http://api",
+        model="anthropic/claude", config={"backend_chat": True}, api_url="http://api",
         ollama_url="http://x", tool_schemas=[], system_override="ROLE-Y",
     )
     await pf_cloud("hi", [])

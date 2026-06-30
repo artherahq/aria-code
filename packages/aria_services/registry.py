@@ -95,6 +95,20 @@ def list_service_specs() -> List[ServiceSpec]:
             migration_target="ContextService",
         ),
         ServiceSpec(
+            name="references",
+            description="Typed read-only @ references for files, folders, assets, and research artifacts.",
+            owner_package="packages.aria_services",
+            module="packages.aria_services.references",
+            capabilities=[
+                "context.reference.parse",
+                "context.reference.resolve",
+                "context.reference.tool_plan",
+                "context.reference.complete",
+            ],
+            permissions=[PermissionLevel.READ_ONLY],
+            migration_target="ReferenceService",
+        ),
+        ServiceSpec(
             name="tools",
             description="Typed tool manifests, schemas, permissions, local tool adapters, and MCP tool conversion.",
             owner_package="packages.aria_tools",

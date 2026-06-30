@@ -70,6 +70,8 @@ def default_config() -> dict:
         ),
         "local_url": "http://localhost:8000",
         "ollama_url": os.getenv("OLLAMA_URL", "http://localhost:11434"),
+        "local_provider": os.getenv("ARIA_LLM_PROVIDER", "ollama"),
+        "provider_fallback": "configured",
         "model": "qwen2.5-coder:1.5b",
         "thinking_mode": "auto",
         "watchlist": ["AAPL", "MSFT", "GOOGL", "TSLA", "NVDA"],

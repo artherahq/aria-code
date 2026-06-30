@@ -1,6 +1,10 @@
 import pytest
 
-from apps.cli.runtime_consumer import TerminalApprovalEventConsumer, TerminalRuntimeEventConsumer
+from apps.cli.runtime_consumer import (
+    TerminalApprovalEventConsumer,
+    TerminalRuntimeEventConsumer,
+    TurnPhase,
+)
 from runtime import AgentEventStatus, AgentEventToken, AgentEventToolCall, AgentEventToolResult, ApprovalDecision
 
 
@@ -80,6 +84,59 @@ def test_terminal_runtime_consumer_hides_repetition_marker(capsys):
     assert "已检测到模型开始重复输出" in out
     assert consumer.repetition_stopped is True
     assert "*[model stopped" in consumer.response_text
+
+
+def test_response_header_waits_for_first_visible_token(capsys):
+    starts = []
+    phases = []
+    consumer = TerminalRuntimeEventConsumer(
+        terminal=_Terminal(),
+        console=_Console(),
+        has_rich=False,
+        markdown_cls=None,
+        live_cls=None,
+        strip_latex=lambda text: text,
+        on_response_start=lambda: starts.append("started"),
+        on_phase_change=phases.append,
+    )
+
+    consumer.on_token("\n")
+    consumer.on_token("[system]")
+
+    assert starts == []
+    assert consumer.first_token_received is False
+
+    consumer.on_token("你好")
+    consumer.on_token("！")
+    consumer.finish()
+
+    assert starts == ["started"]
+    assert capsys.readouterr().out == "你好！"
+    assert TurnPhase.STREAMING in phases
+    assert phases[-1] is TurnPhase.DONE
+    assert consumer.lifecycle.first_visible_at is not None
+    assert consumer.lifecycle.ended_at is not None
+
+
+def test_batch_render_defers_response_header_until_final_render():
+    starts = []
+    consumer = TerminalRuntimeEventConsumer(
+        terminal=_Terminal(),
+        console=_Console(),
+        has_rich=False,
+        markdown_cls=None,
+        live_cls=None,
+        strip_latex=lambda text: text,
+        on_response_start=lambda: starts.append("started"),
+    )
+    consumer.set_batch_render_mode()
+
+    consumer.on_token("batched answer")
+
+    assert starts == []
+    assert consumer.response_text == "batched answer"
+    consumer.ensure_response_started()
+    assert starts == ["started"]
 
 
 @pytest.mark.asyncio

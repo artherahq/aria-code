@@ -28,6 +28,30 @@ def test_run_chat_via_runtime_streams_tokens_and_returns_text(monkeypatch):
     assert text == "Hello world"
 
 
+def test_run_chat_via_runtime_can_return_gateway_metadata(monkeypatch):
+    async def fake_provider_fn(message, history, *, on_token=None, **kwargs):
+        if on_token:
+            on_token("answer")
+        return {
+            "success": True,
+            "response": "answer",
+            "provider": "ollama",
+            "usage": {"prompt_tokens": 2, "completion_tokens": 1},
+        }
+
+    monkeypatch.setattr(rb, "make_provider_fn", lambda **kw: fake_provider_fn)
+
+    result = asyncio.run(rb.run_chat_via_runtime(
+        prompt="hi", history=[], local_tools={}, tool_schemas=[],
+        model="m", config={}, api_url=None, ollama_url="http://x",
+        return_result=True,
+    ))
+
+    assert result.text == "answer"
+    assert result.final.provider == "ollama"
+    assert result.final.metadata.prompt_tokens == 2
+
+
 def test_run_chat_via_runtime_executes_a_tool_then_finishes(monkeypatch):
     """The bridge must run a requested tool through ToolExecutor and continue —
     the agentic path use_runtime_loop relies on."""
@@ -60,6 +84,37 @@ def test_run_chat_via_runtime_executes_a_tool_then_finishes(monkeypatch):
     assert text == "done after tool"          # finished after the tool round
     assert ran.get("x") == 7                   # the tool actually executed
     assert "ping" in seen_calls and "ping" in seen_results  # both events surfaced
+
+
+def test_runtime_tool_round_preserves_original_prompt_and_tool_context(monkeypatch):
+    histories = []
+
+    async def fake_provider_fn(message, history, *, on_token=None, **kwargs):
+        histories.append((message, list(history)))
+        if len(histories) == 1:
+            return {
+                "success": True,
+                "response": "",
+                "provider": "fake",
+                "tool_calls_pending": [{"tool": "ping", "params": {}}],
+            }
+        return {"success": True, "response": "done", "provider": "fake"}
+
+    monkeypatch.setattr(rb, "make_provider_fn", lambda **kw: fake_provider_fn)
+
+    asyncio.run(rb.run_chat_via_runtime(
+        prompt="original request",
+        history=[{"role": "assistant", "content": "earlier"}],
+        local_tools={"ping": (lambda _params: {"success": True}, "Ping")},
+        tool_schemas=[], model="m", config={}, api_url=None,
+        ollama_url="http://x", max_rounds=3,
+    ))
+
+    second_message, second_history = histories[1]
+    assert second_message.startswith("## Tool Results")
+    assert {"role": "user", "content": "original request"} in second_history
+    assert any(item.get("role") == "assistant" and item.get("tool_calls") for item in second_history)
+    assert any(item.get("role") == "tool" and item.get("name") == "ping" for item in second_history)
 
 
 class RuntimeBridgeTests(unittest.TestCase):

@@ -18,7 +18,8 @@ if _HAS_TERMIOS:
 
 
 def arrow_select(options: list, selected: int = 0, title: str = "",
-                 max_visible: int = 10) -> int:
+                 max_visible: int = 10,
+                 controls_hint: str = "↑↓  Enter  Esc/q Cancel") -> int:
     """Interactive arrow-key selector with scrolling.
 
     Args:
@@ -136,9 +137,9 @@ def arrow_select(options: list, selected: int = 0, title: str = "",
         # Top boundary
         _raw(f"\n  \033[2m{_rule}\033[0m\n")
         if title:
-            _raw(f"  \033[1m{title}\033[0m  \033[2m↑↓  Enter  q=取消\033[0m\n\n")
+            _raw(f"  \033[1m{title}\033[0m  \033[2m{controls_hint}\033[0m\n\n")
         else:
-            _raw(f"  \033[2m↑↓  Enter  q=取消\033[0m\n\n")
+            _raw(f"  \033[2m{controls_hint}\033[0m\n\n")
 
         _render()
 
@@ -181,12 +182,15 @@ def arrow_select(options: list, selected: int = 0, title: str = "",
 
 
 async def run_picker_in_thread(options: list, current_idx: int,
-                               title: str, max_visible: int = 14) -> int:
+                               title: str, max_visible: int = 14,
+                               controls_hint: str = "↑↓  Enter  Esc/q Cancel") -> int:
     """Run arrow_select in an executor thread to avoid kqueue conflicts on macOS."""
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(
         None,
-        lambda: arrow_select(options, current_idx, title, max_visible),
+        lambda: arrow_select(
+            options, current_idx, title, max_visible, controls_hint
+        ),
     )
 
 

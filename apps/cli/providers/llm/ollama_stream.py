@@ -8,6 +8,17 @@ import asyncio
 from datetime import datetime
 
 
+def _try_inject_file_paths(_message: str) -> str:
+    """Legacy hook retained for the extracted stream implementation.
+
+    Context references are resolved by the typed ``@`` reference service before
+    provider dispatch. Silently reading path-like text here would bypass that
+    service's validation and duplicate context, so the legacy hook is now a
+    deliberate no-op.
+    """
+    return ""
+
+
 def _recent_sports_quant_context(history: list, max_chars: int = 5000) -> str:
     """Return the latest sports quant block from chat history for follow-ups."""
     markers = (
@@ -25,21 +36,82 @@ def _recent_sports_quant_context(history: list, max_chars: int = 5000) -> str:
     return ""
 
 
+_TOOL_NAME_ALIASES = {
+    "get_stock_data": "get_market_data",
+    "get_stock_price": "get_market_data",
+    "fetch_stock_data": "get_market_data",
+    "query_stock_data": "get_market_data",
+    "get_stock_history": "get_market_history",
+    "get_historical_data": "get_market_history",
+    "fetch_market_history": "get_market_history",
+}
+
+
+def _response_cache_eligible(message: str, history: list, enable_tools: bool) -> bool:
+    """Return whether a turn can safely reuse a prose-only model response."""
+    return not enable_tools and not history and len(message) < 300
+
+
+def _routing_message_for_turn(message: str, history: list) -> str:
+    """Keep provider routing anchored to the user's original request.
+
+    Runtime tool rounds pass a generated ``## Tool Results`` prompt as the
+    current message. Classifying that synthetic prompt can switch a finance
+    turn into coding and expose unrelated file/shell tools.
+    """
+    current = str(message or "")
+    if not current.lstrip().startswith("## Tool Results"):
+        return current
+    for item in reversed(history or []):
+        if not isinstance(item, dict) or item.get("role") != "user":
+            continue
+        content = item.get("content", "")
+        if not isinstance(content, str):
+            continue
+        if content.strip() and not content.lstrip().startswith("## Tool Results"):
+            return content
+    return current
+
+
+def _normalize_requested_tool_call(
+    tool_name: str,
+    params: dict,
+    available_names: set[str],
+) -> tuple[str, dict, str]:
+    """Map common model aliases and parameter names to registered tools."""
+    requested_name = str(tool_name or "").strip()
+    aliased_name = _TOOL_NAME_ALIASES.get(requested_name, requested_name)
+    resolved_name = aliased_name if aliased_name in available_names else requested_name
+    normalized_params = dict(params or {})
+    if resolved_name in {"get_market_data", "get_market_history"} and not normalized_params.get("symbol"):
+        for key in ("ticker", "code", "stock", "asset"):
+            if normalized_params.get(key):
+                normalized_params["symbol"] = normalized_params.pop(key)
+                break
+    return resolved_name, normalized_params, requested_name
+
+
 async def stream_ollama(ollama_url: str, message: str, history: list,
                         model: str = "qwen2.5:7b",
                         on_token=None, on_thinking=None,
                         on_tool_call=None, on_tool_result=None,
                         cancel_event: asyncio.Event = None,
                         enable_tools: bool = True,
+                        tool_schemas: list = None,
+                        defer_tool_execution: bool = False,
                         system_override: str = None,
                         show_market_prefetch_status: bool = True) -> dict:
     """Stream chat via local Ollama with tool calling support (native + text-based)."""
     import aiohttp
 
+    _intent_message = _routing_message_for_turn(message, history)
+
     # ── Response cache: skip Ollama for repeated stateless queries ───────────
     # Only cache when there is no conversation history (stateless), the query
     # is short (likely a simple quote/concept), and no tools are being called.
-    _should_cache = not history and len(message) < 300
+    # A cached prose answer cannot stand in for a tool-capable turn: returning
+    # it here bypasses schema injection and the runtime tool loop entirely.
+    _should_cache = _response_cache_eligible(message, history, enable_tools)
     if _should_cache:
         _ck = _cache_key(model, message)
         _cached = _cache_get(_ck)
@@ -51,7 +123,7 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
 
     _models_probe, _ollama_err = detect_ollama_models_rich(ollama_url)
     if _ollama_err:
-        if _is_simple_greeting(message):
+        if _is_simple_greeting(_intent_message):
             return _offline_greeting_response()
         return _ollama_unavailable_result(ollama_url, _ollama_err)
 
@@ -72,14 +144,14 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
         _cap_check = get_model_capability(model)
         _task_needs_upgrade = (
             is_router_only(_cap_check)
-            or (not can_handle_coding(_cap_check) and _is_coding_request(message))
+            or (not can_handle_coding(_cap_check) and _is_coding_request(_intent_message))
             # Small (1-4B) models also struggle with complex finance questions:
             # they ignore detailed system prompts and output template garbage.
             # Upgrade when the question is non-trivial and the model is "small".
             # Use 8 as the minimum length threshold (works for both Chinese and English):
             # Chinese "比特币值得投资吗" = 9 chars, English "buy or sell?" = 12 chars.
-            or (_cap_check.size_class == "small" and len(message) > 8
-                and not _is_simple_greeting(message))
+            or (_cap_check.size_class == "small" and len(_intent_message) > 8
+                and not _is_simple_greeting(_intent_message))
         )
         if _task_needs_upgrade and _models_probe:
             # 按优先级寻找可用的升级模型
@@ -109,7 +181,7 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
 
     # ── 五档路由：通过 Prelude 意图分类器（或关键词 fallback）决定 prompt ────
     # Always rebuild finance prompt to get today's date
-    _finance_prompt = _build_finance_prompt(message)
+    _finance_prompt = _build_finance_prompt(_intent_message)
 
     try:
         from intent_classifier import (
@@ -117,22 +189,28 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
             INTENT_CODING, INTENT_ANALYSIS, INTENT_REALTIME,
             INTENT_GENERAL, INTENT_FINANCE,
         )
-        _intent = await classify_intent_async(message, ollama_url)
+        _intent = await classify_intent_async(_intent_message, ollama_url)
     except Exception:
         # Fallback to legacy keyword detection if intent_classifier unavailable
-        if _is_coding_request(message):
+        if _is_coding_request(_intent_message):
             _intent = "coding"
-        elif _is_analysis_request(message):
+        elif _is_analysis_request(_intent_message):
             _intent = "analysis"
-        elif _is_general_knowledge(message):
+        elif _is_general_knowledge(_intent_message):
             _intent = "general"
         else:
             _intent = "finance"
 
+    # The lightweight classifier can label stock-analysis prompts as generic
+    # finance. Preserve the stronger deterministic signal so tool-capable
+    # models receive the prompt that requires market data before analysis.
+    if _is_analysis_request(_intent_message) and _intent in {"general", "finance"}:
+        _intent = "analysis"
+
     _is_general = (_intent == "general")
     try:
         from apps.cli.intent_router import build_intent_route
-        _route = build_intent_route(message)
+        _route = build_intent_route(_intent_message)
     except Exception:
         _route = None
 
@@ -145,8 +223,40 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
     _CODE_TOOL_NAMES = {"read_file", "write_file", "edit_file", "list_files",
                         "search_code", "run_command", "github",
                         "glob", "notebook_read", "notebook_edit"}
+    _FINANCE_TOOL_NAMES = {
+        "get_market_data", "get_market_history", "calculate_factors",
+        "get_risk_metrics", "analyze_news",
+        "get_market_insights", "get_predictions", "peer_comparison",
+        "web_search", "web_fetch",
+    }
 
-    _msg_low = message.lower()
+    _available_tool_schemas = list(
+        LOCAL_TOOL_SCHEMAS if tool_schemas is None else tool_schemas
+    )
+    _msg_low = _intent_message.lower()
+    _explicit_tool_signal = any(k in _msg_low for k in (
+        "调用工具", "使用工具", "用工具", "调用 agent", "使用 agent",
+        "调用智能体", "使用智能体", "mcp", "tool call", "use tool",
+        "use agent", "spawn agent",
+    ))
+    _explicit_agent_signal = any(k in _msg_low for k in (
+        "agent", "智能体", "多代理", "多智能体", "研究团队", "subagent",
+    ))
+    _explicit_mcp_signal = "mcp" in _msg_low
+    _finance_tool_names = set(_FINANCE_TOOL_NAMES)
+    if any(k in _msg_low for k in ("加密", "比特币", "以太坊", "crypto", "btc", "eth")):
+        _finance_tool_names.add("get_crypto_data")
+    if any(k in _msg_low for k in ("外汇", "汇率", "forex", "fx", "usd/", "eur/")):
+        _finance_tool_names.add("get_forex_data")
+    if any(k in _msg_low for k in ("持仓", "账户", "下单", "broker", "portfolio", "position")):
+        _finance_tool_names.update({"broker_query", "broker_order", "get_risk_metrics"})
+    if any(k in _msg_low for k in ("期权", "option", "隐含波动率")):
+        _finance_tool_names.add("get_options_chain")
+    if _explicit_agent_signal:
+        _finance_tool_names.update({
+            "spawn_task", "task_status", "task_result", "task_list",
+            "task_cancel", "update_todos",
+        })
     _explicit_code_signal = bool(getattr(_route, "explicit_code", False)) if _route else any(k in _msg_low for k in (
         "代码", "脚本", "python", "程序", "实现", "开发", "修改文件",
         "写代码", "编写代码", "策略代码", "保存为.py", ".py",
@@ -168,29 +278,34 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
     if _is_visual_artifact_request and not _explicit_code_signal:
         _excluded = _CU_TOOL_NAMES | _CODE_TOOL_NAMES
         _schemas_for_context = [
-            s for s in LOCAL_TOOL_SCHEMAS
+            s for s in _available_tool_schemas
             if s.get("function", {}).get("name") not in _excluded
         ]
     elif _intent in ("finance", "analysis", "realtime") and not _is_cross_intent:
-        # Pure finance: market data + broker + web_fetch (for news), no coding/CU tools.
-        # Excluding coding tools prevents the LLM from calling run_command instead of
-        # get_market_data when answering a stock question.
-        _excluded = _CU_TOOL_NAMES | _CODE_TOOL_NAMES
+        # Keep finance turns focused. MCP tools remain available because they
+        # may provide institution-specific data, while file/code tools are
+        # excluded so the model does not search the repository for a quote API.
         _schemas_for_context = [
-            s for s in LOCAL_TOOL_SCHEMAS
-            if s.get("function", {}).get("name") not in _excluded
+            s for s in _available_tool_schemas
+            if (
+                s.get("function", {}).get("name") in _finance_tool_names
+                or (
+                    _explicit_mcp_signal
+                    and s.get("function", {}).get("name", "").startswith("mcp__")
+                )
+            )
         ]
     elif _is_cross_intent:
         # Cross-intent: expose both finance AND coding tools (minus CU/browser).
         # Intent hint injected into system prompt guides priority without hard exclusion.
         _schemas_for_context = [
-            s for s in LOCAL_TOOL_SCHEMAS
+            s for s in _available_tool_schemas
             if s.get("function", {}).get("name") not in _CU_TOOL_NAMES
         ]
     else:
         # Coding/general: all local tools except CU (browser/computer control)
         _schemas_for_context = [
-            s for s in LOCAL_TOOL_SCHEMAS
+            s for s in _available_tool_schemas
             if s.get("function", {}).get("name") not in _CU_TOOL_NAMES
         ]
 
@@ -199,26 +314,31 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
     # (6000+ tokens of examples they mostly ignore).  Send a condensed version that
     # keeps the essential rules and the single complete working template.
     #
-    # Analysis: always use the LITE prompt in Ollama mode, even for medium/large
-    # cloud models relayed through Ollama.  The full ANALYSIS_SYSTEM_PROMPT
-    # instructs the model to call `get_market_data`, which is a cloud-only tool
-    # not available in the LOCAL_TOOLS registry — leading to "Unknown local tool"
-    # errors and an infinite retry loop.  The lite prompt explicitly refuses to
-    # output N/A templates when no data is injected, which is the correct
-    # behaviour in local mode.
+    # Analysis uses the full tool-aware prompt for capable models and the lite
+    # prefetched-data prompt for small/text-only models.
     try:
         from model_capability import get_model_capability as _gmc
-        _model_size = _gmc(model).size_class
+        _prompt_cap = _gmc(model)
+        _model_size = _prompt_cap.size_class
+        _model_supports_native_tools = bool(
+            _prompt_cap.tool_calls and _prompt_cap.format == "ollama_native"
+        )
     except Exception:
         _model_size = "medium"
+        _model_supports_native_tools = False
     _use_lite_prompt = _model_size in ("nano", "small")
 
     if _intent == "coding":
-        _base_prompt = _build_coding_prompt_lite(message) if _use_lite_prompt else CODING_SYSTEM_PROMPT
+        _base_prompt = _build_coding_prompt_lite(_intent_message) if _use_lite_prompt else CODING_SYSTEM_PROMPT
     elif _intent == "analysis":
-        # Always use lite analysis prompt in Ollama — the full prompt triggers
-        # get_market_data tool calls that are not available locally.
-        _base_prompt = _build_analysis_prompt_lite(message)
+        # Native-tool models must receive the prompt that explicitly requires
+        # get_market_data. The lite prompt is the fallback for text-only/small
+        # models and tells them to rely on deterministic prefetched data.
+        _base_prompt = (
+            ANALYSIS_SYSTEM_PROMPT
+            if _model_supports_native_tools and not _use_lite_prompt
+            else _build_analysis_prompt_lite(_intent_message)
+        )
     elif _intent == "general":
         # 纯知识/概念问题：注入日期，但不注入工具 schema
         from datetime import datetime as _dt2
@@ -303,7 +423,7 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
 
     # Inject live broker context when user is asking about their own portfolio,
     # or when a broker is connected and the message is finance-related.
-    if _is_broker_intent(message):
+    if _is_broker_intent(_intent_message):
         _broker_ctx = _build_broker_context_block()
         if _broker_ctx:
             system_prompt = system_prompt + "\n\n" + _broker_ctx
@@ -342,17 +462,35 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
 
     messages = [{"role": "system", "content": system_prompt}]
     for msg in _trimmed_history:
-        messages.append({"role": msg["role"], "content": msg["content"]})
-    # send_message pre-appends the current user turn to self.conversation before
-    # calling stream_ollama, so history already ends with a user message.
-    # Only add `message` if the last entry is NOT already a user message.
-    if not (_trimmed_history and _trimmed_history[-1].get("role") == "user"):
+        prepared_msg = {
+            "role": msg["role"],
+            "content": msg.get("content", ""),
+        }
+        for key in ("tool_calls", "tool_call_id", "name"):
+            if msg.get(key) is not None:
+                prepared_msg[key] = msg[key]
+        messages.append(prepared_msg)
+    # Runtime adapters pass history and the current prompt separately. Legacy
+    # callers may already have appended that exact prompt, so deduplicate by
+    # content rather than by role; a tool-result message is also role=user and
+    # must not cause the next agent instruction to be dropped.
+    _last_is_current = bool(
+        _trimmed_history
+        and _trimmed_history[-1].get("role") == "user"
+        and _trimmed_history[-1].get("content") == message
+    )
+    if not _last_is_current:
         messages.append({"role": "user", "content": message})
 
     # ── 工具注入：通识问答跳过，同时跳过无法可靠调用工具的小模型 ──────────
     # 判断模型是否具备工具调用能力（text_only / format不支持的都跳过）
     _model_can_use_tools = False
-    if _HAS_MODEL_CAP and enable_tools and LOCAL_TOOL_SCHEMAS and not _is_general:
+    if (
+        _HAS_MODEL_CAP
+        and enable_tools
+        and _available_tool_schemas
+        and (not _is_general or _explicit_tool_signal)
+    ):
         _tool_cap = get_model_capability(model)
         # 只有明确支持工具且 context_window >= 8192 的模型才注入 tool schema
         _model_can_use_tools = (
@@ -372,11 +510,15 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
     # 策略：
     #   1. system prompt 替换为"数据已预取"专用 prompt
     #   2. 数据同时注入到用户消息开头（本地模型对最近的 user message 最敏感）
-    _skip_market_prefetch = _is_general or _is_visual_artifact_request
+    _skip_market_prefetch = (
+        _is_general
+        or _is_visual_artifact_request
+        or _model_can_use_tools
+    )
     if _HAS_MDC and not _skip_market_prefetch:
         import time as _t_inj
         _t_inj_start = _t_inj.time()
-        _market_inject = _try_prefetch_market_data(message, history)
+        _market_inject = _try_prefetch_market_data(_intent_message, history)
         _t_inj_ms = int((_t_inj.time() - _t_inj_start) * 1000)
         if _market_inject:
             # 过程可见化：⏺/✓ 格式，与工具调用步骤保持一致
@@ -396,7 +538,7 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
             # Replace system prompt with data-first prompt.
             # Use nano variant for 1-3B models (no template placeholders).
             _is_nano_model = _use_lite_prompt or _model_size in ("nano", "small")
-            _prefetched_sys = _build_prefetched_analysis_prompt(nano=_is_nano_model, user_message=message)
+            _prefetched_sys = _build_prefetched_analysis_prompt(nano=_is_nano_model, user_message=_intent_message)
             if messages and messages[0].get("role") == "system":
                 messages[0]["content"] = _prefetched_sys
             else:
@@ -415,8 +557,8 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
                     break
 
     # ── 体育赛事数据预取：sports query → inject live scores / WC data + Poisson ─
-    if _is_general and _is_sports_query(message):
-        _sports_ctx = _try_prefetch_sports_data(message)
+    if _is_general and _is_sports_query(_intent_message):
+        _sports_ctx = _try_prefetch_sports_data(_intent_message)
         if not _sports_ctx:
             _sports_ctx = _recent_sports_quant_context(history)
         if _sports_ctx:
@@ -469,7 +611,7 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
 
     # ── 文件路径自动注入：若用户消息引用了本地文件，预读并注入内容 ────────────
     # 无论意图是什么，只要消息里有可读的文件路径就注入（coding / analysis 均有效）
-    _file_inject = _try_inject_file_paths(message)
+    _file_inject = _try_inject_file_paths(_intent_message)
     if _file_inject:
         for _mi in reversed(messages):
             if _mi.get("role") == "user":
@@ -482,15 +624,19 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
     #   · 知识解释问题（"什么是X", "如何…"） → 1500 tokens（保证完整性）
     #   · 正常问题 → 模型 max_tokens 配置值
     _is_small_model = _HAS_MODEL_CAP and get_model_capability(model).context_window < 8192
-    _is_greeting    = _is_simple_greeting(message)
-    _wants_complete_output = any(k in message.lower() for k in (
+    _is_greeting    = _is_simple_greeting(_intent_message)
+    _wants_complete_output = any(k in _intent_message.lower() for k in (
         "完整", "完整输出", "完整给出", "全面", "详细", "不要中断", "不要截断",
         "complete", "full output", "comprehensive", "do not stop", "don't stop",
         "do not truncate", "end-to-end",
     ))
 
     if _is_greeting:
-        _effective_max_tokens = 200
+        # Reasoning-capable Ollama Cloud models can spend more than 200 tokens
+        # in ``message.thinking`` before emitting the short visible greeting.
+        _effective_max_tokens = 512 if (
+            _HAS_MODEL_CAP and get_model_capability(model).thinking
+        ) else 200
     elif _wants_complete_output:
         _complete_cap = max(2048, min(8192, int(_num_ctx * 0.45)))
         _effective_max_tokens = max(_max_tokens, _complete_cap)
@@ -584,6 +730,11 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
     tool_calls_pending = []
     _tool_call_counts = {}
     _tool_name_counts = {}
+    _available_tool_names = {
+        s.get("function", {}).get("name", "")
+        for s in _schemas_for_context
+        if s.get("function", {}).get("name")
+    }
     max_tool_rounds = 25 if _wants_complete_output or _intent == "coding" else 12
     _server_retry_budget = 2
     _continuation_count = 0
@@ -607,7 +758,14 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
         return tool_name, payload
 
     def _register_tool_call(tool_name: str, params: dict) -> dict:
-        call = {"tool": tool_name, "params": params}
+        tool_name, normalized_params, requested_name = _normalize_requested_tool_call(
+            tool_name,
+            params,
+            _available_tool_names,
+        )
+        call = {"tool": tool_name, "params": normalized_params}
+        if requested_name != tool_name:
+            call["_aria_requested_tool"] = requested_name
         sig = _tool_signature(tool_name, params)
         seen = _tool_call_counts.get(sig, 0)
         _tool_call_counts[sig] = seen + 1
@@ -747,6 +905,10 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
 
                         # Check for native tool calls from Ollama
                         msg = data.get("message", {})
+                        reasoning = msg.get("thinking", "")
+                        if reasoning:
+                            if on_thinking:
+                                on_thinking(reasoning)
                         if msg.get("tool_calls"):
                             for tc in msg["tool_calls"]:
                                 fn = tc.get("function", {})
@@ -935,6 +1097,22 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
             else:
                 tool_calls_this_round = tool_calls_this_round[:1]
 
+        if defer_tool_execution:
+            clean_text = _strip_tool_call_tags(full_response)
+            return {
+                "success": True,
+                "response": clean_text,
+                "tools_used": [],
+                "sources": [],
+                "tool_calls_pending": [
+                    {"tool": tc["tool"], "params": tc["params"]}
+                    for tc in tool_calls_this_round
+                    if not tc.get("_aria_duplicate")
+                ],
+                "usage": usage,
+                "provider": "ollama",
+            }
+
         # Execute tool calls locally and feed results back
         clean_text = _strip_tool_call_tags(full_response)
         payload["messages"].append({"role": "assistant", "content": clean_text,
@@ -1115,7 +1293,7 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
                 r'保存(?:到|为|成)?\s*([^\s，,。]+\.py)'
                 r'|save\s+(?:to\s+|as\s+)?([^\s,]+\.py)'
                 r'|(?:named?|called?|filename?)\s+([^\s,]+\.py)',
-                message, _re.IGNORECASE
+                _intent_message, _re.IGNORECASE
             )
             if _fname_match:
                 _fname = next(g for g in _fname_match.groups() if g)

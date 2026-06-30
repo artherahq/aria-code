@@ -15,6 +15,17 @@ from .provider_health import (
     classify_provider_error,
     summarize_provider_health,
 )
+from .references import (
+    REFERENCE_KINDS,
+    ContextReference,
+    PreparedReferences,
+    ReferenceKind,
+    ReferencePolicy,
+    ReferenceService,
+    build_reference_service,
+    iter_reference_tokens,
+    reference_search_roots,
+)
 from .registry import ServiceSpec, list_service_specs, required_service_names, service_map
 from .usage import ServiceUsageSpec, list_service_usage_specs, service_usage_map
 
@@ -23,6 +34,7 @@ __all__ = [
     "ContextPolicy",
     "ContextService",
     "ContextSummaryEnvelope",
+    "ContextReference",
     "DataBundle",
     "DataService",
     "DataServiceResult",
@@ -30,12 +42,20 @@ __all__ = [
     "ProviderHealthRegistry",
     "ProviderIssue",
     "ProviderState",
+    "PreparedReferences",
+    "REFERENCE_KINDS",
+    "ReferenceKind",
+    "ReferencePolicy",
+    "ReferenceService",
     "ServiceSpec",
     "ServiceUsageSpec",
     "build_context_service",
+    "build_reference_service",
     "classify_provider_error",
     "list_service_specs",
     "list_service_usage_specs",
+    "iter_reference_tokens",
+    "reference_search_roots",
     "required_service_names",
     "service_map",
     "service_usage_map",

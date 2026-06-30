@@ -45,6 +45,20 @@ class RuntimeAgentLoopTests(unittest.TestCase):
             ["所有云端 Provider 均请求失败，请检查网络或 API Key 是否有效。"],
         )
 
+    def test_agent_error_presentation_empty_response_is_actionable(self):
+        presentation = AgentErrorPresentation.from_error("empty_response")
+
+        self.assertEqual(presentation.level, "warning")
+        self.assertFalse(presentation.use_generic_error_prefix)
+        self.assertIn("空响应", presentation.lines[0])
+
+    def test_agent_error_presentation_respects_ui_language(self):
+        presentation = AgentErrorPresentation.from_error("empty_response", lang="en")
+
+        self.assertIn("no visible response", presentation.lines[0])
+        self.assertIn("/health", presentation.lines[1])
+        self.assertTrue(any("/health" in line for line in presentation.lines))
+
     def test_agent_error_presentation_unknown_error(self):
         presentation = AgentErrorPresentation.from_error("boom")
 
@@ -161,6 +175,16 @@ class RuntimeAgentLoopTests(unittest.TestCase):
         self.assertEqual(result.sources, [{"id": "source-1"}])
         self.assertEqual(result.metadata.total_tokens, 10)
         self.assertEqual(result.to_dict()["metadata"]["parts"], result.metadata.parts)
+
+    def test_agent_turn_state_keeps_streamed_text_when_result_text_is_empty(self):
+        state = AgentTurnState(provider="ollama")
+
+        state.apply_model_result(
+            {"success": True, "response": "", "provider": "ollama"},
+            fallback_response="streamed answer",
+        )
+
+        self.assertEqual(state.total_response, "streamed answer")
 
     def test_agent_turn_state_builds_cancelled_result(self):
         state = AgentTurnState(provider="ollama")
@@ -341,7 +365,14 @@ class RuntimeAgentLoopTests(unittest.TestCase):
         self.assertEqual(captured["policy"], "balanced")
         self.assertTrue(captured["user_approved"])
         self.assertEqual(result.activities[0].tool, "run_command")
-        self.assertEqual(result.assistant_message, {"role": "assistant", "content": "assistant text"})
+        self.assertEqual(result.assistant_message["role"], "assistant")
+        self.assertEqual(result.assistant_message["content"], "assistant text")
+        self.assertEqual(
+            result.assistant_message["tool_calls"][0]["function"],
+            {"name": "run_command", "arguments": {"command": "pytest -q"}},
+        )
+        self.assertEqual(result.tool_messages[0]["role"], "tool")
+        self.assertEqual(result.tool_messages[0]["name"], "run_command")
         self.assertEqual(result.user_message["role"], "user")
         self.assertIn("run_command:ok", result.followup)
 

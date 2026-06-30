@@ -1581,6 +1581,391 @@ class BacktestCommandsMixin:
                 print(f"Skipped: {', '.join(skipped)}")
             print(f"Run: cd \"{base_dir}\" && python3 main.py")
 
+    async def _strategy_overview(self, vault):
+        """所有策略一览看板：版本数 / 最新 / 回测 Sharpe·收益 / 审查 / 是否部署实盘。"""
+        names = vault.list_all_names()
+        if not names:
+            console.print("  [dim]还没有保存任何策略。用 /strategy save 开始。[/dim]" if HAS_RICH
+                          else "no strategies")
+            return
+        deployed = set()
+        try:
+            from portfolio_ledger import PortfolioLedger
+            groups = PortfolioLedger().positions_by_strategy(names)
+            deployed = {k for k in groups if k != PortfolioLedger.UNATTRIBUTED}
+        except Exception:
+            pass
+
+        if HAS_RICH:
+            from rich.table import Table
+            console.print()
+            console.print("  [bold cyan]策略总览[/bold cyan]")
+            tbl = Table(box=None, header_style="bold", pad_edge=False)
+            tbl.add_column("策略", width=20)
+            tbl.add_column("版本", justify="right", width=4)
+            tbl.add_column("最新", width=8)
+            tbl.add_column("回测", width=22)
+            tbl.add_column("审查", justify="center", width=4)
+            tbl.add_column("实盘", justify="center", width=4)
+            for nm in names:
+                vers = vault.list(nm, limit=50)
+                if not vers:
+                    continue
+                latest = vers[0]
+                btv = next((v for v in vers if v.backtest_result), None)
+                if btv and btv.backtest_result:
+                    br = btv.backtest_result
+                    sh = br.get("sharpe_ratio")
+                    rt = br.get("total_return_pct", br.get("total_return"))
+                    if rt is not None:
+                        rt = rt * 100 if abs(rt) < 5 else rt   # 兼容 0.18 / 18.0
+                    if sh is not None and rt is not None:
+                        body = f"Sharpe {sh:.2f} · {rt:+.1f}%"
+                    elif sh is not None:
+                        body = f"Sharpe {sh:.2f}"
+                    else:
+                        body = "—"
+                    col = "green" if (sh or 0) >= 1 else ("yellow" if (sh or 0) > 0 else "red")
+                    bt = f"[{col}]{body}[/{col}]"
+                else:
+                    bt = "[dim]未回测[/dim]"
+                rv = "[green]✓[/green]" if latest.review_result else "[dim]—[/dim]"
+                live = "[green]●[/green]" if nm in deployed else "[dim]○[/dim]"
+                tbl.add_row(nm[:20], str(len(vers)), latest.version_tag, bt, rv, live)
+            console.print(tbl)
+            console.print("  [dim]详情: /strategy show <名字>   ·   部署: /deploy <名字> SYM:qty[/dim]")
+            console.print()
+        else:
+            for nm in names:
+                vers = vault.list(nm, limit=50)
+                if vers:
+                    print(f"  {nm}: {len(vers)} versions, latest {vers[0].version_tag}"
+                          + (" [deployed]" if nm in deployed else ""))
+
+    @staticmethod
+    def _parse_deploy_token(tok: str):
+        """
+        解析部署持仓 token → (symbol, qty_or_None, weight_or_None, price_or_None)。
+
+          SYM:qty[@price]    固定股数        e.g. AAPL:10      AAPL:10@150
+          SYM:pct%[@price]   占资金比例(权重)  e.g. AAPL:30%     AAPL:30%@150
+
+        价格可省（返回 None，由调用方取实时价）；权重模式由调用方结合资金折算股数。
+        非法输入抛 ValueError。作为 staticmethod 经 self 调用，以在 mixin 全局重绑后仍可用。
+        """
+        sym, sep, rest = tok.partition(":")
+        if not sep or not rest.strip():
+            raise ValueError("缺数量，用 SYM:qty 或 SYM:pct%")
+        amt_s, _, px_s = rest.partition("@")
+        amt_s = amt_s.strip()
+        price = float(px_s) if px_s.strip() else None
+        if price is not None and price <= 0:
+            raise ValueError("价格须为正")
+        sym = sym.strip().upper()
+        if amt_s.endswith("%"):
+            weight = float(amt_s[:-1]) / 100.0
+            if not (0 < weight <= 1.0):
+                raise ValueError("权重须在 0–100%")
+            return sym, None, weight, price
+        qty = float(amt_s)
+        if qty <= 0:
+            raise ValueError("数量须为正")
+        return sym, qty, None, price
+
+    @staticmethod
+    def _value_weights(positions, prices):
+        """市值权重：{sym: net_qty} + {sym: price} → {sym: weight}（总市值为 0 或无价时返回空）。"""
+        vals = {s: positions[s] * prices[s] for s in positions if prices.get(s)}
+        tot = sum(vals.values())
+        return {s: v / tot for s, v in vals.items()} if tot > 0 else {}
+
+    @staticmethod
+    def _rebalance_plan(current, targets, prices, capital=None):
+        """
+        计算把现有持仓对齐到目标权重所需的调仓（纯函数，可测）。
+
+          current: {sym: net_qty}   targets: {sym: weight}   prices: {sym: price}
+          capital: 组合总值；省略则用现有持仓市值之和（在现有资金内再平衡）。
+
+        返回按标的排序的计划项 list：{symbol, cur_weight, target_weight, side, shares, price}。
+        只产生非平凡调仓；不做空（SELL 数量上限为当前持仓）。
+        """
+        total = capital if capital else sum(current.get(s, 0.0) * prices[s] for s in prices if s in current)
+        if not total or total <= 0:
+            return []
+        plan = []
+        for s in sorted(set(current) | set(targets)):
+            px = prices.get(s)
+            if not px:
+                continue
+            cq = current.get(s, 0.0)
+            cw = (cq * px) / total
+            tw = targets.get(s, 0.0)
+            dshares = round((tw * total - cq * px) / px, 4)
+            if abs(dshares) < 1e-4:
+                continue
+            side = "BUY" if dshares > 0 else "SELL"
+            shares = abs(dshares)
+            if side == "SELL":
+                shares = min(shares, cq)        # 不做空：卖出不超过持仓
+            if shares < 1e-4:
+                continue
+            plan.append({"symbol": s, "cur_weight": cw, "target_weight": tw,
+                         "side": side, "shares": round(shares, 4), "price": px})
+        return plan
+
+    async def cmd_deploy(self, args: str):
+        """
+        部署策略到实盘账本，闭合 回测 → 实盘 环。
+
+        /deploy <策略> AAPL:10 MSFT:5@320       — 按股数建仓（@价格可省，省则取实时价）
+        /deploy <策略> $100000 AAPL:30% MSFT:20% — 按权重建仓（先给资金，自动按实时价折算股数）
+        /deploy <策略> rebalance [apply] AAPL:30% MSFT:20% — 对齐到目标权重（默认预览，apply 落账）
+        /deploy <策略> rebalance equal | like <参考策略>     — 等权 / 对齐另一策略的市值权重
+        /deploy <策略> close                    — 平掉该策略当前实盘净持仓
+        /deploy <策略>                          — 显示该策略回测摘要与用法
+
+        交易自动打标记 reason="deploy <策略> @<版本>"，从而被
+        /strategy show（实盘 vs 回测）与 /portfolio holdings（分组看板）关联。
+        """
+        if not _HAS_VAULT:
+            console.print("[yellow]strategy_vault.py 未找到[/yellow]" if HAS_RICH else "strategy_vault not found")
+            return
+        parts = args.strip().split()
+        if not parts:
+            msg = ("用法: /deploy <策略> SYM:qty[@price] …  |  /deploy <策略> $资金 SYM:pct% …  |  "
+                   "/deploy <策略> close")
+            console.print(f"  [yellow]{msg}[/yellow]" if HAS_RICH else msg)
+            return
+
+        def _live_price(sym):
+            try:
+                import yfinance as yf
+                h = yf.Ticker(sym).history(period="1d")
+                return float(h["Close"].iloc[-1]) if not h.empty else None
+            except Exception:
+                return None
+
+        name  = parts[0]
+        vault = _get_vault()
+        all_versions = vault.list(name, limit=20)
+        if not all_versions:
+            console.print(f"  [red]未找到策略 '{name}'[/red]，先 /strategy save。" if HAS_RICH
+                          else f"Not found: {name}")
+            return
+        latest = all_versions[0]
+        bt = latest.backtest_result or next((v.backtest_result for v in all_versions if v.backtest_result), None)
+
+        from portfolio_ledger import PortfolioLedger
+        ledger = PortfolioLedger()
+        rest = parts[1:]
+
+        # /deploy <策略>  → 回测摘要 + 用法（你将对照它部署）
+        if not rest:
+            if HAS_RICH:
+                console.print(f"\n  [bold cyan]部署 · {name}[/bold cyan]  [dim]最新 {latest.version_tag} · {latest.created_at[:10]}[/dim]")
+                if bt:
+                    def _g(*ks):
+                        for k in ks:
+                            if bt.get(k) is not None:
+                                return bt[k]
+                        return None
+                    sh = _g("sharpe_ratio"); rt = _g("total_return_pct", "total_return")
+                    console.print(f"  [dim]回测: Sharpe {sh if sh is not None else '—'} · "
+                                  f"总收益 {rt if rt is not None else '—'}[/dim]")
+                else:
+                    console.print("  [dim]该策略尚无回测。建议先 /backtest 再部署。[/dim]")
+                console.print("  [dim]建仓: /deploy {0} AAPL:10 MSFT:5@320   平仓: /deploy {0} close[/dim]\n".format(name))
+            else:
+                print(f"deploy {name} (latest {latest.version_tag}); usage: /deploy {name} SYM:qty[@price] | close")
+            return
+
+        # /deploy <策略> close → 平掉该策略净持仓
+        if rest[0].lower() == "close":
+            poss = ledger.positions_by_strategy([name]).get(name, [])
+            if not poss:
+                console.print(f"  [dim]{name} 当前无实盘净持仓。[/dim]" if HAS_RICH else "no positions")
+                return
+            done = []
+            for p in poss:
+                px = _live_price(p["symbol"]) or p["avg_cost"]
+                tid = ledger.add_trade(p["symbol"], "SELL", p["net_qty"], px,
+                                       reason=f"deploy {name} close @{latest.version_tag}")
+                done.append((tid, p["symbol"], p["net_qty"], px))
+            if HAS_RICH:
+                console.print(f"\n  [green]✓ 已平仓 {name}[/green]  [dim]{len(done)} 笔[/dim]")
+                for tid, s, q, px in done:
+                    console.print(f"   [red]SELL[/red] {s} × {q:g} @ {px:,.2f}  [dim]#{tid}[/dim]")
+                console.print(f"  [dim]撤销: /journal delete <id>[/dim]\n")
+            else:
+                for tid, s, q, px in done:
+                    print(f"  SELL {s} {q} @ {px}  #{tid}")
+            return
+
+        # /deploy <策略> rebalance [apply] [$资金] SYM:pct% … → 对齐到目标权重（默认预览）
+        if rest[0].lower() == "rebalance":
+            sub = rest[1:]
+            do_apply = bool(sub and sub[0].lower() == "apply")
+            if do_apply:
+                sub = sub[1:]
+            # 剥离资金 token（$100000 / cap:100000）
+            capital, errs, rest2 = None, [], []
+            for tok in sub:
+                t = tok.strip()
+                if t.startswith("$") or t.lower().startswith(("cap:", "cap=")):
+                    cs = t[1:] if t.startswith("$") else t[4:]
+                    try:
+                        capital = float(cs.replace(",", ""))
+                    except ValueError:
+                        pass
+                    continue
+                rest2.append(tok)
+
+            cur = {p["symbol"]: p for p in ledger.positions_by_strategy([name]).get(name, [])}
+            mode = rest2[0].lower() if rest2 else ""
+
+            # 目标权重来源：equal（当前持仓等权）/ like <策略>（对齐另一策略市值权重）/ 显式 SYM:pct%
+            targets = {}   # sym -> (weight, price_or_None)
+            if mode == "equal":
+                if not cur:
+                    console.print(f"  [yellow]{name} 无持仓，无法等权再平衡。[/yellow]" if HAS_RICH else "no positions")
+                    return
+                w = 1.0 / len(cur)
+                targets = {s: (w, None) for s in cur}
+            elif mode == "like":
+                if len(rest2) < 2:
+                    console.print(f"  [yellow]用法: /deploy {name} rebalance like <参考策略>[/yellow]"
+                                  if HAS_RICH else "need ref strategy")
+                    return
+                ref = rest2[1]
+                ref_pos = {p["symbol"]: p["net_qty"]
+                           for p in ledger.positions_by_strategy([ref]).get(ref, [])}
+                if not ref_pos:
+                    console.print(f"  [yellow]参考策略 '{ref}' 无实盘持仓。[/yellow]" if HAS_RICH else "ref empty")
+                    return
+                refw = self._value_weights(ref_pos, {s: (_live_price(s) or 0) for s in ref_pos})
+                if not refw:
+                    console.print(f"  [yellow]无法获取 '{ref}' 的报价以计算参考权重。[/yellow]"
+                                  if HAS_RICH else "no ref prices")
+                    return
+                targets = {s: (w, None) for s, w in refw.items()}
+            else:
+                for tok in rest2:
+                    try:
+                        s, q, w, px = self._parse_deploy_token(tok)
+                        if w is None:
+                            errs.append(f"{tok} (再平衡用权重 SYM:pct%)"); continue
+                        targets[s] = (w, px)
+                    except Exception as e:
+                        errs.append(f"{tok} ({e})")
+                if not targets:
+                    console.print(f"  [yellow]需要目标权重：SYM:pct% …  |  equal  |  like <策略>[/yellow]"
+                                  if HAS_RICH else "need targets")
+                    return
+            syms = sorted(set(cur) | set(targets))
+            prices = {}
+            for s in syms:
+                px = (targets.get(s, (None, None))[1] or _live_price(s)
+                      or (cur[s]["avg_cost"] if s in cur else None))
+                if px:
+                    prices[s] = px
+            plan = self._rebalance_plan({s: cur[s]["net_qty"] for s in cur},
+                                        {s: w for s, (w, _) in targets.items()}, prices, capital)
+            if not plan:
+                console.print(f"  [green]{name} 已接近目标权重，无需调仓。[/green]" if HAS_RICH else "balanced")
+                return
+            if HAS_RICH:
+                from rich.table import Table
+                console.print()
+                head = "执行再平衡" if do_apply else "再平衡预览"
+                console.print(f"  [bold cyan]{name} · {head}[/bold cyan]")
+                tbl = Table(box=None, header_style="bold", pad_edge=False)
+                tbl.add_column("标的", width=8)
+                tbl.add_column("当前%", justify="right", width=7)
+                tbl.add_column("目标%", justify="right", width=7)
+                tbl.add_column("操作", width=6)
+                tbl.add_column("股数", justify="right", width=10)
+                tbl.add_column("金额", justify="right", width=12)
+                for it in plan:
+                    sc = "green" if it["side"] == "BUY" else "red"
+                    tbl.add_row(it["symbol"], f"{it['cur_weight']*100:.0f}%", f"{it['target_weight']*100:.0f}%",
+                                f"[{sc}]{it['side']}[/{sc}]", f"{it['shares']:g}",
+                                f"{it['shares']*it['price']:,.0f}")
+                console.print(tbl)
+                for e in errs:
+                    console.print(f"   [yellow]跳过 {e}[/yellow]")
+                if do_apply:
+                    ids = [ledger.add_trade(it["symbol"], it["side"], it["shares"], it["price"],
+                                            reason=f"deploy {name} rebalance @{latest.version_tag}")
+                           for it in plan]
+                    console.print(f"  [green]✓ 已执行 {len(ids)} 笔[/green] · [dim]撤销 /journal delete <id>[/dim]")
+                else:
+                    console.print(f"  [dim]以上为预览。执行: /deploy {name} rebalance apply …（同样参数）[/dim]")
+                console.print()
+            else:
+                for it in plan:
+                    print(f"  {it['side']} {it['symbol']} {it['shares']:g} @ {it['price']}")
+                if do_apply:
+                    for it in plan:
+                        ledger.add_trade(it["symbol"], it["side"], it["shares"], it["price"],
+                                         reason=f"deploy {name} rebalance @{latest.version_tag}")
+                    print(f"  applied {len(plan)} trades")
+            return
+
+        # /deploy <策略> [$资金] SYM:qty|SYM:pct% [@price] … → 建仓
+        # 先剥离资金 token（$100000 / cap:100000），用于按权重折算股数
+        capital = None
+        pos_tokens = []
+        for tok in rest:
+            t = tok.strip()
+            if t.startswith("$") or t.lower().startswith(("cap:", "cap=")):
+                cs = t[1:] if t.startswith("$") else t[4:]
+                try:
+                    capital = float(cs.replace(",", ""))
+                except ValueError:
+                    pass
+                continue
+            pos_tokens.append(tok)
+
+        deployed, errors, total_weight = [], [], 0.0
+        for tok in pos_tokens:
+            try:
+                sym, qty, weight, price = self._parse_deploy_token(tok)
+                if price is None:
+                    price = _live_price(sym)
+                if not price:
+                    errors.append(f"{sym} (取不到价，加 @price)"); continue
+                if weight is not None:
+                    if not capital:
+                        errors.append(f"{sym} (按权重部署需先给资金，如 $100000)"); continue
+                    total_weight += weight
+                    qty = round(capital * weight / price, 4)
+                tid = ledger.add_trade(sym, "BUY", qty, price,
+                                       reason=f"deploy {name} @{latest.version_tag}")
+                deployed.append((tid, sym, qty, price))
+            except Exception as e:
+                errors.append(f"{tok} ({e})")
+        if total_weight > 1.0001:
+            errors.append(f"权重合计 {total_weight*100:.0f}% > 100%（已按各自比例建仓，注意超配）")
+
+        if HAS_RICH:
+            console.print(f"\n  [bold cyan]部署 {name} {latest.version_tag} → 实盘[/bold cyan]")
+            total = 0.0
+            for tid, s, q, px in deployed:
+                total += q * px
+                console.print(f"   [green]BUY[/green] {s} × {q:g} @ {px:,.2f}  = {q*px:,.0f}  [dim]#{tid}[/dim]")
+            if deployed:
+                console.print(f"  [dim]共投入 {total:,.0f} · 标记 reason='deploy {name} @{latest.version_tag}'[/dim]")
+                console.print(f"  [dim]→ /strategy show {name} 看实盘 vs 回测 · /portfolio holdings 看分组看板[/dim]")
+            for e in errors:
+                console.print(f"   [yellow]跳过 {e}[/yellow]")
+            console.print()
+        else:
+            for tid, s, q, px in deployed:
+                print(f"  BUY {s} {q} @ {px}  #{tid}")
+            for e in errors:
+                print(f"  skip {e}")
+
     async def cmd_strategy(self, args: str):
         """
         策略版本管理系统 (Strategy Vault)
@@ -1677,6 +2062,186 @@ class BacktestCommandsMixin:
             else:
                 for v in versions:
                     print(v.summary_line())
+
+        # ── show: 统一策略工作台 (版本史 + 回测 + 实盘持仓) ──────────────────
+        elif sub == "show":
+            # 不带名字 → 所有策略总览看板
+            if len(parts) <= 1:
+                await self._strategy_overview(vault)
+                return
+            name = parts[1]
+            versions = vault.list(name, limit=20)
+            if not versions:
+                console.print(f"  [dim]没有找到策略 '{name}'。用 /strategy list 查看全部。[/dim]" if HAS_RICH
+                              else f"  Not found: {name}")
+                return
+            latest = versions[0]
+            bt_ver = next((v for v in versions if v.backtest_result), None)
+
+            def _num(d, *keys):
+                for k in keys:
+                    val = d.get(k)
+                    if val is not None:
+                        return val
+                return None
+
+            def _pct(x):
+                if x is None:
+                    return "—"
+                v = x * 100 if abs(x) < 5 else x   # 兼容 0.18 与 18.0 两种存法
+                return f"{v:+.1f}%"
+
+            def _spark(curve):
+                vals = []
+                for x in (curve or []):
+                    if isinstance(x, (int, float)):
+                        vals.append(float(x))
+                    elif isinstance(x, dict):
+                        for k in ("equity", "value", "nav", "total", "close"):
+                            if x.get(k) is not None:
+                                vals.append(float(x[k])); break
+                if len(vals) < 2:
+                    return ""
+                blocks = "▁▂▃▄▅▆▇█"
+                s = vals[:: max(1, len(vals) // 48)]
+                lo, hi = min(s), max(s)
+                if hi <= lo:
+                    return blocks[0] * len(s)
+                return "".join(blocks[int((v - lo) / (hi - lo) * 7)] for v in s)
+
+            if HAS_RICH:
+                console.print()
+                reviewed = "✓ 已审查" if latest.review_result else "未审查"
+                console.print(f"  [bold cyan]策略工作台 · {name}[/bold cyan]")
+                console.print(f"  [dim]最新 {latest.version_tag} · {latest.created_at[:16]} · "
+                              f"{len(versions)} 个版本 · {reviewed} · hash {latest.code_hash}[/dim]")
+                if latest.message:
+                    console.print(f"  [dim]“{latest.message[:70]}”[/dim]")
+
+                console.print("\n  [bold]版本史[/bold]")
+                for v in versions[:6]:
+                    br = v.backtest_result or {}
+                    sh = _num(br, "sharpe_ratio")
+                    rt = _num(br, "total_return_pct", "total_return")
+                    mtxt = f"  [green]Sharpe {sh:.2f} · {_pct(rt)}[/green]" if sh is not None else ""
+                    marker = "●" if v is latest else "○"
+                    msg = f"  [dim]{v.message[:42]}[/dim]" if v.message else ""
+                    console.print(f"  [cyan]{marker}[/cyan] [bold]{v.version_tag}[/bold] "
+                                  f"[dim]{v.created_at[:10]}[/dim]{mtxt}{msg}")
+
+                console.print("\n  [bold]最新回测[/bold]")
+                if bt_ver and bt_ver.backtest_result:
+                    br = bt_ver.backtest_result
+                    console.print(
+                        f"  [dim]({bt_ver.version_tag})[/dim]  总收益 {_pct(_num(br,'total_return_pct','total_return'))}  ·  "
+                        f"年化 {_pct(_num(br,'annualized_return','annual_return'))}  ·  "
+                        f"Sharpe {_num(br,'sharpe_ratio') if _num(br,'sharpe_ratio') is not None else '—'}  ·  "
+                        f"回撤 {_pct(_num(br,'max_drawdown'))}  ·  胜率 {_pct(_num(br,'win_rate'))}")
+                    spark = _spark(br.get("equity_curve"))
+                    if spark:
+                        console.print(f"  [green]{spark}[/green]")
+                else:
+                    console.print("  [dim]尚无回测。运行 /backtest 后回测结果会关联到该策略版本。[/dim]")
+
+                console.print("\n  [bold]实盘部署[/bold]")
+                try:
+                    from portfolio_ledger import PortfolioLedger
+                    trades = PortfolioLedger().get_trades(limit=2000)
+                    tagged = [t for t in trades if name.lower() in str(t.get("reason") or "").lower()]
+                    if not tagged:
+                        console.print(f"  [dim]未部署到实盘。给交易加 reason 含 '{name}' 即可在此关联。[/dim]")
+                    else:
+                        # 从标记交易聚合每个标的：净持仓 + 买入均价
+                        agg = {}  # sym -> [net_qty, buy_qty, buy_cost]
+                        for t in tagged:
+                            q  = float(t.get("qty") or 0)
+                            px = float(t.get("price") or 0)
+                            a  = agg.setdefault(t["symbol"], [0.0, 0.0, 0.0])
+                            if str(t.get("side")).upper() == "BUY":
+                                a[0] += q; a[1] += q; a[2] += q * px
+                            else:
+                                a[0] -= q
+                        held = {s: v for s, v in agg.items() if abs(v[0]) > 1e-6}
+                        if not held:
+                            console.print(f"  [green]已部署[/green] · {len(tagged)} 笔标记交易 · [dim](已全部平仓)[/dim]")
+                        else:
+                            console.print(f"  [dim]获取 {len(held)} 只实时报价…[/dim]")
+                            live = {}
+                            try:
+                                import yfinance as yf
+                                for s in held:
+                                    try:
+                                        h = yf.Ticker(s).history(period="1d")
+                                        if not h.empty:
+                                            live[s] = float(h["Close"].iloc[-1])
+                                    except Exception:
+                                        pass
+                            except ImportError:
+                                pass
+
+                            from rich.table import Table
+                            tbl = Table(box=None, header_style="bold", pad_edge=False)
+                            tbl.add_column("标的", width=8)
+                            tbl.add_column("净持仓", justify="right", width=10)
+                            tbl.add_column("买入均价", justify="right", width=10)
+                            tbl.add_column("现价", justify="right", width=10)
+                            tbl.add_column("浮动盈亏", justify="right", width=13)
+                            tbl.add_column("%", justify="right", width=8)
+                            tot_cost = tot_mv = 0.0
+                            have_px = False
+                            for s, (nq, bq, bc) in sorted(held.items()):
+                                avg  = bc / bq if bq else 0.0
+                                cost = nq * avg
+                                tot_cost += cost
+                                px = live.get(s)
+                                if px is not None:
+                                    have_px = True
+                                    mv  = nq * px
+                                    tot_mv += mv
+                                    pnl = mv - cost
+                                    pct = (pnl / cost * 100) if cost else 0.0
+                                    c = "green" if pnl >= 0 else "red"
+                                    tbl.add_row(s, f"{nq:,.4g}", f"{avg:,.4f}", f"{px:,.4f}",
+                                                f"[{c}]{pnl:+,.2f}[/{c}]", f"[{c}]{pct:+.1f}%[/{c}]")
+                                else:
+                                    tot_mv += cost
+                                    tbl.add_row(s, f"{nq:,.4g}", f"{avg:,.4f}", "N/A", "—", "—")
+                            console.print(tbl)
+                            if have_px and tot_cost:
+                                live_pnl = tot_mv - tot_cost
+                                live_pct = live_pnl / tot_cost * 100
+                                c = "green" if live_pnl >= 0 else "red"
+                                console.print(f"  [bold]实盘 {len(tagged)} 笔 · 成本 {tot_cost:,.0f} · "
+                                              f"浮盈 [{c}]{live_pnl:+,.0f} ({live_pct:+.1f}%)[/{c}][/bold]")
+                                # vs 回测：口径不同（实盘自部署以来 vs 回测全程），仅作参考信号
+                                if bt_ver and bt_ver.backtest_result:
+                                    bt_ret = _num(bt_ver.backtest_result, "total_return_pct", "total_return")
+                                    if bt_ret is not None:
+                                        bt_pct = bt_ret * 100 if abs(bt_ret) < 5 else bt_ret
+                                        gap = live_pct - bt_pct
+                                        gc  = "green" if gap >= 0 else "yellow"
+                                        console.print(f"  [dim]vs 回测总收益 {bt_pct:+.1f}% · "
+                                                      f"偏离 [{gc}]{gap:+.1f}pp[/{gc}]  (口径不同，仅供参考)[/dim]")
+                            else:
+                                pos_txt = ", ".join(f"{s} {v[0]:g}" for s, v in sorted(held.items()))
+                                console.print(f"  [green]已部署[/green] · {len(tagged)} 笔 · {pos_txt}  [dim](报价不可用)[/dim]")
+                except Exception:
+                    console.print("  [dim]持仓账本不可用。[/dim]")
+                console.print()
+            else:
+                print(f"Strategy {name}: latest {latest.version_tag}, {len(versions)} versions")
+                if bt_ver and bt_ver.backtest_result:
+                    br = bt_ver.backtest_result
+                    print(f"  backtest: sharpe={br.get('sharpe_ratio')} "
+                          f"return={br.get('total_return_pct', br.get('total_return'))}")
+                try:
+                    from portfolio_ledger import PortfolioLedger
+                    tagged = [t for t in PortfolioLedger().get_trades(limit=2000)
+                              if name.lower() in str(t.get("reason") or "").lower()]
+                    if tagged:
+                        print(f"  deployed: {len(tagged)} tagged trades")
+                except Exception:
+                    pass
 
         # ── diff ──────────────────────────────────────────────────────────
         elif sub == "diff":

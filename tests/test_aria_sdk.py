@@ -1,4 +1,6 @@
 import pytest
+import sys
+import types
 
 from apps.cli.providers.base import (
     AriaSSEProvider,
@@ -54,11 +56,24 @@ def test_sdk_provider_factory_normalizes_local_and_cloud_modes():
     assert isinstance(cloud.provider, AriaSSEProvider)
 
 
+def test_ollama_stream_resolver_supports_direct_script_entrypoint(monkeypatch):
+    import apps.cli.providers.base as provider_base
+
+    sentinel = lambda: None
+    fake_main = types.SimpleNamespace(stream_ollama=sentinel)
+    monkeypatch.delitem(sys.modules, "aria_cli", raising=False)
+    monkeypatch.setitem(sys.modules, "__main__", fake_main)
+
+    assert provider_base._resolve_ollama_stream() is sentinel
+
+
 @pytest.mark.asyncio
 async def test_callback_provider_streams_events_before_done(monkeypatch):
     import apps.cli.providers.base as provider_base
 
     async def fake_stream_ollama(*args, **kwargs):
+        assert kwargs["tool_schemas"] == [{"type": "function", "function": {"name": "echo"}}]
+        assert kwargs["defer_tool_execution"] is True
         kwargs["on_token"]("hello")
         kwargs["on_thinking"]("thinking")
         kwargs["on_tool_call"]("echo", {"x": 1})
@@ -119,6 +134,33 @@ async def test_stream_provider_result_forwards_callbacks():
     assert result["response"] == "AB"
     assert result["provider"] == "fake"
     assert result["tool_calls_pending"] == [{"tool": "echo", "params": {"value": 3}}]
+
+
+@pytest.mark.asyncio
+async def test_stream_provider_result_rejects_empty_success_without_tools():
+    class EmptyProvider:
+        async def stream(self, messages, tools, *, cancel_event=None):
+            yield LLMDone(response="", provider="empty", success=True)
+
+    result = await stream_provider_result(EmptyProvider(), "hi", [])
+
+    assert result["success"] is False
+    assert result["error"] == "empty_response"
+
+
+@pytest.mark.asyncio
+async def test_stream_provider_result_allows_tool_only_turn():
+    class ToolProvider:
+        async def stream(self, messages, tools, *, cancel_event=None):
+            yield LLMToolCall("read_file", {"path": "README.md"})
+            yield LLMDone(response="", provider="tool", success=True)
+
+    result = await stream_provider_result(ToolProvider(), "hi", [])
+
+    assert result["success"] is True
+    assert result["tool_calls_pending"] == [
+        {"tool": "read_file", "params": {"path": "README.md"}},
+    ]
 
 
 @pytest.mark.asyncio
@@ -282,3 +324,30 @@ def test_deterministic_router_preserves_strategy_advice_path():
     assert result["success"] is True
     assert result["tools_used"] == ["strategy_advice"]
     assert "不需要先写文件" in result["response"]
+
+
+def test_tool_capable_model_skips_blocking_deterministic_market_lookup(monkeypatch):
+    import apps.cli.deterministic as deterministic
+
+    market_calls = []
+    monkeypatch.setattr(deterministic, "handle_strategy_advice", lambda _message: {"success": False})
+    monkeypatch.setattr(deterministic, "_handle_realty_query", lambda _message: {"success": False})
+    monkeypatch.setattr(deterministic, "_handle_stock_chart_analysis", lambda _message: {"success": False})
+    monkeypatch.setattr(
+        deterministic,
+        "_try_handle_market_overview",
+        lambda _message: market_calls.append("overview") or {"success": False},
+    )
+    monkeypatch.setattr(
+        deterministic,
+        "_try_handle_market_snapshot_analysis",
+        lambda _message, history=None: market_calls.append("snapshot") or {"success": True},
+    )
+
+    result = deterministic.run_deterministic_chain(
+        "分析苹果股票走势和成交量",
+        model_has_tools=True,
+    )
+
+    assert result == {"success": False}
+    assert market_calls == []

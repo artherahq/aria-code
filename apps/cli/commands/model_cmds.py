@@ -18,7 +18,9 @@ class ModelCommandsMixin:
         #           /model openai/gpt-4.5          /model openai/o3  /model openai/o4-mini
         if "/" in name and not name.startswith("http"):
             _prov, _mod = name.split("/", 1)
-            _prov = _prov.strip().lower()
+            from apps.cli.providers.chat_routing import normalize_provider_name
+
+            _prov = normalize_provider_name(_prov)
             _mod  = _mod.strip()
             _local_backends = {"ollama", "lmstudio", "vllm", "llamacpp", "jan", "custom"}
             if _prov not in _local_backends:
@@ -31,6 +33,11 @@ class ModelCommandsMixin:
                     return
             self.terminal.config["local_provider"] = _prov
             self.terminal.config["model"] = _mod
+            self.terminal.config["local_mode"] = _prov in _local_backends
+            # /model is an explicit provider selection. A legacy
+            # backend_chat=true value must not silently override it and route
+            # the next turn through Aria SSE instead of the selected runtime.
+            self.terminal.config["backend_chat"] = False
             save_config(self.terminal.config)
             msg = f"✓ 已切换到 {_prov}/{_mod}"
             console.print(f"[green]{msg}[/green]") if HAS_RICH else print(msg)
@@ -58,11 +65,14 @@ class ModelCommandsMixin:
 
         # Direct selection by full Ollama model ID: /model qwen2.5-coder:1.5b
         if name and ":" in name:
-            self._set_model_by_id(name)
+            self._set_model_by_id(name, provider="ollama")
             return
 
         # ── Interactive picker (Codex style: numbered list + descriptions) ────
         ollama_url  = self.terminal.config.get("ollama_url", "http://localhost:11434")
+        current_provider = str(
+            self.terminal.config.get("local_provider") or "ollama"
+        ).lower()
         current_id  = self.terminal.config.get("model", "qwen2.5:7b")
         try:
             from apps.cli.i18n import t as _i18nt
@@ -72,24 +82,81 @@ class ModelCommandsMixin:
             _lang = "en"
             _i18n = lambda k: k
 
-        rich_models, ollama_err = detect_ollama_models_rich(ollama_url)
+        _local_backends = {"ollama", "lmstudio", "vllm", "llamacpp", "jan", "custom"}
+        if current_provider == "ollama":
+            rich_models, ollama_err = detect_ollama_models_rich(ollama_url)
+        elif current_provider in _local_backends:
+            try:
+                from local_llm_provider import LocalLLMProvider
+
+                _runtime = LocalLLMProvider.from_config(self.terminal.config)
+                _runtime_models = _runtime.list_models()
+                rich_models = [
+                    {
+                        "name": model_name,
+                        "size_label": "",
+                        "family": "",
+                        "quant": "",
+                        "execution": "local",
+                        "remote_model": "",
+                        "remote_host": "",
+                        "context_window": 0,
+                        "capabilities": [],
+                    }
+                    for model_name in _runtime_models
+                ]
+                ollama_err = None if _runtime.is_available() else f"{current_provider} unavailable"
+            except Exception as exc:
+                rich_models, ollama_err = [], str(exc)
+        else:
+            # Cloud catalog APIs vary widely and can be expensive. Keep the
+            # selected model visible and report credential readiness; users can
+            # switch directly with /model provider/model.
+            if _get_provider_key(current_provider):
+                rich_models = [{
+                    "name": current_id,
+                    "size_label": "",
+                    "family": "",
+                    "quant": "",
+                    "execution": "remote",
+                    "remote_model": current_id,
+                    "remote_host": current_provider,
+                    "context_window": 0,
+                    "capabilities": [],
+                }]
+                ollama_err = None
+            else:
+                rich_models = []
+                ollama_err = f"API key missing · /apikey set {current_provider} <key>"
         installed_names = {m["name"] for m in rich_models}
         aria_ids        = {m["id"] for m in MODELS.values()}
+        runtime_by_id   = {m["name"]: m for m in rich_models}
 
         # ── Build picker title (one line, shown inside arrow_select header) ──
         _sel_model = _i18n("select_model")
         _installed = _i18n("installed")
         if ollama_err:
-            _picker_title = f"{_sel_model}  [Ollama: {ollama_err[:40]}]"
+            _picker_title = f"{_sel_model}  [{current_provider}: {ollama_err[:40]}]"
         else:
-            n_installed = sum(1 for m in MODELS.values() if m["id"] in installed_names)
-            _picker_title = f"{_sel_model}   {n_installed}/{len(MODELS)} {_installed}  ·  /model <id> or number"
+            n_local = sum(1 for m in rich_models if m.get("execution") != "remote")
+            n_remote = len(rich_models) - n_local
+            if current_provider == "ollama":
+                _picker_title = (
+                    f"{_sel_model}  Ollama {len(rich_models)} ready"
+                    f" · {n_local} local · {n_remote} cloud"
+                )
+            else:
+                _picker_title = (
+                    f"{_sel_model}  {current_provider} {len(rich_models)} ready"
+                    " · /model <provider>/<model>"
+                )
 
         def _status_tag(mid: str, badge: str) -> str:
-            """Return short status: ● installed / ○ not installed / ☁ cloud"""
-            if badge == "Cloud":
+            """Return runtime status, not a hard-coded catalogue badge."""
+            runtime = runtime_by_id.get(mid)
+            if runtime and runtime.get("execution") == "remote":
                 return "☁"
-            return "●" if mid in installed_names else "○"
+            return "●" if runtime else "○"
 
         # Get terminal width for safe label truncation
         try:
@@ -125,14 +192,25 @@ class ModelCommandsMixin:
             desc  = m.get("description", "")
             badge = m.get("badge", "")
             extras = []
-            if _HAS_MODEL_CAP:
+            runtime = runtime_by_id.get(m["id"], {})
+            runtime_ctx = int(runtime.get("context_window") or 0)
+            runtime_caps = set(runtime.get("capabilities") or [])
+            if runtime_ctx:
+                extras.append(f"ctx={runtime_ctx//1024}K")
+                if "tools" in runtime_caps: extras.append("tools")
+                if "thinking" in runtime_caps: extras.append("think")
+            elif _HAS_MODEL_CAP:
                 cap = get_model_capability(m["id"])
                 extras.append(f"ctx={cap.context_window//1024}K")
-                if cap.tool_calls: extras.append("tools✓")
+                if cap.tool_calls: extras.append("tools")
                 if cap.thinking:   extras.append("think")
             else:
                 extras.append(f"ctx={m.get('num_ctx', 8192)//1024}K")
-            if badge in ("Fast", "Code", "Think", "Cloud"):
+            if runtime.get("execution") == "remote":
+                extras.insert(0, "Cloud")
+            elif m["id"] in installed_names:
+                extras.insert(0, "Local")
+            elif badge in ("Fast", "Code", "Think"):
                 extras.insert(0, badge)
             meta = "  " + " · ".join(extras) if extras else ""
             # prefix "  N. ☁ ModelName  " ≈ 24 cols; give description 60% of remaining
@@ -183,10 +261,25 @@ class ModelCommandsMixin:
         # In TTY mode: include short description (static list is suppressed above).
         # In non-TTY: descriptions already shown in static list, keep labels short.
         num = 1
-        for key, m in MODELS.items():
+        picker_models = (
+            list(MODELS.values())
+            if current_provider == "ollama"
+            else [
+                {
+                    "id": item["name"], "name": item["name"],
+                    "description": (
+                        "可用模型" if str(_lang).lower().startswith("zh")
+                        else "available model"
+                    ),
+                    "num_ctx": item.get("context_window") or 8192,
+                }
+                for item in rich_models
+            ]
+        )
+        for m in picker_models:
             mid    = m["id"]
             status = _status_tag(mid, m.get("badge", ""))
-            is_cur = " ◀" if mid == current_id else ""
+            is_cur = " ✓" if mid == current_id else ""
             if _is_tty:
                 desc_part = f"  {_short_desc(m)}"
             else:
@@ -196,7 +289,10 @@ class ModelCommandsMixin:
             all_ids.append(mid)
             num += 1
 
-        community = [cm for cm in rich_models if cm["name"] not in aria_ids]
+        community = (
+            [cm for cm in rich_models if cm["name"] not in aria_ids]
+            if current_provider == "ollama" else []
+        )
         if community:
             _comm_label = _i18n("community_models")
             options.append((f"  ── {_comm_label} ──", ""))
@@ -213,14 +309,27 @@ class ModelCommandsMixin:
             options.append((f"  ── {_unreach} ──────────", ""))
             all_ids.append(None)
 
+        if not any(model_id is not None for model_id in all_ids):
+            message = (
+                f"{current_provider}: {ollama_err or 'no models available'}"
+            )
+            console.print(f"[yellow]{message}[/yellow]") if HAS_RICH else print(message)
+            return
+
         # ── Run thread-based arrow picker (short labels = no line wrap) ────
         current_idx = next((i for i, mid in enumerate(all_ids) if mid == current_id), 0)
 
         while True:
+            _controls_hint = (
+                "↑↓  Enter  Esc/q 取消"
+                if str(_lang).lower().startswith("zh")
+                else "↑↓  Enter  Esc/q Cancel"
+            )
             choice = await _run_picker_in_thread(
                 options, current_idx,
                 _picker_title,
-                max_visible=len(options),
+                max_visible=min(9, len(options)),
+                controls_hint=_controls_hint,
             )
             if choice < 0:
                 _msg = _i18n("cancelled")
@@ -231,24 +340,35 @@ class ModelCommandsMixin:
                 continue
             break
 
-        self._set_model_by_id(all_ids[choice])
+        self._set_model_by_id(all_ids[choice], provider=current_provider)
 
     def _set_model(self, key: str):
         """Set model by MODELS key."""
         m = MODELS[key]
         self._set_model_by_id(m["id"])
 
-    def _set_model_by_id(self, model_id: str):
+    def _set_model_by_id(self, model_id: str, provider: str | None = None):
         """Set model by Ollama model ID (works for both built-in and community models)."""
         self.terminal.config["model"] = model_id
+        matched = next((m for m in MODELS.values() if m["id"] == model_id), None)
+        self.terminal.config["local_provider"] = provider or (
+            "ollama" if matched is not None else
+            self.terminal.config.get("local_provider", "ollama")
+        )
+        self.terminal.config["local_mode"] = (
+            self.terminal.config["local_provider"]
+            in {"ollama", "lmstudio", "vllm", "llamacpp", "jan", "custom"}
+        )
+        self.terminal.config["backend_chat"] = False
         self.terminal._actual_model = None  # reset: new config model, no known fallback yet
         save_config(self.terminal.config)
         # Pretty label
         for m in MODELS.values():
             if m["id"] == model_id:
+                runtime = "Ollama Cloud" if m.get("badge") == "Cloud" else "Ollama"
                 if HAS_RICH:
                     console.print(f"[bold]Model:[/bold] [bold]{m['name']} {m['version']}[/bold] "
-                                  f"[dim]{m['tag']}[/dim]")
+                                  f"[dim]· {runtime}[/dim]")
                 else:
                     print(f"Model: {m['name']} {m['version']} ({m['tag']})")
                 return
@@ -798,8 +918,8 @@ class ModelCommandsMixin:
 
         # ── Section 1: Local backends ────────────────────────────────────────
         try:
-            from local_llm_provider import probe_all_backends, BACKEND_DEFAULTS
-            results = probe_all_backends()
+            from local_llm_provider import probe_local_backends, BACKEND_DEFAULTS
+            results = probe_local_backends()
             current_provider = self.terminal.config.get("local_provider", "ollama")
             # Count Ollama models if online
             _ollama_count = ""
@@ -1227,7 +1347,8 @@ class ModelCommandsMixin:
                 console.print("[bold]Configuration[/bold]")
                 console.print()
                 snap = config_snapshot()
-                for key in ("api_url", "ollama_url", "model", "thinking_mode",
+                for key in ("api_url", "ollama_url", "local_provider", "model",
+                            "provider_fallback", "llm_base_url", "thinking_mode",
                             "command_policy", "permission_mode", "network_enabled",
                             "write_policy", "lsp_autocheck", "input_style", "input_theme",
                             "response_footer", "auto_compact_context",
@@ -1273,7 +1394,8 @@ class ModelCommandsMixin:
                         pass
                 console.print()
             else:
-                for key in ("api_url", "ollama_url", "model", "thinking_mode",
+                for key in ("api_url", "ollama_url", "local_provider", "model",
+                            "provider_fallback", "llm_base_url", "thinking_mode",
                             "command_policy", "permission_mode", "network_enabled",
                             "write_policy", "lsp_autocheck", "input_style", "input_theme",
                             "response_footer", "auto_compact_context",
@@ -1309,6 +1431,15 @@ class ModelCommandsMixin:
                         msg = "thinking_mode must be one of: auto | instant | thinking"
                         console.print(f"[red]{msg}[/red]" if HAS_RICH else msg)
                         return
+                elif key == "provider_fallback":
+                    if val not in {"off", "configured", "auto"}:
+                        msg = "provider_fallback must be: off | configured | auto"
+                        console.print(f"[red]{msg}[/red]" if HAS_RICH else msg)
+                        return
+                elif key == "local_provider":
+                    from apps.cli.providers.chat_routing import normalize_provider_name
+
+                    val = normalize_provider_name(val)
                 elif key == "model":
                     resolved = MODEL_ALIASES.get(val) or (val if val in MODELS else None)
                     if not resolved:

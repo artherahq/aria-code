@@ -87,9 +87,13 @@ from apps.cli.commands.market import (
     sanitize_chart_symbol_args,
     try_top_level_route,
 )
-from apps.cli.providers.base import AriaSSEProvider, OllamaProvider
+from apps.cli.providers.base import AriaSSEProvider, ConfiguredProvider, OllamaProvider
 from apps.cli.preflight import build_intent_preflight, format_preflight_plain
-from apps.cli.runtime_consumer import TerminalApprovalEventConsumer, TerminalRuntimeEventConsumer
+from apps.cli.runtime_consumer import (
+    TerminalApprovalEventConsumer,
+    TerminalRuntimeEventConsumer,
+    TurnPhase,
+)
 from packages.aria_sdk.streaming import stream_provider_result
 from ui.render.market import print_quote_result, print_ta_result
 from apps.cli.commands.report import (
@@ -1363,7 +1367,7 @@ MODELS = {
         "intelligence": "★★★★★",
         "description": "云端 120B 中继：机构级分析，复杂金融报告",
         "capabilities": ["institutional analysis", "long-form reports", "complex reasoning"],
-        "thinking": False, "tools": True,
+        "thinking": True, "tools": True,
         "max_tokens": 8192, "num_ctx": 131072, "temperature": 0.3,
         "badge": "Cloud",
     },
@@ -1376,8 +1380,8 @@ MODELS = {
         "intelligence": "★★★★★",
         "description": "云端 671B 旗舰：最强推理，研报级分析，需订阅",
         "capabilities": ["flagship reasoning", "research report", "quant strategy"],
-        "thinking": False, "tools": True,
-        "max_tokens": 8192, "num_ctx": 131072, "temperature": 0.3,
+        "thinking": True, "tools": True,
+        "max_tokens": 8192, "num_ctx": 163840, "temperature": 0.3,
         "badge": "Cloud",
     },
 }
@@ -1526,7 +1530,9 @@ def detect_ollama_models(ollama_url: str = "http://localhost:11434") -> list:
 
 def detect_ollama_models_rich(ollama_url: str = "http://localhost:11434") -> tuple:
     """Return (models_list, error_str) where each entry in models_list is a dict:
-        {"name": str, "size_label": str, "family": str, "quant": str}
+        {"name": str, "size_label": str, "family": str, "quant": str,
+         "execution": "local" | "remote", "remote_host": str,
+         "context_window": int, "capabilities": list[str]}
     error_str is None on success, or a short human-readable reason on failure.
     """
     import urllib.request
@@ -1562,6 +1568,11 @@ def detect_ollama_models_rich(ollama_url: str = "http://localhost:11434") -> tup
             "size_label": size,    # e.g. "1.5B", "7B", "671.0B"
             "family":     fam,     # e.g. "qwen2", "deepseek2"
             "quant":      qnt,     # e.g. "Q4_K_M", "MXFP4"
+            "execution":  "remote" if m.get("remote_host") else "local",
+            "remote_model": m.get("remote_model", ""),
+            "remote_host": m.get("remote_host", ""),
+            "context_window": int(det.get("context_length") or 0),
+            "capabilities": list(m.get("capabilities") or []),
         })
     return results, None
 
@@ -3483,21 +3494,13 @@ _FILE_PATH_RE = _re_fi.compile(
     r'|docx|xlsx|pptx|pdf)(?!\w)'  # bare filenames (incl. Office docs)
     r')'
 )
-_FILE_INJECT_CAP = 8000  # total chars injected across all files in one message
-
-
-def _try_inject_file_paths(message: str) -> str:
-    """Pre-read local files referenced in the user message and inject their content.
-
-    Works like _try_prefetch_market_data() but for file paths.  Only reads files
-    that actually exist and pass _is_safe_path(), capped at 8 KB total.
-    Returns "" when no file paths are found or readable.
-    """
+def _build_file_tool_hint(message: str) -> str:
+    """Build resource pointers for file tools without reading file contents."""
     raw_matches = _FILE_PATH_RE.findall(message)
     candidates = [m for m in raw_matches if m]
     if not candidates:
         return ""
-    injected, total = [], 0
+    references: list[str] = []
     seen: set = set()
     for raw in candidates[:6]:
         raw = raw.strip().rstrip("，,。.）)")
@@ -3510,62 +3513,27 @@ def _try_inject_file_paths(message: str) -> str:
             p = pathlib.Path(raw).expanduser().resolve()
         except Exception:
             continue
-        if not p.is_file():
+        if not p.exists():
             continue
         try:
             if not _is_safe_path(p):
                 continue
         except Exception:
             continue
-        try:
-            suffix = p.suffix.lower()
-            if suffix == ".docx":
-                try:
-                    from docx import Document as _DocxDocument
-                    _doc = _DocxDocument(str(p))
-                    content = "\n".join(
-                        para.text for para in _doc.paragraphs if para.text.strip()
-                    )
-                    # Also extract tables
-                    for _tbl in _doc.tables:
-                        for _row in _tbl.rows:
-                            content += "\n" + " | ".join(
-                                c.text.strip() for c in _row.cells
-                            )
-                except ImportError:
-                    content = f"[python-docx 未安装，无法解析 .docx 文件。运行: pip install python-docx]"
-                except Exception as _de:
-                    content = f"[docx 解析失败: {_de}]"
-            elif suffix == ".pdf":
-                try:
-                    import pdfplumber as _pdfplumber
-                    with _pdfplumber.open(str(p)) as _pdf:
-                        content = "\n".join(
-                            page.extract_text() or "" for page in _pdf.pages[:20]
-                        )
-                except ImportError:
-                    content = f"[pdfplumber 未安装，无法解析 PDF。运行: pip install pdfplumber]"
-                except Exception as _pe:
-                    content = f"[PDF 解析失败: {_pe}]"
-            else:
-                content = p.read_text(errors="replace")
-            remaining = _FILE_INJECT_CAP - total
-            if remaining <= 0:
-                break
-            chunk = content[:remaining]
-            line_count = content.count("\n") + 1
-            injected.append(
-                f"\n## 📄 File: {p} ({line_count} lines)\n"
-                f"```\n{chunk}\n```\n"
-                + ("*[truncated]*\n" if len(content) > remaining else "")
-            )
-            total += len(chunk)
-        except Exception:
-            continue
-    if not injected:
+        if p.is_dir():
+            references.append(f"- folder: {p} (use list_files or search_code)")
+        elif p.suffix.lower() in {".pdf", ".docx", ".xlsx", ".xls", ".pptx", ".png", ".jpg", ".jpeg", ".gif", ".mov", ".mp4"}:
+            references.append(f"- file: {p} (use analyze_file)")
+        else:
+            references.append(f"- file: {p} (use read_file)")
+    if not references:
         return ""
-    header = "*以下为用户消息中引用的本地文件内容，请基于这些内容回答：*\n"
-    return header + "\n".join(injected) + "\n---\n"
+    return (
+        "[Referenced local resources - pointers only]\n"
+        "No file content is preloaded. Call the indicated tools before answering.\n"
+        + "\n".join(references)
+        + "\n[End referenced local resources]\n\n"
+    )
 
 
 _STOCK_ANALYSIS_INTENT_KW = frozenset({
@@ -4460,10 +4428,13 @@ def _try_handle_stock_chart_analysis(message: str) -> dict:
 
 from apps.cli.providers.llm.ollama_stream import stream_ollama as _stream_ollama_src
 import types as _types_rebind
+_ollama_stream_globals = dict(_stream_ollama_src.__globals__)
+_ollama_stream_globals.update(globals())
 stream_ollama = _types_rebind.FunctionType(
-    _stream_ollama_src.__code__, globals(), "stream_ollama",
+    _stream_ollama_src.__code__, _ollama_stream_globals, "stream_ollama",
     _stream_ollama_src.__defaults__, _stream_ollama_src.__closure__
 )
+del _ollama_stream_globals
 del _types_rebind
 
 # ============================================================================
@@ -5627,7 +5598,8 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
             "/orders":    (self.cmd_orders,   "Order history: /orders [open|filled|all]"),
             "/paper":     (self.cmd_paper,    "Paper trading: /paper start|account|positions|orders|reset"),
             "/trade":     (self.cmd_trade,    "Trade preview/confirm: /trade preview ... | confirm <id>"),
-            "/strategy":  (self.cmd_strategy, "Strategy vault: /strategy save|list|diff|load|review"),
+            "/strategy":  (self.cmd_strategy, "Strategy vault: /strategy show [name] (overview/workspace)|save|list|diff|load|review"),
+            "/deploy":    (self.cmd_deploy,  "Deploy strategy to live ledger: /deploy <name> AAPL:10 | $100000 AAPL:30% | rebalance AAPL:30% | close"),
             "/accuracy":  (self.cmd_accuracy, "Prediction track record vs live prices"),
             "/artifacts": (self.cmd_artifacts,"List or prune generated files: /artifacts [limit|stats|prune [keep] [--dry-run]]"),
             # ── Code & project ────────────────────────────────────────────────
@@ -5706,7 +5678,7 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
             # ── Analysis / data commands with dedicated deterministic handlers ──
             # These have real cmd_* handlers; without registration they fell
             # through to the LLM (which hallucinated, e.g. /team → fake roster).
-            "/portfolio": (self.cmd_portfolio,"Portfolio analysis: /portfolio [analyze|rebalance] [SYMBOL...]"),
+            "/portfolio": (self.cmd_portfolio,"Portfolio: /portfolio [analyze|rebalance] [SYMBOL...] | holdings (按策略分组持仓看板)"),
             "/realty":    (self.cmd_realty,   "Real-estate data: /realty market|reit|valuation|compare"),
             "/crypto":    (self.cmd_crypto,   "Crypto data: /crypto BTC ETH | /crypto account"),
             "/risk":      (self.cmd_risk,     "Risk metrics: /risk AAPL | /risk portfolio"),
@@ -5749,6 +5721,15 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
         return cmd in self.commands or cmd in self.skill_map
 
     async def execute(self, text: str):
+        reference_service = getattr(self.terminal, "_reference_service", None)
+        if reference_service is not None and "@" in text:
+            prepared = reference_service.prepare(text)
+            if prepared.errors:
+                self.terminal._print_reference_errors(prepared)
+                return
+            if prepared.references:
+                self.terminal._print_reference_summary(prepared)
+                text = prepared.expanded_text
         parts = text.split(maxsplit=1)
         cmd_name = parts[0].lower()
         args = parts[1] if len(parts) > 1 else ""
@@ -5998,6 +5979,32 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
             ]
             for zh, en in nl_examples:
                 console.print(f"  [#C08050]{zh}[/#C08050]  [dim]{en}[/dim]")
+            console.print()
+
+            # ── Context references ─────────────────────────────────────────
+            _ref_is_zh = str(self.terminal.config.get("ui_lang", "en")).lower().startswith("zh")
+            _ref_title = "上下文引用" if _ref_is_zh else "Context references"
+            _ref_subtitle = (
+                "@ 只附加只读上下文，不执行操作"
+                if _ref_is_zh else
+                "@ attaches read-only context; it never runs an action"
+            )
+            console.print(f"[bold]{_ref_title}[/bold]  [dim]({_ref_subtitle})[/dim]")
+            console.print()
+            for example, description_en, description_zh in (
+                ("@file:src/model.py", "file pointer → read_file", "文件引用 → read_file"),
+                ("@folder:apps/cli", "folder pointer → list_files", "目录引用 → list_files"),
+                ("@asset:AAPL", "market asset", "市场资产"),
+                ("@portfolio:core", "saved portfolio", "已保存投资组合"),
+                ("@strategy:momentum-v2", "saved strategy", "已保存策略"),
+                ("@dataset:prices", "local dataset", "本地数据集"),
+                ("@run:walk-forward-42", "research run", "研究运行"),
+                ("@report:daily", "generated report", "生成报告"),
+            ):
+                description = description_zh if _ref_is_zh else description_en
+                console.print(f"  [#C08050]{example:27s}[/#C08050] [dim]{description}[/dim]")
+            _combine = "组合使用" if _ref_is_zh else "Combine them"
+            console.print(f"  [dim]{_combine}: /risk @portfolio:core · /review @folder:apps/cli[/dim]")
             console.print()
 
             # ── Slash commands — grouped ────────────────────────────────────
@@ -9076,6 +9083,19 @@ class ArtheraTerminal:
         except Exception:
             self.memory_mgr = None
 
+        # ``@`` is a read-only context plane. Resolution is shared with the
+        # completer and slash-command executor so displayed behavior matches
+        # submitted behavior.
+        try:
+            from apps.cli.config_paths import resolve_user_output_root
+            from packages.aria_services.references import build_reference_service
+            self._reference_service = build_reference_service(
+                workspace=pathlib.Path.cwd(),
+                output_root=resolve_user_output_root(),
+            )
+        except Exception:
+            self._reference_service = None
+
         self.commands = SlashCommands(self)
 
         # Setup input — prefer prompt_toolkit, fallback to readline.
@@ -9098,14 +9118,22 @@ class ArtheraTerminal:
         self._last_turn_ts: float = 0.0
 
         if HAS_PT and _interactive:
+            try:
+                from apps.cli.config_paths import resolve_user_output_root as _reference_output_root
+                _completion_output_root = _reference_output_root()
+            except Exception:
+                _completion_output_root = None
             self._pt_completer = AriaPTCompleter(
                 self.commands.commands, SKILLS, config.get("watchlist", []),
+                workspace=pathlib.Path.cwd(),
+                output_root=_completion_output_root,
+                lang=config.get("ui_lang", "en"),
             )
             self._pt_history = FileHistory(str(HISTORY_FILE))
             _placeholder = (
                 [("class:placeholder", "Ask Aria, edit files, run commands, or /help")]
                 if config.get("input_style", "panel") == "box"
-                else HTML('<style fg="#888888">Ask Aria · @ file  !cmd  /help</style>')
+                else HTML('<style fg="#888888">Ask Aria · @ context  !cmd  /help</style>')
             )
             _kb = self._build_keybindings()
             self._pt_session = PromptSession(
@@ -9165,6 +9193,7 @@ class ArtheraTerminal:
         _default_m  = MODELS.get("qwen7b") or MODELS.get("qwen-fast") or next(iter(MODELS.values()))
         m = MODELS.get(current_key, _default_m) if current_key else _default_m
         cwd = os.getcwd()
+        _git_branch, _git_dirty = self._workspace_git_state()
         # Shorten home directory to ~
         home = os.path.expanduser("~")
         if cwd.startswith(home):
@@ -9172,6 +9201,16 @@ class ArtheraTerminal:
         wl = self.config.get("watchlist", [])
         tool_count = len(ARIA_TOOLS) + len(LOCAL_TOOLS)
         skill_count = len(SKILLS)
+        _mcp_configured = 0
+        if _HAS_MCP:
+            try:
+                _mcp_cfg = json.loads(MCP_CONFIG_PATH.read_text(encoding="utf-8"))
+                _mcp_configured = sum(
+                    1 for item in (_mcp_cfg.get("servers") or [])
+                    if isinstance(item, dict) and item.get("enabled", True)
+                )
+            except Exception:
+                pass
 
         # Watchlist string
         wl_str = ""
@@ -9229,30 +9268,39 @@ class ArtheraTerminal:
                     _rt_label = f"{_model_label}  [dim]{_local_word}[/dim]"
 
                 _best_id = (MODELS.get("qwen7b") or {}).get("id", "qwen2.5:7b")
-                from ui.banner import render_full_banner as _rfb, render_try_hints as _rth
+                from ui.banner import render_startup_dashboard as _rsd, render_try_hints as _rth
+                from ui.startup_dashboard import StartupDashboardViewModel as _StartupDashboardViewModel
                 try:
                     from apps.cli.update_check import get_update_notice as _gun
                     _update_notice = _gun(wait_ms=1200)
                 except Exception:
                     _update_notice = None
-                _rfb(
+                _first_run = not bool(self.config.get("first_run_seen"))
+                _dashboard = _StartupDashboardViewModel(
                     version=__version__,
-                    rt_label=_rt_label,
+                    runtime_label=_rt_label,
                     cwd=cwd,
-                    control_status_rich=self._control_status_label(rich=True),
-                    ollama_status_rich=self._ollama_status_label(rich=True),
+                    control_status=self._control_status_label(rich=True),
+                    health_status=self._ollama_status_label(rich=True),
                     tool_count=tool_count,
                     skill_count=skill_count,
+                    lang=_ui_lang,
+                    first_run=_first_run,
+                    update_notice=_update_notice,
                     auto_healed_from=self._auto_healed_from or "",
                     current_id=current_id,
                     badge=_badge,
-                    installed_models=frozenset(self._installed_models),
                     best_lite_id=_best_id,
-                    update_notice=_update_notice,
+                    best_lite_installed=_best_id in self._installed_models,
+                    git_branch=_git_branch,
+                    git_dirty=_git_dirty,
+                    mcp_server_count=_mcp_configured,
+                )
+                _rsd(
+                    _dashboard,
                     console=console,
                     has_rich=HAS_RICH,
                     rich_box=rich_box,
-                    lang=_ui_lang,
                 )
                 _rth(console, HAS_RICH, lang=_ui_lang)
                 if not self.config.get("first_run_seen"):
@@ -9361,6 +9409,45 @@ class ArtheraTerminal:
             self._last_preflight_key = key
         return shown
 
+    def _print_reference_errors(self, prepared) -> None:
+        is_zh = str(self.config.get("ui_lang", "en")).lower().startswith("zh")
+        title = "上下文引用无法解析" if is_zh else "Context reference could not be resolved"
+        hint = (
+            "使用 @file:路径、@folder:路径、@asset:代码，输入 @ 可查看全部类型。"
+            if is_zh else
+            "Use @file:path, @folder:path, or @asset:symbol. Type @ to see all types."
+        )
+        lines = [f"{ref.raw}: {ref.error}" for ref in prepared.errors]
+        if HAS_RICH:
+            from rich.panel import Panel as _ReferencePanel
+            from rich.markup import escape as _escape_reference_markup
+            console.print(_ReferencePanel(
+                "\n".join(f"[red]{_escape_reference_markup(line)}[/red]" for line in lines)
+                + f"\n[dim]{_escape_reference_markup(hint)}[/dim]",
+                title=title,
+                border_style="red",
+            ))
+        else:
+            print(f"{title}: " + "; ".join(lines))
+            print(hint)
+
+    def _print_reference_summary(self, prepared) -> None:
+        refs = [ref for ref in prepared.references if ref.ok]
+        if not refs:
+            return
+        labels = []
+        for ref in refs[:4]:
+            label = ref.path.name if ref.path is not None else ref.resolved_value
+            labels.append(f"{ref.kind}:{label}")
+        suffix = f" +{len(refs) - 4}" if len(refs) > 4 else ""
+        lead = "已引用资源" if str(self.config.get("ui_lang", "en")).lower().startswith("zh") else "Resource referenced"
+        message = f"  {lead}  ·  {' · '.join(labels)}{suffix}"
+        if HAS_RICH:
+            from rich.markup import escape as _escape_reference_markup
+            console.print(f"[dim]{_escape_reference_markup(message)}[/dim]")
+        else:
+            print(message)
+
     async def _try_football_nl_intercept(self, message: str) -> bool:
         """Route an NL football query to the Poisson engine. Returns True if handled.
 
@@ -9387,6 +9474,29 @@ class ArtheraTerminal:
 
     async def send_message(self, message: str, system_override: Optional[str] = None):
         """Send message to Aria AI with agentic tool loop, smart fallback, markdown."""
+        if getattr(self, "_streaming", False):
+            is_zh = str(self.config.get("ui_lang", "en")).lower().startswith("zh")
+            notice = (
+                "上一条请求仍在处理中；按 Esc 取消后再提交。"
+                if is_zh else
+                "A request is already running. Press Esc to cancel it before submitting another."
+            )
+            if HAS_RICH:
+                console.print(f"  [yellow]{notice}[/yellow]")
+            else:
+                print(f"  {notice}")
+            return
+        reference_context = ""
+        reference_service = getattr(self, "_reference_service", None)
+        if reference_service is not None and "@" in message:
+            prepared = reference_service.prepare(message)
+            if prepared.errors:
+                self._print_reference_errors(prepared)
+                return
+            if prepared.references:
+                self._print_reference_summary(prepared)
+                message = prepared.expanded_text
+                reference_context = prepared.context_block
         if (
             not system_override
             and self._pending_image is None
@@ -9457,6 +9567,13 @@ class ArtheraTerminal:
             user_content = message
             self._file_ctx_injected = False  # reset when no file loaded
             self._project_ctx_injected = False  # reset when no project loaded
+
+        if reference_context:
+            if isinstance(user_content, list) and user_content and isinstance(user_content[0], dict):
+                first_text = str(user_content[0].get("text") or "")
+                user_content[0]["text"] = f"{first_text}\n\n{reference_context}"
+            elif isinstance(user_content, str):
+                user_content = f"{user_content}\n\n{reference_context}"
 
         try:
             _incoming_for_compact = (
@@ -9708,20 +9825,19 @@ class ArtheraTerminal:
                 f"[用户请求]\n{message}"
             )
 
-        # ── 本地文件注入：用户消息含文件路径时自动读取内容并注入 ──────────────
-        # 支持: .txt .md .py .js .ts .json .csv .docx .pdf .xlsx .pptx
-        # docx 使用 python-docx 提取文本；pdf 使用 pdfplumber。
-        if not _det_wants_analysis:
-            _file_ctx = _try_inject_file_paths(message)
-            if _file_ctx:
-                current_message = _file_ctx + current_message
+        # Referenced paths stay as pointers. The model must use audited file
+        # tools, preserving permissions, tool traces, and context efficiency.
+        if not _det_wants_analysis and not reference_context:
+            _file_tool_hint = _build_file_tool_hint(message)
+            if _file_tool_hint:
+                current_message = _file_tool_hint + current_message
 
         # ── ML 预测信号注入：聊天中自动检测标的并注入 5 日预测参考 ──────────
         # 仅在 LLM 路径触发（已过确定性路由），且消息含分析意图时启用。
         # 信号注入 current_message（不污染 conversation history），3s 超时。
         _ml_signal_syms: list = []
         try:
-            if _is_stock_analysis_intent(message):
+            if _is_stock_analysis_intent(message) and not _model_has_tools:
                 _ml_signal_syms = _extract_market_symbols(message, limit=3)
                 if _ml_signal_syms:
                     _ml_sig = _fetch_quick_ml_signal(_ml_signal_syms)
@@ -9748,16 +9864,22 @@ class ArtheraTerminal:
 
         round_num = 0
         _loop_compactions = 0   # proactive mid-loop compactions done this turn
+        _response_header_printed = False
+
+        def _print_response_header() -> None:
+            nonlocal _response_header_printed
+            if _response_header_printed:
+                return
+            _response_header_printed = True
+            _answer_model = self._actual_model or self.config.get("model", "")
+            _answer_meta = f"  [dim]· {_answer_model}[/dim]" if _answer_model else ""
+            if HAS_RICH:
+                console.print(f"[bold]Aria[/bold]{_answer_meta}")
+            else:
+                print(f"Aria{' · ' + _answer_model if _answer_model else ''}")
+
         while round_num < hard_max_rounds:
             response_text = ""
-
-            if round_num == 0:
-                if HAS_RICH:
-                    _answer_model = self._actual_model or self.config.get("model", "")
-                    _answer_meta = f"  [dim]· {_answer_model}[/dim]" if _answer_model else ""
-                    console.print(f"\n[bold]Aria[/bold]{_answer_meta}")
-                else:
-                    print("\nAria")
 
             stream_consumer = TerminalRuntimeEventConsumer(
                 terminal=self,
@@ -9771,6 +9893,8 @@ class ArtheraTerminal:
                 print_tool_call=_print_tool_call,
                 print_tool_done=_print_tool_done,
                 fallback_from=self._last_provider or "local",
+                ui_lang=self.config.get("ui_lang", "en") or "en",
+                on_response_start=_print_response_header,
             )
             _start_spinner = stream_consumer.start_spinner
             _stop_spinner = stream_consumer.stop_spinner
@@ -9812,8 +9936,8 @@ class ArtheraTerminal:
                     # yet: if the runtime path falls through, the inline loop below
                     # must still see it. Only cleared on a confirmed success.
                     _rt_sys_ov = getattr(self, "_system_override", None)
-                    _rt_text = await run_chat_via_runtime(
-                        prompt=current_message, history=self.conversation,
+                    _rt_turn = await run_chat_via_runtime(
+                        prompt=current_message, history=self.conversation[:-1],
                         local_tools=LOCAL_TOOLS, tool_schemas=LOCAL_TOOL_SCHEMAS,
                         model=model, config=self.config, api_url=self.api_url,
                         ollama_url=self.config.get("ollama_url", "http://localhost:11434"),
@@ -9824,42 +9948,67 @@ class ArtheraTerminal:
                         thinking_mode=thinking_mode, user_context=user_context,
                         auth_token=auth_token, project_context=_PROJECT_CONTEXT,
                         system_override=_rt_sys_ov,
+                        return_result=True,
                     )
+                    _rt_text = _rt_turn.text
                     if (_rt_text or "").strip():
                         self._system_override = None  # consumed by the successful turn
-                        self.conversation.append({"role": "assistant", "content": _rt_text})
-                        # Batch-render mode buffered the answer silently — render the
-                        # complete text now; otherwise it already streamed live.
-                        if _use_batch_render[0] and HAS_RICH:
-                            try:
-                                _stop_spinner()
-                            except Exception:
-                                pass
-                            _render_answer_block(_rt_text)
-                        try:
-                            _stop_live(discard=True)
-                        except Exception:
-                            pass
-                        self._last_provider = "runtime"
-                        return
+                        _rt_final = getattr(_rt_turn, "final", None)
+                        _rt_metadata = getattr(_rt_final, "metadata", None)
+                        _rt_provider = (
+                            getattr(_rt_final, "provider", "")
+                            or str(self.config.get("local_provider") or "ollama")
+                        )
+                        result = {
+                            "success": True,
+                            "response": _rt_text,
+                            "provider": _rt_provider,
+                            "cancelled": False,
+                            "usage": {
+                                "prompt_tokens": getattr(_rt_metadata, "prompt_tokens", 0),
+                                "completion_tokens": getattr(_rt_metadata, "completion_tokens", 0),
+                                "thinking_tokens": getattr(_rt_metadata, "thinking_tokens", 0),
+                            },
+                            "tools_used": list(getattr(_rt_final, "tools", []) or []),
+                            "sources": list(getattr(_rt_final, "sources", []) or []),
+                        }
+                        response_text = stream_consumer.response_text or _rt_text
+                        token_count = stream_consumer.token_count
+                        thinking_tokens = stream_consumer.thinking_tokens
+                        turn_state.provider = _rt_provider
+                        turn_state.apply_model_result(result, response_text)
+                        provider = turn_state.provider
+                        self._last_provider = _rt_provider
+                        break
                     # empty → fall through to the proven inline loop
                 except Exception as _rt_err:
                     logger.warning("use_runtime_loop failed, using inline loop: %s", _rt_err)
 
-            # Route: local_mode → Ollama directly; otherwise AWS first → Ollama fallback
+            # Route through the explicitly selected runtime. ``local_mode`` means
+            # no Aria backend, not "always Ollama".
             local_mode = self.config.get("local_mode", False)
             if local_mode:
+                _local_backend = str(
+                    self.config.get("local_provider") or "ollama"
+                ).lower()
                 _use_plain_print[0]  = True
                 _use_batch_render[0] = True   # accumulate silently → Rich render at end
                 _sys_ov = getattr(self, "_system_override", None)
                 self._system_override = None
-                result = await stream_provider_result(
+                _local_adapter = (
                     OllamaProvider(
                         self.config.get("ollama_url", "http://localhost:11434"),
                         model,
                         system_override=_sys_ov,
                         show_market_prefetch_status=not _det_wants_analysis,
-                    ),
+                    )
+                    if _local_backend == "ollama" else
+                    ConfiguredProvider(
+                        self.config, model, system_override=_sys_ov,
+                    )
+                )
+                result = await stream_provider_result(
+                    _local_adapter,
                     current_message,
                     self.conversation,
                     tools=LOCAL_TOOL_SCHEMAS,
@@ -9869,21 +10018,22 @@ class ArtheraTerminal:
                     on_tool_call=on_tool_call,
                     on_tool_result=on_tool_result,
                 )
-                provider = "ollama"
-                self._last_provider = "ollama"
+                provider = _local_backend
+                self._last_provider = _local_backend
             else:
-                # Cloud models are provider-prefixed (openai/gpt-4.5, anthropic/…);
-                # Ollama models have no "/" (gpt-oss:120b-cloud, deepseek-r1:14b).
-                # The api_url backend is only for genuine cloud-provider models —
-                # routing Ollama models there hits a stub that returns placeholder
-                # help text. Skip it entirely and go straight to the Ollama path
-                # below (which also auto-picks an installed model / cloud fallback).
-                _is_ollama_model = "/" not in (model or "")
+                # Provider selection is explicit. Model punctuation cannot identify
+                # its runtime: ``gpt-oss:120b-cloud`` is an Ollama remote model,
+                # while LM Studio/vLLM models may use arbitrary IDs.
+                _configured_provider = str(
+                    self.config.get("local_provider") or "ollama"
+                ).lower()
+                _is_ollama_model = _configured_provider == "ollama"
                 # backend_chat=True forces ALL chat through the self-hosted
                 # backend (which proxies to its own Ollama + collects training
                 # data), instead of the CLI's local Ollama. Used for the
                 # self-host deployment where users connect to your server.
                 _force_backend = bool(self.config.get("backend_chat")) and bool(self.api_url)
+                _direct_configured = not _is_ollama_model and not _force_backend
                 if _is_ollama_model and not _force_backend:
                     result = {"success": False, "response": "", "cancelled": False}
                 else:
@@ -9893,15 +10043,19 @@ class ArtheraTerminal:
                     if _so:
                         _cloud_uctx["system_role_override"] = _so
                         self._system_override = None
-                    result = await stream_provider_result(
+                    _selected_provider = (
+                        ConfiguredProvider(
+                            self.config, model, system_override=_so,
+                        )
+                        if _direct_configured else
                         AriaSSEProvider(
-                            self.api_url,
-                            model,
-                            thinking_mode=thinking_mode,
+                            self.api_url, model, thinking_mode=thinking_mode,
                             user_context=_cloud_uctx or user_context,
-                            auth_token=auth_token,
-                            project_context=_PROJECT_CONTEXT,
-                        ),
+                            auth_token=auth_token, project_context=_PROJECT_CONTEXT,
+                        )
+                    )
+                    result = await stream_provider_result(
+                        _selected_provider,
                         current_message,
                         self.conversation,
                         tools=LOCAL_TOOL_SCHEMAS,
@@ -9935,11 +10089,19 @@ class ArtheraTerminal:
                 # backend answers for ollama-named models under backend_chat
                 # (re-run / hang on the self-host path); keying on the route fixes it.
                 from apps.cli.providers.chat_routing import should_fallback as _route_should_fallback
-                _primary_route = "skip" if (_is_ollama_model and not _force_backend) else "cloud"
+                _primary_route = (
+                    "skip" if (_is_ollama_model and not _force_backend)
+                    else "configured" if _direct_configured
+                    else "cloud"
+                )
                 _should_fallback = _route_should_fallback(
                     _primary_route, result,
                     is_placeholder=_is_placeholder_response(result),
                 )
+                # An explicitly selected API/local endpoint is strict by default.
+                # Do not silently replace it with Ollama or an unrelated paid API.
+                if _direct_configured:
+                    _should_fallback = False
                 if _should_fallback:
                     # Discard any in-progress Live display without rendering it —
                     # the fallback will stream fresh content.  Rendering here would
@@ -10033,6 +10195,33 @@ class ArtheraTerminal:
                         provider = "ollama"
                         self._last_provider = "ollama"
 
+                        # An installed Ollama model can still return a transport
+                        # error or an empty completion. Continue through the cloud
+                        # fallback chain instead of rendering a blank Aria block.
+                        if not result.get("success") and not result.get("cancelled"):
+                            try:
+                                from providers.llm.registry import stream_cloud_fallback
+                                _fallback_mode = str(
+                                    self.config.get("provider_fallback", "configured")
+                                ).lower()
+                                if _fallback_mode != "off":
+                                    _cloud_result = await stream_cloud_fallback(
+                                        current_message,
+                                        self.conversation,
+                                        on_token=on_token,
+                                        cancel_event=self.cancel_event,
+                                        include_defaults=_fallback_mode == "auto",
+                                    )
+                                    if _cloud_result.get("success"):
+                                        result = _cloud_result
+                                        provider = result.get("provider", "cloud")
+                                        self._last_provider = provider
+                            except Exception as _cloud_fallback_error:
+                                logger.debug(
+                                    "Cloud fallback after Ollama failure did not complete: %s",
+                                    _cloud_fallback_error,
+                                )
+
                     else:
                         # ── 2. Ollama 无模型或未运行 → 尝试云端 provider ─────
                         if _ollama_up and not _ollama_models:
@@ -10054,11 +10243,15 @@ class ArtheraTerminal:
                         except ImportError:
                             _cloud_avail = False
 
-                        if _cloud_avail:
+                        _fallback_mode = str(
+                            self.config.get("provider_fallback", "configured")
+                        ).lower()
+                        if _cloud_avail and _fallback_mode != "off":
                             result = await stream_cloud_fallback(
                                 current_message, self.conversation,
                                 on_token=on_token,
                                 cancel_event=self.cancel_event,
+                                include_defaults=_fallback_mode == "auto",
                             )
                             provider = result.get("provider", "cloud")
                             self._last_provider = provider
@@ -10080,6 +10273,7 @@ class ArtheraTerminal:
                 break
 
             if not result.get("success"):
+                stream_consumer.finish(TurnPhase.ERROR)
                 set_robot_state(RobotState.ERROR)
                 turn_result = turn_state.build_error_result(
                     result.get("error"),
@@ -10095,7 +10289,10 @@ class ArtheraTerminal:
                         self.runtime_trace.add_turn_result(_turn_envelope)
                     except Exception:
                         pass
-                error_presentation = AgentErrorPresentation.from_error(result.get("error", "Unknown error"))
+                error_presentation = AgentErrorPresentation.from_error(
+                    result.get("error", "Unknown error"),
+                    lang=self.config.get("ui_lang", "en") or "en",
+                )
                 console.print() if HAS_RICH else print()
                 if error_presentation.use_generic_error_prefix:
                     _print_error(error_presentation.lines[0])
@@ -10259,7 +10456,12 @@ class ArtheraTerminal:
         # --- End of agentic loop ---
         _esc_watcher.stop()
         self._streaming = False
-        set_robot_state(RobotState.DONE)
+        if result.get("cancelled"):
+            set_robot_state(RobotState.IDLE)
+        elif result.get("success"):
+            set_robot_state(RobotState.DONE)
+        else:
+            set_robot_state(RobotState.ERROR)
         elapsed = time.time() - start_time
 
         # ── Unified cancellation path ──────────────────────────────────────────
@@ -10267,6 +10469,7 @@ class ArtheraTerminal:
         # converge here via result["cancelled"]=True.  A single AgentTurnResult
         # carries partial text and timing so callers see a consistent shape.
         if result.get("cancelled"):
+            stream_consumer.finish(TurnPhase.CANCELLED)
             _stop_live()
             turn_result = turn_state.build_cancelled_result(
                 elapsed=elapsed,
@@ -10348,6 +10551,33 @@ class ArtheraTerminal:
                     pass
             final_text = turn_result.final_text
 
+            if not (final_text or "").strip():
+                stream_consumer.finish(TurnPhase.ERROR)
+                set_robot_state(RobotState.ERROR)
+                empty_result = turn_state.build_error_result(
+                    "empty_response",
+                    elapsed=elapsed,
+                    token_count=token_count,
+                    thinking_tokens=thinking_tokens,
+                )
+                self._last_turn_envelope = empty_result.to_envelope()
+                if self.runtime_trace is not None:
+                    try:
+                        self.runtime_trace.add_turn_result(self._last_turn_envelope.to_dict())
+                    except Exception:
+                        pass
+                presentation = AgentErrorPresentation.from_error(
+                    "empty_response",
+                    lang=self.config.get("ui_lang", "en") or "en",
+                )
+                for idx, line in enumerate(presentation.lines):
+                    if HAS_RICH:
+                        style = "bold yellow" if idx == 0 else "yellow"
+                        console.print(f"  [{style}]{line}[/{style}]")
+                    else:
+                        print(f"  {line}")
+                return
+
             # Flush any unclosed LaTeX buffer (e.g. stream cut off mid-formula).
             # This only matters for the non-batch plain-print path; in batch-render
             # mode the full raw response is rendered below anyway.
@@ -10362,7 +10592,7 @@ class ArtheraTerminal:
             _stop_live()
 
             # ── Render final response ──────────────────────────────────────
-            if _use_batch_render[0] and final_text and HAS_RICH:
+            if _use_batch_render[0] and final_text:
                 # Ollama batch-render: spinner was kept running during generation.
                 # Stop it and render the COMPLETE response through Rich Markdown +
                 # _strip_latex in one pass.  This correctly handles:
@@ -10370,10 +10600,14 @@ class ArtheraTerminal:
                 #   • All LaTeX spacing commands (\; \, \quad etc.)
                 #   • Markdown headings, bold, tables
                 _stop_spinner()
+                stream_consumer.ensure_response_started()
                 _render_answer_block(final_text)
-            elif token_count == 0 and final_text and HAS_RICH:
+            elif token_count == 0 and final_text:
                 # Non-streamed response (e.g. complete() API path): render markdown.
+                stream_consumer.ensure_response_started()
                 _render_answer_block(final_text)
+
+            stream_consumer.finish(TurnPhase.DONE)
 
             self.conversation.append({"role": "assistant", "content": final_text})
             import time as _time_ts
@@ -10707,6 +10941,26 @@ class ArtheraTerminal:
         except Exception:
             return {"settled": 0, "correct": 0, "wrong": 0}
 
+    def _workspace_git_state(self) -> tuple[str, bool]:
+        """Return the current branch and tracked-worktree dirty state."""
+        try:
+            import subprocess as _sp
+            branch = _sp.check_output(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                stderr=_sp.DEVNULL,
+                timeout=1,
+            ).decode().strip()
+            if not branch or branch == "HEAD":
+                return "", False
+            dirty = bool(_sp.check_output(
+                ["git", "status", "--porcelain", "--untracked-files=no"],
+                stderr=_sp.DEVNULL,
+                timeout=1,
+            ).decode().strip())
+            return branch, dirty
+        except Exception:
+            return "", False
+
     def _bottom_toolbar(self):
         """Bottom toolbar content for prompt_toolkit."""
         model_label, cwd, privacy, est_tokens, max_ctx = self._bottom_toolbar_parts()
@@ -10717,15 +10971,8 @@ class ArtheraTerminal:
         perm_color = {"read-only": "#888800", "workspace-write": "#606060", "full-access": "#cc4444"}.get(perm, "#606060")
         perm_short = {"read-only": "ro", "workspace-write": "rw", "full-access": "full"}.get(perm, perm)
         # PR / git branch info
-        _branch = ""
-        try:
-            import subprocess as _sp
-            _b = _sp.check_output(["git", "rev-parse", "--abbrev-ref", "HEAD"],
-                                  stderr=_sp.DEVNULL, timeout=1).decode().strip()
-            if _b and _b != "HEAD":
-                _branch = f" ⎇ {_b}"
-        except Exception:
-            pass
+        _branch_name, _git_dirty = self._workspace_git_state()
+        _branch = f" ⎇ {_branch_name}{'*' if _git_dirty else ''}" if _branch_name else ""
         # Task list indicator
         _tasks = ""
         if self._task_list:
@@ -10926,9 +11173,14 @@ class ArtheraTerminal:
                         _mcp_registry = self._mcp_registry
                         if n and not self._mcp_connection_notice_shown:
                             self._mcp_connection_notice_shown = True
-                            server_word = "server" if len(results) == 1 else "servers"
-                            self._pending_notifications.append(
-                                f"  [dim]MCP connected · {n} tools · {len(results)} {server_word}[/dim]"
+                            # The status bar is the single source of truth for
+                            # MCP state. A standalone async success message used
+                            # to interrupt the next input frame and corrupt IME
+                            # composition on terminals without reliable CPR.
+                            logger.info(
+                                "MCP connected: %d tools, %d servers",
+                                n,
+                                len(results),
                             )
                 except Exception as _exc:
                     logger.debug("MCP startup error: %s", _exc)
@@ -10951,7 +11203,7 @@ class ArtheraTerminal:
             try:
                 if self._pt_session:
                     if self.config.get("input_style", "panel") == "panel":
-                        from ui import PanelInputConfig, run_panel_input
+                        from ui import PanelInputConfig, run_panel_input_async
                         # Drain notifications queued while pt was active (avoids stdout corruption)
                         while self._pending_notifications:
                             _note = self._pending_notifications.pop(0)
@@ -10960,37 +11212,49 @@ class ArtheraTerminal:
                         _ml, _cwd, _priv, _etok, _mctx = self._bottom_toolbar_parts()
                         _skills_n = len(SKILLS)
                         _tools_n = len(LOCAL_TOOLS)
+                        _git_branch, _git_dirty = self._workspace_git_state()
+                        _mcp_running = _mcp_total = _mcp_tools = 0
+                        if self._mcp_registry:
+                            try:
+                                _mcp_states = self._mcp_registry.status()
+                                _mcp_total = len(_mcp_states)
+                                _mcp_running = sum(1 for state in _mcp_states if state.get("running"))
+                                _mcp_tools = sum(
+                                    int(state.get("tool_count", 0))
+                                    for state in _mcp_states if state.get("running")
+                                )
+                            except Exception:
+                                pass
                         _ollama_st = ""
                         if getattr(self, "_ollama_alive", False):
                             _om = len(getattr(self, "_installed_models", set()) or [])
                             _ollama_st = f"ollama {_om}m" if _om else "ollama ●"
-                        user_input = await asyncio.get_event_loop().run_in_executor(
-                            None,
-                            lambda: run_panel_input(
-                                completer=self._pt_completer,
-                                history=self._pt_history,
-                                config=PanelInputConfig(
-                                    theme=self.config.get("input_theme", "auto"),
-                                    model_label=_ml,
-                                    cwd=_cwd,
-                                    privacy=_priv,
-                                    est_tokens=_etok,
-                                    max_tokens=_mctx,
-                                    tools_count=_tools_n,
-                                    skills_count=_skills_n,
-                                    ollama_status=_ollama_st,
-                                ),
+                        user_input = await run_panel_input_async(
+                            completer=self._pt_completer,
+                            history=self._pt_history,
+                            config=PanelInputConfig(
+                                theme=self.config.get("input_theme", "auto"),
+                                lang=self.config.get("ui_lang", "en") or "en",
+                                model_label=_ml,
+                                cwd=_cwd,
+                                privacy=_priv,
+                                est_tokens=_etok,
+                                max_tokens=_mctx,
+                                tools_count=_tools_n,
+                                skills_count=_skills_n,
+                                ollama_status=_ollama_st,
+                                permission_mode=self.config.get("permission_mode", "workspace-write"),
+                                git_branch=_git_branch,
+                                git_dirty=_git_dirty,
+                                mcp_running=_mcp_running,
+                                mcp_total=_mcp_total,
+                                mcp_tool_count=_mcp_tools,
                             ),
                         )
                     else:
-                        user_input = await asyncio.get_event_loop().run_in_executor(
-                            None,
-                            lambda: self._pt_session.prompt(
-                                [("class:prompt", "> ")]
-                                if self.config.get("input_style", "panel") == "box"
-                                else [("class:prompt", "> ")],
-                                bottom_toolbar=self._bottom_toolbar,
-                            ),
+                        user_input = await self._pt_session.prompt_async(
+                            [("class:prompt", "> ")],
+                            bottom_toolbar=self._bottom_toolbar,
                         )
                     user_input = user_input.strip()
                 elif HAS_RICH:
@@ -11155,10 +11419,26 @@ class ArtheraTerminal:
             await self.commands.execute(_stripped_prompt)
             return
 
-        # Auto-inject referenced local file contents before the LLM call (-p mode)
-        _file_inject = _try_inject_file_paths(prompt)
-        if _file_inject:
-            prompt = _file_inject + prompt
+        _reference_context = ""
+        _reference_service = getattr(self, "_reference_service", None)
+        if _reference_service is not None and "@" in prompt:
+            _prepared_references = _reference_service.prepare(prompt)
+            if _prepared_references.errors:
+                self._print_reference_errors(_prepared_references)
+                return
+            if _prepared_references.references:
+                self._print_reference_summary(_prepared_references)
+                prompt = _prepared_references.expanded_text
+                _reference_context = _prepared_references.context_block
+
+        # Keep referenced local files as pointers; the model reads them through
+        # audited tools instead of silently embedding their contents.
+        if _reference_context:
+            prompt = f"{prompt}\n\n{_reference_context}"
+        else:
+            _file_tool_hint = _build_file_tool_hint(prompt)
+            if _file_tool_hint:
+                prompt = _file_tool_hint + prompt
         self._maybe_show_intent_preflight(prompt, quiet=quiet)
 
         _curr_model_id_p = self.config.get("model", "")
@@ -11404,8 +11684,21 @@ Examples:
 
     # Apply CLI overrides
     if args.model:
-        mkey = resolve_model_key(args.model)
-        config["model"] = MODELS[mkey]["id"] if mkey in MODELS else args.model
+        raw_model = str(args.model).strip()
+        if "/" in raw_model and not raw_model.startswith("http"):
+            provider_name, selected_model = raw_model.split("/", 1)
+            from apps.cli.providers.chat_routing import normalize_provider_name
+
+            provider_name = normalize_provider_name(provider_name)
+            config["local_provider"] = provider_name
+            config["model"] = selected_model
+            config["local_mode"] = provider_name in {
+                "ollama", "lmstudio", "vllm", "llamacpp", "jan", "custom",
+            }
+        else:
+            mkey = resolve_model_key(raw_model)
+            config["model"] = MODELS[mkey]["id"] if mkey in MODELS else raw_model
+            config["local_provider"] = "ollama"
     if getattr(args, "local", False):
         config["local_mode"] = True
     if getattr(args, "no_banner", False):

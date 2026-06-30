@@ -100,7 +100,7 @@ See [CHANGELOG.md](CHANGELOG.md) for the full history.
 |---------|-------------|
 | ⌨️ **Keyboard shortcuts** | `Shift+Tab` cycle modes · `Alt+T` thinking · `Alt+P` model picker · `Ctrl+O` transcript · `Ctrl+T` tasks |
 | `!` **Shell mode** | Type `! git status` to run shell commands, output auto-added to AI context |
-| `@` **File autocomplete** | Type `@src/` to get instant file path completion anywhere in input |
+| `@` **Typed context references** | Attach files, folders, assets, portfolios, strategies, datasets, runs, or reports without executing an action |
 | `/btw` **Side questions** | Ask quick questions without polluting conversation history |
 | 🌍 **Auto language** | UI and responses auto-detect Chinese/English from OS locale on first run |
 | 🤖 **19+ cloud providers** | Google Gemini · xAI Grok · Mistral · Cohere · Perplexity · Baidu ERNIE · ByteDance · MiniMax · StepFun · 01.AI + all originals |
@@ -172,7 +172,7 @@ mindmap
 | 🔍 **Quant research** | `/backtest` `/signal` `/kelly` `/factor` `/portfolio` `/screen` `/corr` `/ptbt` |
 | 🤖 **19+ cloud providers** | All major international + Chinese LLM APIs supported |
 | 🔌 **MCP protocol** | Connect any [Model Context Protocol](https://modelcontextprotocol.io) server |
-| ⌨️ **Rich keyboard UX** | Vim mode · `!` shell · `@` files · `Shift+Tab` modes · transcript viewer |
+| ⌨️ **Rich keyboard UX** | Vim mode · `!` shell · typed `@` context · `Shift+Tab` modes · transcript viewer |
 | 💬 **Feishu / Telegram** | Ask Aria from any chat app, anytime |
 | 📱 **iOS push alerts** | Real-time price alerts via APNs |
 | 🌍 **Auto bilingual** | OS language auto-detected on first run; output follows user's input language |
@@ -351,8 +351,25 @@ Aria Code has a full keyboard shortcut system powered by `prompt_toolkit`:
 |--------|------|---------|
 | `/` | Slash command with fuzzy autocomplete | `/backtest momentum SPY` |
 | `!` | Shell mode — runs command, adds output to context | `! git diff HEAD~1` |
-| `@` | File path autocomplete | `@src/components/` |
+| `@` | Read-only typed context reference | `@file:src/app.py` · `@asset:AAPL` |
 | `"""` | Multi-line input mode (end with `"""`) | For pasting code blocks |
+
+`/` and `@` are intentionally different: `/` selects an action; `@` selects
+context for that action or for a natural-language request. They can be combined:
+
+```text
+/risk @portfolio:core
+/backtest @strategy:momentum-v2 @asset:AAPL --period 3y
+Review @folder:apps/cli against @report:last-audit
+```
+
+Available reference types: `@file:`, `@folder:`, `@asset:`, `@portfolio:`,
+`@strategy:`, `@dataset:`, `@run:`, and `@report:`. A plain `@path` remains a
+file reference for compatibility; unknown references fail locally instead of
+being guessed by the model. References contain pointers only: Aria reads them
+on demand through audited tools such as `read_file`, `list_files`,
+`analyze_file`, and `get_market_data`; source content is never silently
+expanded into the prompt.
 
 ### Bottom Toolbar (always visible)
 
@@ -668,7 +685,7 @@ Analyze NVDA momentum      → Full AI analysis
 
 ```
 aria-code/
-├── aria_cli.py               # Main CLI + REPL (keyboard shortcuts, ! shell, @files)
+├── aria_cli.py               # Main CLI + REPL (keyboard shortcuts, ! shell, @ context)
 ├── aria_daemon.py            # Background daemon + scheduler
 ├── market_data_client.py     # Unified market data (Finnhub primary for US)
 ├── setup_wizard.py           # Bilingual setup wizard (19 providers)
@@ -684,7 +701,7 @@ aria-code/
 │
 ├── ui/
 │   ├── banner.py             # Bilingual banner (i18n aware)
-│   └── completer.py          # Fuzzy autocomplete: / commands · @ files · ! history
+│   └── completer.py          # Fuzzy autocomplete: / commands · @ context · ! history
 │
 ├── providers/llm/            # LLM adapters (19+ cloud endpoints)
 ├── agents/financial/         # Fundamental / Technical / Macro / Risk / Synthesis

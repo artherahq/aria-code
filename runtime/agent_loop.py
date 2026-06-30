@@ -199,7 +199,7 @@ class AgentTurnState:
             self.total_response += text
 
     def apply_model_result(self, result: dict, fallback_response: str = "") -> None:
-        self.append_response(result.get("response", fallback_response))
+        self.append_response(result.get("response") or fallback_response)
         self.tools_used.extend(result.get("tools_used", []))
         self.sources.extend(result.get("sources", []))
         self.provider = result.get("provider", self.provider)
@@ -491,26 +491,99 @@ class AgentErrorPresentation:
     use_generic_error_prefix: bool = False
 
     @classmethod
-    def from_error(cls, error: str | None) -> "AgentErrorPresentation":
+    def from_error(cls, error: str | None, *, lang: str = "zh") -> "AgentErrorPresentation":
         normalized = error or "Unknown error"
-        if normalized in ("no_cloud_provider", "no_provider"):
+        lowered = normalized.lower()
+        is_zh = str(lang or "zh").lower().startswith("zh")
+        if lowered.startswith("missing_api_key:"):
+            provider = normalized.split(":", 1)[1] or "provider"
             return cls(
                 error=normalized,
                 level="warning",
                 lines=[
-                    "没有可用的 AI 模型",
-                    "  Ollama 未运行，且未配置云端 API Key。",
-                    "  解决方案（任选其一）：",
-                    "    • 启动 Ollama:  ollama serve",
-                    "    • 配置云端 Key: /apikey set deepseek <your-key>",
-                    "    • 导出环境变量: export DEEPSEEK_API_KEY=sk-...",
+                    f"{provider} API Key 未配置。" if is_zh else f"{provider} API key is not configured.",
+                    f"运行: /apikey set {provider} <key>" if is_zh else f"Run: /apikey set {provider} <key>",
                 ],
+            )
+        if "http 402" in lowered or "insufficient balance" in lowered:
+            return cls(
+                error=normalized,
+                level="warning",
+                lines=[
+                    "Provider 余额不足，当前模型请求未执行。"
+                    if is_zh else
+                    "The provider balance is insufficient; the model request was not run."
+                ],
+            )
+        if "http 401" in lowered or "http 403" in lowered:
+            return cls(
+                error=normalized,
+                level="warning",
+                lines=[
+                    "Provider 身份验证失败，请检查 API Key 或登录状态。"
+                    if is_zh else
+                    "Provider authentication failed. Check the API key or sign-in state."
+                ],
+            )
+        if "http 429" in lowered or "rate limit" in lowered:
+            return cls(
+                error=normalized,
+                level="warning",
+                lines=[
+                    "Provider 请求频率受限，请稍后重试。"
+                    if is_zh else
+                    "The provider rate limit was reached. Try again shortly."
+                ],
+            )
+        if normalized in ("no_cloud_provider", "no_provider"):
+            return cls(
+                error=normalized,
+                level="warning",
+                lines=(
+                    [
+                        "没有可用的 AI 模型",
+                        "  Ollama 未运行，且未配置云端 API Key。",
+                        "  解决方案（任选其一）：",
+                        "    • 启动 Ollama:  ollama serve",
+                        "    • 配置云端 Key: /apikey set deepseek <your-key>",
+                        "    • 导出环境变量: export DEEPSEEK_API_KEY=sk-...",
+                    ]
+                    if is_zh else
+                    [
+                        "No AI model is available.",
+                        "  Ollama is offline and no cloud API key is configured.",
+                        "  Choose one:",
+                        "    • Start Ollama: ollama serve",
+                        "    • Configure a key: /apikey set deepseek <your-key>",
+                        "    • Export an environment variable: export DEEPSEEK_API_KEY=sk-...",
+                    ]
+                ),
             )
         if normalized == "all_providers_failed":
             return cls(
                 error=normalized,
                 level="warning",
-                lines=["所有云端 Provider 均请求失败，请检查网络或 API Key 是否有效。"],
+                lines=[
+                    "所有云端 Provider 均请求失败，请检查网络或 API Key 是否有效。"
+                    if is_zh else
+                    "All cloud providers failed. Check the network connection and API keys."
+                ],
+            )
+        if normalized == "empty_response":
+            return cls(
+                error=normalized,
+                level="warning",
+                lines=(
+                    [
+                        "模型返回了空响应，已停止本轮。",
+                        "请重试；若持续出现，请使用 /health 检查当前模型与 Provider。",
+                    ]
+                    if is_zh else
+                    [
+                        "The model returned no visible response, so this turn was stopped.",
+                        "Retry once. If it persists, run /health to check the model and provider.",
+                    ]
+                ),
             )
         return cls(
             error=normalized,
@@ -609,6 +682,7 @@ class ToolExecutionTurnResult:
     batch: ToolBatchState
     activities: List[ToolExecutionActivity]
     assistant_message: dict
+    tool_messages: List[dict]
     user_message: dict
     followup: str
     guard_directives: List[str] = field(default_factory=list)
@@ -717,6 +791,15 @@ async def execute_tool_turn(
     """
 
     confirm = set(confirm_tools)
+    # Keep the model-facing call transcript free of runtime-only approval
+    # fields that may be injected into the executable parameter dictionary.
+    pending_transcript = [
+        {
+            "tool": str(tool_call.get("tool", "")),
+            "params": dict(tool_call.get("params", {}) or {}),
+        }
+        for tool_call in pending
+    ]
     parallel_done = await run_parallel_tools(
         pending,
         tool_executor,
@@ -780,6 +863,24 @@ async def execute_tool_turn(
                 guard_directives.append(directive)
 
     assistant_message, user_message, followup = tool_batch.build_next_turn(total_response)
+    assistant_message["tool_calls"] = [
+        {
+            "function": {
+                "name": str(tool_call.get("tool", "")),
+                "arguments": dict(tool_call.get("params", {}) or {}),
+            }
+        }
+        for tool_call in pending_transcript
+        if tool_call.get("tool")
+    ]
+    tool_messages = [
+        {
+            "role": "tool",
+            "content": str(item.get("result", "")),
+            "name": str(item.get("tool", "")),
+        }
+        for item in tool_batch.tool_results
+    ]
     if guard_directives:
         guard_text = "\n\n".join(guard_directives)
         if isinstance(user_message.get("content"), str):
@@ -792,6 +893,7 @@ async def execute_tool_turn(
         batch=tool_batch,
         activities=activities,
         assistant_message=assistant_message,
+        tool_messages=tool_messages,
         user_message=user_message,
         followup=followup,
         guard_directives=guard_directives,
@@ -1088,7 +1190,7 @@ async def run_agent(
         try:
             result = await provider_fn(
                 current_message,
-                history if round_num == 0 else [],
+                history,
                 on_token=_wrap_on_token,
                 on_thinking=_wrap_on_thinking,
                 on_tool_call=_wrap_on_tool_call,
@@ -1160,8 +1262,9 @@ async def run_agent(
             )
 
         history = list(history) + [
+            {"role": "user", "content": current_message},
             tool_turn_result.assistant_message,
-            tool_turn_result.user_message,
+            *tool_turn_result.tool_messages,
         ]
         current_message = tool_turn_result.followup
         turn_state.reset_response()

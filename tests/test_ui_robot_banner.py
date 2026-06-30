@@ -61,8 +61,8 @@ class RobotBannerTests(unittest.TestCase):
 
         self.assertEqual(text, "•")
 
-    def test_full_banner_uses_pixel_robot_and_minimal_startup_info(self):
-        console = Console(file=io.StringIO(), record=True, width=100, force_terminal=False)
+    def test_full_banner_uses_pixel_robot_and_runtime_dashboard(self):
+        console = Console(file=io.StringIO(), record=True, width=120, force_terminal=False)
 
         render_full_banner(
             version="4.1.0",
@@ -72,6 +72,7 @@ class RobotBannerTests(unittest.TestCase):
             ollama_status_rich="Ollama online · 3 models",
             tool_count=71,
             skill_count=14,
+            first_run=True,
             console=console,
             has_rich=True,
             rich_box=box,
@@ -80,12 +81,12 @@ class RobotBannerTests(unittest.TestCase):
 
         rendered = console.export_text()
         self.assertIn("~/Desktop/aria-code", rendered)
-        self.assertNotIn("71 tools", rendered)
-        self.assertNotIn("14 skills", rendered)
+        self.assertIn("71 tools", rendered)
+        self.assertIn("Quick start", rendered)
+        self.assertIn("workspace-write", rendered)
         self.assertNotIn("┌──┐", rendered)
         self.assertNotIn("╔══════════════╗", rendered)
-        self.assertNotIn("╭────────╮", rendered)
-        self.assertNotIn("┌────────────────", rendered)
+        self.assertIn("╭", rendered)
 
 
 if __name__ == "__main__":

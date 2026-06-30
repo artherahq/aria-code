@@ -42,6 +42,7 @@ import json
 import logging
 import os
 import pathlib
+import re
 import traceback
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -51,6 +52,13 @@ MCP_CONFIG_PATH = pathlib.Path.home() / ".arthera" / "mcp_servers.json"
 
 # MCP JSON-RPC protocol version
 MCP_PROTOCOL_VERSION = "2024-11-05"
+
+
+def model_safe_tool_name(server_name: str, tool_name: str) -> str:
+    """Return an OpenAI/Ollama-compatible qualified MCP function name."""
+    server = re.sub(r"[^A-Za-z0-9_-]+", "_", str(server_name)).strip("_") or "server"
+    tool = re.sub(r"[^A-Za-z0-9_-]+", "_", str(tool_name)).strip("_") or "tool"
+    return f"mcp__{server}__{tool}"
 
 
 # ---------------------------------------------------------------------------
@@ -267,7 +275,9 @@ class MCPToolRegistry:
     Loads MCP server config from ``~/.arthera/mcp_servers.json``, starts
     each server, discovers tools, and registers them in the CLI's tool loop.
 
-    Tool naming convention:  ``{server_name}/{tool_name}``
+    Internal naming convention: ``{server_name}/{tool_name}``.
+    Model-facing schemas use ``mcp__{server_name}__{tool_name}`` because tool
+    APIs reject slashes in function names.
     This avoids collisions when two servers expose a tool with the same name.
     """
 
@@ -276,6 +286,7 @@ class MCPToolRegistry:
         self._servers:   Dict[str, MCPServer] = {}
         self._tool_map:  Dict[str, Tuple[str, str]] = {}  # qualified_name → (server_name, tool_name)
         self._loaded     = False
+        self._event_loop: Optional[asyncio.AbstractEventLoop] = None
 
     # ── config ─────────────────────────────────────────────────────────────
 
@@ -313,6 +324,7 @@ class MCPToolRegistry:
 
     async def start_all(self) -> Dict[str, bool]:
         """Start all configured MCP servers.  Returns {name: started_ok}."""
+        self._event_loop = asyncio.get_running_loop()
         server_configs = self.load_config()
         results = {}
         for cfg in server_configs:
@@ -349,6 +361,7 @@ class MCPToolRegistry:
         self._servers.clear()
         self._tool_map.clear()
         self._loaded = False
+        self._event_loop = None
 
     # ── tool info ──────────────────────────────────────────────────────────
 
@@ -394,8 +407,8 @@ class MCPToolRegistry:
         """
         Add all MCP tools into the CLI's LOCAL_TOOLS and LOCAL_TOOL_SCHEMAS.
 
-        Tool names use the qualified ``server/tool`` format so they appear
-        in the model's tool list as e.g. ``quant_engine/backtest_strategy``.
+        Model-facing tool names use ``mcp__server__tool`` while handlers retain
+        the MCP server's internal ``server/tool`` qualified name.
 
         Returns number of tools registered.
         """
@@ -407,35 +420,39 @@ class MCPToolRegistry:
         for srv_name, srv in self._servers.items():
             for tool in srv.tools:
                 qname = f"{srv_name}/{tool['name']}"
-                if qname in existing_names and not overwrite:
+                model_name = model_safe_tool_name(srv_name, tool["name"])
+                if model_name in existing_names and not overwrite:
                     continue
 
-                # Create a synchronous wrapper that runs the async call
+                # ToolExecutor invokes synchronous handlers in a worker thread.
+                # Route the coroutine back to the event loop that owns the MCP
+                # subprocess streams; asyncio.run() in the worker creates a
+                # different loop and fails with cross-loop Future errors.
                 def _make_sync_handler(qn: str) -> Callable:
                     def _handler(params: dict) -> dict:
-                        loop = None
                         try:
-                            loop = _asyncio.get_event_loop()
+                            current_loop = _asyncio.get_running_loop()
                         except RuntimeError:
-                            pass
-                        if loop and loop.is_running():
-                            # We're inside an async context — schedule as coroutine
-                            # The caller should use the async version instead
-                            import concurrent.futures
-                            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-                                fut = ex.submit(
-                                    _asyncio.run,
-                                    self.call_tool(qn, params)
-                                )
-                                return fut.result(timeout=60)
-                        else:
-                            return _asyncio.run(self.call_tool(qn, params))
+                            current_loop = None
+                        owner_loop = self._event_loop
+                        if owner_loop and owner_loop.is_running():
+                            if current_loop is owner_loop:
+                                return {
+                                    "success": False,
+                                    "error": "MCP sync handler called on its owner event loop; use ToolExecutor.execute",
+                                }
+                            future = _asyncio.run_coroutine_threadsafe(
+                                self.call_tool(qn, params), owner_loop
+                            )
+                            return future.result(timeout=60)
+                        return _asyncio.run(self.call_tool(qn, params))
                     return _handler
 
-                tool_registry[qname] = (
+                tool_registry[model_name] = (
                     _make_sync_handler(qname),
                     tool.get("description", f"MCP tool from {srv_name}"),
                 )
+                existing_names.add(model_name)
                 added += 1
 
                 # Build schema
@@ -445,7 +462,7 @@ class MCPToolRegistry:
                 schema_registry.append({
                     "type": "function",
                     "function": {
-                        "name":        qname,
+                        "name":        model_name,
                         "description": f"[{srv_name}] {tool.get('description', '')}",
                         "parameters":  input_schema,
                     },

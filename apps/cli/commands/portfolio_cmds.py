@@ -482,6 +482,11 @@ class PortfolioCommandsMixin:
         sym_parts  = parts[1:] if parts else []
         rebalance  = (sub == "rebalance")
 
+        # ── holdings: 实盘持仓看板，按来源策略分组 ──────────────────────────
+        if sub in ("holdings", "book", "positions"):
+            await self._portfolio_holdings_by_strategy()
+            return
+
         # 解析标的：命令行 > watchlist
         if sym_parts:
             symbols = [s.strip(",").upper() for s in sym_parts if s.strip(",")]
@@ -585,6 +590,93 @@ class PortfolioCommandsMixin:
         else:
             console.print(f"[dim]No data: {result.get('error', '')}[/dim]" if HAS_RICH
                           else f"No data: {result.get('error', '')}")
+
+    async def _portfolio_holdings_by_strategy(self):
+        """实盘持仓看板：按来源策略分组（策略名匹配交易 reason），含实时浮盈。"""
+        try:
+            from portfolio_ledger import PortfolioLedger
+        except ImportError:
+            console.print("[red]portfolio_ledger 模块未找到[/red]") if HAS_RICH else print("portfolio_ledger 未找到")
+            return
+        ledger = PortfolioLedger()
+        names = []
+        try:
+            from strategy_vault import get_vault
+            names = get_vault().list_all_names()
+        except Exception:
+            pass
+        groups = ledger.positions_by_strategy(names)
+        if not groups:
+            console.print("[dim]暂无持仓。用 /deploy 或 /journal add 建仓后在此按策略查看。[/dim]"
+                          if HAS_RICH else "暂无持仓。")
+            return
+
+        syms = sorted({p["symbol"] for poss in groups.values() for p in poss})
+        if HAS_RICH:
+            console.print(f"  [dim]获取 {len(syms)} 只实时报价…[/dim]")
+        live = {}
+        try:
+            import yfinance as yf
+            for s in syms:
+                try:
+                    h = yf.Ticker(s).history(period="1d")
+                    if not h.empty:
+                        live[s] = float(h["Close"].iloc[-1])
+                except Exception:
+                    pass
+        except ImportError:
+            pass
+
+        g_cost = g_mv = 0.0
+        if HAS_RICH:
+            from rich.table import Table
+            console.print()
+            console.print("  [bold cyan]持仓看板 · 按来源策略[/bold cyan]")
+            for grp, poss in groups.items():
+                tbl = Table(box=None, header_style="bold", pad_edge=False)
+                tbl.add_column("标的", width=8)
+                tbl.add_column("净持仓", justify="right", width=10)
+                tbl.add_column("均价", justify="right", width=10)
+                tbl.add_column("现价", justify="right", width=10)
+                tbl.add_column("市值", justify="right", width=12)
+                tbl.add_column("浮动盈亏", justify="right", width=13)
+                tbl.add_column("%", justify="right", width=8)
+                sub_cost = sub_mv = 0.0; have = False
+                for p in poss:
+                    cost = p["cost_basis"]; sub_cost += cost
+                    px = live.get(p["symbol"])
+                    if px is not None:
+                        have = True
+                        mv = px * p["net_qty"]; sub_mv += mv
+                        pnl = mv - cost; pct = (pnl / cost * 100) if cost else 0.0
+                        c = "green" if pnl >= 0 else "red"
+                        tbl.add_row(p["symbol"], f"{p['net_qty']:,.4g}", f"{p['avg_cost']:,.2f}",
+                                    f"{px:,.2f}", f"{mv:,.0f}", f"[{c}]{pnl:+,.0f}[/{c}]",
+                                    f"[{c}]{pct:+.1f}%[/{c}]")
+                    else:
+                        sub_mv += cost
+                        tbl.add_row(p["symbol"], f"{p['net_qty']:,.4g}", f"{p['avg_cost']:,.2f}",
+                                    "N/A", f"{cost:,.0f}", "—", "—")
+                g_cost += sub_cost; g_mv += sub_mv
+                console.print(f"\n  [bold]{grp}[/bold]  [dim]{len(poss)} 持仓 · 成本 {sub_cost:,.0f}[/dim]")
+                console.print(tbl)
+                if have:
+                    spnl = sub_mv - sub_cost; sc = "green" if spnl >= 0 else "red"
+                    spct = spnl / sub_cost * 100 if sub_cost else 0.0
+                    console.print(f"  [dim]小计 市值 {sub_mv:,.0f} · 浮盈 [{sc}]{spnl:+,.0f} ({spct:+.1f}%)[/{sc}][/dim]")
+            gpnl = g_mv - g_cost; gc = "green" if gpnl >= 0 else "red"
+            gpct = gpnl / g_cost * 100 if g_cost else 0.0
+            console.print(f"\n  [bold]合计[/bold] 成本 {g_cost:,.0f} · 市值 {g_mv:,.0f} · "
+                          f"浮盈 [{gc}]{gpnl:+,.0f} ({gpct:+.1f}%)[/{gc}]")
+            console.print()
+        else:
+            for grp, poss in groups.items():
+                print(f"[{grp}]")
+                for p in poss:
+                    px = live.get(p["symbol"])
+                    pnl = (px * p["net_qty"] - p["cost_basis"]) if px else None
+                    print(f"  {p['symbol']} net={p['net_qty']:g} avg={p['avg_cost']:.2f}"
+                          + (f" pnl={pnl:+.0f}" if pnl is not None else ""))
 
     def cmd_apply_plan(self, args: str):
         """Execute the pending command plan sequentially."""

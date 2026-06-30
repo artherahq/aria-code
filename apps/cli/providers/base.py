@@ -71,10 +71,15 @@ def _resolve_ollama_stream():
     """Prefer the aria_cli rebound stream_ollama when available."""
     import sys
 
-    aria_cli = sys.modules.get("aria_cli")
-    rebound = getattr(aria_cli, "stream_ollama", None) if aria_cli else None
-    if callable(rebound):
-        return rebound
+    # Console entry points import ``aria_cli``; direct execution
+    # (``python aria_cli.py`` and the npm launcher) registers it as
+    # ``__main__``. Both own the rebound function whose globals include the
+    # CLI tool registry and cache helpers.
+    for module_name in ("aria_cli", "__main__"):
+        module = sys.modules.get(module_name)
+        rebound = getattr(module, "stream_ollama", None) if module else None
+        if callable(rebound):
+            return rebound
     from apps.cli.providers.llm.ollama_stream import stream_ollama
 
     return stream_ollama
@@ -203,6 +208,8 @@ class OllamaProvider:
                 on_tool_result=on_tool_result,
                 cancel_event=cancel_event,
                 enable_tools=bool(tools),
+                tool_schemas=list(tools or []),
+                defer_tool_execution=True,
                 system_override=self.system_override,
                 show_market_prefetch_status=self.show_market_prefetch_status,
             )
@@ -269,3 +276,187 @@ class AriaSSEProvider:
 
         async for event in _stream_callback_provider(_invoke, done_provider="aria_sse"):
             yield event
+
+
+class ConfiguredProvider:
+    """Adapter for the provider selected by ``/model provider/model``.
+
+    Ollama keeps its dedicated CLI adapter because that path owns Aria's local
+    intent and tool orchestration. Other local runtimes use the shared
+    ``LocalLLMProvider`` OpenAI-compatible transport, while cloud APIs use the
+    provider registry (including Anthropic's native protocol).
+    """
+
+    LOCAL_OPENAI_BACKENDS = {"lmstudio", "vllm", "llamacpp", "jan", "custom"}
+    GENERIC_OPENAI_BACKENDS = {
+        "google", "gemini", "xai", "grok", "mistral", "cohere",
+        "perplexity", "baidu", "ernie", "qianfan", "bytedance",
+        "doubao", "ark", "minimax", "stepfun", "01ai", "yi",
+    }
+    GENERIC_ENV_KEYS = {
+        "google": "GOOGLE_API_KEY", "gemini": "GOOGLE_API_KEY",
+        "xai": "XAI_API_KEY", "grok": "XAI_API_KEY",
+        "mistral": "MISTRAL_API_KEY", "cohere": "COHERE_API_KEY",
+        "perplexity": "PERPLEXITY_API_KEY", "baidu": "QIANFAN_ACCESS_KEY",
+        "ernie": "QIANFAN_ACCESS_KEY", "qianfan": "QIANFAN_ACCESS_KEY",
+        "bytedance": "ARK_API_KEY", "doubao": "ARK_API_KEY",
+        "ark": "ARK_API_KEY", "minimax": "MINIMAX_API_KEY",
+        "stepfun": "STEPFUN_API_KEY", "01ai": "ONEAI_API_KEY",
+        "yi": "ONEAI_API_KEY",
+    }
+    GENERIC_BASE_URLS = {
+        "google": "https://generativelanguage.googleapis.com/v1beta/openai",
+        "gemini": "https://generativelanguage.googleapis.com/v1beta/openai",
+        "xai": "https://api.x.ai/v1", "grok": "https://api.x.ai/v1",
+        "mistral": "https://api.mistral.ai/v1",
+        "cohere": "https://api.cohere.ai/compatibility/v1",
+        "perplexity": "https://api.perplexity.ai",
+        "baidu": "https://qianfan.baidubce.com/v2",
+        "ernie": "https://qianfan.baidubce.com/v2",
+        "qianfan": "https://qianfan.baidubce.com/v2",
+        "bytedance": "https://ark.cn-beijing.volces.com/api/v3",
+        "doubao": "https://ark.cn-beijing.volces.com/api/v3",
+        "ark": "https://ark.cn-beijing.volces.com/api/v3",
+        "minimax": "https://api.minimax.chat/v1",
+        "stepfun": "https://api.stepfun.com/v1",
+        "01ai": "https://api.lingyiwanwu.com/v1",
+        "yi": "https://api.lingyiwanwu.com/v1",
+    }
+
+    def __init__(
+        self,
+        config: dict,
+        model: str,
+        *,
+        system_override: Optional[str] = None,
+    ) -> None:
+        self.config = dict(config or {})
+        self.model = model
+        from apps.cli.providers.chat_routing import normalize_provider_name
+
+        self.backend = normalize_provider_name(
+            self.config.get("local_provider") or "ollama"
+        )
+        self.config["local_provider"] = self.backend
+        self.system_override = system_override
+
+    def _messages(self, messages: list) -> list:
+        prepared = [dict(message) for message in messages]
+        if not self.system_override:
+            return prepared
+        if prepared and prepared[0].get("role") == "system":
+            prepared[0]["content"] = (
+                self.system_override + "\n\n" + str(prepared[0].get("content", ""))
+            )
+        else:
+            prepared.insert(0, {"role": "system", "content": self.system_override})
+        return prepared
+
+    async def stream(
+        self,
+        messages: list,
+        tools: list,
+        *,
+        cancel_event: Optional[asyncio.Event] = None,
+    ) -> AsyncGenerator[LLMEvent, None]:
+        prepared = self._messages(messages)
+
+        if self.backend in self.LOCAL_OPENAI_BACKENDS | self.GENERIC_OPENAI_BACKENDS:
+            from local_llm_provider import LocalLLMProvider
+
+            cfg = dict(self.config)
+            cfg["model"] = self.model
+            if self.backend in self.GENERIC_OPENAI_BACKENDS:
+                import os
+                from providers.llm.registry import _load_provider_cfg_from_file
+
+                file_cfg = _load_provider_cfg_from_file(self.backend)
+                api_key = (
+                    os.getenv(self.GENERIC_ENV_KEYS[self.backend], "")
+                    or str(file_cfg.get("api_key") or "")
+                )
+                if not api_key:
+                    yield LLMDone(
+                        response="", provider=self.backend, success=False,
+                        error=f"missing_api_key:{self.backend}",
+                    )
+                    return
+                cfg.update({
+                    "local_provider": "custom",
+                    "custom_endpoint": (
+                        file_cfg.get("base_url")
+                        or self.GENERIC_BASE_URLS[self.backend]
+                    ),
+                    "custom_model": self.model,
+                    "local_api_key": api_key,
+                })
+            provider = LocalLLMProvider.from_config(cfg)
+            source = self.backend
+            event_stream = provider.stream(prepared, tools=tools, cancel_event=cancel_event)
+        else:
+            from providers.llm.base import Message
+            from providers.llm.registry import get_provider
+
+            try:
+                provider = get_provider(f"{self.backend}/{self.model}")
+            except Exception as exc:
+                yield LLMDone(
+                    response="", provider=self.backend, success=False,
+                    error=f"{self.backend}: {exc}",
+                )
+                return
+            source = self.backend
+            registry_messages = [
+                Message(
+                    role=str(message.get("role", "user")),
+                    content=str(message.get("content", "")),
+                    name=message.get("name"),
+                    tool_call_id=message.get("tool_call_id"),
+                )
+                for message in prepared
+            ]
+            # providers.llm accepts bare function schemas, while the CLI owns
+            # OpenAI envelopes. Normalize once at this adapter boundary.
+            registry_tools = [
+                item.get("function", item)
+                if isinstance(item, dict) and item.get("type") == "function"
+                else item
+                for item in tools
+            ]
+            event_stream = provider.stream(
+                registry_messages, tools=registry_tools, cancel_event=cancel_event
+            )
+
+        async for event in event_stream:
+            kind = event.get("type")
+            if kind == "token":
+                yield LLMToken(text=str(event.get("text", "")))
+            elif kind == "thinking":
+                yield LLMThinking(content=str(event.get("text", "")))
+            elif kind == "tool_call":
+                yield LLMToolCall(
+                    tool=str(event.get("name", "")),
+                    params=dict(event.get("arguments") or {}),
+                )
+            elif kind == "error":
+                yield LLMDone(
+                    response="",
+                    provider=source,
+                    success=False,
+                    error=str(event.get("message") or "provider_error"),
+                )
+                return
+            elif kind == "done":
+                stop_reason = str(event.get("stop_reason") or "")
+                yield LLMDone(
+                    response=str(event.get("text") or ""),
+                    usage=dict(event.get("usage") or {}),
+                    provider=source,
+                    success=True,
+                    cancelled=stop_reason == "cancelled",
+                )
+                return
+
+        yield LLMDone(
+            response="", provider=source, success=False, error="empty_response"
+        )

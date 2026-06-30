@@ -382,9 +382,6 @@ def build_analysis_system_prompt() -> str:
         "4. NEVER invent prices, P/E ratios, earnings, or any numeric data. Only use what tools return.\n"
         "5. If a tool returns no data, say so explicitly — do NOT substitute made-up numbers.\n\n"
 
-        "## Tool Call Format\n"
-        "<tool_call>{\"name\": \"tool_name\", \"arguments\": {\"key\": \"value\"}}</tool_call>\n\n"
-
         "## Available Tools\n"
         "- web_search: {query, max_results?} — 🔍 SEARCH THE WEB for current news, events, filings, price targets.\n"
         "  USE for: recent earnings, new IPOs, M&A, regulatory news, analyst upgrades, anything after training cutoff.\n"

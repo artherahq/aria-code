@@ -59,14 +59,20 @@ async def stream_provider_result(
             final = event
 
     response = final.response or "".join(response_parts)
+    pending_tools = tool_calls or list(final.tool_calls_pending)
+    success = final.success
+    error = final.error
+    if success and not final.cancelled and not response.strip() and not pending_tools:
+        success = False
+        error = error or "empty_response"
     return {
-        "success": final.success,
+        "success": success,
         "response": response,
         "provider": final.provider,
-        "tool_calls_pending": tool_calls or list(final.tool_calls_pending),
+        "tool_calls_pending": pending_tools,
         "usage": dict(final.usage),
         "cancelled": final.cancelled,
-        "error": final.error,
+        "error": error,
     }
 
 

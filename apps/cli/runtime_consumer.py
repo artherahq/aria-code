@@ -10,6 +10,8 @@ from __future__ import annotations
 import re
 import sys
 import time
+from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, Callable
 
 from runtime import (
@@ -27,6 +29,34 @@ _REPETITION_NOTICE = (
     "\n\n> 已检测到模型开始重复输出，已自动停止展开。"
     "上方结果仍然有效；如需继续，请指定要补充的部分。"
 )
+
+
+class TurnPhase(str, Enum):
+    """User-visible lifecycle for one assistant turn."""
+
+    CONNECTING = "connecting"
+    THINKING = "thinking"
+    STREAMING = "streaming"
+    TOOL = "tool"
+    DONE = "done"
+    ERROR = "error"
+    CANCELLED = "cancelled"
+
+
+@dataclass
+class TurnLifecycle:
+    phase: TurnPhase = TurnPhase.CONNECTING
+    started_at: float = field(default_factory=time.time)
+    first_visible_at: float | None = None
+    ended_at: float | None = None
+
+    def transition(self, phase: TurnPhase) -> None:
+        self.phase = phase
+        now = time.time()
+        if phase is TurnPhase.STREAMING and self.first_visible_at is None:
+            self.first_visible_at = now
+        if phase in {TurnPhase.DONE, TurnPhase.ERROR, TurnPhase.CANCELLED}:
+            self.ended_at = now
 
 
 class TerminalRuntimeEventConsumer:
@@ -47,6 +77,9 @@ class TerminalRuntimeEventConsumer:
         print_tool_done: Callable[[str, int, bool], None] | None = None,
         fallback_from: str = "local",
         live_update_interval: float = 0.08,
+        ui_lang: str = "en",
+        on_response_start: Callable[[], None] | None = None,
+        on_phase_change: Callable[[TurnPhase], None] | None = None,
     ) -> None:
         self.terminal = terminal
         self.console = console
@@ -60,6 +93,10 @@ class TerminalRuntimeEventConsumer:
         self.print_tool_done = print_tool_done
         self.fallback_from = fallback_from
         self.live_update_interval = live_update_interval
+        self.ui_lang = ui_lang or "en"
+        self.on_response_start = on_response_start
+        self.on_phase_change = on_phase_change
+        self.lifecycle = TurnLifecycle()
 
         self.response_text = ""
         self.streamed_any = False
@@ -73,6 +110,7 @@ class TerminalRuntimeEventConsumer:
         self.tool_start_times: dict[str, float] = {}
         self.repetition_stopped = False
         self.repetition_notice_printed = False
+        self.response_started = False
 
         self.live_display = None
         self.spinner = None
@@ -125,13 +163,38 @@ class TerminalRuntimeEventConsumer:
         self.in_latex_ref[0] = value
 
     def start_spinner(self) -> None:
+        self.set_phase(TurnPhase.THINKING)
         if self.has_rich and self.spinner is None and not self.first_token_received:
+            label = "思考中" if self.ui_lang.lower().startswith("zh") else "Thinking"
+            cancel = "esc 取消" if self.ui_lang.lower().startswith("zh") else "esc cancel"
             self.spinner = self.console.status(
-                "[dim]思考中… [/dim][dim italic]esc 取消[/dim italic]",
+                f"[dim]{label}… [/dim][dim italic]{cancel}[/dim italic]",
                 spinner="dots",
                 spinner_style="dim",
             )
             self.spinner.__enter__()
+
+    def set_phase(self, phase: TurnPhase) -> None:
+        if self.lifecycle.phase is phase:
+            return
+        self.lifecycle.transition(phase)
+        if self.on_phase_change is not None:
+            self.on_phase_change(phase)
+
+    def ensure_response_started(self) -> None:
+        """Render the response label only when visible answer text exists."""
+        if self.response_started:
+            return
+        self._finish_thinking()
+        self.stop_spinner()
+        self.response_started = True
+        if self.on_response_start is not None:
+            self.on_response_start()
+
+    def finish(self, phase: TurnPhase = TurnPhase.DONE) -> None:
+        self._finish_thinking()
+        self.stop_spinner()
+        self.set_phase(phase)
 
     def stop_spinner(self) -> None:
         if self.spinner is not None:
@@ -205,10 +268,12 @@ class TerminalRuntimeEventConsumer:
         self.stop_spinner()
         elapsed_t = time.time() - self.thinking_start if self.thinking_start else 0
         self.terminal._last_thinking = "".join(self.thinking_full_buf).strip()
-        t_info = f"Thought for {elapsed_t:.1f}s"
+        is_zh = self.ui_lang.lower().startswith("zh")
+        t_info = f"思考 {elapsed_t:.1f}s" if is_zh else f"Thought for {elapsed_t:.1f}s"
         if self.thinking_tokens > 0:
             t_info += f" · {self.thinking_tokens:,} tokens"
-        ctrlo = "  [dim]· Ctrl+O 展开[/dim]" if self.terminal._last_thinking else ""
+        expand = "展开" if is_zh else "expand"
+        ctrlo = f"  [dim]· Ctrl+O {expand}[/dim]" if self.terminal._last_thinking else ""
         if self.has_rich:
             sys.stdout.write("\r\033[K")
             sys.stdout.flush()
@@ -222,14 +287,6 @@ class TerminalRuntimeEventConsumer:
             print(f"\r  ✻ {t_info}")
 
     def on_token(self, token: str) -> None:
-        if not self.first_token_received:
-            self.first_token_received = True
-            self.token_start_time = time.time()
-            if self.set_robot_state is not None:
-                self.set_robot_state(self.streaming_state)
-            if not self.use_batch_render:
-                self.stop_spinner()
-
         if "<|im_start|>" in token or "<|im_end|>" in token:
             token = token.replace("<|im_start|>", "").replace("<|im_end|>", "")
             if not token.strip():
@@ -259,6 +316,21 @@ class TerminalRuntimeEventConsumer:
             )
             if not token.strip():
                 return
+
+        if not self.first_token_received and not token.strip():
+            self.response_text += token
+            self.streamed_any = True
+            self.token_count += 1
+            return
+
+        if not self.first_token_received:
+            self.first_token_received = True
+            self.token_start_time = time.time()
+            self.set_phase(TurnPhase.STREAMING)
+            if self.set_robot_state is not None:
+                self.set_robot_state(self.streaming_state)
+            if not self.use_batch_render:
+                self.ensure_response_started()
 
         if _REPETITION_MARKER in token:
             if self.use_batch_render:
@@ -345,6 +417,7 @@ class TerminalRuntimeEventConsumer:
             print(token, end="", flush=True)
 
     def on_thinking(self, content: str) -> None:
+        self.set_phase(TurnPhase.THINKING)
         if not self.thinking_shown:
             self.stop_spinner()
             self.thinking_start = time.time()
@@ -352,8 +425,9 @@ class TerminalRuntimeEventConsumer:
         self.thinking_tokens += 1
         if self.thinking_tokens % 30 == 1:
             elapsed = time.time() - self.thinking_start
+            label = "思考中" if self.ui_lang.lower().startswith("zh") else "Thinking"
             sys.stdout.write(
-                f"\r  \033[2m✻\033[0m \033[2m思考中  {elapsed:.1f}s  "
+                f"\r  \033[2m✻\033[0m \033[2m{label}  {elapsed:.1f}s  "
                 f"({self.thinking_tokens} tokens)\033[0m    "
             )
             sys.stdout.flush()
@@ -363,6 +437,7 @@ class TerminalRuntimeEventConsumer:
             self.thinking_full_buf.append(content)
 
     def on_tool_call(self, tool: str, params: dict) -> None:
+        self.set_phase(TurnPhase.TOOL)
         self._finish_thinking()
         if self.print_tool_call is not None:
             self.print_tool_call(tool, params if isinstance(params, dict) else {})

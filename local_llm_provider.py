@@ -189,6 +189,16 @@ BACKEND_DEFAULTS: Dict[str, Dict[str, Any]] = {
     "custom":      {"default_url": "",                                           "api_path": "/chat/completions",    "protocol": "openai"},
 }
 
+LOCAL_BACKENDS = {"ollama", "lmstudio", "vllm", "llamacpp", "jan", "custom"}
+
+
+def openai_models_url(base_url: str) -> str:
+    """Return the models endpoint for a versioned or unversioned base URL."""
+    base = base_url.rstrip("/")
+    if re.search(r"/v\d+(?:beta)?(?:/openai)?$", base):
+        return f"{base}/models"
+    return f"{base}/v1/models"
+
 
 @dataclass
 class LocalLLMProvider:
@@ -235,7 +245,22 @@ class LocalLLMProvider:
             url = config.get("custom_endpoint") or info["default_url"]
             return cls(backend=backend, base_url=url, model=requested_model, api_key=api_key)
 
-        url     = config.get("local_url") or config.get("ollama_url") or info["default_url"]
+        # ``local_url`` belongs to Aria's local application server and used to
+        # accidentally route LM Studio/llama.cpp requests to port 8000.  LLM
+        # endpoints have provider-specific keys, with ``llm_base_url`` as the
+        # shared explicit override.
+        provider_urls = config.get("provider_urls", {})
+        if not isinstance(provider_urls, dict):
+            provider_urls = {}
+        if backend == "ollama":
+            url = config.get("ollama_url") or info["default_url"]
+        else:
+            url = (
+                config.get(f"{backend}_url")
+                or provider_urls.get(backend)
+                or config.get("llm_base_url")
+                or info["default_url"]
+            )
         api_key = config.get("local_api_key", os.getenv("LOCAL_LLM_API_KEY", ""))
 
         # Resolve model at construction time so later callers always get a
@@ -261,7 +286,10 @@ class LocalLLMProvider:
         """Quick synchronous check that the backend is reachable."""
         info    = BACKEND_DEFAULTS.get(self.backend, BACKEND_DEFAULTS["ollama"])
         url     = (self.base_url or info["default_url"]).rstrip("/")
-        probe   = f"{url}/api/tags" if self.backend == "ollama" else f"{url}/v1/models"
+        probe = (
+            f"{url}/api/tags" if self.backend == "ollama"
+            else openai_models_url(url)
+        )
         try:
             with urllib.request.urlopen(probe, timeout=3) as r:
                 return r.status == 200
@@ -278,7 +306,7 @@ class LocalLLMProvider:
                     data = json.loads(r.read())
                 return [m["name"] for m in data.get("models", [])]
             else:
-                req = urllib.request.Request(f"{url}/v1/models")
+                req = urllib.request.Request(openai_models_url(url))
                 if self.api_key:
                     req.add_header("Authorization", f"Bearer {self.api_key}")
                 with urllib.request.urlopen(req, timeout=3) as r:
@@ -550,3 +578,12 @@ def probe_all_backends() -> Dict[str, bool]:
         except Exception:
             results[name] = False
     return results
+
+
+def probe_local_backends() -> Dict[str, bool]:
+    """Probe only desktop/local runtimes, never paid cloud APIs."""
+    return {
+        name: LocalLLMProvider(backend=name).is_available()
+        for name in LOCAL_BACKENDS
+        if name != "custom"
+    }

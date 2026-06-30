@@ -25,6 +25,19 @@ def load_cli_config(
             saved = json.loads(paths.config_file.read_text(encoding="utf-8"))
             merged = {**defaults, **saved}
             saved_model = merged.get("model", "")
+            if "local_provider" not in saved:
+                merged["local_provider"] = (
+                    saved_model.split("/", 1)[0].lower()
+                    if "/" in saved_model else "ollama"
+                )
+            try:
+                from apps.cli.providers.chat_routing import normalize_provider_name
+
+                merged["local_provider"] = (
+                    normalize_provider_name(merged.get("local_provider")) or "ollama"
+                )
+            except Exception:
+                pass
             if any(saved_model.startswith(prefix) for prefix in STALE_ARIA_MODEL_PREFIXES):
                 merged["model"] = defaults["model"]
             if not merged.get("ui_lang"):

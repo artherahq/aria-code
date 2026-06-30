@@ -1,3 +1,5 @@
+import asyncio
+import os
 import unittest
 from unittest.mock import patch
 
@@ -13,17 +15,27 @@ from ui.input_box import (
     PlaceholderProcessor,
     detect_terminal_theme,
     run_panel_input,
+    run_panel_input_async,
     _build_style,
     _input_rule,
+    _status_bar,
 )
 
 
 class InputBoxTests(unittest.TestCase):
     def test_panel_input_config_defaults(self):
-        config = PanelInputConfig()
+        config = PanelInputConfig().resolved()
 
         self.assertIn("›", config.prompt)
         self.assertIn("Aria", config.placeholder)
+
+    def test_placeholder_follows_ui_language(self):
+        english = PanelInputConfig(theme="dark", lang="en").resolved()
+        chinese = PanelInputConfig(theme="dark", lang="zh").resolved()
+
+        self.assertIn("Ask Aria", english.placeholder)
+        self.assertIn("问 Aria", chinese.placeholder)
+        self.assertNotEqual(english.placeholder, chinese.placeholder)
 
     def test_panel_style_builds_prompt_toolkit_style(self):
         style = _build_style(PanelInputConfig(theme="dark").resolved())
@@ -55,6 +67,45 @@ class InputBoxTests(unittest.TestCase):
             self.assertEqual(detect_terminal_theme(), "light")
         with patch.dict("os.environ", {"ARIA_INPUT_THEME": "dark"}, clear=False):
             self.assertEqual(detect_terminal_theme(), "dark")
+
+    @patch("ui.input_box.shutil.get_terminal_size", return_value=os.terminal_size((80, 24)))
+    def test_status_bar_prioritizes_runtime_state_without_repeating_full_path(self, _size):
+        config = PanelInputConfig(
+            theme="dark",
+            model_label="gpt-oss:120b-cloud",
+            cwd="/Users/mac/Desktop/aria-code",
+            est_tokens=4096,
+            max_tokens=16384,
+            permission_mode="workspace-write",
+            git_branch="main",
+            git_dirty=True,
+            mcp_running=1,
+            mcp_total=1,
+            mcp_tool_count=20,
+        ).resolved()
+
+        text = "".join(fragment for _, fragment in _status_bar(config))
+
+        self.assertIn("main*", text)
+        self.assertIn("MCP 20", text)
+        self.assertIn("rw", text)
+        self.assertIn("ctx 25%", text)
+        self.assertNotIn("/Users/mac/Desktop", text)
+
+    @patch("ui.input_box.shutil.get_terminal_size", return_value=os.terminal_size((80, 24)))
+    def test_status_bar_does_not_round_nonzero_context_to_zero(self, _size):
+        config = PanelInputConfig(
+            theme="dark",
+            model_label="gpt-oss:120b-cloud",
+            cwd="/tmp/project",
+            est_tokens=128,
+            max_tokens=131072,
+        ).resolved()
+
+        text = "".join(fragment for _, fragment in _status_bar(config))
+
+        self.assertIn("ctx <1%", text)
+        self.assertNotIn("ctx 0%", text)
 
     def test_placeholder_processor_adds_prefix_and_placeholder_when_empty(self):
         prefix_frags = [("class:prompt", "> ")]
@@ -166,6 +217,47 @@ class InputBoxTests(unittest.TestCase):
             if getattr(window, "height", None) == 1 and "FormattedTextControl" in type(window.content).__name__
         ]
         self.assertGreaterEqual(len(rule_windows), 3)
+
+    def test_panel_input_disables_cpr_probe_only_while_running(self):
+        seen = []
+
+        class FakeApplication:
+            def run(self):
+                seen.append(os.environ.get("PROMPT_TOOLKIT_NO_CPR"))
+                return "ok"
+
+        with (
+            patch("ui.input_box._build_panel_input_application", return_value=FakeApplication()),
+            patch.dict("os.environ", {}, clear=False),
+        ):
+            os.environ.pop("PROMPT_TOOLKIT_NO_CPR", None)
+            self.assertEqual(run_panel_input(), "ok")
+            self.assertNotIn("PROMPT_TOOLKIT_NO_CPR", os.environ)
+
+        self.assertEqual(seen, ["1"])
+
+    def test_async_panel_runs_on_active_event_loop_with_cpr_disabled(self):
+        seen = []
+
+        class FakeApplication:
+            async def run_async(self):
+                seen.append((
+                    os.environ.get("PROMPT_TOOLKIT_NO_CPR"),
+                    asyncio.get_running_loop(),
+                ))
+                return "中文输入"
+
+        async def exercise():
+            with patch(
+                "ui.input_box._build_panel_input_application",
+                return_value=FakeApplication(),
+            ):
+                return await run_panel_input_async()
+
+        result = asyncio.run(exercise())
+
+        self.assertEqual(result, "中文输入")
+        self.assertEqual(seen[0][0], "1")
 
 
 if __name__ == "__main__":

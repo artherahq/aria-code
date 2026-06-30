@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -14,12 +16,21 @@ def arthera_quant_engine_server_config(
 
     root = (arthera_root or Path.home() / "Desktop" / "Arthera").expanduser()
     server = root / "packages" / "quant_engine" / "mcp_server.py"
+    configured_python = os.getenv("ARTHERA_MCP_PYTHON", "").strip()
+    candidates = [
+        Path(configured_python).expanduser() if configured_python else None,
+        root / ".venv-mcp" / "bin" / "python",
+        root / ".venv" / "bin" / "python",
+        Path(sys.executable),
+    ]
+    python = next((path for path in candidates if path and path.exists()), Path("python3"))
     return {
         "name": "arthera_quant_engine",
-        "command": "python3",
+        "command": str(python),
         "args": [str(server)],
-        "env": {"PYTHONPATH": str(root)},
+        "env": {"PYTHONPATH": str(root), "PYTHONUNBUFFERED": "1"},
         "description": "Arthera QuantEngine tools exposed through MCP",
+        "enabled": True,
     }
 
 
@@ -31,9 +42,12 @@ def merge_server_config(existing: Dict[str, object], server: Dict[str, object]) 
     out = []
     replaced = False
     for item in servers:
-        if isinstance(item, dict) and item.get("name") == name:
-            out.append(server)
-            replaced = True
+        item_name = item.get("name") if isinstance(item, dict) else None
+        is_legacy_arthera = name == "arthera_quant_engine" and item_name == "quant_engine"
+        if isinstance(item, dict) and (item_name == name or is_legacy_arthera):
+            if not replaced:
+                out.append(server)
+                replaced = True
         else:
             out.append(item)
     if not replaced:

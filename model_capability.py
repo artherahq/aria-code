@@ -104,7 +104,7 @@ _CAPABILITY_TABLE: Dict[str, ModelCapability] = {
     "deepseek-r1:8b":       ModelCapability(tool_calls=False, format="xml_tags",      context_window=32768,  temperature=0.3, thinking=True),
     "deepseek-r1:7b":       ModelCapability(tool_calls=False, format="xml_tags",      context_window=32768,  temperature=0.3, thinking=True),
     "deepseek-r1":          ModelCapability(tool_calls=False, format="xml_tags",      context_window=32768,  temperature=0.3, thinking=True),
-    "deepseek-v3.1":        ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.3, notes="DeepSeek V3.1 671B"),
+    "deepseek-v3.1":        ModelCapability(tool_calls=True,  format="ollama_native", context_window=163840, temperature=0.3, thinking=True, notes="DeepSeek V3.1 671B"),
     "deepseek-v3":          ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.3),
     "deepseek-v2.5":        ModelCapability(tool_calls=True,  format="ollama_native", context_window=65536,  temperature=0.3),
     "deepseek-coder-v2":    ModelCapability(tool_calls=True,  format="ollama_native", context_window=65536,  temperature=0.2),
@@ -185,9 +185,9 @@ _CAPABILITY_TABLE: Dict[str, ModelCapability] = {
     # specific entries above still win over this fallback)
     "claude":                       ModelCapability(tool_calls=True, format="anthropic_native", context_window=200000, temperature=0.3, size_class="large",  vision=True),
     # ── Arthera cloud-routed models (large, run via cloud API) ────────────
-    "gpt-oss:120b":             ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.3, vision=True, notes="GPT-OSS 120B cloud"),
-    "gpt-oss":                  ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.3, vision=True, notes="GPT-OSS cloud"),
-    "deepseek-v3.1:671b-cloud": ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.3, notes="DeepSeek V3.1 671B cloud"),
+    "gpt-oss:120b":             ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.3, thinking=True, notes="GPT-OSS 120B via Ollama Cloud"),
+    "gpt-oss":                  ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.3, thinking=True, notes="GPT-OSS via Ollama Cloud"),
+    "deepseek-v3.1:671b-cloud": ModelCapability(tool_calls=True,  format="ollama_native", context_window=163840, temperature=0.3, thinking=True, notes="DeepSeek V3.1 671B via Ollama Cloud"),
 }
 
 # Default fallback when model is unknown

@@ -44,6 +44,14 @@ def list_service_usage_specs() -> tuple[ServiceUsageSpec, ...]:
             next_step="/status 查看 auto compact 状态",
         ),
         ServiceUsageSpec(
+            name="context_references",
+            purpose="使用 @ 将文件、目录、市场资产和研究产物作为只读上下文附加到请求",
+            cli_entrypoints=("@file:", "@folder:", "@asset:", "@portfolio:", "@strategy:", "@dataset:", "@run:", "@report:"),
+            package_sources=("packages/aria_services/references.py", "ui/completer.py"),
+            mcp_tools=(),
+            next_step="输入 @ 查看类型，或使用 /risk @portfolio:core",
+        ),
+        ServiceUsageSpec(
             name="tool_registry",
             purpose="本地工具、MCP 工具、schema、权限和 deterministic 输出封装",
             cli_entrypoints=("/tools", "/mcp", "!shell"),

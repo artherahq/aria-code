@@ -100,7 +100,7 @@ $ aria-code
 |------|------|
 | ⌨️ **键盘快捷键** | `Shift+Tab` 切换权限 · `Alt+T` 思考模式 · `Alt+P` 模型切换 · `Ctrl+O` 对话记录 · `Ctrl+T` 任务列表 |
 | `!` **Shell 模式** | 输入 `! git status` 直接执行系统命令，输出自动加入 AI 上下文 |
-| `@` **文件自动补全** | 在任意位置输入 `@src/` 即可补全文件路径 |
+| `@` **类型化上下文引用** | 附加文件、目录、资产、投资组合、策略、数据集、运行或报告，不执行操作 |
 | 🌍 **系统语言自动识别** | 首次运行自动读取 OS 语言，界面和提示语中英文随系统切换 |
 | 🤖 **19+ 云端供应商** | Google Gemini · xAI Grok · Mistral · Cohere · Perplexity · 百度文心 · 豆包 · MiniMax · 阶跃星辰 · 零一万物 + 全部原有供应商 |
 | 🔢 **全系 Ollama 模型** | Qwen3 · DeepSeek-R1 · Llama 3.x · Phi-4 · Gemma3 · Mistral 全家桶 |
@@ -117,7 +117,7 @@ $ aria-code
 | 🔍 **量化研究** | `/backtest` `/signal` `/kelly` `/factor` `/portfolio` `/screen` `/corr` `/ptbt` |
 | 🤖 **19+ 云端供应商** | 国际主流 + 国内主流 LLM API 全覆盖 |
 | 🔌 **MCP 协议** | 对接任意 [Model Context Protocol](https://modelcontextprotocol.io) 服务器 |
-| ⌨️ **丰富键盘体验** | Vim 模式 · `!` Shell · `@` 文件 · `Shift+Tab` 权限 · 对话记录查看 |
+| ⌨️ **丰富键盘体验** | Vim 模式 · `!` Shell · 类型化 `@` 上下文 · `Shift+Tab` 权限 · 对话记录查看 |
 | 💬 **飞书 / Telegram** | 从任意聊天 App 随时问 Aria |
 | 📱 **iOS 推送提醒** | 通过 APNs 实时推送价格告警 |
 | 🌍 **自动双语** | 首次运行自动检测 OS 语言；AI 回复语言跟随用户输入 |
@@ -250,8 +250,23 @@ Aria Code 基于 `prompt_toolkit` 构建了完整的键盘快捷键系统：
 |------|------|------|
 | `/` | 斜杠命令（模糊自动补全） | `/backtest momentum SPY` |
 | `!` | Shell 模式 — 运行命令，输出加入上下文 | `! git diff HEAD~1` |
-| `@` | 文件路径自动补全 | `@src/components/` |
+| `@` | 只读类型化上下文引用 | `@file:src/app.py` · `@asset:AAPL` |
 | `"""` | 多行输入模式（以 `"""` 结束） | 粘贴大段代码 |
+
+`/` 与 `@` 的职责明确分离：`/` 选择要执行的操作，`@` 选择该操作或自然语言
+请求所使用的上下文。两者可以组合：
+
+```text
+/risk @portfolio:core
+/backtest @strategy:momentum-v2 @asset:AAPL --period 3y
+审查 @folder:apps/cli，并参考 @report:last-audit
+```
+
+可用引用类型：`@file:`、`@folder:`、`@asset:`、`@portfolio:`、`@strategy:`、
+`@dataset:`、`@run:`、`@report:`。为兼容旧用法，普通 `@路径` 仍按文件处理；
+无法解析的引用会在本地直接报错，不再交给模型猜测。引用只保存资源指针；
+Aria 会按需调用 `read_file`、`list_files`、`analyze_file`、`get_market_data`
+等可审计工具，不会静默展开项目原文并拼入提示词。
 
 ### 底部工具栏（始终显示）
 
@@ -381,6 +396,36 @@ Alt+P                     # 键盘快捷键
 /feargreed                         # 加密恐贪指数
 /funding BTC ETH                   # 永续合约资金费率
 ```
+
+### 策略工作台（策略 → 回测 → 实盘闭环）
+
+一条从「写策略」到「实盘跟踪」的完整链路。策略保存在版本库（`~/.arthera/strategies/vault.db`），
+实盘交易记在本地账本（`~/.arthera/portfolio.db`），二者通过交易的 `reason` 字段（含策略名）软关联。
+
+```bash
+# 1) 策略版本库
+/strategy save 价值组合 "E/P + S/P 复合"   # 把对话里最后一段策略代码存为新版本
+/strategy show                           # 所有策略总览（版本数 / 回测 Sharpe·收益 / 是否部署）
+/strategy show 价值组合                   # 单策略工作台：版本史 + 关联回测(含 equity 火花线) + 实盘 vs 回测
+/strategy diff 价值组合 v1 v2            # 版本差异
+/strategy review                         # AI + 静态审查
+
+# 2) 部署到实盘（闭合 回测 → 实盘 环；交易自动打 reason="deploy <策略> @<版本>"）
+/deploy 价值组合 AAPL:10 MSFT:5@320       # 按股数建仓（@价格可省，省则取实时价）
+/deploy 价值组合 $100000 AAPL:30% MSFT:20% # 按权重建仓（给资金，自动按实时价折算股数）
+/deploy 价值组合 rebalance AAPL:30% MSFT:20%      # 再平衡预览（不落账）
+/deploy 价值组合 rebalance apply AAPL:30% MSFT:20% # 执行再平衡（对齐目标权重，不做空）
+/deploy 价值组合 rebalance equal                  # 当前持仓等权
+/deploy 价值组合 rebalance like 动量组合          # 对齐到另一策略的市值权重
+/deploy 价值组合 close                    # 平掉该策略当前净持仓
+
+# 3) 持仓与盈亏
+/portfolio holdings                      # 按来源策略分组的持仓看板（含实时浮盈 + 每组小计）
+/journal pnl                             # 全部持仓的未实现盈亏（实时报价）
+/journal add buy AAPL 100 185.50 价值组合 # 手动记一笔（reason 含策略名即可被上面关联）
+```
+
+> 📖 完整生命周期、数据模型与设计注记见 [docs/strategy_workspace.md](docs/strategy_workspace.md)。
 
 ### 会话与界面
 
@@ -567,7 +612,7 @@ python3 aria_daemon.py start
 
 ```
 aria-code/
-├── aria_cli.py               # 主 CLI + REPL（键盘快捷键、! Shell、@文件）
+├── aria_cli.py               # 主 CLI + REPL（键盘快捷键、! Shell、@ 上下文）
 ├── aria_daemon.py            # 后台守护进程 + 定时任务
 ├── market_data_client.py     # 统一行情数据层（美股优先走 Finnhub）
 ├── setup_wizard.py           # 双语配置向导（19 家供应商）
@@ -583,7 +628,7 @@ aria-code/
 │
 ├── ui/
 │   ├── banner.py             # 双语横幅（i18n 感知）
-│   └── completer.py          # 模糊自动补全：/ 命令 · @ 文件 · ! 历史
+│   └── completer.py          # 模糊自动补全：/ 命令 · @ 上下文 · ! 历史
 │
 ├── providers/llm/            # LLM 适配器（19+ 云端 endpoint）
 ├── agents/financial/         # 基本面 / 技术面 / 宏观 / 风险 / 综合智能体

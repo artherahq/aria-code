@@ -6,7 +6,8 @@ so aria_cli.py can do data gathering while this module owns all display.
 Public surface
 --------------
     render_compact_banner(...)   — one-line banner (banner=compact)
-    render_full_banner(...)      — robot-face + grid panel (banner=full)
+    render_full_banner(...)      — compatibility wrapper for the dashboard
+    render_startup_dashboard(...) — responsive wide/stacked/minimal dashboard
     render_try_hints(console)    — "try analyze AAPL · /help" line below panel
     privacy_status_label(...)
     control_status_label(...)
@@ -19,6 +20,8 @@ from __future__ import annotations
 import os
 import shutil
 from typing import Optional
+
+from .startup_dashboard import StartupDashboardViewModel, select_dashboard_layout
 
 
 def _t(key: str, lang: str) -> str:
@@ -37,6 +40,7 @@ def _t(key: str, lang: str) -> str:
             "mode": "mode", "status": "status",
             "tools": "tools", "skills": "skills", "quant": "quant",
             "try": "try", "local": "local", "lite": "lite",
+            "local_retention": "local retention",
         }
         return _fallback.get(key, key)
 
@@ -56,11 +60,19 @@ def privacy_status_label(config: dict, rich: bool = False, lang: str = "") -> st
 def control_status_label(config: dict, rich: bool = False, lang: str = "") -> str:
     _lang      = lang or config.get("ui_lang", "en")
     permission = config.get("permission_mode", "workspace-write")
+    if _lang.lower().startswith("zh"):
+        permission = {
+            "read-only": "只读",
+            "workspace-write": "工作区可写",
+            "full-access": "完全访问",
+        }.get(permission, permission)
     net_key    = "network_on" if bool(config.get("network_enabled", True)) else "network_off"
     network    = _t(net_key, _lang)
-    priv_label = _t("privacy", _lang)
-    privacy    = privacy_status_label(config, rich=rich, lang=_lang)
-    return f"{permission} · {network} · {priv_label} {privacy}"
+    sharing = bool(config.get("data_sharing", False) and config.get("feedback_upload", False))
+    retention = _t("sharing_on", _lang) if sharing else _t("local_retention", _lang)
+    if rich:
+        retention = _mark("muted", retention)
+    return f"{permission} · {network} · {retention}"
 
 
 def ollama_status_label(
@@ -165,6 +177,183 @@ def _normalize_dim_markup(markup: str) -> str:
     return markup.replace("[dim]", "[#57606A]").replace("[/dim]", "[/#57606A]")
 
 
+def _console_width(console) -> int:
+    try:
+        return max(20, int(console.width))
+    except Exception:
+        return max(20, shutil.get_terminal_size((80, 24)).columns)
+
+
+def _robot_text():
+    from rich.text import Text
+
+    from .robot import ROBOT_ROW_COUNT, get_robot_row
+
+    face = Text()
+    for idx in range(ROBOT_ROW_COUNT):
+        for style, value in get_robot_row(2, idx):
+            face.append(value, style=style)
+        if idx < ROBOT_ROW_COUNT - 1:
+            face.append("\n")
+    return face
+
+
+def _identity_markup(view: StartupDashboardViewModel) -> str:
+    from rich.markup import escape
+
+    lines = [
+        f"{_mark('primary', 'Aria Code')}  {_mark('subtle', f'v{view.version}')}",
+        _normalize_dim_markup(view.runtime_label),
+        _mark("muted", escape(view.cwd)),
+    ]
+    if view.workspace_state:
+        lines.append(_mark("muted", escape(view.workspace_state)))
+    if view.auto_healed_from:
+        lines.append(
+            f"{_mark('muted', '⚙ ' + _t('auto_matched', view.lang))}  "
+            f"[yellow]{escape(view.auto_healed_from)}[/yellow]"
+            f" {_mark('dim', '→')} [bold]{escape(view.current_id)}[/bold]"
+        )
+    if view.badge == "Fast" and view.best_lite_id and not view.best_lite_installed:
+        lines.append(
+            f"[yellow]{_t('tip', view.lang)}[/yellow]  "
+            f"{_mark('muted', _t('lite', view.lang) + ' model · ')}"
+            f"[bold]ollama pull {escape(view.best_lite_id)}[/bold]"
+        )
+    return "\n".join(lines)
+
+
+def _runtime_markup(view: StartupDashboardViewModel, *, include_heading: bool = True) -> str:
+    from rich.markup import escape
+
+    lines = []
+    if include_heading:
+        lines.append(_mark("primary", view.runtime_title))
+    lines.extend([
+        _normalize_dim_markup(view.control_status),
+        _normalize_dim_markup(view.health_status),
+        _mark("muted", escape(view.capabilities)),
+    ])
+    return "\n".join(line for line in lines if line)
+
+
+def _compact_runtime_markup(view: StartupDashboardViewModel) -> str:
+    control_parts = view.control_status.split(" · ")
+    control_line = " · ".join(control_parts[:2])
+    retention = " · ".join(control_parts[2:])
+    health_line = " · ".join(part for part in (retention, view.compact_health) if part)
+    lines = [
+        _mark("primary", view.runtime_title),
+        _normalize_dim_markup(control_line),
+        _normalize_dim_markup(health_line),
+        _mark("muted", view.capabilities),
+    ]
+    return "\n".join(line for line in lines if line)
+
+
+def _compact_guidance_markup(view: StartupDashboardViewModel) -> str:
+    if not view.first_run:
+        return "\n".join(f" {line}" for line in _compact_runtime_markup(view).splitlines())
+    compact_health = view.compact_health.replace("Local: ", "").replace("本地: ", "")
+    quick_counts = []
+    if view.mcp_server_count:
+        quick_counts.append(f"MCP {view.mcp_server_count}")
+    quick_counts.append(f"{view.tool_count} {'个工具' if view.is_zh else 'tools'}")
+    lines = [
+        _mark("primary", view.getting_started_title),
+        *(_mark("muted", line) for line in view.getting_started_lines),
+        f"{_mark('primary', view.runtime_title)} {_mark('dim', '·')} "
+        f"{_normalize_dim_markup(' · '.join(view.control_status.split(' · ')[:2]))}",
+        _mark("muted", " · ".join([compact_health, *quick_counts])),
+    ]
+    return "\n".join(f" {line}" for line in lines)
+
+
+def _guidance_markup(view: StartupDashboardViewModel) -> str:
+    from rich.markup import escape
+
+    sections = []
+    if view.first_run:
+        start_lines = "\n".join(_mark("muted", escape(line)) for line in view.getting_started_lines)
+        sections.append(f"{_mark('primary', view.getting_started_title)}\n{start_lines}")
+    else:
+        sections.append(_runtime_markup(view))
+
+    if view.update_notice:
+        sections.append(f"{_mark('primary', view.whats_new_title)}\n{view.update_notice}")
+    elif view.first_run:
+        sections.append(_runtime_markup(view))
+    return "\n\n".join(sections)
+
+
+def render_startup_dashboard(
+    view: StartupDashboardViewModel,
+    *,
+    console,
+    has_rich: bool,
+    rich_box,
+    terminal_width: Optional[int] = None,
+    terminal_height: Optional[int] = None,
+) -> None:
+    """Render startup state using a layout selected from terminal width."""
+    if not has_rich:
+        print(f"\n  Aria Code v{view.version}")
+        print(f"  {view.runtime_label}")
+        print(f"  {view.cwd}")
+        print(f"  {view.control_status}")
+        print(f"  {view.health_status}")
+        print(f"  {view.capabilities}")
+        print("─" * 60)
+        return
+
+    from rich.console import Group
+    from rich.markup import escape
+    from rich.panel import Panel
+    from rich.table import Table
+    from rich.text import Text
+
+    terminal_size = shutil.get_terminal_size((80, 24))
+    width = terminal_width or _console_width(console)
+    height = terminal_height or terminal_size.lines
+    layout = select_dashboard_layout(width, height)
+
+    if layout == "minimal":
+        console.print(
+            f"  {_MASCOT} {_mark('primary', 'Aria Code')} "
+            f"{_mark('subtle', f'v{view.version}')} {_mark('dim', '·')} "
+            f"{_normalize_dim_markup(view.runtime_label)}"
+        )
+        console.print(
+            f"  {_mark('muted', escape(view.cwd))} {_mark('dim', '·')} "
+            f"{_mark('muted', escape(view.capabilities))}"
+        )
+        return
+
+    identity = Table.grid(padding=(0, 2))
+    identity.add_column(no_wrap=True, vertical="top")
+    identity.add_column(vertical="middle")
+    identity.add_row(_robot_text(), Text.from_markup(_identity_markup(view)))
+
+    border_style = _banner_style("dim")
+    panel_box = getattr(rich_box, "ROUNDED", None)
+
+    if layout == "stacked":
+        details = _compact_guidance_markup(view)
+        if view.update_notice and not view.first_run:
+            details = f"{details}\n{_mark('primary', view.whats_new_title)} {_mark('dim', '·')} {view.update_notice}"
+        content = Group(identity, Text.from_markup("\n" + details))
+        console.print(Panel(content, box=panel_box, border_style=border_style, padding=(0, 1)))
+        return
+
+    body = Table.grid(expand=True, padding=0)
+    body.add_column(ratio=5, vertical="top")
+    body.add_column(width=1, vertical="top")
+    body.add_column(ratio=6, vertical="top")
+    divider = Text("\n".join("│" for _ in range(5)), style=_banner_style("dim"))
+    body.add_row(identity, divider, Text.from_markup(_compact_guidance_markup(view)))
+    console.print(Panel(body, box=panel_box, border_style=border_style, padding=(0, 1)))
+
+
 def render_compact_banner(
     *,
     version: str,
@@ -210,71 +399,37 @@ def render_full_banner(
     installed_models: frozenset = frozenset(),
     best_lite_id: str = "",     # model ID to suggest when lite badge + not installed
     update_notice: Optional[str] = None,
+    first_run: bool = False,
+    terminal_width: Optional[int] = None,
     console,
     has_rich: bool,
     rich_box,
     lang: str = "en",
 ) -> None:
-    _lfa    = _t("local_first_agent", lang)
-    _model  = _t("model", lang)
-    _ws     = _t("workspace", lang)
-    _tools  = _t("tools", lang)
-    _tip    = _t("tip", lang)
-    _amatch = _t("auto_matched", lang)
-
-    if not has_rich:
-        print(f"\n  Aria Code v{version}  {_lfa}")
-        print(f"  {_model:<10}{rt_label}")
-        print(f"  {_ws:<10}{cwd}")
-        print(f"  {control_status_rich}")
-        print(f"  {ollama_status_rich}")
-        print("─" * 60)
-        return
-
-    from rich.table import Table
-    from rich.text import Text
-
-    # Left column: hand-tuned pixel mascot (pure text — works in every terminal,
-    # no image deps). Keep it quiet; copper is reserved for state accents.
-    from .robot import ROBOT_ROW_COUNT, get_robot_row
-
-    _face = Text()
-    for _idx in range(ROBOT_ROW_COUNT):
-        for _style, _text in get_robot_row(2, _idx):
-            _face.append(_text, style=_style)
-        if _idx < ROBOT_ROW_COUNT - 1:
-            _face.append("\n")
-
-    # Right column: Claude Code-like essentials only. Operational detail is
-    # available in the bottom toolbar and slash commands, so startup stays calm.
-    _info_lines = [
-        f"{_mark('primary', 'Aria Code')}  {_mark('subtle', f'v{version} · {_lfa}')}",
-        f"{_normalize_dim_markup(rt_label)}",
-        f"{_mark('muted', cwd)}",
-    ]
-    if auto_healed_from:
-        _info_lines.append(
-            f"{_mark('muted', f'⚙ {_amatch}')}  "
-            f"[yellow]{auto_healed_from}[/yellow]"
-            f" {_mark('dim', '→')} [bold]{current_id}[/bold]"
-        )
-    if badge == "Fast" and best_lite_id and best_lite_id not in installed_models:
-        lite_word = _t("lite", lang)
-        _info_lines.append(
-            f"[yellow]{_tip}[/yellow]  {_mark('muted', f'{lite_word} model — ')}"
-            f"[bold]ollama pull {best_lite_id}[/bold] {_mark('muted', f'for full {_tools}')}"
-        )
-    if update_notice:
-        _info_lines.append(update_notice)
-
-    _info = Text.from_markup("\n".join(_info_lines))
-
-    _grid = Table.grid(padding=(0, 3))
-    _grid.add_column(no_wrap=True, vertical="top")
-    _grid.add_column(vertical="middle")
-    _grid.add_row(_face, _info)
-
-    console.print(_grid)
+    view = StartupDashboardViewModel(
+        version=version,
+        runtime_label=rt_label,
+        cwd=cwd,
+        control_status=control_status_rich,
+        health_status=ollama_status_rich,
+        tool_count=tool_count,
+        skill_count=skill_count,
+        lang=lang,
+        first_run=first_run,
+        update_notice=update_notice,
+        auto_healed_from=auto_healed_from,
+        current_id=current_id,
+        badge=badge,
+        best_lite_id=best_lite_id,
+        best_lite_installed=(not best_lite_id or best_lite_id in installed_models),
+    )
+    render_startup_dashboard(
+        view,
+        console=console,
+        has_rich=has_rich,
+        rich_box=rich_box,
+        terminal_width=terminal_width,
+    )
 
 
 def render_try_hints(console, has_rich: bool, lang: str = "en") -> None:
@@ -307,4 +462,4 @@ def render_try_hints(console, has_rich: bool, lang: str = "en") -> None:
             parts.append(hint_rich)
             used += cost
     _try_word = _t("try", lang)
-    console.print(f"  {_mark('subtle', _try_word)}  " + sep.join(parts) + "\n")
+    console.print(f"  {_mark('subtle', _try_word)}  " + sep.join(parts))

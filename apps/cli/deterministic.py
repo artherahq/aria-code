@@ -103,13 +103,19 @@ def run_deterministic_chain(
         handle_strategy_advice,
         _handle_realty_query,
         _handle_stock_chart_analysis,
-        _try_handle_market_overview,
     ):
         if deterministic.get("success"):
             break
         deterministic = handler(message)
 
-    if not deterministic.get("success"):
+    # Tool-capable models should resolve symbols and fetch market data through
+    # the audited tool loop. The deterministic market handlers can refresh a
+    # large remote symbol universe, which blocks the REPL before the model ever
+    # receives the request. Keep them as the fallback for text-only models.
+    if not deterministic.get("success") and not config.model_has_tools:
+        deterministic = _try_handle_market_overview(message)
+
+    if not deterministic.get("success") and not config.model_has_tools:
         deterministic = _try_handle_market_snapshot_analysis(message, history=history)
 
     return deterministic

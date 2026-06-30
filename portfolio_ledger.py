@@ -49,6 +49,8 @@ CREATE INDEX IF NOT EXISTS idx_trades_date   ON trades(date);
 
 class PortfolioLedger:
 
+    UNATTRIBUTED = "(未归属)"   # group for trades whose reason matches no strategy
+
     def __init__(self, db_path: Optional[Path] = None):
         self.db_path = db_path or _DB_PATH
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -187,6 +189,48 @@ class PortfolioLedger:
                 })
             result.append(pos)
         return result
+
+    def positions_by_strategy(self, strategy_names: List[str],
+                              limit: int = 100_000) -> "Dict[str, List[Dict]]":
+        """
+        Open positions partitioned by the strategy that originated them.
+
+        Attribution is by the free-text `reason` on each trade: a trade belongs
+        to a strategy when that strategy's name appears (case-insensitive) in its
+        reason. The longest matching name wins, so 'value_v2' beats 'value'.
+        Trades matching no strategy fall into the UNATTRIBUTED group. Average cost
+        = total BUY amount / total BUY qty within each (group, symbol).
+
+        Returns an ordered dict {group_name: [position, ...]} (named groups first
+        in alpha order, UNATTRIBUTED last), each position with net_qty > 0.
+        """
+        names = sorted({n for n in strategy_names if n}, key=len, reverse=True)
+        agg: Dict[Tuple[str, str], Dict[str, float]] = {}
+        for t in self.get_trades(limit=limit):
+            reason = str(t.get("reason") or "").lower()
+            owner  = next((n for n in names if n.lower() in reason), None) or self.UNATTRIBUTED
+            a = agg.setdefault((owner, t["symbol"]), {"buy_amt": 0.0, "buy_qty": 0.0, "net": 0.0})
+            q, amt = float(t["qty"]), float(t["amount"])
+            if str(t["side"]).upper() == "BUY":
+                a["buy_amt"] += amt; a["buy_qty"] += q; a["net"] += q
+            else:
+                a["net"] -= q
+
+        groups: Dict[str, List[Dict]] = {}
+        for (owner, sym), a in agg.items():
+            if a["net"] <= 1e-4:
+                continue
+            avg = a["buy_amt"] / a["buy_qty"] if a["buy_qty"] > 0 else 0.0
+            groups.setdefault(owner, []).append({
+                "symbol": sym, "net_qty": round(a["net"], 4),
+                "avg_cost": round(avg, 4), "cost_basis": round(a["net"] * avg, 2),
+            })
+        for v in groups.values():
+            v.sort(key=lambda p: p["symbol"])
+        ordered = {k: groups[k] for k in sorted(groups) if k != self.UNATTRIBUTED}
+        if self.UNATTRIBUTED in groups:
+            ordered[self.UNATTRIBUTED] = groups[self.UNATTRIBUTED]
+        return ordered
 
     def get_realized_pnl(self) -> List[Dict]:
         """FIFO realized P&L per symbol (all closed lots)."""

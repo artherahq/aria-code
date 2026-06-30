@@ -12,9 +12,14 @@ Improvements over the original:
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
 from typing import Iterator, List, Tuple
 
 from ui.console import HAS_PT
+from packages.aria_services.references import REFERENCE_KINDS, reference_search_roots
+
+_REFERENCE_KIND_NAMES = frozenset(item.name for item in REFERENCE_KINDS)
 
 # ── Category map ────────────────────────────────────────────────────────────
 # Keyed on command name fragments; first match wins.
@@ -160,9 +165,21 @@ if HAS_PT:
           /team AAPL → only complete the command part (stop after first space)
         """
 
-        def __init__(self, commands_dict: dict, skills: list, watchlist: list):
+        def __init__(
+            self,
+            commands_dict: dict,
+            skills: list,
+            watchlist: list,
+            *,
+            workspace: Path | str | None = None,
+            output_root: Path | str | None = None,
+            lang: str = "en",
+        ):
             self.commands = commands_dict
             self.skills   = skills
+            self.workspace = Path(workspace or Path.cwd()).expanduser().resolve()
+            self.output_root = Path(output_root).expanduser().resolve() if output_root else None
+            self.lang = "zh" if str(lang).lower().startswith("zh") else "en"
             self._shell_history: list[str] = []  # populated by REPL after ! commands
             self.symbols  = sorted(set([
                 "AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA", "META",
@@ -183,15 +200,12 @@ if HAS_PT:
             text = document.text_before_cursor
             ltext = text.lstrip()
 
-            # ── @ file path autocomplete ────────────────────────────────────
-            # Triggered any time text contains "@" — complete path after it.
-            at_idx = text.rfind("@")
-            if at_idx != -1:
-                path_frag = text[at_idx + 1:]
-                # Only complete if fragment has no spaces (i.e. contiguous word)
-                if " " not in path_frag:
-                    yield from self._file_completions(path_frag, at_idx + 1)
-                    return
+            # ── @ context reference autocomplete ───────────────────────────
+            # References work anywhere in a prompt. Email addresses do not.
+            ref_match = re.search(r"(?<![\w@])@([^\s@]*)$", text)
+            if ref_match:
+                yield from self._reference_completions(ref_match.group(1))
+                return
 
             # ── ! shell command autocomplete ────────────────────────────────
             if ltext.startswith("!"):
@@ -260,7 +274,17 @@ if HAS_PT:
                     display_parts += [("class:fz-cat", f"  {badge}")]
 
                 # Truncate description to ~45 chars for meta column
-                meta_str = desc[:45] + ("…" if len(desc) > 45 else "")
+                cat_label = {
+                    "市场": "市场" if self.lang == "zh" else "Market",
+                    "分析": "研究" if self.lang == "zh" else "Research",
+                    "量化": "量化" if self.lang == "zh" else "Quant",
+                    "图表": "可视化" if self.lang == "zh" else "Visualize",
+                    "工具": "开发工具" if self.lang == "zh" else "Developer",
+                    "设置": "运行设置" if self.lang == "zh" else "Runtime",
+                    "系统": "会话" if self.lang == "zh" else "Session",
+                }.get(cat, "")
+                meta_body = desc[:38] + ("…" if len(desc) > 38 else "")
+                meta_str = f"{cat_label} · {meta_body}" if cat_label else meta_body
 
                 # start_position: replace the entire typed prefix
                 start = -len(pattern)
@@ -272,33 +296,119 @@ if HAS_PT:
                     display_meta    = meta_str,
                 )
 
-        def _file_completions(self, frag: str, cursor_offset: int) -> Iterator[Completion]:
-            """Yield file/directory completions for @<frag>."""
+        def _reference_completions(self, frag: str) -> Iterator[Completion]:
+            """Complete typed reference namespaces and their values."""
+            if ":" not in frag:
+                lowered = frag.lower()
+                for kind in REFERENCE_KINDS:
+                    if kind.name.startswith(lowered):
+                        label = kind.label_zh if self.lang == "zh" else kind.label_en
+                        yield Completion(
+                            f"{kind.name}:",
+                            start_position=-len(frag),
+                            display=FormattedText([
+                                ("class:fz-hi", f"@{kind.name}"),
+                                ("class:fz-cat", ":"),
+                            ]),
+                            display_meta=label,
+                        )
+                # Keep the first-level @ menu semantic and compact. Plain-path
+                # completion remains available only after an explicit path
+                # prefix; normal discovery goes through @file:/@folder:.
+                if frag and (frag.startswith((".", "/", "~")) or "/" in frag):
+                    yield from self._file_completions(frag)
+                return
+
+            kind, value_frag = frag.split(":", 1)
+            kind = kind.lower()
+            if kind == "asset":
+                for symbol in self.symbols:
+                    if symbol.lower().startswith(value_frag.lower()):
+                        yield Completion(
+                            f"asset:{symbol}",
+                            start_position=-len(frag),
+                            display=FormattedText([("class:fz-hi", symbol)]),
+                            display_meta="市场资产" if self.lang == "zh" else "market asset",
+                        )
+                return
+            if kind in {"file", "folder"}:
+                yield from self._file_completions(
+                    value_frag,
+                    value_prefix=f"{kind}:",
+                    directories_only=(kind == "folder"),
+                )
+                return
+            if kind in _REFERENCE_KIND_NAMES:
+                yield from self._named_resource_completions(kind, value_frag)
+
+        def _file_completions(
+            self,
+            frag: str,
+            *,
+            value_prefix: str = "",
+            directories_only: bool = False,
+        ) -> Iterator[Completion]:
+            """Yield workspace-relative file/directory reference completions."""
             try:
-                if frag.startswith("~"):
-                    frag = _os.path.expanduser(frag)
-                base_dir = _os.path.dirname(frag) or "."
+                expanded = _os.path.expanduser(frag) if frag.startswith("~") else frag
+                base_fragment = _os.path.dirname(expanded) or "."
+                base_dir = Path(base_fragment)
+                if not base_dir.is_absolute():
+                    base_dir = self.workspace / base_dir
                 prefix   = _os.path.basename(frag)
-                if not _os.path.isdir(base_dir):
+                if not base_dir.is_dir():
                     return
-                for entry in sorted(_os.listdir(base_dir))[:40]:
+                for entry in sorted(_os.listdir(base_dir))[:60]:
                     if entry.startswith("."):
                         continue
                     if not entry.lower().startswith(prefix.lower()):
                         continue
-                    full = _os.path.join(base_dir, entry) if base_dir != "." else entry
-                    is_dir = _os.path.isdir(_os.path.join(base_dir, entry))
+                    candidate = base_dir / entry
+                    is_dir = candidate.is_dir()
+                    if directories_only and not is_dir:
+                        continue
+                    if Path(expanded).is_absolute():
+                        full = str(candidate)
+                    else:
+                        parent = _os.path.dirname(frag)
+                        full = _os.path.join(parent, entry) if parent else entry
                     display_parts = [("class:fz-hi", prefix), ("", entry[len(prefix):])]
                     if is_dir:
                         display_parts.append(("class:fz-cat", "/"))
                     yield Completion(
-                        full + ("/" if is_dir else ""),
-                        start_position=-len(frag),
+                        value_prefix + full + ("/" if is_dir else ""),
+                        start_position=-(len(value_prefix) + len(frag)),
                         display=FormattedText(display_parts),
                         display_meta="dir" if is_dir else "file",
                     )
             except Exception:
                 pass
+
+        def _named_resource_completions(self, kind: str, frag: str) -> Iterator[Completion]:
+            seen: set[str] = set()
+            emitted = 0
+            for root in reference_search_roots(kind, self.workspace, self.output_root):
+                if not root.is_dir():
+                    continue
+                try:
+                    for path in root.rglob("*"):
+                        if not path.is_file() or any(part.startswith(".") for part in path.relative_to(root).parts):
+                            continue
+                        name = path.stem
+                        if name in seen or not name.lower().startswith(frag.lower()):
+                            continue
+                        seen.add(name)
+                        yield Completion(
+                            f"{kind}:{name}",
+                            start_position=-(len(kind) + 1 + len(frag)),
+                            display=FormattedText([("class:fz-hi", name)]),
+                            display_meta=kind,
+                        )
+                        emitted += 1
+                        if emitted >= 40:
+                            return
+                except OSError:
+                    continue
 
         def add_shell_history(self, cmd: str) -> None:
             """Called by REPL after each ! command to update shell autocomplete."""

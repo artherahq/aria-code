@@ -6,11 +6,17 @@ from apps.cli.providers.chat_routing import (
     is_cloud_model,
     is_ollama_model,
     is_placeholder_response,
+    normalize_provider_name,
     should_fallback,
 )
 
 
 class ChatRoutingTests(unittest.TestCase):
+    def test_provider_aliases(self):
+        self.assertEqual(normalize_provider_name("LM-Studio"), "lmstudio")
+        self.assertEqual(normalize_provider_name("llama.cpp"), "llamacpp")
+        self.assertEqual(normalize_provider_name("claude"), "anthropic")
+
     def test_model_kind(self):
         self.assertTrue(is_cloud_model("openai/gpt-4.5"))
         self.assertFalse(is_cloud_model("gpt-oss:120b-cloud"))
@@ -23,10 +29,13 @@ class ChatRoutingTests(unittest.TestCase):
         self.assertFalse(force_backend({"backend_chat": False}, "https://x"))
 
     def test_first_round_route(self):
-        self.assertEqual(first_round_route("any", {"local_mode": True}, "https://x"), "ollama")
-        self.assertEqual(first_round_route("openai/gpt-4", {}, "https://x"), "cloud")
-        # ollama-named, no forced backend → skip the stub
-        self.assertEqual(first_round_route("gpt-oss:120b-cloud", {}, "https://x"), "skip")
+        self.assertEqual(first_round_route("any", {"local_provider": "ollama"}, "https://x"), "ollama")
+        self.assertEqual(first_round_route("openai/gpt-4", {}, "https://x"), "configured")
+        self.assertEqual(first_round_route("gpt-oss:120b-cloud", {}, "https://x"), "ollama")
+        self.assertEqual(
+            first_round_route("loaded", {"local_provider": "lmstudio"}, "https://x"),
+            "configured",
+        )
         # ollama-named but backend_chat forces it → cloud
         self.assertEqual(
             first_round_route("gpt-oss:120b-cloud", {"backend_chat": True}, "https://x"), "cloud")

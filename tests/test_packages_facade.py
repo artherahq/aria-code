@@ -66,6 +66,7 @@ def test_service_boundaries_are_registered():
         "runtime",
         "settings",
         "context",
+        "references",
         "tools",
         "data",
         "reports",
@@ -78,6 +79,7 @@ def test_service_boundaries_are_registered():
     assert "channels" in services
     assert "settings.permission_policy" in services["settings"].capabilities
     assert "context.compaction" in services["context"].capabilities
+    assert "context.reference.resolve" in services["references"].capabilities
     assert "tool.permissions" in services["tools"].capabilities
     assert "data.quality" in services["data"].capabilities
     assert "mcp.provenance" in services["mcp"].capabilities
@@ -137,6 +139,7 @@ def test_service_usage_catalog_maps_cli_packages_and_mcp_tools():
     assert "agent_runtime" in usage
     assert "settings_config" in usage
     assert "context_memory" in usage
+    assert "context_references" in usage
     assert "tool_registry" in usage
     assert "safety_policy" in usage
     assert "observability" in usage
@@ -147,6 +150,7 @@ def test_service_usage_catalog_maps_cli_packages_and_mcp_tools():
     assert "/architecture" in usage["observability"].cli_entrypoints
     assert "runtime" in usage["agent_runtime"].package_sources
     assert "mcp_bridge" in usage
+    assert "@asset:" in usage["context_references"].cli_entrypoints
     assert "run_backtest" in usage["mcp_bridge"].mcp_tools
     assert len(list_service_usage_specs()) >= 14
 
@@ -201,6 +205,16 @@ def test_mcp_tools_convert_to_aria_tool_specs():
                 "name": "calculate_factors",
                 "description": "Calculate alpha factor features",
             },
+            {
+                "name": "research_run_create",
+                "description": "Create an institutional research lifecycle run",
+                "annotations": {"readOnlyHint": False},
+            },
+            {
+                "name": "execution_schedule",
+                "description": "Institutional execution plan analytics",
+                "annotations": {"readOnlyHint": True},
+            },
         ],
         "arthera_quant_engine",
     )
@@ -212,6 +226,12 @@ def test_mcp_tools_convert_to_aria_tool_specs():
     assert PermissionLevel.WORKSPACE_WRITE in by_name["arthera_quant_engine/run_backtest"].permissions
     assert PermissionLevel.BROKER_TRADE in by_name["arthera_quant_engine/place_order"].permissions
     assert "factors" in by_name["arthera_quant_engine/calculate_factors"].capabilities
+    research = by_name["arthera_quant_engine/research_run_create"]
+    assert "research.lifecycle" in research.capabilities
+    assert PermissionLevel.WORKSPACE_WRITE in research.permissions
+    execution = by_name["arthera_quant_engine/execution_schedule"]
+    assert "execution.analytics" in execution.capabilities
+    assert execution.permissions == [PermissionLevel.NETWORK]
 
 
 def test_package_manifest_export_shape(tmp_path):
@@ -376,6 +396,12 @@ def test_arthera_mcp_server_config_and_merge(tmp_path):
     matches = [server for server in replaced["servers"] if server["name"] == "arthera_quant_engine"]
     assert len(matches) == 1
     assert matches[0]["description"] == "updated"
+
+    migrated = merge_server_config(
+        {"servers": [{"name": "quant_engine", "command": "python3", "args": ["legacy.py"]}]},
+        config,
+    )
+    assert [server["name"] for server in migrated["servers"]] == ["arthera_quant_engine"]
 
     config_path = tmp_path / ".arthera" / "mcp_servers.json"
     write_mcp_config(config_path, replaced)
