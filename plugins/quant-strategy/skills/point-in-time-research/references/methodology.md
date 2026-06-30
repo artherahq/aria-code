@@ -78,17 +78,21 @@ variant and the paired differences A–B, B–C, C–D, A–D.
 
 - **Rank IC** — monthly Spearman correlation of factor vs forward return; report
   the time-series mean.
-- **CAPM alpha** — intercept of monthly long-short excess return on the market
-  proxy, annualized. Significance via **Newey–West** HAC t-stat (default 4 lags),
-  because monthly factor returns are serially dependent and heteroskedastic.
+- **CAPM alpha** — intercept of the monthly long-short return regressed on the
+  market proxy, annualized. The proxy is the **equal-weight mean return of the
+  test universe** (not an external index), so read the alpha as "selection on top
+  of the equal-weight universe," not "beat the market." Significance via
+  **Newey–West** HAC t-stat (default 4 lags), because monthly factor returns are
+  serially dependent and heteroskedastic.
 - **Sharpe** — annualized mean/stdev of the long-short return.
 - **Turnover** — one-way fraction of the book traded per rebalance.
 - **Paired differences** — for A–D etc., the mean of the per-month return
   difference, with a two-sided **stationary block bootstrap** p-value (preserves
   local dependence) rather than an i.i.d. test.
-- **Multiple testing** — **Benjamini–Hochberg** q-values across the factor family
-  to control the false-discovery rate; optionally a deflated Sharpe when the
-  number and dependence of trials can be estimated.
+- **Multiple testing** — the harness reports **Benjamini–Hochberg** q-values
+  across the factor family to control the false-discovery rate. A deflated Sharpe
+  (Bailey & López de Prado) is the recommended manual follow-up once the number
+  and dependence of trials can be estimated; the harness does not compute it.
 
 ## 6. Honest boundaries
 
