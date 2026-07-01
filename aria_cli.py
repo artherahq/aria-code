@@ -67,6 +67,8 @@ from runtime import (
     AgentTurnEnvelope,
     AgentTurnState,
     ApprovalDecision,
+    RunStatus,
+    RunStore,
     RuntimeTrace,
     ToolExecutor,
     apply_approval_decision,
@@ -5550,6 +5552,7 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
             "/context":   (self.cmd_context,  "Show AI context and session info"),
             "/regen":     (self.cmd_regen,    "Regenerate last response"),
             "/undo":      (self.cmd_undo,     "Undo last message pair"),
+            "/rewind":    (self.cmd_rewind,   "Restore code/chat: /rewind code|conversation|both|list"),
             "/fork":      (self.cmd_fork,     "Fork conversation: /fork [name]"),
             "/load-fork": (self.cmd_load_fork,"Restore forked conversation: /load-fork <id>"),
             "/copy":      (self.cmd_copy,     "Copy last response to clipboard"),
@@ -6018,7 +6021,7 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
             console.print()
             groups = [
                 ("Session", ["/help","/clear","/compact","/cost","/status","/health",
-                             "/regen","/undo","/copy","/recap","/btw",
+                             "/regen","/undo","/rewind","/copy","/recap","/btw",
                              "/save","/load","/sessions","/export"]),
                 ("Config",  ["/model","/thinking","/config","/privacy","/local",
                              "/setup","/apikey","/doctor","/mcp"]),
@@ -8537,6 +8540,13 @@ class ArtheraTerminal:
         self.running = True
         self.session_id = config.get("last_session_id") or str(uuid.uuid4())[:8]
         self.session_mgr = SessionManager(SESSIONS_DIR)
+        self._run_store: Optional[RunStore] = None
+        self._active_run_id: Optional[str] = None
+        try:
+            self._run_store = RunStore()
+            self._run_store.recover_orphaned_runs()
+        except Exception as exc:
+            logger.debug("Durable run store unavailable: %s", exc)
         # JSONL session store: crash-safe, append-per-turn
         try:
             from apps.cli.session_jsonl import JsonlSessionStore
@@ -8555,12 +8565,16 @@ class ArtheraTerminal:
         _refresh_project_context()
         self.pending_plan: List[str] = []
         self.last_plan_results: List[dict] = []
-        self.runtime_trace = RuntimeTrace()
+        self.runtime_trace = RuntimeTrace(event_sink=self._persist_runtime_event)
         self.tool_executor = ToolExecutor(
             LOCAL_TOOLS,
             hook=_run_hook,
             trace=self.runtime_trace,
             config=self.config,
+            execution_context=lambda: {
+                "_run_id": self._active_run_id,
+                "_session_id": self.session_id,
+            },
         )
         self.cancel_event: Optional[asyncio.Event] = None
         self._streaming = False
@@ -9027,6 +9041,79 @@ class ArtheraTerminal:
             pass
         return False
 
+    def _persist_runtime_event(self, event) -> None:
+        """Append an in-memory runtime event to the active durable run."""
+        if self._run_store is None or not self._active_run_id:
+            return
+        self._run_store.append_event(
+            self._active_run_id,
+            event.type,
+            event.data,
+            event_id=event.event_id,
+            timestamp=event.timestamp,
+        )
+
+    def _begin_runtime_run(self, prompt: str) -> Optional[str]:
+        """Create a queued run before planning or model execution starts."""
+        if self._run_store is None:
+            return None
+        try:
+            if self._active_run_id:
+                previous = self._run_store.get_run(self._active_run_id)
+                if previous and previous.status not in {
+                    RunStatus.SUCCEEDED,
+                    RunStatus.FAILED,
+                    RunStatus.CANCELLED,
+                }:
+                    self._run_store.transition(
+                        previous.run_id,
+                        RunStatus.INTERRUPTED,
+                        reason="superseded_by_new_turn",
+                    )
+            record = self._run_store.create_run(
+                session_id=self.session_id,
+                prompt=prompt,
+                workspace=str(pathlib.Path.cwd()),
+                provider=self._last_provider,
+                metadata={
+                    "model": self.config.get("model", ""),
+                    "permission_mode": self.config.get("permission_mode", "workspace-write"),
+                    "local_mode": bool(self.config.get("local_mode", False)),
+                },
+            )
+            self._active_run_id = record.run_id
+            return record.run_id
+        except Exception as exc:
+            logger.debug("Unable to create durable run: %s", exc)
+            self._active_run_id = None
+            return None
+
+    def _transition_runtime_run(
+        self,
+        status: RunStatus,
+        *,
+        reason: str = "",
+        error: Optional[str] = None,
+        provider: Optional[str] = None,
+        data: Optional[dict] = None,
+    ) -> None:
+        """Move the active run through the runtime-owned state machine."""
+        if self._run_store is None or not self._active_run_id:
+            return
+        try:
+            self._run_store.transition(
+                self._active_run_id,
+                status,
+                reason=reason,
+                error=error,
+                provider=provider,
+                data=data,
+            )
+            if status in {RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.CANCELLED}:
+                self._active_run_id = None
+        except Exception as exc:
+            logger.debug("Unable to transition durable run to %s: %s", status.value, exc)
+
     async def send_message(self, message: str, system_override: Optional[str] = None):
         """Send message to Aria AI with agentic tool loop, smart fallback, markdown."""
         if getattr(self, "_streaming", False):
@@ -9314,6 +9401,7 @@ class ArtheraTerminal:
         if HAS_RICH:
             console.print()
         start_time = time.time()
+        self._begin_runtime_run(message)
 
         # --- Dynamic max_rounds: scale with task complexity ---
         # Treat this as a soft budget. If the model is still making concrete
@@ -9341,6 +9429,10 @@ class ArtheraTerminal:
             _task_complexity_signals and
             not any(message.startswith(p) for p in ("/", "!"))  # not a slash command
         ):
+            self._transition_runtime_run(
+                RunStatus.PLANNING,
+                reason="complex_request_decomposition",
+            )
             _decomp_prompt = (
                 "Break the following user request into a numbered step-by-step execution plan "
                 "(max 8 steps, one line each). Be concrete and tool-aware. "
@@ -9362,6 +9454,11 @@ class ArtheraTerminal:
                     _decomp_plan = _plan_result["response"].strip()
             except Exception:
                 pass  # decomposition is best-effort
+
+        self._transition_runtime_run(
+            RunStatus.RUNNING,
+            reason="agent_loop_started",
+        )
 
         # Inject plan as a prefix to the first turn's message so the AI
         # follows the decomposed steps rather than free-forming the approach.
@@ -9916,11 +10013,23 @@ class ArtheraTerminal:
             )
 
             async def _approval_callback(tool_name: str, tool_params: dict) -> ApprovalDecision:
-                return await approval_consumer.approve(
-                    tool_name,
-                    tool_params,
-                    stop_before_prompt=_stop_live,
+                self._transition_runtime_run(
+                    RunStatus.WAITING_APPROVAL,
+                    reason="tool_requires_approval",
+                    data={"tool": tool_name},
                 )
+                try:
+                    return await approval_consumer.approve(
+                        tool_name,
+                        tool_params,
+                        stop_before_prompt=_stop_live,
+                    )
+                finally:
+                    self._transition_runtime_run(
+                        RunStatus.RUNNING,
+                        reason="tool_approval_resolved",
+                        data={"tool": tool_name},
+                    )
 
             def _approval_applier(tool_params: dict, approval: ApprovalDecision) -> dict:
                 return approval_consumer.apply(tool_params, approval)
@@ -10038,6 +10147,12 @@ class ArtheraTerminal:
                     self.runtime_trace.add_turn_result(_turn_envelope)
                 except Exception:
                     pass
+            self._transition_runtime_run(
+                RunStatus.CANCELLED,
+                reason="user_or_provider_cancelled",
+                provider=turn_result.provider,
+                data={"elapsed_seconds": elapsed},
+            )
             if HAS_RICH:
                 # Batch-render mode (Ollama): tokens were silently accumulated.
                 # Render whatever was generated before the cancel so the user
@@ -10099,11 +10214,6 @@ class ArtheraTerminal:
             )
             self._last_turn_envelope = turn_result.to_envelope()
             _turn_envelope = self._last_turn_envelope.to_dict()
-            if self.runtime_trace is not None:
-                try:
-                    self.runtime_trace.add_turn_result(_turn_envelope)
-                except Exception:
-                    pass
             final_text = turn_result.final_text
 
             if not (final_text or "").strip():
@@ -10121,6 +10231,13 @@ class ArtheraTerminal:
                         self.runtime_trace.add_turn_result(self._last_turn_envelope.to_dict())
                     except Exception:
                         pass
+                self._transition_runtime_run(
+                    RunStatus.FAILED,
+                    reason="response_validation_failed",
+                    error="empty_response",
+                    provider=empty_result.provider,
+                    data={"check": "non_empty_response"},
+                )
                 presentation = AgentErrorPresentation.from_error(
                     "empty_response",
                     lang=self.config.get("ui_lang", "en") or "en",
@@ -10132,6 +10249,26 @@ class ArtheraTerminal:
                     else:
                         print(f"  {line}")
                 return
+
+            if self.runtime_trace is not None:
+                try:
+                    self.runtime_trace.add_turn_result(_turn_envelope)
+                except Exception:
+                    pass
+
+            self._transition_runtime_run(
+                RunStatus.VERIFYING,
+                reason="model_turn_completed",
+                provider=turn_result.provider,
+                data={
+                    "checks": ["provider_success", "non_empty_response"],
+                    "tools_used": turn_state.unique_tools(),
+                },
+            )
+            self.runtime_trace.emit("verification_completed", {
+                "passed": True,
+                "checks": ["provider_success", "non_empty_response"],
+            })
 
             # Flush any unclosed LaTeX buffer (e.g. stream cut off mid-formula).
             # This only matters for the non-batch plain-print path; in batch-render
@@ -10338,6 +10475,28 @@ class ArtheraTerminal:
                         self.memory_mgr.append("user_profile", _sig, title="User Profile")
                 except Exception:
                     pass
+
+            self._transition_runtime_run(
+                RunStatus.SUCCEEDED,
+                reason="turn_completed",
+                provider=turn_result.provider,
+                data={
+                    "elapsed_seconds": elapsed,
+                    "prompt_tokens": prompt_t,
+                    "completion_tokens": completion_t,
+                    "thinking_tokens": think_t,
+                    "tools_used": turn_state.unique_tools(),
+                },
+            )
+
+        if not result.get("success") and not result.get("cancelled"):
+            self._transition_runtime_run(
+                RunStatus.FAILED,
+                reason="provider_or_agent_error",
+                error=str(result.get("error") or "unknown_error"),
+                provider=str(result.get("provider") or provider),
+                data={"elapsed_seconds": elapsed},
+            )
 
     def _build_keybindings(self):
         """Build prompt_toolkit KeyBindings for REPL shortcuts."""
