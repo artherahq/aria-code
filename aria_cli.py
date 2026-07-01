@@ -5549,6 +5549,13 @@ _rebind_mixin_globals(PortfolioCommandsMixin)
 class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommandsMixin, DataCommandsMixin, OpsCommandsMixin, DiagnosticCommandsMixin, DiagnosticOpsCommandsMixin, UiCommandsMixin, SessionUxCommandsMixin, AuthCommandsMixin, FileCommandsMixin, FxCommodityCommandsMixin, WorkflowCommandsMixin, BusinessWorkflowCommandsMixin, SessionCommandsMixin, WorkspaceCommandsMixin, ModelCommandsMixin, MarketCommandsMixin, PortfolioCommandsMixin):
     """Claude Code-style slash command system."""
 
+    def _cmd_rewind_unavailable(self, args: str):
+        # cmd_rewind lands with the checkpoint store (runtime/checkpoints.py,
+        # still a separate, uncommitted change) — degrade instead of crashing
+        # SlashCommands construction when it isn't present yet.
+        msg = "/rewind is not available in this build yet."
+        console.print(f"[dim]{msg}[/dim]" if HAS_RICH else msg)
+
     def __init__(self, terminal: 'ArtheraTerminal'):
         self.terminal = terminal
         self.commands = {
@@ -5564,7 +5571,8 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
             "/context":   (self.cmd_context,  "Show AI context and session info"),
             "/regen":     (self.cmd_regen,    "Regenerate last response"),
             "/undo":      (self.cmd_undo,     "Undo last message pair"),
-            "/rewind":    (self.cmd_rewind,   "Restore code/chat: /rewind code|conversation|both|list"),
+            "/rewind":    (getattr(self, "cmd_rewind", self._cmd_rewind_unavailable),
+                           "Restore code/chat: /rewind code|conversation|both|list"),
             "/fork":      (self.cmd_fork,     "Fork conversation: /fork [name]"),
             "/load-fork": (self.cmd_load_fork,"Restore forked conversation: /load-fork <id>"),
             "/copy":      (self.cmd_copy,     "Copy last response to clipboard"),
