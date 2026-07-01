@@ -63,6 +63,7 @@ from plan_utils import parse_plan_steps
 from privacy import FeedbackRecord, FeedbackStore, PrivacySettings
 from apps.cli.session_store import SessionManager
 from apps.cli.turn_planning import is_complex_task, round_budget_for, should_decompose
+from apps.cli.prompt_assembly import build_base_message, should_prepend_file_tool_hint, with_ml_signal_prefix
 from runtime import (
     AgentErrorPresentation,
     AgentTurnEnvelope,
@@ -9451,24 +9452,16 @@ class ArtheraTerminal:
 
         # Inject plan as a prefix to the first turn's message so the AI
         # follows the decomposed steps rather than free-forming the approach.
-        current_message = message
-        if _det_wants_analysis:
-            # Snapshot already shown — ask LLM to provide analysis commentary
-            current_message = (
-                "请基于上方已获取的实时行情数据提供深度分析（约300字）："
-                " 当前价格位置与短期趋势判断、多空力量对比"
-                "（若涉及多标的则对比两者强弱）、关键支撑/阻力位、操作建议（附风险提示）。"
-                " 直接开始分析，不要重复表格数据。"
-            )
-        elif _decomp_plan:
-            current_message = (
-                f"[执行计划]\n{_decomp_plan}\n\n"
-                f"[用户请求]\n{message}"
-            )
+        # (assembly decisions: apps/cli/prompt_assembly.py, unit-tested)
+        current_message = build_base_message(
+            message,
+            wants_analysis_commentary=_det_wants_analysis,
+            decomposition_plan=_decomp_plan,
+        )
 
         # Referenced paths stay as pointers. The model must use audited file
         # tools, preserving permissions, tool traces, and context efficiency.
-        if not _det_wants_analysis and not reference_context:
+        if should_prepend_file_tool_hint(_det_wants_analysis, reference_context):
             _file_tool_hint = _build_file_tool_hint(message)
             if _file_tool_hint:
                 current_message = _file_tool_hint + current_message
@@ -9482,11 +9475,7 @@ class ArtheraTerminal:
                 _ml_signal_syms = _extract_market_symbols(message, limit=3)
                 if _ml_signal_syms:
                     _ml_sig = _fetch_quick_ml_signal(_ml_signal_syms)
-                    if _ml_sig:
-                        current_message = (
-                            f"[ML信号参考 — 仅供分析参考，非投资建议]\n{_ml_sig}\n\n"
-                            f"{current_message}"
-                        )
+                    current_message = with_ml_signal_prefix(current_message, _ml_sig)
         except Exception:
             _ml_signal_syms = []
 
