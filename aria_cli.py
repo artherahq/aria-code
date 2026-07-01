@@ -9651,20 +9651,18 @@ class ArtheraTerminal:
                 provider = _local_backend
                 self._last_provider = _local_backend
             else:
-                # Provider selection is explicit. Model punctuation cannot identify
-                # its runtime: ``gpt-oss:120b-cloud`` is an Ollama remote model,
-                # while LM Studio/vLLM models may use arbitrary IDs.
-                _configured_provider = str(
-                    self.config.get("local_provider") or "ollama"
-                ).lower()
-                _is_ollama_model = _configured_provider == "ollama"
-                # backend_chat=True forces ALL chat through the self-hosted
-                # backend (which proxies to its own Ollama + collects training
-                # data), instead of the CLI's local Ollama. Used for the
-                # self-host deployment where users connect to your server.
-                _force_backend = bool(self.config.get("backend_chat")) and bool(self.api_url)
-                _direct_configured = not _is_ollama_model and not _force_backend
-                if _is_ollama_model and not _force_backend:
+                # Provider selection: explicit local_provider wins; otherwise a
+                # slash-prefixed model (``openai/gpt-4.5``) names its own cloud
+                # provider, distinct from a colon-suffixed Ollama tag like
+                # ``gpt-oss:120b-cloud`` (still routed as "ollama" — colon syntax
+                # cannot identify a runtime on its own). backend_chat=True forces
+                # ALL chat through the self-hosted backend (proxies to its own
+                # Ollama + collects training data) regardless of the above.
+                # Shared with the runtime path (apps/cli/providers/runtime_bridge.py)
+                # so both agree on where a given model/config combination routes.
+                from apps.cli.providers.chat_routing import first_round_route
+                _route = first_round_route(model, self.config, self.api_url)
+                if _route == "ollama":
                     result = {"success": False, "response": "", "cancelled": False}
                 else:
                     # Pass system_override through user_context for cloud path
@@ -9677,7 +9675,7 @@ class ArtheraTerminal:
                         ConfiguredProvider(
                             self.config, model, system_override=_so,
                         )
-                        if _direct_configured else
+                        if _route == "configured" else
                         AriaSSEProvider(
                             self.api_url, model, thinking_mode=thinking_mode,
                             user_context=_cloud_uctx or user_context,
@@ -9715,22 +9713,18 @@ class ArtheraTerminal:
                 # If backend failed OR returned placeholder, fallback chain:
                 # Ollama (if running) → DeepSeek cloud → OpenAI → error.
                 # Route-aware: fall back only when the primary round did NOT really
-                # generate. The old first term `_is_ollama_model` discarded GOOD
-                # backend answers for ollama-named models under backend_chat
-                # (re-run / hang on the self-host path); keying on the route fixes it.
+                # generate. Keying on `_route` (not the model name) means a forced-
+                # backend round that genuinely succeeded does NOT get discarded and
+                # re-run (the old bug: re-run / hang on the self-host path).
                 from apps.cli.providers.chat_routing import should_fallback as _route_should_fallback
-                _primary_route = (
-                    "skip" if (_is_ollama_model and not _force_backend)
-                    else "configured" if _direct_configured
-                    else "cloud"
-                )
+                _primary_route = "skip" if _route == "ollama" else _route
                 _should_fallback = _route_should_fallback(
                     _primary_route, result,
                     is_placeholder=_is_placeholder_response(result),
                 )
                 # An explicitly selected API/local endpoint is strict by default.
                 # Do not silently replace it with Ollama or an unrelated paid API.
-                if _direct_configured:
+                if _route == "configured":
                     _should_fallback = False
                 if _should_fallback:
                     # Discard any in-progress Live display without rendering it —
