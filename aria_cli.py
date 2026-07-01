@@ -62,6 +62,7 @@ from safety import evaluate_command_policy
 from plan_utils import parse_plan_steps
 from privacy import FeedbackRecord, FeedbackStore, PrivacySettings
 from apps.cli.session_store import SessionManager
+from apps.cli.turn_planning import is_complex_task, round_budget_for, should_decompose
 from runtime import (
     AgentErrorPresentation,
     AgentTurnEnvelope,
@@ -9407,28 +9408,16 @@ class ArtheraTerminal:
         # Treat this as a soft budget. If the model is still making concrete
         # tool progress at the soft limit, keep going so one user instruction
         # can finish end-to-end instead of stopping after a tool result.
-        _task_complexity_signals = (
-            len(message) > 120 or
-            any(kw in message for kw in (
-                "然后", "接着", "最后", "步骤", "并且", "同时",
-                "and then", "step", "finally", "after that", "next",
-                "完整", "全面", "详细", "系统", "comprehensive", "complete",
-            ))
-        )
-        max_rounds = 30 if _task_complexity_signals else 16
-        hard_max_rounds = max_rounds + (20 if _task_complexity_signals else 10)
+        # (decision logic: apps/cli/turn_planning.py, unit-tested in isolation)
+        _task_complexity_signals = is_complex_task(message)
+        max_rounds, hard_max_rounds = round_budget_for(_task_complexity_signals)
         _round_extension_notified = False
 
         # --- Task decomposition for complex multi-step requests ---
         # For long or multi-step messages, ask the AI to produce a plan first,
         # then inject it as context so the agentic loop follows a clear path.
-        _DECOMP_THRESHOLD = 150   # chars
         _decomp_plan: str = ""
-        if (
-            len(message) > _DECOMP_THRESHOLD and
-            _task_complexity_signals and
-            not any(message.startswith(p) for p in ("/", "!"))  # not a slash command
-        ):
+        if should_decompose(message, _task_complexity_signals):
             self._transition_runtime_run(
                 RunStatus.PLANNING,
                 reason="complex_request_decomposition",
