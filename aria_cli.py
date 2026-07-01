@@ -69,8 +69,6 @@ from runtime import (
     AgentTurnEnvelope,
     AgentTurnState,
     ApprovalDecision,
-    RunStatus,
-    RunStore,
     RuntimeTrace,
     ToolExecutor,
     apply_approval_decision,
@@ -78,6 +76,18 @@ from runtime import (
     execute_tool_turn,
     LoopGuard,
 )
+try:
+    # RunStatus/RunStore land with the durable run-state store (runtime/run_store.py,
+    # runtime/run_state.py) — still landing separately. Degrade gracefully rather than
+    # fail the whole module import: _run_store stays None, every _transition_runtime_run/
+    # _begin_runtime_run call already no-ops when that's the case (see ArtheraTerminal).
+    from runtime import RunStatus, RunStore
+except ImportError:
+    RunStore = None
+
+    class RunStatus:  # pragma: no cover - fallback until runtime/run_state.py lands
+        PLANNING = RUNNING = WAITING_APPROVAL = VERIFYING = "unavailable"
+        SUCCEEDED = FAILED = CANCELLED = INTERRUPTED = "unavailable"
 from runtime.tool_policy import check_tool_policy
 from apps.cli.plan_mode import PlanModeState
 from workspace import VerificationPlanner, WorkspaceFiles, WorkspaceSecurity
@@ -8567,17 +8577,31 @@ class ArtheraTerminal:
         _refresh_project_context()
         self.pending_plan: List[str] = []
         self.last_plan_results: List[dict] = []
-        self.runtime_trace = RuntimeTrace(event_sink=self._persist_runtime_event)
-        self.tool_executor = ToolExecutor(
-            LOCAL_TOOLS,
-            hook=_run_hook,
-            trace=self.runtime_trace,
-            config=self.config,
-            execution_context=lambda: {
-                "_run_id": self._active_run_id,
-                "_session_id": self.session_id,
-            },
-        )
+        try:
+            # event_sink lands with the durable run-state store
+            # (runtime/events.py); older RuntimeTrace() takes no arguments.
+            self.runtime_trace = RuntimeTrace(event_sink=self._persist_runtime_event)
+        except TypeError:
+            self.runtime_trace = RuntimeTrace()
+        try:
+            self.tool_executor = ToolExecutor(
+                LOCAL_TOOLS,
+                hook=_run_hook,
+                trace=self.runtime_trace,
+                config=self.config,
+                execution_context=lambda: {
+                    "_run_id": self._active_run_id,
+                    "_session_id": self.session_id,
+                },
+            )
+        except TypeError:
+            # execution_context lands with the durable run-state store too.
+            self.tool_executor = ToolExecutor(
+                LOCAL_TOOLS,
+                hook=_run_hook,
+                trace=self.runtime_trace,
+                config=self.config,
+            )
         self.cancel_event: Optional[asyncio.Event] = None
         self._streaming = False
         self._last_provider = ""   # last successful provider ("" = no message sent yet)
