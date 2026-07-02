@@ -168,6 +168,11 @@ from apps.cli.tools.notebook_tools import (
     tool_notebook_read as _src_notebook_read,
     tool_notebook_edit as _src_notebook_edit,
 )
+from apps.cli.tools.file_tools import (
+    tool_read_file   as _src_read_file,
+    tool_list_files  as _src_list_files,
+    tool_search_code as _src_search_code,
+)
 from apps.cli.tools.market_tools import (
     tool_get_market_data    as _src_get_market_data,
     tool_get_market_history as _src_get_market_history,
@@ -2011,26 +2016,8 @@ def _tool_analyze_file(params: dict) -> dict:
 
 
 def _tool_read_file(params: dict) -> dict:
-    """Read file contents with optional line range."""
-    path = params.get("path", "")
-    if not path:
-        return {"success": False, "error": "Missing 'path' parameter"}
-    try:
-        offset = int(params.get("offset", 0) or 0)
-        limit = int(params.get("limit", 0) or 0)
-        if not offset and not limit:
-            limit = 160
-        result = WorkspaceFiles().read_file(path, offset=offset, limit=limit)
-        content = result.content
-        if limit and result.lines >= limit and "use offset/limit to read more" not in content:
-            content += "\n... [default read limit applied — use offset/limit to read more]"
-        return {"success": True, "data": {
-            "path": result.path, "lines": result.lines,
-            "content": content
-        }}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
+    """Thin shim — implementation in apps/cli/tools/file_tools.py."""
+    return _src_read_file(params)
 
 def _strip_markdown_fences(content: str) -> str:
     """Thin shim — implementation in apps/cli/tools/write_tools.py."""
@@ -2075,35 +2062,12 @@ def _tool_update_todos(params: dict) -> dict:
 
 
 def _tool_list_files(params: dict) -> dict:
-    """List files in a directory, optionally matching a glob pattern."""
-    path = params.get("path", ".")
-    pattern = params.get("pattern", "*")
-    try:
-        data = WorkspaceFiles().list_files(path, pattern)
-        return {"success": True, "data": {
-            "path": data["path"], "pattern": data["pattern"],
-            "count": data["count"], "items": data["items"]
-        }}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
+    """Thin shim — implementation in apps/cli/tools/file_tools.py."""
+    return _src_list_files(params)
 
 def _tool_search_code(params: dict) -> dict:
-    """Search for a pattern in files (like grep)."""
-    pattern = params.get("pattern", "")
-    path = params.get("path", ".")
-    file_glob = params.get("glob", "**/*.py")
-    if not pattern:
-        return {"success": False, "error": "Missing 'pattern' parameter"}
-    try:
-        data = WorkspaceFiles().search_code(pattern, path, file_glob)
-        return {"success": True, "data": {
-            "pattern": data["pattern"], "path": data["path"],
-            "count": data["count"], "matches": data["matches"]
-        }}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
+    """Thin shim — implementation in apps/cli/tools/file_tools.py."""
+    return _src_search_code(params)
 
 def _tool_run_command(params: dict) -> dict:
     """Run a shell command — thin wrapper supplying global defaults."""
