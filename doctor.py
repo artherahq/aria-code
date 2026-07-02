@@ -60,7 +60,7 @@ class DoctorReport:
 
 
 VENV_REBUILD_HINT = (
-    "Rebuild the venv with your current Python: rm -rf .venv && bash install.sh "
+    "Rebuild the venv with your current Python: bash install.sh --rebuild "
     "(repo checkout) or npm run repair (npm install)."
 )
 

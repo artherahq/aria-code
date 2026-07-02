@@ -179,7 +179,7 @@ def test_python_drift_warns_on_minor_version_mismatch():
     check = analyze_python_drift("3.12.4", "3.14.6", home_exists=True)
     assert check.status == "warn"
     assert "3.12.4" in check.detail and "3.14.6" in check.detail
-    assert "rm -rf .venv" in check.suggestion
+    assert "install.sh --rebuild" in check.suggestion
 
 
 def test_python_drift_patch_difference_is_not_drift():
@@ -193,7 +193,7 @@ def test_python_drift_errs_when_base_interpreter_removed():
     check = analyze_python_drift("3.13.2", "3.13.2", home_exists=False)
     assert check.status == "err"
     assert "base interpreter is gone" in check.detail
-    assert "rm -rf .venv" in check.suggestion
+    assert "install.sh --rebuild" in check.suggestion
 
 
 def test_run_doctor_includes_python_venv_check_inside_venv(monkeypatch, tmp_path):

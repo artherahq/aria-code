@@ -52,7 +52,7 @@ _ARCHITECTURE_LAYERS: Tuple[ArchitectureLayer, ...] = (
         current_state="aria and aria-code bootstrap local dependencies. /doctor now runs a python_venv drift check (pyvenv.cfg recorded version vs the running interpreter, and whether the venv's base interpreter still exists — the Homebrew-upgrade breakage) with the rebuild command as its suggestion.",
         status=LayerStatus.PARTIAL,
         source_paths=("aria-code", "install.sh", "doctor.py"),
-        next_steps=("Wire install.sh --rebuild to automate the venv recreation the doctor check suggests.",),
+        next_steps=("Have npm run repair perform the same drift-aware venv rebuild that install.sh --rebuild does for repo checkouts.",),
     ),
     ArchitectureLayer(
         name="settings",
