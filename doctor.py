@@ -59,6 +59,68 @@ class DoctorReport:
         }
 
 
+VENV_REBUILD_HINT = (
+    "Rebuild the venv with your current Python: rm -rf .venv && bash install.sh "
+    "(repo checkout) or npm run repair (npm install)."
+)
+
+
+def analyze_python_drift(
+    recorded_version: str,
+    running_version: str,
+    home_exists: bool,
+) -> DoctorCheck:
+    """Pure drift analysis for a venv's pyvenv.cfg vs the running interpreter.
+
+    Two real-world failure signals:
+      • the venv's base interpreter (``home =``) was removed — e.g. Homebrew
+        upgraded python@3.13 → 3.14 and deleted the old keg; the venv breaks
+        on the next symlink resolution even though it still "exists";
+      • the recorded creation version differs from the interpreter actually
+        running — stale metadata after a relink, or the entrypoint resolved a
+        different Python than the one the venv was built with.
+    """
+    if not home_exists:
+        return _check(
+            "python_venv",
+            "err",
+            f"venv base interpreter is gone (built with {recorded_version or 'unknown'})",
+            VENV_REBUILD_HINT,
+        )
+    rec = tuple((recorded_version or "").split(".")[:2])
+    run = tuple((running_version or "").split(".")[:2])
+    if rec and run and rec != run:
+        return _check(
+            "python_venv",
+            "warn",
+            f"venv was created with Python {recorded_version} but {running_version} is running",
+            VENV_REBUILD_HINT,
+        )
+    return _check("python_venv", "ok", f"venv matches running Python {running_version}")
+
+
+def _check_python_drift() -> Optional[DoctorCheck]:
+    """Read the active venv's pyvenv.cfg; None when not running inside a venv."""
+    if sys.prefix == getattr(sys, "base_prefix", sys.prefix):
+        return None
+    cfg = Path(sys.prefix) / "pyvenv.cfg"
+    if not cfg.exists():
+        return None
+    recorded, home = "", ""
+    try:
+        for line in cfg.read_text(encoding="utf-8").splitlines():
+            key, _, value = line.partition("=")
+            key = key.strip().lower()
+            if key == "version":
+                recorded = value.strip()
+            elif key == "home":
+                home = value.strip()
+    except Exception:
+        return None
+    running = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+    return analyze_python_drift(recorded, running, home_exists=bool(home) and Path(home).exists())
+
+
 def _check(name: str, status: str, detail: str = "", suggestion: str = "") -> DoctorCheck:
     return DoctorCheck(name=name, status=status, detail=detail, suggestion=suggestion)
 
@@ -417,6 +479,10 @@ def run_doctor(
         checks.append(_check("python", "ok", f"{pyver} on {platform.system()}"))
     else:
         checks.append(_check("python", "err", f"{pyver} is unsupported", "Install Python 3.10 or newer."))
+
+    drift = _check_python_drift()
+    if drift is not None:
+        checks.append(drift)
 
     for module, purpose in _iter_required_modules():
         if _has_module(module):

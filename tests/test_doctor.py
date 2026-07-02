@@ -3,7 +3,7 @@ try:
 except ModuleNotFoundError:  # Python < 3.11
     import tomli as tomllib
 
-from doctor import format_doctor_plain, npm_runtime_checks, provider_health_checks, provider_health_summary, run_doctor
+from doctor import analyze_python_drift, format_doctor_plain, npm_runtime_checks, provider_health_checks, provider_health_summary, run_doctor
 from packages.aria_services.provider_health import summarize_provider_health
 
 
@@ -167,3 +167,44 @@ def test_pyproject_includes_top_level_modules():
     modules = set(data["tool"]["setuptools"]["py-modules"])
 
     assert {"aria_cli", "doctor", "data_service", "artifacts", "report_generator"} <= modules
+
+
+def test_python_drift_ok_when_versions_match_and_home_exists():
+    check = analyze_python_drift("3.14.6", "3.14.6", home_exists=True)
+    assert check.name == "python_venv"
+    assert check.status == "ok"
+
+
+def test_python_drift_warns_on_minor_version_mismatch():
+    check = analyze_python_drift("3.12.4", "3.14.6", home_exists=True)
+    assert check.status == "warn"
+    assert "3.12.4" in check.detail and "3.14.6" in check.detail
+    assert "rm -rf .venv" in check.suggestion
+
+
+def test_python_drift_patch_difference_is_not_drift():
+    # Patch upgrades (3.14.1 → 3.14.6) are routine; only minor drift warns.
+    check = analyze_python_drift("3.14.1", "3.14.6", home_exists=True)
+    assert check.status == "ok"
+
+
+def test_python_drift_errs_when_base_interpreter_removed():
+    # Homebrew upgraded/removed the keg the venv was built against.
+    check = analyze_python_drift("3.13.2", "3.13.2", home_exists=False)
+    assert check.status == "err"
+    assert "base interpreter is gone" in check.detail
+    assert "rm -rf .venv" in check.suggestion
+
+
+def test_run_doctor_includes_python_venv_check_inside_venv(monkeypatch, tmp_path):
+    # This test suite itself runs inside the project venv, so the drift check
+    # must be present and healthy.
+    import sys
+    if sys.prefix == getattr(sys, "base_prefix", sys.prefix):
+        import pytest
+        pytest.skip("not running inside a venv")
+    monkeypatch.setenv("ARIA_ARTIFACT_ROOT", str(tmp_path / "artifacts"))
+    report = run_doctor({}, cwd=tmp_path)
+    names = {c.name: c for c in report.checks}
+    assert "python_venv" in names
+    assert names["python_venv"].status == "ok"
