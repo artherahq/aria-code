@@ -848,6 +848,7 @@ class PortfolioCommandsMixin:
                         console, name, getattr(result, "signal", None), _kp,
                         success=bool(getattr(result, "success", True)),
                         error=getattr(result, "error", None),
+                        degraded=bool(getattr(result, "degraded", False)),
                     )
                 else:
                     print(f"  ⎿ {name}  {getattr(result, 'signal', '')}  {_kp[:50]}")
@@ -925,6 +926,7 @@ class PortfolioCommandsMixin:
                         getattr(result, "signal", None), _kp,
                         success=bool(getattr(result, "success", True)),
                         error=getattr(result, "error", None),
+                        degraded=bool(getattr(result, "degraded", False)),
                     )
                 else:
                     print(f"  ⎿ {name}  {getattr(result, 'signal', '')}  {_kp[:50]}")

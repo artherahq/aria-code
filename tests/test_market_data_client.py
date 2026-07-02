@@ -158,6 +158,10 @@ def test_ashare_quote_prefers_eastmoney():
     assert quote["name"] == "汇川技术"
     assert quote["provider"] == "eastmoney"
     assert quote["provider_chain"] == ["eastmoney"]
+    assert quote["volume"] == 12_345_600
+    assert quote["market_cap"] == 12_345
+    assert quote["volume_unit"] == "shares"
+    assert quote["market_cap_unit"] == "CNY"
 
 
 def test_ashare_quote_failure_returns_friendly_error(monkeypatch):

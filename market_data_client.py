@@ -1108,9 +1108,16 @@ class MarketDataClient:
                 "price":      price,
                 "change":     chg,
                 "change_pct": chg_pct,
-                "volume":     int(d.get("f47", 0)),
+                # Eastmoney push2 quote fields use lots (手) for f47 and
+                # CNY yuan for f48/f116 when fltt=2.  Normalize the public
+                # contract to shares/yuan so every downstream renderer uses
+                # the same units.
+                "volume":     int(float(d.get("f47", 0) or 0) * 100),
                 "turnover":   float(d.get("f48", 0)),
-                "market_cap": float(d.get("f116", 0)) * 1e4,
+                "market_cap": float(d.get("f116", 0)),
+                "volume_unit": "shares",
+                "turnover_unit": "CNY",
+                "market_cap_unit": "CNY",
                 "high":       float(d.get("f44", 0)),
                 "low":        float(d.get("f45", 0)),
                 "open":       float(d.get("f46", 0)),

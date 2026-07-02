@@ -38,6 +38,7 @@ class TeamAnalysisResult:
     team_result: Any
     data_bundle: Any = None
     quality_notes: list[str] | None = None
+    quality_assessment: dict[str, Any] | None = None
     captured_noise: str = ""
 
 
@@ -251,6 +252,35 @@ def build_team_market_context(data_bundle: Any) -> dict[str, Any]:
     }
 
 
+def build_team_agent_data(data_bundle: Any) -> dict[str, dict[str, Any]]:
+    """Adapt one normalized data bundle to each agent's expected input shape."""
+    if not data_bundle:
+        return {}
+    quote = dict(getattr(data_bundle, "quote", {}) or {})
+    technical = dict(getattr(data_bundle, "technical", {}) or {})
+    fundamentals = dict(getattr(data_bundle, "fundamentals", {}) or {})
+    history = dict(getattr(data_bundle, "history", {}) or {})
+    prepared: dict[str, dict[str, Any]] = {}
+
+    if quote and technical:
+        prepared["technical"] = {"quote": quote, "history": technical}
+    if quote and fundamentals:
+        prepared["fundamental"] = {"quote": quote, "fundamentals": fundamentals}
+
+    rows = history.get("data")
+    if quote and isinstance(rows, list) and rows:
+        try:
+            import pandas as pd
+            from agents.financial.risk import _compute_risk
+
+            metrics = _compute_risk(pd.DataFrame(rows))
+            if metrics:
+                prepared["risk"] = {"quote": quote, "risk_metrics": metrics}
+        except Exception as exc:
+            logger.debug("team prefetched risk calculation failed: %s", exc)
+    return prepared
+
+
 def build_team_terminal_summary(data_bundle: Any) -> str:
     """Return compact Rich markup summary for the /team panel."""
     if not data_bundle:
@@ -373,12 +403,22 @@ async def run_team_analysis(
                 on_synthesis_start=None,
                 lang=lang,
                 market_context=build_team_market_context(data_bundle),
+                agent_data=build_team_agent_data(data_bundle),
             )
     finally:
         for name, level in saved_levels.items():
             logging.getLogger(name).setLevel(level or logging.NOTSET)
 
     quality_notes = sanitize_result(team_result, data_bundle) if sanitize_result else []
+    from packages.aria_services.research_quality import assess_team_report
+
+    assessment = assess_team_report(team_result, data_bundle)
+    gate_notes = [*assessment.blocking_reasons, *assessment.warnings]
+    quality_notes = list(dict.fromkeys([*quality_notes, *gate_notes]))
+    if assessment.decision.value == "blocked":
+        team_result.confidence = min(float(getattr(team_result, "confidence", 0) or 0), 0.20)
+    elif assessment.decision.value == "partial":
+        team_result.confidence = min(float(getattr(team_result, "confidence", 0) or 0), 0.55)
     captured_noise = (captured_stdout.getvalue() + captured_stderr.getvalue()).strip()
     if captured_noise:
         logger.debug("captured /team noisy output for %s: %s", symbol, captured_noise[:3000])
@@ -388,6 +428,7 @@ async def run_team_analysis(
         team_result=team_result,
         data_bundle=data_bundle,
         quality_notes=quality_notes,
+        quality_assessment=assessment.to_dict(),
         captured_noise=captured_noise,
     )
 
@@ -447,6 +488,9 @@ def _agent_result_summary(team_result: Any) -> list[dict[str, Any]]:
             "confidence": getattr(result, "confidence", None),
             "error": getattr(result, "error", None),
             "key_points": getattr(result, "key_points", None),
+            "degraded": bool(getattr(result, "degraded", False)),
+            "provenance": list(getattr(result, "provenance", None) or []),
+            "limitations": list(getattr(result, "limitations", None) or []),
         }
         for result in getattr(team_result, "results", []) or []
     ]
@@ -460,6 +504,8 @@ def build_team_report_markdown(
     quality_notes: list[str] | None = None,
     created_at: datetime | None = None,
 ) -> str:
+    from packages.aria_services.research_quality import assess_team_report
+
     created = created_at or datetime.now()
     quality_notes = quality_notes or []
     quote_snapshot = team_quote_snapshot(data_bundle) if data_bundle else {}
@@ -472,6 +518,7 @@ def build_team_report_markdown(
     errors = quote_snapshot.get("errors") or []
     quality = quote_snapshot.get("quality") or {}
     stale = bool(quote_snapshot.get("stale"))
+    assessment = assess_team_report(team_result, data_bundle)
 
     lines = [
         f"# {symbol} 多 Agent 研究报告",
@@ -492,7 +539,18 @@ def build_team_report_markdown(
         f"- 分析师目标价: `{currency} {_fmt_num(quote_snapshot.get('analyst_target'))}`" if quote_snapshot.get("analyst_target") is not None else "- 分析师目标价: `unavailable`",
         f"- 数据源链: `{', '.join(providers) if providers else 'unknown'}`",
         f"- 缺失字段: `{', '.join(missing) if missing else 'none'}`",
+        "",
+        "## 完成度门禁",
+        "",
+        f"- 判定: `{assessment.decision.value}`",
+        f"- Agent 覆盖: `{assessment.agent_coverage:.0%}`",
+        f"- 核心 Agent 覆盖: `{assessment.core_coverage:.0%}`",
+        f"- 降级 Agent: `{', '.join(assessment.degraded_agents) or 'none'}`",
+        f"- 失败 Agent: `{', '.join(assessment.failed_agents) or 'none'}`",
     ]
+    gate_notes = [*assessment.blocking_reasons, *assessment.warnings]
+    if gate_notes:
+        lines.append(f"- 门禁说明: `{' ; '.join(gate_notes)}`")
     if quality_notes:
         lines.append(f"- 输出校验: `{'; '.join(quality_notes)}`")
     if warnings:
@@ -505,12 +563,19 @@ def build_team_report_markdown(
 
     for result in getattr(team_result, "results", []) or []:
         if getattr(result, "success", False):
+            mode = " · DEGRADED" if getattr(result, "degraded", False) else ""
             lines += [
-                f"## {result.agent.upper()} ({result.signal}, {result.confidence:.0%})",
+                f"## {result.agent.upper()} ({result.signal}, {result.confidence:.0%}{mode})",
                 "",
                 result.analysis or "*(无分析文本)*",
                 "",
             ]
+            provenance = list(getattr(result, "provenance", None) or [])
+            limitations = list(getattr(result, "limitations", None) or [])
+            if provenance:
+                lines += [f"> Provenance: {', '.join(provenance)}", ""]
+            if limitations:
+                lines += [f"> Limitations: {'; '.join(limitations)}", ""]
         else:
             lines += [
                 f"## {result.agent.upper()} (UNUSABLE)",
@@ -533,6 +598,7 @@ def save_team_report(
     created_at: datetime | None = None,
 ) -> SavedTeamReport:
     from artifacts import create_user_artifact, write_artifact_metadata, write_artifact_raw_data
+    from packages.aria_services.research_quality import assess_team_report
 
     created = created_at or datetime.now()
     quality_notes = quality_notes or []
@@ -549,9 +615,10 @@ def save_team_report(
     quote_snapshot = team_quote_snapshot(data_bundle) if data_bundle else {}
     quality = quote_snapshot.get("quality") or {}
     agent_results = _agent_result_summary(team_result)
+    assessment = assess_team_report(team_result, data_bundle)
     write_artifact_metadata(artifact, {
         "kind": "team_report",
-        "status": "complete" if any(result.get("success") for result in agent_results) else "data_unavailable",
+        "status": assessment.metadata_status,
         "symbol": symbol,
         "created_at": created.isoformat(timespec="seconds"),
         "data": {
@@ -561,6 +628,7 @@ def save_team_report(
             "quote": quote_snapshot,
             "quality": quality,
             "quality_notes": quality_notes,
+            "quality_gate": assessment.to_dict(),
         },
         "verdict": {
             "final_signal": getattr(team_result, "final_signal", None),
