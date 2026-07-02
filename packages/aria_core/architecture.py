@@ -89,7 +89,10 @@ _ARCHITECTURE_LAYERS: Tuple[ArchitectureLayer, ...] = (
         status=LayerStatus.PARTIAL,
         source_paths=("aria_cli.py", "runtime/", "packages/aria_sdk/", "apps/cli/runtime_consumer.py", "apps/cli/deterministic.py", "apps/cli/providers/"),
         depends_on=("settings", "tools", "safety", "context"),
-        next_steps=("Fold send_message's remaining pre-turn (routing/decomposition/context injection) and post-turn (rendering/history/metrics) sections into testable modules, mirroring turn_planning/prompt_assembly.",),
+        next_steps=(
+            "Fold send_message's remaining pre-turn (routing/decomposition/context injection) and post-turn (rendering/history/metrics) sections into testable modules, mirroring turn_planning/prompt_assembly.",
+            "Untangle stream_ollama's 47 aria_cli module-global borrowings (AST-audited) so SDK/daemon consumers stop needing an aria_cli pre-import for the default Ollama path.",
+        ),
     ),
     ArchitectureLayer(
         name="tools",
@@ -139,11 +142,11 @@ _ARCHITECTURE_LAYERS: Tuple[ArchitectureLayer, ...] = (
         name="channels",
         responsibility="Daemon, webhook, TradingView alerts, Feishu, Telegram, and future external entrypoints.",
         target_state="Channels submit structured tasks to gateway/runtime and never call CLI internals directly.",
-        current_state="apps/channels now has the channel registry (six channels with direction/capabilities/enable resolution from config+env) and the TradingView adapter: alert payloads become aria.channel_task.v1 structured tasks (passphrase/HMAC verification reused from tradingview_bridge, fail-closed on mismatch, explicit verified/open_mode flags, stable dedup keys, gateway-facing prompt that forbids order placement).",
+        current_state="apps/channels now has the channel registry (six channels with direction/capabilities/enable resolution from config+env) and the TradingView adapter: alert payloads become aria.channel_task.v1 structured tasks (passphrase/HMAC verification reused from tradingview_bridge, fail-closed on mismatch, explicit verified/open_mode flags, stable dedup keys, gateway-facing prompt that forbids order placement). The daemon webhook endpoint now refuses open-mode intake from non-loopback clients and runs alert analysis through runtime.gateway.run_turn (tool-less turn; legacy quick summary kept as fallback).",
         status=LayerStatus.PARTIAL,
         source_paths=("aria_daemon.py", "apps/channels/", "apps/cli/tradingview_bridge.py"),
         depends_on=("settings", "runtime", "services", "safety"),
-        next_steps=("Wire the daemon webhook endpoint to feed verified channel tasks into runtime.run_turn (refusing open_mode tasks off-localhost), then register alert outcomes back through notify channels.",),
+        next_steps=("End-to-end drill: a real TradingView alert through webhook → gateway analysis → notify push, then document channel setup in the README.",),
     ),
     ArchitectureLayer(
         name="observability",

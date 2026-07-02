@@ -527,7 +527,25 @@ async def _run_tradingview_alert(payload: dict) -> str:
         logger.warning("TradingView trade preview failed: %s", exc)
         preview_lines.extend(["", "*Trade Preview*", f"生成失败: `{exc}`"])
 
-    analysis = await _run_report(symbol)
+    # Channels contract: analysis goes through the shared runtime gateway
+    # (tool-less turn) instead of poking CLI internals; the legacy quick
+    # summary stays as the fallback when no model backend is reachable.
+    analysis = ""
+    try:
+        from apps.channels.intake import analyze_alert_via_gateway
+        from apps.channels.tradingview import task_prompt
+        _gw_config = {
+            "model": os.environ.get("ARIA_DAEMON_MODEL", "qwen2.5:7b"),
+            "ollama_url": os.environ.get("OLLAMA_URL", "http://localhost:11434"),
+            "local_provider": "ollama",
+        }
+        analysis = await asyncio.wait_for(
+            analyze_alert_via_gateway(task_prompt(alert), _gw_config), timeout=90.0
+        )
+    except Exception as exc:
+        logger.info("gateway analysis unavailable (%s) — using quick summary", exc)
+    if not analysis:
+        analysis = await _run_report(symbol)
     return "\n".join(header + preview_lines) + "\n\n" + analysis
 
 
@@ -903,6 +921,24 @@ async def _webhook_http_server() -> None:
         return supplied == token
 
     async def _handle_tradingview(request):
+        # Open-mode guard (channels contract): with neither an endpoint token
+        # nor ARIA_WEBHOOK_SECRET configured, only loopback clients may submit —
+        # an open endpoint reachable off-host would accept injected alerts.
+        try:
+            from apps.channels.intake import should_refuse_open_intake
+            secret_configured = bool(os.environ.get("ARIA_WEBHOOK_SECRET", "").strip())
+            if should_refuse_open_intake(
+                getattr(request, "remote", None),
+                token_configured=bool(token),
+                secret_configured=secret_configured,
+            ):
+                return web.json_response(
+                    {"success": False,
+                     "error": "open-mode intake refused for non-local client; set ARIA_WEBHOOK_SECRET or WEBHOOK_TOKEN"},
+                    status=403,
+                )
+        except ImportError:
+            pass
         if not _authorized(request):
             return web.json_response({"success": False, "error": "unauthorized"}, status=401)
         text = await request.text()
