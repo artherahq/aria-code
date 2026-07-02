@@ -65,6 +65,8 @@ def build_session_diagnostic_bundle(
     trace: Any = None,
     provider_health: Optional[list] = None,
     artifact_summary: Optional[dict] = None,
+    doctor_report: Any = None,
+    mcp_status: Optional[list] = None,
 ) -> Dict[str, Any]:
     """Build a stable export bundle for debugging and replay."""
     config = dict(config or {})
@@ -100,6 +102,24 @@ def build_session_diagnostic_bundle(
             bundle["provider_health_summary"] = summarize_provider_health(provider_rows).to_dict()
         except Exception:
             pass
+    if doctor_report is not None:
+        # Accept a DoctorReport dataclass or a pre-serialized dict.
+        try:
+            bundle["doctor"] = {
+                "status": doctor_report.status,
+                "passed": doctor_report.passed,
+                "warnings": doctor_report.warnings,
+                "errors": doctor_report.errors,
+                "checks": [
+                    {"name": c.name, "status": c.status,
+                     "detail": c.detail, "suggestion": c.suggestion}
+                    for c in doctor_report.checks
+                ],
+            }
+        except AttributeError:
+            bundle["doctor"] = dict(doctor_report) if isinstance(doctor_report, dict) else {}
+    if mcp_status is not None:
+        bundle["mcp_servers"] = list(mcp_status)
     if artifact_summary is not None:
         bundle["artifact_summary"] = dict(artifact_summary)
     else:

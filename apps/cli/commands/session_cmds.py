@@ -141,12 +141,26 @@ class SessionCommandsMixin:
 
         try:
             provider_health = []
+            doctor_report = None
+            mcp_status = None
             if fmt == "bundle":
                 try:
                     from packages.aria_services.provider_health import GLOBAL_PROVIDER_HEALTH
                     provider_health = GLOBAL_PROVIDER_HEALTH.snapshot()
                 except Exception:
                     provider_health = []
+                # A support bundle should carry environment health and MCP/circuit
+                # state — the two things a maintainer asks for first. Best-effort.
+                try:
+                    from doctor import run_doctor
+                    doctor_report = run_doctor(self.terminal.config)
+                except Exception:
+                    doctor_report = None
+                try:
+                    _reg = getattr(self.terminal, "_mcp_registry", None)
+                    mcp_status = _reg.status() if _reg else None
+                except Exception:
+                    mcp_status = None
             content, ext, prefix = build_session_export_payload(
                 fmt,
                 self.terminal.conversation,
@@ -154,6 +168,8 @@ class SessionCommandsMixin:
                 config=self.terminal.config,
                 trace=getattr(self.terminal, "runtime_trace", None),
                 provider_health=provider_health,
+                doctor_report=doctor_report,
+                mcp_status=mcp_status,
             )
         except ValueError as exc:
             if fmt == "sft" and "No user→assistant pairs" in str(exc):
