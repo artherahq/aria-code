@@ -272,6 +272,12 @@ def route_top_level_text(user_input: str, available_commands: set[str]) -> Route
                 )
                 return RoutedCommand(command=command, args=mode)
             if command == "/chart":
+                if not symbols:
+                    # A chart keyword with no resolvable symbol is a question
+                    # ABOUT charting ("你会制作图表吗"), not a chart request.
+                    # Routing the raw sentence produced `/chart <whole question>`
+                    # and a guaranteed data-fetch failure; let the LLM answer.
+                    continue
                 period = next(
                     (
                         period
@@ -280,7 +286,7 @@ def route_top_level_text(user_input: str, available_commands: set[str]) -> Route
                     ),
                     "1y",
                 )
-                rest = " ".join(symbols) if symbols else stripped
+                rest = " ".join(symbols)
                 return RoutedCommand(command=command, args=f"{rest} {period}".strip())
             if command == "/report":
                 report_type = next(
@@ -294,8 +300,9 @@ def route_top_level_text(user_input: str, available_commands: set[str]) -> Route
                 fmt = "html"
                 if any(k in low for k in ("markdown", "md")):
                     fmt = "md"
-                rest = symbol or stripped
-                args = " ".join(part for part in [rest, f"--type {report_type}" if report_type else "", f"--format {fmt}" if fmt else ""] if part)
+                if not symbol:
+                    continue  # same rule as /chart: no symbol → not a report request
+                args = " ".join(part for part in [symbol, f"--type {report_type}" if report_type else "", f"--format {fmt}" if fmt else ""] if part)
                 return RoutedCommand(command=command, args=args)
     if "/news" in available_commands and any(k in low for k in (
         "新闻", "消息", "最新进展", "最近进展", "news", "latest", "recent",
