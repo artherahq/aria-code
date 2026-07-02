@@ -81,13 +81,19 @@ class TradingRiskTests(unittest.TestCase):
         self.assertTrue(pol.allow_short)
 
     def test_importing_safety_does_not_import_brokers(self):
-        import importlib, sys
-        for m in [k for k in sys.modules if k.startswith("brokers")]:
-            del sys.modules[m]
-        import safety
-        importlib.reload(safety)
-        self.assertFalse(any(k.startswith("brokers") for k in sys.modules),
-                         "safety must stay lazily decoupled from brokers")
+        # Run in a subprocess: asserting on a *fresh* interpreter's sys.modules
+        # is the only way to check import-time layering without mutating this
+        # process's module state (deleting/reloading modules here orphans other
+        # tests' collection-time references and corrupts their monkeypatching).
+        import subprocess, sys
+        code = (
+            "import sys; import safety; "
+            "bad = [m for m in sys.modules if m.startswith('brokers') or m.startswith('privacy')]; "
+            "sys.exit(1 if bad else 0)"
+        )
+        proc = subprocess.run([sys.executable, "-c", code], capture_output=True)
+        self.assertEqual(proc.returncode, 0,
+                         "importing safety must not import brokers/privacy")
 
 
 if __name__ == "__main__":

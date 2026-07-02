@@ -46,6 +46,8 @@ import re
 import traceback
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from packages.aria_mcp.circuit import ServerCircuit
+
 logger = logging.getLogger(__name__)
 
 MCP_CONFIG_PATH = pathlib.Path.home() / ".arthera" / "mcp_servers.json"
@@ -245,6 +247,16 @@ class MCPServer:
         except Exception as exc:
             return {"success": False, "error": str(exc)}
 
+    @property
+    def is_alive(self) -> bool:
+        """Process exists and has not exited (handshake state tracked separately)."""
+        return self._proc is not None and self._proc.returncode is None
+
+    async def restart(self) -> bool:
+        """Tear down and re-launch the subprocess (reconnect policy)."""
+        await self.stop()
+        return await self.start()
+
     async def stop(self):
         self._running = False
         if self._reader_task:
@@ -285,6 +297,7 @@ class MCPToolRegistry:
         self.config_path = config_path
         self._servers:   Dict[str, MCPServer] = {}
         self._tool_map:  Dict[str, Tuple[str, str]] = {}  # qualified_name → (server_name, tool_name)
+        self._circuits:  Dict[str, "ServerCircuit"] = {}  # per-server failure isolation
         self._loaded     = False
         self._event_loop: Optional[asyncio.AbstractEventLoop] = None
 
@@ -378,6 +391,12 @@ class MCPToolRegistry:
 
     # ── call ───────────────────────────────────────────────────────────────
 
+    def _circuit_for(self, srv_name: str) -> ServerCircuit:
+        circuit = self._circuits.get(srv_name)
+        if circuit is None:
+            circuit = self._circuits[srv_name] = ServerCircuit()
+        return circuit
+
     async def call_tool(self, qualified_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
         if "/" in qualified_name:
             srv_name, tool_name = qualified_name.split("/", 1)
@@ -388,7 +407,52 @@ class MCPToolRegistry:
         srv = self._servers.get(srv_name)
         if srv is None:
             return {"success": False, "error": f"MCP server {srv_name!r} not found"}
-        return await srv.call_tool(tool_name, arguments)
+
+        # Per-server failure isolation: a wedged/dead server fails fast instead
+        # of costing every call its full request timeout for the whole session.
+        circuit = self._circuit_for(srv_name)
+        if not circuit.allow_call():
+            return {
+                "success": False,
+                "error": (
+                    f"MCP server {srv_name!r} temporarily disabled after repeated "
+                    f"failures ({circuit.describe()}). It will be probed again "
+                    f"automatically; /mcp reload {srv_name} forces a restart now."
+                ),
+                "circuit": circuit.state,
+            }
+
+        # Reconnect policy: if the subprocess died, use this (probe) call to
+        # relaunch it before dispatching.
+        if not srv.is_alive:
+            logger.info("[MCP:%s] Process dead — attempting restart", srv_name)
+            if not await srv.restart():
+                circuit.record_failure()
+                return {
+                    "success": False,
+                    "error": f"MCP server {srv_name!r} is down and restart failed",
+                    "circuit": circuit.state,
+                }
+
+        result = await srv.call_tool(tool_name, arguments)
+        if result.get("success"):
+            circuit.record_success()
+        else:
+            circuit.record_failure()
+        return result
+
+    async def reload_server(self, srv_name: str) -> bool:
+        """Force stop/start of one server and reset its circuit (reload policy)."""
+        srv = self._servers.get(srv_name)
+        if srv is None:
+            return False
+        ok = await srv.restart()
+        if ok:
+            self._circuit_for(srv_name).record_success()
+            self._tool_map = {q: st for q, st in self._tool_map.items() if st[0] != srv_name}
+            for tool in srv.tools:
+                self._tool_map[f"{srv_name}/{tool['name']}"] = (srv_name, tool["name"])
+        return ok
 
     def _resolve_short_name(self, name: str) -> Tuple[str, str]:
         for qname, (srv, tool) in self._tool_map.items():
@@ -486,6 +550,8 @@ class MCPToolRegistry:
             {
                 "name":        name,
                 "running":     srv._running,
+                "alive":       srv.is_alive,
+                "circuit":     self._circuit_for(name).describe(),
                 "tool_count":  len(srv.tools),
                 "description": srv.description,
                 "tools":       [t["name"] for t in srv.tools],

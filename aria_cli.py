@@ -5561,7 +5561,7 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
             "/license":   (self.cmd_license,  "Show feature license/entitlement status"),
             "/architecture": (self.cmd_architecture, "Show layered architecture contract: /architecture [--gaps]"),
             "/install":   (self.cmd_install,  "Detect & install missing deps: /install [pkg|--auto|--required]"),
-            "/mcp":       (self.cmd_mcp,      "MCP servers: /mcp status|tools|reload"),
+            "/mcp":       (self.cmd_mcp,      "MCP servers: /mcp status|tools|reload [server]"),
             "/providers": (self.cmd_providers,"List local LLM backends and status"),
             "/ariarc":    (self.cmd_ariarc,   "Show .ariarc project config: /ariarc [reload]"),
             "/skills":    (self.cmd_skills,   "List all available skills"),
@@ -7284,12 +7284,29 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
     # ---- MCP server management ----
 
     async def cmd_mcp(self, args: str):
-        """Manage MCP servers: /mcp status | /mcp tools | /mcp reload"""
+        """Manage MCP servers: /mcp status | /mcp tools | /mcp reload [server]"""
         if not _HAS_MCP:
             console.print("  [dim]mcp_client.py not available[/dim]" if HAS_RICH else "MCP not available")
             return
         sub = args.strip().lower()
         reg = self.terminal._mcp_registry
+
+        _parts = sub.split()
+        if _parts and _parts[0] in ("reload", "restart") and len(_parts) > 1:
+            # Per-server reload: restart one subprocess + reset its circuit,
+            # without tearing down every other server.
+            _name = args.strip().split()[1]
+            if not reg:
+                console.print("  [dim]No MCP servers running[/dim]" if HAS_RICH else "No MCP servers")
+                return
+            ok = await reg.reload_server(_name)
+            msg = (f"MCP server {_name!r} reloaded" if ok
+                   else f"MCP server {_name!r} not found or failed to restart")
+            if HAS_RICH:
+                console.print(f"  [{'green' if ok else 'red'}]{msg}[/{'green' if ok else 'red'}]")
+            else:
+                print(f"  {msg}")
+            return
 
         if sub in ("reload", "restart"):
             if reg:
