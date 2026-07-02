@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, Mapping, Optional
 
 from .events import RuntimeTrace, ToolCallRecord
@@ -11,6 +12,7 @@ from .events import RuntimeTrace, ToolCallRecord
 ToolHandler = Callable[[dict], dict]
 RemoteExecutor = Callable[[str, dict], Awaitable[dict]]
 Hook = Callable[[str, str, dict, Optional[dict]], None]
+ExecutionContextProvider = Callable[[], Mapping[str, Any]]
 
 
 class ToolExecutor:
@@ -24,25 +26,31 @@ class ToolExecutor:
         hook: Hook | None = None,
         trace: RuntimeTrace | None = None,
         config: Dict[str, Any] | None = None,
+        execution_context: ExecutionContextProvider | None = None,
     ) -> None:
         self.local_tools = local_tools
         self.remote_executor = remote_executor
         self.hook = hook
         self.trace = trace or RuntimeTrace()
         self.config = config or {}
+        self.execution_context = execution_context
 
     def execute_local(self, tool_name: str, params: dict) -> dict:
         """Execute a local tool synchronously."""
         if tool_name not in self.local_tools:
             return {"success": False, "error": f"Unknown local tool: {tool_name}"}
         handler = self.local_tools[tool_name][0]
-        params = self._prepare_params(tool_name, params)
+        params = self._prepare_params(tool_name, params, include_execution_context=True)
+        context_error = params.pop("_execution_context_error", None)
+        if context_error:
+            result = {"success": False, "error": context_error}
+            self.trace.emit("tool_denied", {"tool": tool_name, "reason": context_error})
+            return result
         return self._call_with_trace(tool_name, params, lambda: handler(params))
 
     async def execute(self, tool_name: str, params: dict) -> dict:
         """Execute a tool asynchronously, using remote executor when needed."""
         if tool_name in self.local_tools:
-            params = self._prepare_params(tool_name, params)
             loop = asyncio.get_event_loop()
             return await loop.run_in_executor(None, self.execute_local, tool_name, params)
         if self.remote_executor is None:
@@ -87,13 +95,71 @@ class ToolExecutor:
         ))
         return result
 
-    def _prepare_params(self, tool_name: str, params: dict) -> dict:
+    def _prepare_params(
+        self,
+        tool_name: str,
+        params: dict,
+        *,
+        include_execution_context: bool = False,
+    ) -> dict:
         prepared = dict(params or {})
+        if include_execution_context and self.execution_context is not None:
+            try:
+                context = dict(self.execution_context() or {})
+                for key, value in context.items():
+                    if str(key).startswith("_") and value is not None:
+                        prepared.setdefault(str(key), value)
+                self._bind_workspace(tool_name, prepared, context)
+            except Exception:
+                pass
         if tool_name == "run_command":
             prepared.setdefault("policy", self.config.get("command_policy", "safe"))
             prepared.setdefault("permission_mode", self.config.get("permission_mode", "workspace-write"))
             prepared.setdefault("network_enabled", bool(self.config.get("network_enabled", True)))
         return prepared
+
+    @staticmethod
+    def _bind_workspace(tool_name: str, prepared: dict, context: Mapping[str, Any]) -> None:
+        workspace_value = context.get("_workspace")
+        if not workspace_value:
+            return
+        workspace = Path(str(workspace_value)).expanduser().resolve()
+        restricted = bool(context.get("_workspace_restricted", False))
+        path_tools = {
+            "read_file",
+            "write_file",
+            "edit_file",
+            "multi_edit",
+            "list_files",
+            "search_code",
+            "analyze_file",
+            "notebook_read",
+            "notebook_edit",
+        }
+        if tool_name in path_tools:
+            raw_path = str(prepared.get("path") or ".")
+            target = Path(raw_path).expanduser()
+            if not target.is_absolute():
+                target = workspace / target
+            target = target.resolve()
+            if restricted and not target.is_relative_to(workspace):
+                prepared["_execution_context_error"] = (
+                    f"Tool path is outside the isolated workspace: {target}"
+                )
+                return
+            prepared["path"] = str(target)
+        if tool_name in {"run_command", "github"}:
+            raw_cwd = str(prepared.get("cwd") or workspace)
+            cwd = Path(raw_cwd).expanduser()
+            if not cwd.is_absolute():
+                cwd = workspace / cwd
+            cwd = cwd.resolve()
+            if restricted and not cwd.is_relative_to(workspace):
+                prepared["_execution_context_error"] = (
+                    f"Command cwd is outside the isolated workspace: {cwd}"
+                )
+                return
+            prepared["cwd"] = str(cwd)
 
     def _run_hook(self, hook_type: str, tool_name: str, params: dict, result: dict | None = None) -> None:
         if self.hook is None:

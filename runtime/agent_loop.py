@@ -1097,6 +1097,12 @@ class AgentOptions:
         default_factory=lambda: frozenset(DEFAULT_SERIAL_TOOLS)
     )
     tool_schemas: List[dict] = field(default_factory=list)
+    # Interactive tool approval (UI adapters inject these; None = execute
+    # without prompting, matching the historical embedded-loop default only
+    # for callers that never wire an approval UI).
+    confirm_tools: FrozenSet[str] = field(default_factory=frozenset)
+    approval_callback: Optional[ApprovalCallback] = None
+    approval_applier: Optional[Callable[[dict, "ApprovalDecision"], dict]] = None
 
 
 # ── run_agent() ───────────────────────────────────────────────────────────────
@@ -1241,6 +1247,9 @@ async def run_agent(
             cancel_event=cancel_event,
             loop_guard=loop_guard,
             serial_tools=_serial,
+            confirm_tools=opts.confirm_tools,
+            approval_callback=opts.approval_callback,
+            approval_applier=opts.approval_applier or apply_approval_decision,
         )
 
         for activity in tool_turn_result.activities:

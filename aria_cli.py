@@ -72,9 +72,6 @@ from runtime import (
     RuntimeTrace,
     ToolExecutor,
     apply_approval_decision,
-    detect_task_complete,
-    execute_tool_turn,
-    LoopGuard,
 )
 try:
     # RunStatus/RunStore land with the durable run-state store (runtime/run_store.py,
@@ -9444,7 +9441,6 @@ class ArtheraTerminal:
         # (decision logic: apps/cli/turn_planning.py, unit-tested in isolation)
         _task_complexity_signals = is_complex_task(message)
         max_rounds, hard_max_rounds = round_budget_for(_task_complexity_signals)
-        _round_extension_notified = False
 
         # --- Task decomposition for complex multi-step requests ---
         # For long or multi-step messages, ask the AI to produce a plan first,
@@ -9517,15 +9513,12 @@ class ArtheraTerminal:
         thinking_tokens = 0
         elapsed = 0.0
 
-        _loop_guard = LoopGuard()  # detect repeated identical failing tool calls
         try:
             from apps.cli.todo_tracker import clear_todos as _clear_todos
             _clear_todos()  # reset task checklist for this new turn
         except Exception:
             pass
 
-        round_num = 0
-        _loop_compactions = 0   # proactive mid-loop compactions done this turn
         _response_header_printed = False
 
         def _print_response_header() -> None:
@@ -9540,395 +9533,201 @@ class ArtheraTerminal:
             else:
                 print(f"Aria{' · ' + _answer_model if _answer_model else ''}")
 
-        while round_num < hard_max_rounds:
-            response_text = ""
+        # ── Single-shot turn through the shared runtime Gateway ─────────────
+        # The per-round inline agent loop that used to live here was removed
+        # (2026-07) after the runtime path was validated with real turns:
+        # plain chat, inline-parity, and native tool-calling all served by
+        # gateway.run_turn → run_agent, which owns rounds, tool execution,
+        # loop-guard and (now) per-tool approval. This block only adapts the
+        # terminal — stream consumer, approval UI, run-store transitions —
+        # to that loop and renders its outcome.
+        from apps.cli.providers.runtime_bridge import run_chat_via_runtime
 
-            stream_consumer = TerminalRuntimeEventConsumer(
-                terminal=self,
-                console=console,
-                has_rich=HAS_RICH,
-                markdown_cls=make_markdown,
-                live_cls=Live,
-                strip_latex=_strip_latex,
-                set_robot_state=set_robot_state,
-                streaming_state=RobotState.STREAMING,
-                print_tool_call=_print_tool_call,
-                print_tool_done=_print_tool_done,
-                fallback_from=self._last_provider or "local",
-                ui_lang=self.config.get("ui_lang", "en") or "en",
-                on_response_start=_print_response_header,
+        response_text = ""
+        stream_consumer = TerminalRuntimeEventConsumer(
+            terminal=self,
+            console=console,
+            has_rich=HAS_RICH,
+            markdown_cls=make_markdown,
+            live_cls=Live,
+            strip_latex=_strip_latex,
+            set_robot_state=set_robot_state,
+            streaming_state=RobotState.STREAMING,
+            print_tool_call=_print_tool_call,
+            print_tool_done=_print_tool_done,
+            fallback_from=self._last_provider or "local",
+            ui_lang=self.config.get("ui_lang", "en") or "en",
+            on_response_start=_print_response_header,
+        )
+        _start_spinner = stream_consumer.start_spinner
+        _stop_spinner = stream_consumer.stop_spinner
+        _stop_live = stream_consumer.stop_live
+        _flush_latex_buf = stream_consumer.flush_latex_buf
+        _first_token_received = stream_consumer.first_token_received_ref
+        _use_plain_print = stream_consumer.use_plain_print_ref
+        _use_batch_render = stream_consumer.use_batch_render_ref
+        _latex_buf = stream_consumer.latex_buf_ref
+        _in_latex = stream_consumer.in_latex_ref
+
+        _start_spinner()
+
+        on_token = stream_consumer.on_token
+        on_thinking = stream_consumer.on_thinking
+        on_tool_call = stream_consumer.on_tool_call
+        on_tool_result = stream_consumer.on_tool_result
+        on_status = stream_consumer.on_status
+
+        # Interactive tool approval, threaded through the gateway into
+        # run_agent's tool loop (previously an inline-loop exclusive — the
+        # runtime path used to execute _CONFIRM_TOOLS without prompting).
+        approval_consumer = TerminalApprovalEventConsumer(
+            terminal=self,
+            console=console,
+            has_rich=HAS_RICH,
+            confirm_decision=_confirm_tool_execution_decision,
+            apply_decision=_apply_tool_approval,
+            save_config=save_config,
+        )
+
+        async def _approval_callback(tool_name: str, tool_params: dict) -> ApprovalDecision:
+            self._transition_runtime_run(
+                RunStatus.WAITING_APPROVAL,
+                reason="tool_requires_approval",
+                data={"tool": tool_name},
             )
-            _start_spinner = stream_consumer.start_spinner
-            _stop_spinner = stream_consumer.stop_spinner
-            _stop_live = stream_consumer.stop_live
-            _flush_latex_buf = stream_consumer.flush_latex_buf
-            _first_token_received = stream_consumer.first_token_received_ref
-            _use_plain_print = stream_consumer.use_plain_print_ref
-            _use_batch_render = stream_consumer.use_batch_render_ref
-            _latex_buf = stream_consumer.latex_buf_ref
-            _in_latex = stream_consumer.in_latex_ref
+            try:
+                return await approval_consumer.approve(
+                    tool_name,
+                    tool_params,
+                    stop_before_prompt=_stop_live,
+                )
+            finally:
+                self._transition_runtime_run(
+                    RunStatus.RUNNING,
+                    reason="tool_approval_resolved",
+                    data={"tool": tool_name},
+                )
 
-            _start_spinner()
+        def _approval_applier(tool_params: dict, approval: ApprovalDecision) -> dict:
+            return approval_consumer.apply(tool_params, approval)
 
-            on_token = stream_consumer.on_token
-            on_thinking = stream_consumer.on_thinking
-            on_tool_call = stream_consumer.on_tool_call
-            on_tool_result = stream_consumer.on_tool_result
-            on_status = stream_consumer.on_status
+        # Parity with the old inline local_mode rendering: Ollama generates
+        # with no live display — accumulate silently, Rich-render at the end.
+        if self.config.get("local_mode", False):
+            _use_plain_print[0] = True
+            _use_batch_render[0] = True
 
-            # ── route this turn through the shared runtime Gateway (run_turn) ──
-            # The CLI uses the same tested agent loop the SDK/API use, keeping
-            # aria_cli as orchestration glue. ON by default now; on ANY failure
-            # (or empty result) we fall through to the proven inline loop below,
-            # so the runtime path can never strand the user. The inline loop is
-            # deliberately kept as the safety net until the runtime path is
-            # confirmed in real-world use. Force the legacy loop with
-            # `config use_runtime_loop false`.
-            if self.config.get("use_runtime_loop", True):
+        # Capture the pending system-role override WITHOUT consuming it yet:
+        # only a confirmed-successful turn clears it.
+        _rt_sys_ov = getattr(self, "_system_override", None)
+        _rt_turn = None
+        try:
+            _rt_turn = await run_chat_via_runtime(
+                prompt=current_message, history=self.conversation[:-1],
+                local_tools=LOCAL_TOOLS, tool_schemas=LOCAL_TOOL_SCHEMAS,
+                model=model, config=self.config, api_url=self.api_url,
+                ollama_url=self.config.get("ollama_url", "http://localhost:11434"),
+                cancel_event=self.cancel_event,
+                on_token=on_token, on_thinking=on_thinking,
+                on_tool_call=on_tool_call,
+                on_tool_result=on_tool_result, on_status=on_status,
+                thinking_mode=thinking_mode, user_context=user_context,
+                auth_token=auth_token, project_context=_PROJECT_CONTEXT,
+                system_override=_rt_sys_ov,
+                max_rounds=hard_max_rounds,
+                confirm_tools=_CONFIRM_TOOLS,
+                approval_callback=_approval_callback,
+                approval_applier=_approval_applier,
+                execution_context=lambda: {
+                    "_run_id": self._active_run_id,
+                    "_session_id": self.session_id,
+                },
+                return_result=True,
+            )
+        except Exception as _rt_err:
+            logger.error("Runtime turn failed: %s", _rt_err)
+
+        response_text = stream_consumer.response_text
+        token_count = stream_consumer.token_count
+        thinking_tokens = stream_consumer.thinking_tokens
+        _stop_live()
+
+        _rt_text = getattr(_rt_turn, "text", "") if _rt_turn is not None else ""
+        _rt_cancelled = bool(getattr(_rt_turn, "cancelled", False)) or bool(
+            self.cancel_event is not None and self.cancel_event.is_set()
+        )
+        if _rt_cancelled:
+            result = {"success": False, "response": response_text, "cancelled": True}
+            turn_state.append_response(response_text)
+        elif (_rt_text or "").strip():
+            self._system_override = None  # consumed by the successful turn
+            _rt_final = getattr(_rt_turn, "final", None)
+            _rt_metadata = getattr(_rt_final, "metadata", None)
+            _rt_provider = (
+                getattr(_rt_final, "provider", "")
+                or str(self.config.get("local_provider") or "ollama")
+            )
+            result = {
+                "success": True,
+                "response": _rt_text,
+                "provider": _rt_provider,
+                "cancelled": False,
+                "usage": {
+                    "prompt_tokens": getattr(_rt_metadata, "prompt_tokens", 0),
+                    "completion_tokens": getattr(_rt_metadata, "completion_tokens", 0),
+                    "thinking_tokens": getattr(_rt_metadata, "thinking_tokens", 0),
+                },
+                "tools_used": list(getattr(_rt_final, "tools", []) or []),
+                "sources": list(getattr(_rt_final, "sources", []) or []),
+            }
+            response_text = stream_consumer.response_text or _rt_text
+            turn_state.provider = _rt_provider
+            turn_state.apply_model_result(result, response_text)
+            provider = turn_state.provider
+            self._last_provider = _rt_provider
+        else:
+            # Runtime turn failed or produced nothing. Keep the old inline
+            # chain's most valuable recovery in compact form: one direct
+            # cloud-API rescue (providers/llm/registry fallback chain),
+            # honoring the provider_fallback config.
+            _err = (getattr(_rt_turn, "error", None) if _rt_turn is not None else None) or "empty_response"
+            result = {"success": False, "error": str(_err), "response": "", "cancelled": False}
+            _fallback_mode = str(self.config.get("provider_fallback", "configured")).lower()
+            _rescue = None
+            if _fallback_mode != "off":
                 try:
-                    from apps.cli.providers.runtime_bridge import run_chat_via_runtime
-                    # Parity with the inline loop's local_mode rendering: Ollama
-                    # generates with no live display — accumulate silently and
-                    # Rich-render the complete answer at the end (otherwise the
-                    # batched output would be discarded and the user sees nothing).
-                    if self.config.get("local_mode", False):
-                        _use_plain_print[0]  = True
-                        _use_batch_render[0] = True
-                    # Capture any pending system-role override WITHOUT consuming it
-                    # yet: if the runtime path falls through, the inline loop below
-                    # must still see it. Only cleared on a confirmed success.
-                    _rt_sys_ov = getattr(self, "_system_override", None)
-                    _rt_turn = await run_chat_via_runtime(
-                        prompt=current_message, history=self.conversation[:-1],
-                        local_tools=LOCAL_TOOLS, tool_schemas=LOCAL_TOOL_SCHEMAS,
-                        model=model, config=self.config, api_url=self.api_url,
-                        ollama_url=self.config.get("ollama_url", "http://localhost:11434"),
-                        cancel_event=self.cancel_event,
-                        on_token=on_token, on_thinking=on_thinking,
-                        on_tool_call=on_tool_call,
-                        on_tool_result=on_tool_result, on_status=on_status,
-                        thinking_mode=thinking_mode, user_context=user_context,
-                        auth_token=auth_token, project_context=_PROJECT_CONTEXT,
-                        system_override=_rt_sys_ov,
-                        return_result=True,
-                    )
-                    _rt_text = _rt_turn.text
-                    if (_rt_text or "").strip():
-                        self._system_override = None  # consumed by the successful turn
-                        _rt_final = getattr(_rt_turn, "final", None)
-                        _rt_metadata = getattr(_rt_final, "metadata", None)
-                        _rt_provider = (
-                            getattr(_rt_final, "provider", "")
-                            or str(self.config.get("local_provider") or "ollama")
-                        )
-                        result = {
-                            "success": True,
-                            "response": _rt_text,
-                            "provider": _rt_provider,
-                            "cancelled": False,
-                            "usage": {
-                                "prompt_tokens": getattr(_rt_metadata, "prompt_tokens", 0),
-                                "completion_tokens": getattr(_rt_metadata, "completion_tokens", 0),
-                                "thinking_tokens": getattr(_rt_metadata, "thinking_tokens", 0),
-                            },
-                            "tools_used": list(getattr(_rt_final, "tools", []) or []),
-                            "sources": list(getattr(_rt_final, "sources", []) or []),
-                        }
-                        response_text = stream_consumer.response_text or _rt_text
-                        token_count = stream_consumer.token_count
-                        thinking_tokens = stream_consumer.thinking_tokens
-                        turn_state.provider = _rt_provider
-                        turn_state.apply_model_result(result, response_text)
-                        provider = turn_state.provider
-                        self._last_provider = _rt_provider
-                        break
-                    # empty → fall through to the proven inline loop
-                except Exception as _rt_err:
-                    logger.warning("use_runtime_loop failed, using inline loop: %s", _rt_err)
-
-            # Route through the explicitly selected runtime. ``local_mode`` means
-            # no Aria backend, not "always Ollama".
-            local_mode = self.config.get("local_mode", False)
-            if local_mode:
-                _local_backend = str(
-                    self.config.get("local_provider") or "ollama"
-                ).lower()
-                _use_plain_print[0]  = True
-                _use_batch_render[0] = True   # accumulate silently → Rich render at end
-                _sys_ov = getattr(self, "_system_override", None)
-                self._system_override = None
-                _local_adapter = (
-                    OllamaProvider(
-                        self.config.get("ollama_url", "http://localhost:11434"),
-                        model,
-                        system_override=_sys_ov,
-                        show_market_prefetch_status=not _det_wants_analysis,
-                    )
-                    if _local_backend == "ollama" else
-                    ConfiguredProvider(
-                        self.config, model, system_override=_sys_ov,
-                    )
-                )
-                result = await stream_provider_result(
-                    _local_adapter,
-                    current_message,
-                    self.conversation,
-                    tools=LOCAL_TOOL_SCHEMAS,
-                    cancel_event=self.cancel_event,
-                    on_token=on_token,
-                    on_thinking=on_thinking,
-                    on_tool_call=on_tool_call,
-                    on_tool_result=on_tool_result,
-                )
-                provider = _local_backend
-                self._last_provider = _local_backend
-            else:
-                # Provider selection: explicit local_provider wins; otherwise a
-                # slash-prefixed model (``openai/gpt-4.5``) names its own cloud
-                # provider, distinct from a colon-suffixed Ollama tag like
-                # ``gpt-oss:120b-cloud`` (still routed as "ollama" — colon syntax
-                # cannot identify a runtime on its own). backend_chat=True forces
-                # ALL chat through the self-hosted backend (proxies to its own
-                # Ollama + collects training data) regardless of the above.
-                # Shared with the runtime path (apps/cli/providers/runtime_bridge.py)
-                # so both agree on where a given model/config combination routes.
-                from apps.cli.providers.chat_routing import first_round_route
-                _route = first_round_route(model, self.config, self.api_url)
-                if _route == "ollama":
-                    result = {"success": False, "response": "", "cancelled": False}
-                else:
-                    # Pass system_override through user_context for cloud path
-                    _cloud_uctx = dict(user_context or {})
-                    _so = getattr(self, "_system_override", None)
-                    if _so:
-                        _cloud_uctx["system_role_override"] = _so
-                        self._system_override = None
-                    _selected_provider = (
-                        ConfiguredProvider(
-                            self.config, model, system_override=_so,
-                        )
-                        if _route == "configured" else
-                        AriaSSEProvider(
-                            self.api_url, model, thinking_mode=thinking_mode,
-                            user_context=_cloud_uctx or user_context,
-                            auth_token=auth_token, project_context=_PROJECT_CONTEXT,
-                        )
-                    )
-                    result = await stream_provider_result(
-                        _selected_provider,
-                        current_message,
-                        self.conversation,
-                        tools=LOCAL_TOOL_SCHEMAS,
-                        cancel_event=self.cancel_event,
+                    from providers.llm.registry import stream_cloud_fallback
+                    _rescue = await stream_cloud_fallback(
+                        current_message, self.conversation,
                         on_token=on_token,
-                        on_thinking=on_thinking,
-                        on_tool_call=on_tool_call,
-                        on_tool_result=on_tool_result,
-                        on_status=on_status,
+                        cancel_event=self.cancel_event,
+                        include_defaults=_fallback_mode == "auto",
                     )
+                except Exception as _rescue_err:
+                    logger.debug(
+                        "Cloud rescue after runtime failure did not complete: %s",
+                        _rescue_err,
+                    )
+                    _rescue = None
+            if _rescue is not None and _rescue.get("cancelled"):
                 response_text = stream_consumer.response_text
+                result = {"success": False, "response": response_text, "cancelled": True}
+                turn_state.append_response(response_text)
+            elif (
+                _rescue is not None
+                and _rescue.get("success")
+                and (_rescue.get("response") or "").strip()
+            ):
+                self._system_override = None
+                result = _rescue
+                response_text = stream_consumer.response_text or result.get("response", "")
                 token_count = stream_consumer.token_count
                 thinking_tokens = stream_consumer.thinking_tokens
-                # 响应质量检测：success=True 但返回占位符/空响应 → 同样 fallback
-                def _is_placeholder_response(r: dict) -> bool:
-                    resp = r.get("response", "")
-                    if not resp or len(resp) < 20:
-                        return True
-                    if _response_is_stub_placeholder(resp):
-                        return True
-                    # Signal mismatch: the real model emitted ~no tokens yet the
-                    # "response" is long → canned backend reply, not a generation.
-                    if token_count <= 2 and len(resp) > 80:
-                        return True
-                    return False
-
-                # If backend failed OR returned placeholder, fallback chain:
-                # Ollama (if running) → DeepSeek cloud → OpenAI → error.
-                # Route-aware: fall back only when the primary round did NOT really
-                # generate. Keying on `_route` (not the model name) means a forced-
-                # backend round that genuinely succeeded does NOT get discarded and
-                # re-run (the old bug: re-run / hang on the self-host path).
-                from apps.cli.providers.chat_routing import should_fallback as _route_should_fallback
-                _primary_route = "skip" if _route == "ollama" else _route
-                _should_fallback = _route_should_fallback(
-                    _primary_route, result,
-                    is_placeholder=_is_placeholder_response(result),
-                )
-                # An explicitly selected API/local endpoint is strict by default.
-                # Do not silently replace it with Ollama or an unrelated paid API.
-                if _route == "configured":
-                    _should_fallback = False
-                if _should_fallback:
-                    # Discard any in-progress Live display without rendering it —
-                    # the fallback will stream fresh content.  Rendering here would
-                    # cause the same response to appear twice (once from the Live
-                    # final-render and once from the fallback's plain-print path).
-                    _stop_live(discard=True)
-                    # Also reset streaming state so the fallback starts fresh
-                    response_text = ""
-                    token_count = 0
-                    thinking_tokens = stream_consumer.thinking_tokens
-                    stream_consumer.reset_stream_state()
-                    _first_token_received[0] = False
-
-                    # ── 1. 查询 Ollama 实际安装列表 ───────────────────────────
-                    # NOTE: Use aiohttp with trust_env=False to bypass HTTP_PROXY
-                    # environment variable — urllib.request can fail for localhost
-                    # even when NO_PROXY=localhost,127.0.0.1 is set.
-                    import json as _json
-                    ollama_url      = self.config.get("ollama_url", "http://localhost:11434")
-                    _ollama_up      = False
-                    _ollama_models  = set()   # {"qwen2.5:7b", "gpt-oss:120b-cloud", ...}
-                    try:
-                        import aiohttp as _aiohttp
-                        async with _aiohttp.ClientSession(
-                            trust_env=False,  # ignore HTTP_PROXY / NO_PROXY
-                            connector=_aiohttp.TCPConnector(ssl=False)
-                        ) as _sess:
-                            async with _sess.get(
-                                f"{ollama_url}/api/tags",
-                                timeout=_aiohttp.ClientTimeout(total=3)
-                            ) as _resp:
-                                if _resp.status == 200:
-                                    _tags = await _resp.json()
-                                    _ollama_up = True
-                                    _ollama_models = {m["name"] for m in _tags.get("models", [])}
-                    except Exception:
-                        # Fallback: try urllib with explicit no-proxy
-                        try:
-                            import urllib.request as _ur
-                            _proxy_handler = _ur.ProxyHandler({})  # bypass all proxies
-                            _opener = _ur.build_opener(_proxy_handler)
-                            _tags_resp = _opener.open(f"{ollama_url}/api/tags", timeout=3)
-                            _tags = _json.loads(_tags_resp.read())
-                            _ollama_up = True
-                            _ollama_models = {m["name"] for m in _tags.get("models", [])}
-                        except Exception:
-                            pass
-
-                    # 优先使用用户选定的模型；若未安装则按能力顺序降级
-                    # （选择逻辑与启动预检共用 _pick_best_installed_model）
-                    _ollama_model = None
-                    if _ollama_up:
-                        _ollama_model = _pick_best_installed_model(_ollama_models, model)
-
-                    if _ollama_model:
-                        _switched = _ollama_model != model
-                        self._actual_model = _ollama_model  # record for header display
-                        if _switched:
-                            # 配置的模型未安装，已自动切换 — 用 Panel 明确告知用户
-                            if HAS_RICH:
-                                console.print(Panel(
-                                    f"[yellow]⚠ 配置模型 [bold]{model}[/bold] 未安装\n"
-                                    f"[/yellow][dim]已自动切换至 [bold]{_ollama_model}[/bold]（本地可用）\n"
-                                    f"安装配置模型：[bold]ollama pull {model}[/bold][/dim]",
-                                    border_style="yellow",
-                                    box=rich_box.ROUNDED,
-                                    padding=(0, 1),
-                                ))
-                            else:
-                                print(f"  ⚠ 配置模型 {model} 未安装，已切换至 {_ollama_model}")
-                        _use_plain_print[0]  = True   # disable Live for Ollama
-                        _use_batch_render[0] = True   # accumulate silently → Rich render at end
-                        _sys_ov = getattr(self, "_system_override", None)
-                        self._system_override = None  # consume before call
-                        result = await stream_provider_result(
-                            OllamaProvider(
-                                ollama_url,
-                                _ollama_model,
-                                system_override=_sys_ov,
-                                show_market_prefetch_status=not _det_wants_analysis,
-                            ),
-                            current_message,
-                            self.conversation,
-                            tools=LOCAL_TOOL_SCHEMAS,
-                            cancel_event=self.cancel_event,
-                            on_token=on_token,
-                            on_thinking=on_thinking,
-                            on_tool_call=on_tool_call,
-                            on_tool_result=on_tool_result,
-                        )
-                        provider = "ollama"
-                        self._last_provider = "ollama"
-
-                        # An installed Ollama model can still return a transport
-                        # error or an empty completion. Continue through the cloud
-                        # fallback chain instead of rendering a blank Aria block.
-                        if not result.get("success") and not result.get("cancelled"):
-                            try:
-                                from providers.llm.registry import stream_cloud_fallback
-                                _fallback_mode = str(
-                                    self.config.get("provider_fallback", "configured")
-                                ).lower()
-                                if _fallback_mode != "off":
-                                    _cloud_result = await stream_cloud_fallback(
-                                        current_message,
-                                        self.conversation,
-                                        on_token=on_token,
-                                        cancel_event=self.cancel_event,
-                                        include_defaults=_fallback_mode == "auto",
-                                    )
-                                    if _cloud_result.get("success"):
-                                        result = _cloud_result
-                                        provider = result.get("provider", "cloud")
-                                        self._last_provider = provider
-                            except Exception as _cloud_fallback_error:
-                                logger.debug(
-                                    "Cloud fallback after Ollama failure did not complete: %s",
-                                    _cloud_fallback_error,
-                                )
-
-                    else:
-                        # ── 2. Ollama 无模型或未运行 → 尝试云端 provider ─────
-                        if _ollama_up and not _ollama_models:
-                            # Ollama 在但没有任何模型
-                            _tip = "Ollama 已运行但未安装任何模型。运行: ollama pull qwen2.5:7b"
-                            if HAS_RICH:
-                                console.print(f"  [yellow]{_tip}[/yellow]")
-                            else:
-                                print(f"  {_tip}")
-                        elif not _ollama_up:
-                            if HAS_RICH:
-                                console.print("  [dim]Ollama 未运行，尝试云端...[/dim]")
-                            else:
-                                print("  Ollama 未运行，尝试云端...")
-
-                        try:
-                            from providers.llm.registry import stream_cloud_fallback
-                            _cloud_avail = True
-                        except ImportError:
-                            _cloud_avail = False
-
-                        _fallback_mode = str(
-                            self.config.get("provider_fallback", "configured")
-                        ).lower()
-                        if _cloud_avail and _fallback_mode != "off":
-                            result = await stream_cloud_fallback(
-                                current_message, self.conversation,
-                                on_token=on_token,
-                                cancel_event=self.cancel_event,
-                                include_defaults=_fallback_mode == "auto",
-                            )
-                            provider = result.get("provider", "cloud")
-                            self._last_provider = provider
-                        else:
-                            # ── 3. 彻底无可用 provider ────────────────────────
-                            _stop_live()
-                            result = {"success": False, "error": "no_provider",
-                                      "response": "", "cancelled": False}
-
-            response_text = stream_consumer.response_text
-            token_count = stream_consumer.token_count
-            thinking_tokens = stream_consumer.thinking_tokens
-
-            # Stop Live display before handling results
-            _stop_live()
-
-            if result.get("cancelled"):
-                turn_state.append_response(response_text)
-                break
-
-            if not result.get("success"):
+                turn_state.provider = result.get("provider", "cloud")
+                turn_state.apply_model_result(result, response_text)
+                provider = turn_state.provider
+                self._last_provider = provider
+            else:
                 stream_consumer.finish(TurnPhase.ERROR)
                 set_robot_state(RobotState.ERROR)
                 turn_result = turn_state.build_error_result(
@@ -9960,166 +9759,6 @@ class ArtheraTerminal:
                         else:
                             print(f"  {ln}")
                 console.print() if HAS_RICH else print()
-                break
-
-            turn_state.provider = provider
-            turn_state.apply_model_result(result, response_text)
-            provider = turn_state.provider
-            self._last_provider = turn_state.provider
-
-            # --- Agentic tool loop ---
-            pending = result.get("tool_calls_pending", [])
-            if not pending:
-                # Semantic exit: AI returned text without tool calls.
-                # Additionally check if the response contains an explicit
-                # "task complete" signal even after a tool-heavy sequence.
-                break
-
-            # Soft limit: keep going if tools are still pending. The previous
-            # behavior executed the final tool batch and then exited before the
-            # model could summarize, which looked like a mid-task cutoff.
-            if round_num >= max_rounds - 1:
-                if round_num < hard_max_rounds - 1:
-                    if not _round_extension_notified:
-                        _round_extension_notified = True
-                        if HAS_RICH:
-                            console.print(
-                                f"  [dim]↻ 任务仍在推进，自动延长工具轮次 "
-                                f"({max_rounds} → {hard_max_rounds})[/dim]"
-                            )
-                        else:
-                            print(f"  Auto-extending tool rounds ({max_rounds} -> {hard_max_rounds})")
-                else:
-                    turn_state.append_response(
-                        "\n\n任务已达到硬性工具轮次上限，已停止继续调用工具。"
-                        "上方是已完成的结果；如仍缺少内容，请基于当前输出继续追问。"
-                    )
-                    break
-
-            # ── Parallel tool dispatch ─────────────────────────────────────────
-            # Read-only / remote tools run concurrently via asyncio.gather().
-            # Write / edit / shell tools are serialised to avoid race conditions.
-            async def _remote_tool_runner(tool_name: str, tool_params: dict) -> dict:
-                return await execute_aria_tool(
-                    self.api_url,
-                    tool_name,
-                    tool_params,
-                    auth_token=auth_token,
-                )
-
-            approval_consumer = TerminalApprovalEventConsumer(
-                terminal=self,
-                console=console,
-                has_rich=HAS_RICH,
-                confirm_decision=_confirm_tool_execution_decision,
-                apply_decision=_apply_tool_approval,
-                save_config=save_config,
-            )
-
-            async def _approval_callback(tool_name: str, tool_params: dict) -> ApprovalDecision:
-                self._transition_runtime_run(
-                    RunStatus.WAITING_APPROVAL,
-                    reason="tool_requires_approval",
-                    data={"tool": tool_name},
-                )
-                try:
-                    return await approval_consumer.approve(
-                        tool_name,
-                        tool_params,
-                        stop_before_prompt=_stop_live,
-                    )
-                finally:
-                    self._transition_runtime_run(
-                        RunStatus.RUNNING,
-                        reason="tool_approval_resolved",
-                        data={"tool": tool_name},
-                    )
-
-            def _approval_applier(tool_params: dict, approval: ApprovalDecision) -> dict:
-                return approval_consumer.apply(tool_params, approval)
-
-            tool_turn_result = await execute_tool_turn(
-                pending,
-                total_response=turn_state.total_response,
-                tool_executor=self.tool_executor,
-                formatter=_format_tool_summary,
-                remote_runner=_remote_tool_runner,
-                hook=_run_hook,
-                cancel_event=self.cancel_event,
-                confirm_tools=_CONFIRM_TOOLS,
-                approval_callback=_approval_callback,
-                approval_applier=_approval_applier,
-                loop_guard=_loop_guard,
-            )
-            _activity_results = [
-                (activity.tool, activity.result, activity.elapsed, activity.params)
-                for activity in tool_turn_result.activities
-            ]
-
-            # ── Render tool results as Activity group or single-line ───────────
-            if _activity_results:
-                from ui.render.output import print_tool_activity_group as _ptag
-                _ptag(
-                    _activity_results,
-                    console=console,
-                    has_rich=HAS_RICH,
-                    rich_box=rich_box,
-                    print_finance_fn=_print_finance_result,
-                    bot_mode=_ARIA_BOT_MODE,
-                )
-
-            # User cancelled during tool execution
-            turn_state.add_tool_time(tool_turn_result.batch.elapsed_total)
-            if tool_turn_result.cancelled:
-                result = {"success": True, "cancelled": True}
-                break
-
-            if tool_turn_result.guard_directives:
-                if HAS_RICH:
-                    console.print(f"  [yellow]↺ 循环保护: 检测到重复失败的工具调用[/yellow]")
-            self.conversation.append(tool_turn_result.assistant_message)
-            self.conversation.append(tool_turn_result.user_message)
-            current_message = tool_turn_result.followup
-            turn_state.reset_response()
-            round_num += 1
-
-            # ── Proactive context guard (mid-loop) ──────────────────────────────
-            # A long tool loop appends assistant+tool messages every round. Compact
-            # BEFORE the next model call when approaching the window, so we never
-            # send an over-limit prompt (which the provider truncates, making the
-            # model lose the task mid-run). The per-result cap in build_tool_followup
-            # bounds each result; this bounds cumulative growth across rounds.
-            if bool(self.config.get("auto_compact_context", True)) and _loop_compactions < 3:
-                try:
-                    _loop_est = sum(
-                        len(m["content"]) if isinstance(m.get("content"), str)
-                        else len(str(m.get("content", "")))
-                        for m in self.conversation
-                    ) // 3
-                    _loop_max = get_model_cfg(
-                        self.config.get("model", "qwen2.5:7b")
-                    ).get("num_ctx", 16384)
-                    _loop_thr = max(0.60, float(self.config.get("auto_compact_threshold", 0.78)))
-                    if _loop_max and (_loop_est / _loop_max) >= _loop_thr:
-                        await self.commands._smart_compact_async(silent=True)
-                        _loop_compactions += 1
-                        if HAS_RICH:
-                            console.print(
-                                f"  [dim]↩ 循环内自动压缩上下文（约 "
-                                f"{int(_loop_est / _loop_max * 100)}% 已用）[/dim]"
-                            )
-                except Exception:
-                    pass
-
-            # Hard break: same call failed too many times — stop burning rounds
-            if _loop_guard.should_break:
-                if HAS_RICH:
-                    console.print("  [yellow]⛔ 循环保护触发：已停止重复失败的工具调用[/yellow]")
-                turn_state.append_response(
-                    "\n\n（已检测到重复失败的工具调用并停止。请根据上方已有结果继续，"
-                    "或换一种方式描述需求。）"
-                )
-                break
 
         # --- End of agentic loop ---
         _esc_watcher.stop()

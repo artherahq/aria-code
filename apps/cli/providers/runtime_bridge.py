@@ -20,10 +20,18 @@ from typing import Any, Callable, List, Optional
 from .chat_routing import first_round_route, is_placeholder_response, should_fallback
 
 
-def build_tool_executor(local_tools, config: Optional[dict] = None):
+def build_tool_executor(
+    local_tools,
+    config: Optional[dict] = None,
+    execution_context: Optional[Callable[[], dict]] = None,
+):
     """Wrap the CLI's LOCAL_TOOLS registry for run_agent."""
     from runtime.tool_executor import ToolExecutor
-    return ToolExecutor(local_tools, config=config or {})
+    return ToolExecutor(
+        local_tools,
+        config=config or {},
+        execution_context=execution_context,
+    )
 
 
 async def run_with_fallback(
@@ -161,6 +169,10 @@ async def run_chat_via_runtime(
     system_override: Optional[str] = None,
     max_rounds: int = 30,
     return_result: bool = False,
+    execution_context: Optional[Callable[[], dict]] = None,
+    confirm_tools=(),
+    approval_callback: Optional[Callable] = None,
+    approval_applier: Optional[Callable] = None,
 ):
     """Run one chat turn through the shared runtime Gateway.
 
@@ -180,7 +192,7 @@ async def run_chat_via_runtime(
         user_context=user_context, auth_token=auth_token, project_context=project_context,
         system_override=system_override,
     )
-    executor = build_tool_executor(local_tools, config)
+    executor = build_tool_executor(local_tools, config, execution_context)
 
     result = await run_turn(
         prompt, history,
@@ -189,5 +201,8 @@ async def run_chat_via_runtime(
         on_token=on_token, on_thinking=on_thinking,
         on_tool_call=on_tool_call, on_tool_result=on_tool_result, on_status=on_status,
         cancel_event=cancel_event, max_rounds=max_rounds,
+        confirm_tools=confirm_tools,
+        approval_callback=approval_callback,
+        approval_applier=approval_applier,
     )
     return result if return_result else result.text
