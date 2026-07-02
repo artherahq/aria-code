@@ -75,16 +75,82 @@ class AgentTeam:
             lang=self.lang,
         )
 
-    async def _run_one(self, agent: BaseAgent, symbol: str) -> AgentResult:
+    @staticmethod
+    def _fallback_data_is_usable(agent_name: str, data: Dict[str, Any]) -> bool:
+        if agent_name == "technical":
+            return bool(data.get("quote", {}).get("price") and data.get("history"))
+        if agent_name == "fundamental":
+            fundamentals = data.get("fundamentals") or {}
+            return any(
+                fundamentals.get(key) not in (None, "", 0)
+                for key in ("pe_ttm", "pe_ratio", "pb", "pb_ratio", "roe", "revenue_growth")
+            )
+        if agent_name == "risk":
+            return bool(data.get("risk_metrics"))
+        return False
+
+    async def _deterministic_fallback(
+        self,
+        agent: BaseAgent,
+        symbol: str,
+        data: Optional[Dict[str, Any]],
+        reason: str,
+    ) -> Optional[AgentResult]:
+        if not data or not self._fallback_data_is_usable(agent.name, data):
+            return None
         try:
+            fallback_agent = agent.__class__(
+                llm_provider=None,
+                data_router=None,
+                on_token=None,
+                lang=self.lang,
+            )
+            result = await fallback_agent.analyze(symbol, data)
+            result.degraded = True
+            result.confidence = min(float(result.confidence or 0), 0.45)
+            result.provenance = list(dict.fromkeys([
+                *result.provenance,
+                "prefetched_market_bundle",
+                "deterministic_template",
+            ]))
+            result.limitations = list(dict.fromkeys([
+                *result.limitations,
+                f"LLM agent unavailable: {reason}",
+            ]))
+            result.data_used = dict(result.data_used or {})
+            result.data_used["fallback_reason"] = reason
+            return result
+        except Exception as exc:
+            logger.warning("[%s] deterministic fallback failed: %s", agent.name, exc)
+            return None
+
+    async def _run_one(
+        self,
+        agent: BaseAgent,
+        symbol: str,
+        prefetched_data: Optional[Dict[str, Any]] = None,
+    ) -> AgentResult:
+        try:
+            operation = (
+                agent.analyze(symbol, prefetched_data)
+                if prefetched_data is not None
+                else agent.run(symbol)
+            )
             result = await asyncio.wait_for(
-                agent.run(symbol), timeout=self.timeout
+                operation, timeout=self.timeout
             )
             if self.on_agent_done:
                 self.on_agent_done(agent.name, result)
             return result
         except asyncio.TimeoutError:
             logger.warning(f"[{agent.name}] 超时 ({self.timeout}s)")
+            fallback = await self._deterministic_fallback(
+                agent, symbol, prefetched_data, "timeout"
+            )
+            if fallback is not None:
+                if self.on_agent_done:
+                    self.on_agent_done(agent.name, fallback)
+                return fallback
             _timeout_result = AgentResult(
                 agent=agent.name, symbol=symbol,
                 analysis="", confidence=0.0, error="timeout",
@@ -96,12 +162,36 @@ class AgentTeam:
                 except Exception:
                     pass
             return _timeout_result
+        except Exception as exc:
+            reason = f"{type(exc).__name__}: {exc}"
+            logger.warning("[%s] failed: %s", agent.name, reason)
+            fallback = await self._deterministic_fallback(
+                agent, symbol, prefetched_data, reason
+            )
+            if fallback is not None:
+                if self.on_agent_done:
+                    self.on_agent_done(agent.name, fallback)
+                return fallback
+            failed = AgentResult(
+                agent=agent.name,
+                symbol=symbol,
+                analysis="",
+                confidence=0.0,
+                error=reason,
+            )
+            if self.on_agent_done:
+                try:
+                    self.on_agent_done(agent.name, failed)
+                except Exception:
+                    pass
+            return failed
 
     async def run(
         self,
         symbol: str,
         agents: Optional[List[str]] = None,
         market_context: Optional[Dict[str, Any]] = None,
+        agent_data: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> TeamResult:
         """并行运行所有 agent，等待全部完成后汇总。"""
         names_to_run = agents or DEFAULT_TEAM
@@ -118,7 +208,8 @@ class AgentTeam:
             )
 
         # 并行执行 — return_exceptions=True 确保单个 agent 异常不取消其余 agent
-        tasks   = [self._run_one(a, symbol) for a in agent_objects]
+        prefetched = agent_data or {}
+        tasks = [self._run_one(a, symbol, prefetched.get(a.name)) for a in agent_objects]
         _raw    = await asyncio.gather(*tasks, return_exceptions=True)
         results: List[AgentResult] = []
         for _item, _agent in zip(_raw, agent_objects):
@@ -212,6 +303,7 @@ async def run_team(
     on_synthesis_start: Optional[Callable] = None,
     lang: str = "zh",
     market_context: Optional[Dict[str, Any]] = None,
+    agent_data: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> TeamResult:
     """
     便捷函数，替代原 financial_agents.run_team_analysis()。
@@ -229,7 +321,12 @@ async def run_team(
         on_synthesis_start=on_synthesis_start,
         lang=lang,
     )
-    return await team.run(symbol, agents=agents, market_context=market_context)
+    return await team.run(
+        symbol,
+        agents=agents,
+        market_context=market_context,
+        agent_data=agent_data,
+    )
 
 
 # ── 内部工具 ──────────────────────────────────────────────────────────────────

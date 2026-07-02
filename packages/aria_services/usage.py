@@ -93,10 +93,15 @@ def list_service_usage_specs() -> tuple[ServiceUsageSpec, ...]:
         ),
         ServiceUsageSpec(
             name="reports_artifacts",
-            purpose="研报、图表、看板、Pine 文件和本地 artifact 管理",
+            purpose="研报、图表、看板、Pine 文件、完成度门禁和本地 artifact 管理",
             cli_entrypoints=("/report", "/dashboard", "/chart", "/tv", "/artifacts"),
             package_sources=("packages/reporting", "artifacts"),
-            mcp_tools=("aria.report.generate", "aria.artifacts.list"),
+            mcp_tools=(
+                "aria.report.generate",
+                "aria.artifacts.list",
+                "research_report_assess",
+                "research_run_record_quality",
+            ),
             next_step="/report MSFT --format html",
         ),
         ServiceUsageSpec(

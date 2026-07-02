@@ -33,9 +33,34 @@ def builtin_skill_specs() -> List[SkillSpec]:
         SkillSpec(
             name="financial-research",
             description="Multi-source quote, fundamentals, technical analysis, and narrative report generation.",
-            tools=["get_market_data"],
+            tools=["get_market_data", "get_market_history", "get_risk_metrics", "analyze_news"],
             agents=["technical", "fundamental", "macro", "risk", "synthesis"],
             permissions=[PermissionLevel.NETWORK],
+        ),
+        SkillSpec(
+            name="equity-research-report",
+            description=(
+                "Evidence-backed equity report workflow with specialist agents, "
+                "deterministic fallbacks, provenance, critique, and completion gates."
+            ),
+            tools=[
+                "get_market_data",
+                "get_market_history",
+                "calculate_factors",
+                "get_risk_metrics",
+                "analyze_news",
+            ],
+            agents=[
+                "technical",
+                "fundamental",
+                "macro",
+                "risk",
+                "news",
+                "catalyst",
+                "sector",
+                "synthesis",
+            ],
+            permissions=[PermissionLevel.NETWORK, PermissionLevel.WORKSPACE_WRITE],
         ),
         SkillSpec(
             name="strategy-backtest",

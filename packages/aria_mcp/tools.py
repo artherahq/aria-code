@@ -25,6 +25,8 @@ def _capabilities_for_mcp_tool(name: str, description: str = "") -> List[str]:
         capabilities.append("research")
     if any(word in text for word in ("research_run", "artifact", "audit trail", "lifecycle")):
         capabilities.append("research.lifecycle")
+    if "research_report" in text or "quality assessment" in text or "completion gate" in text:
+        capabilities.append("research.quality")
     if any(word in text for word in ("health", "readiness", "dependency")):
         capabilities.append("runtime.health")
     if "execution_schedule" in text or "execution plan" in text:

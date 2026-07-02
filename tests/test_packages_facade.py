@@ -52,6 +52,9 @@ def test_builtin_skills_connect_tools_and_agents():
     assert "financial-research" in skills
     assert "get_market_data" in skills["financial-research"].tools
     assert "technical" in skills["financial-research"].agents
+    assert "equity-research-report" in skills
+    assert "get_risk_metrics" in skills["equity-research-report"].tools
+    assert "synthesis" in skills["equity-research-report"].agents
     assert "workspace-coding" in skills
 
 
@@ -82,6 +85,9 @@ def test_service_boundaries_are_registered():
     assert "context.reference.resolve" in services["references"].capabilities
     assert "tool.permissions" in services["tools"].capabilities
     assert "data.quality" in services["data"].capabilities
+    assert "report.quality_gate" in services["research_quality"].capabilities
+    assert "skill.metadata_route" in services["skills"].capabilities
+    assert "skill.integrity" in services["skills"].capabilities
     assert "mcp.provenance" in services["mcp"].capabilities
     assert "architecture.coverage" in services["observability"].capabilities
     assert PermissionLevel.NETWORK in services["data"].permissions

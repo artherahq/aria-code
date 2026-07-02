@@ -26,6 +26,12 @@ from .references import (
     iter_reference_tokens,
     reference_search_roots,
 )
+from .research_quality import (
+    ReportQualityAssessment,
+    ReportQualityDecision,
+    ReportQualityPolicy,
+    assess_team_report,
+)
 from .registry import ServiceSpec, list_service_specs, required_service_names, service_map
 from .usage import ServiceUsageSpec, list_service_usage_specs, service_usage_map
 
@@ -47,10 +53,14 @@ __all__ = [
     "ReferenceKind",
     "ReferencePolicy",
     "ReferenceService",
+    "ReportQualityAssessment",
+    "ReportQualityDecision",
+    "ReportQualityPolicy",
     "ServiceSpec",
     "ServiceUsageSpec",
     "build_context_service",
     "build_reference_service",
+    "assess_team_report",
     "classify_provider_error",
     "list_service_specs",
     "list_service_usage_specs",

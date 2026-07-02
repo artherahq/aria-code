@@ -91,6 +91,31 @@ def _normalize_requested_tool_call(
     return resolved_name, normalized_params, requested_name
 
 
+def _finance_tool_schema_allowed(
+    schema: dict,
+    allowed_names: set[str],
+    explicit_mcp: bool = False,
+) -> bool:
+    """Allow local finance tools and approved finance tools exposed over MCP."""
+    name = str(schema.get("function", {}).get("name", ""))
+    if name in allowed_names:
+        return True
+    if not name.startswith("mcp__"):
+        return False
+    short_name = name.rsplit("__", 1)[-1]
+    return explicit_mcp or short_name in allowed_names
+
+
+def _skill_tool_schema_allowed(schema: dict, allowed_names: set[str]) -> bool:
+    """Match a Skill policy against local and namespaced MCP tool schemas."""
+    name = str(schema.get("function", {}).get("name", ""))
+    if name in allowed_names:
+        return True
+    if name.startswith("mcp__"):
+        return name.rsplit("__", 1)[-1] in allowed_names
+    return False
+
+
 async def stream_ollama(ollama_url: str, message: str, history: list,
                         model: str = "qwen2.5:7b",
                         on_token=None, on_thinking=None,
@@ -214,6 +239,21 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
     except Exception:
         _route = None
 
+    # Resolve portable workflow metadata before tool schemas are selected. This
+    # lets a verified Skill narrow the tools exposed to the model, rather than
+    # treating its declared policy as prompt-only guidance.
+    _is_tool_followup = message.lstrip().startswith("## Tool Results")
+    _skill_activation = None
+    try:
+        from packages.aria_skills import activate_external_skills as _activate_external_skills
+
+        _skill_activation = _activate_external_skills(
+            _intent_message,
+            record=not _is_tool_followup,
+        )
+    except Exception as _skill_exc:
+        logger.debug("skill activation failed: %s", _skill_exc)
+
     # ── Context-aware tool schema filtering ───────────────────────────────────
     # Intent drives tool exposure, but cross-intent requests (e.g. "分析AAPL然后
     # 写一个回测策略") need BOTH market data tools AND coding tools.
@@ -228,6 +268,10 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
         "get_risk_metrics", "analyze_news",
         "get_market_insights", "get_predictions", "peer_comparison",
         "web_search", "web_fetch",
+        "research_report_assess",
+        "research_run_create", "research_run_get", "research_run_transition",
+        "research_run_attach_artifact", "research_run_record_quality",
+        "research_run_events",
     }
 
     _available_tool_schemas = list(
@@ -287,12 +331,10 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
         # excluded so the model does not search the repository for a quote API.
         _schemas_for_context = [
             s for s in _available_tool_schemas
-            if (
-                s.get("function", {}).get("name") in _finance_tool_names
-                or (
-                    _explicit_mcp_signal
-                    and s.get("function", {}).get("name", "").startswith("mcp__")
-                )
+            if _finance_tool_schema_allowed(
+                s,
+                _finance_tool_names,
+                explicit_mcp=_explicit_mcp_signal,
             )
         ]
     elif _is_cross_intent:
@@ -307,6 +349,17 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
         _schemas_for_context = [
             s for s in _available_tool_schemas
             if s.get("function", {}).get("name") not in _CU_TOOL_NAMES
+        ]
+
+    _skill_allowed_tools = {
+        tool_name
+        for skill in (_skill_activation.skills if _skill_activation else ())
+        for tool_name in skill.policy.allowed_tools
+    }
+    if _skill_allowed_tools:
+        _schemas_for_context = [
+            schema for schema in _schemas_for_context
+            if _skill_tool_schema_allowed(schema, _skill_allowed_tools)
         ]
 
     # ── Select prompt size based on model capability ─────────────────────────
@@ -555,6 +608,31 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
                 if _mi.get("role") == "user":
                     _mi["content"] = _augmented_user
                     break
+
+    # Portable SKILL.md workflows are loaded after prompt/prefetch selection so
+    # they survive the data-first prompt replacement used by local models.
+    try:
+        _skill_block = _skill_activation.prompt_block
+        if _skill_block and messages:
+            if messages[0].get("role") == "system":
+                messages[0]["content"] += "\n\n" + _skill_block
+            else:
+                messages.insert(0, {"role": "system", "content": _skill_block})
+            if not _is_tool_followup:
+                for _active_skill in _skill_activation.skills:
+                    if HAS_RICH:
+                        console.print(
+                            f"  [#C08050]⏺[/#C08050]  [bold]skill[/bold]  "
+                            f"[dim]{_active_skill.qualified_name} · "
+                            f"{_active_skill.integrity}[/dim]"
+                        )
+                    else:
+                        print(
+                            f"  skill  {_active_skill.qualified_name} · "
+                            f"{_active_skill.integrity}"
+                        )
+    except (AttributeError, TypeError) as _skill_exc:
+        logger.debug("skill prompt injection failed: %s", _skill_exc)
 
     # ── 体育赛事数据预取：sports query → inject live scores / WC data + Poisson ─
     if _is_general and _is_sports_query(_intent_message):

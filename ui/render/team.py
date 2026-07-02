@@ -57,7 +57,8 @@ def render_agent_tree_root(console, sym: str, n_agents: int, lang: str = "zh") -
 
 def render_agent_node(console, name: str, signal: str | None,
                       key_point: str | None, success: bool = True,
-                      error: str | None = None) -> None:
+                      error: str | None = None,
+                      degraded: bool = False) -> None:
     """Print one completed-agent leaf: ⎿ ⏺ 基本面  BUY  ROE 24%·PE 32 偏高"""
     label = agent_label(name)
     if not success or error:
@@ -73,6 +74,8 @@ def render_agent_node(console, name: str, signal: str | None,
     kp = (key_point or "").strip().replace("\n", " ")
     if len(kp) > 52:
         kp = kp[:52] + "…"
+    if degraded:
+        kp = f"降级 · {kp}" if kp else "降级执行"
     console.print(
         f"  [dim]⎿[/dim] [#C08050]⏺[/#C08050] [bold]{label}[/bold]  "
         f"{sig_disp}[dim]{kp}[/dim]"
@@ -151,6 +154,7 @@ class TeamTableRow:
     success: bool
     signal_color: str = "dim"
     is_debate: bool = False
+    degraded: bool = False
 
 
 # Minimum usable terminal width before we drop the key_point column entirely.
@@ -221,6 +225,7 @@ def build_team_table_rows(results: list[Any], key_width: int = 36) -> list[TeamT
         signal     = raw_signal or "N/A"
         conf_val   = float(getattr(result, "confidence", 0.0) or 0.0)
         confidence = f"{conf_val:.0%}" if success else "-"
+        degraded = bool(getattr(result, "degraded", False))
         color      = SIGNAL_COLORS.get(raw_signal.upper(), "dim")
 
         if agent == "debate":
@@ -238,6 +243,8 @@ def build_team_table_rows(results: list[Any], key_width: int = 36) -> list[TeamT
         if success:
             kpts      = getattr(result, "key_points", []) or []
             key_point = truncate_cell(kpts[0] if kpts else "", key_width)
+            if degraded:
+                key_point = truncate_cell(f"降级 · {key_point}" if key_point else "降级执行", key_width)
         else:
             _raw_err = getattr(result, "error", None) or "failed"
             _err_display = {
@@ -255,6 +262,7 @@ def build_team_table_rows(results: list[Any], key_width: int = 36) -> list[TeamT
             key_point=key_point,
             success=success,
             signal_color=color,
+            degraded=degraded,
         ))
 
     return rows + debate_rows
@@ -264,7 +272,7 @@ def render_team_rows_plain(rows: list[TeamTableRow]) -> list[str]:
     """Plain-text fallback (no Rich)."""
     lines: list[str] = []
     for row in rows:
-        icon = "OK" if row.success else "WARN"
+        icon = "DEG" if row.degraded else "OK" if row.success else "WARN"
         lines.append(
             f"  {icon} [{row.agent}] {row.signal} ({row.confidence}) {row.key_point}".rstrip()
         )
