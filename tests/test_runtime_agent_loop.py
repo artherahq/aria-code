@@ -626,6 +626,41 @@ class LoopGuardTests(unittest.TestCase):
         self.assertIsNone(g.record("t", {"a": 1}, fail))
         self.assertIsNone(g.record("t", {"a": 2}, fail))  # different params → not a repeat
 
+    def test_tool_level_advisory_fires_on_varying_param_failures(self):
+        # The observed blind spot: peer_comparison failed 4x with slightly
+        # different args and no directive ever fired. Tool-level counting
+        # advises at the third failure regardless of params.
+        from runtime import LoopGuard
+        g = LoopGuard(soft_threshold=2, hard_threshold=4, tool_soft_threshold=3)
+        fail = {"success": False, "error": "yfinance network error"}
+        self.assertIsNone(g.record("peer_comparison", {"symbol": "AAPL"}, fail))
+        self.assertIsNone(g.record("peer_comparison", {"symbol": "AAPL", "peers": ["MSFT"]}, fail))
+        advisory = g.record("peer_comparison", {"peers": ["GOOGL", "NVDA"]}, fail)
+        self.assertIsNotNone(advisory)
+        self.assertIn("peer_comparison", advisory)
+        self.assertFalse(g.should_break)                       # advisory only — no hard break
+        # fires once per tool
+        self.assertIsNone(g.record("peer_comparison", {"symbol": "TSLA"}, fail))
+
+    def test_tool_level_counter_cleared_by_success(self):
+        from runtime import LoopGuard
+        g = LoopGuard(tool_soft_threshold=3)
+        fail = {"success": False, "error": "err"}
+        g.record("t", {"a": 1}, fail)
+        g.record("t", {"a": 2}, fail)
+        g.record("t", {"a": 3}, {"success": True})             # success resets tool count
+        self.assertIsNone(g.record("t", {"a": 4}, fail))       # back to 1 → no advisory
+        self.assertIsNone(g.record("t", {"a": 5}, fail))       # 2 → still none
+
+    def test_exact_signature_hard_break_unaffected_by_tool_layer(self):
+        from runtime import LoopGuard
+        g = LoopGuard(soft_threshold=2, hard_threshold=3, tool_soft_threshold=99)
+        fail = {"success": False, "error": "err"}
+        g.record("t", {"a": 1}, fail)
+        g.record("t", {"a": 1}, fail)
+        g.record("t", {"a": 1}, fail)
+        self.assertTrue(g.should_break)
+
 
 class TodoTrackerTests(unittest.TestCase):
     def test_update_and_normalize(self):

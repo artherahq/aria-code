@@ -52,11 +52,28 @@ class LoopGuard:
     A successful call clears that signature's counter.
     """
 
-    def __init__(self, *, soft_threshold: int = 2, hard_threshold: int = 4) -> None:
+    def __init__(
+        self,
+        *,
+        soft_threshold: int = 2,
+        hard_threshold: int = 4,
+        tool_soft_threshold: int = 3,
+    ) -> None:
         self.soft_threshold = soft_threshold
         self.hard_threshold = hard_threshold
+        # Tool-level counting (ANY params): catches the observed blind spot
+        # where a tool kept failing with slightly different arguments — the
+        # exact-signature counters never accumulated, so peer_comparison
+        # failed 4x in one turn without a single guard directive. Advisory
+        # only: exploration patterns (read_file over several candidate paths)
+        # legitimately fail with varying params, so the hard break stays
+        # signature-exact.
+        self.tool_soft_threshold = tool_soft_threshold
         self._fail_counts: Dict[str, int] = {}
+        self._tool_fail_counts: Dict[str, int] = {}
+        self._tool_fail_sigs: Dict[str, set] = {}
         self._warned: set = set()
+        self._tool_warned: set = set()
         self.should_break: bool = False
 
     @staticmethod
@@ -94,9 +111,14 @@ class LoopGuard:
         if not self.is_failure(result):
             self._fail_counts.pop(sig, None)
             self._warned.discard(sig)
+            self._tool_fail_counts.pop(tool_name, None)
+            self._tool_fail_sigs.pop(tool_name, None)
+            self._tool_warned.discard(tool_name)
             return None
 
         self._fail_counts[sig] = self._fail_counts.get(sig, 0) + 1
+        self._tool_fail_counts[tool_name] = self._tool_fail_counts.get(tool_name, 0) + 1
+        self._tool_fail_sigs.setdefault(tool_name, set()).add(sig)
         count = self._fail_counts[sig]
 
         if count >= self.hard_threshold:
@@ -111,6 +133,25 @@ class LoopGuard:
                 f"⚠ 你已经用完全相同的参数调用了 `{tool_name}` {count} 次，每次都失败。"
                 f"不要再用相同参数重试。请改变策略：换参数、换工具(如先用 list_files/search_code 定位)，"
                 f"或基于已有结果继续。"
+            )
+
+        tool_count = self._tool_fail_counts.get(tool_name, 0)
+        distinct_sigs = len(self._tool_fail_sigs.get(tool_name, ()))
+        # Only when the arguments actually varied — identical-params repeats
+        # belong exclusively to the signature counters above (which already
+        # warned at soft and will hard-break), and this message says
+        # "参数各不相同", which must be true when shown.
+        if (
+            tool_count >= self.tool_soft_threshold
+            and distinct_sigs >= 2
+            and tool_name not in self._tool_warned
+        ):
+            self._tool_warned.add(tool_name)
+            return (
+                f"⚠ 工具 `{tool_name}` 本回合已失败 {tool_count} 次（参数各不相同）。"
+                f"它当前很可能不可用（网络/依赖问题）。不要继续重试该工具；"
+                f"改用其他数据来源，或在回答中说明该工具不可用——"
+                f"也不要在“下一步建议”里推荐它而不注明刚刚失败。"
             )
         return None
 
