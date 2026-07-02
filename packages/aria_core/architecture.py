@@ -146,7 +146,7 @@ _ARCHITECTURE_LAYERS: Tuple[ArchitectureLayer, ...] = (
         status=LayerStatus.PARTIAL,
         source_paths=("aria_daemon.py", "apps/channels/", "apps/cli/tradingview_bridge.py"),
         depends_on=("settings", "runtime", "services", "safety"),
-        next_steps=("Fix market-prefetch symbol extraction treating alert action words (BUY) as tickers, observed in the e2e drill's gateway analysis.",),
+        next_steps=("Consider context-aware disambiguation for MA (Mastercard vs moving-average) in alert prompts; otherwise the channel flow is exercised end-to-end.",),
     ),
     ArchitectureLayer(
         name="observability",

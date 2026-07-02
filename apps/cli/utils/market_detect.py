@@ -1186,6 +1186,11 @@ _MARKET_SYMBOL_WORD_BLOCKLIST: frozenset = frozenset({
     "MARKET", "MARKETS", "VOLUME", "VOLUMES", "CHART", "CHARTS", "PLOT",
     "YAHOO", "STOOQ", "YFINANCE", "AKSHARE", "FINNHUB", "SOURCE",
     "SOURCES", "PROVIDER", "PROVIDERS", "HISTORY", "HISTORICAL",
+    # Trading action words from alert payloads (TradingView etc.) — the
+    # channels e2e drill showed BUY being quoted as a ticker. MA is left
+    # alone: it is Mastercard's real symbol despite doubling as a TA term.
+    "BUY", "SELL", "EXIT", "HOLD", "FLAT", "LONG", "SHORT", "STOP", "ALERT",
+    "CROSS", "SIGNAL", "ENTRY",
 })
 
 
