@@ -4631,32 +4631,40 @@ def _format_tool_params(tool_name: str, params: dict) -> str:
     """Format tool params into a short, target-safe UI hint."""
     if not params:
         return ""
+    def _short(value: object, limit: int = 60) -> str:
+        text = str(value or "").strip().replace("\n", " ")
+        return text[: limit - 1] + "…" if len(text) > limit else text
+
     if tool_name in ("read_file", "write_file", "edit_file"):
-        return "file tool"
+        # Basename only — informative without leaking full workspace paths.
+        return _short(pathlib.Path(str(params.get("path", ""))).name or "file tool", 40)
     if tool_name == "run_command":
         return "shell tool"
     if tool_name == "list_files":
-        return "file tool"
+        return _short(params.get("pattern") or params.get("path") or "file tool", 40)
     if tool_name == "search_code":
-        return "file tool"
+        return _short(params.get("pattern", "") or "file tool", 40)
     if tool_name in ("get_market_data", "get_market_history", "get_crypto_data", "get_forex_data",
                       "get_commodities_data", "get_futures_data", "get_bonds_data"):
         return params.get("symbol", params.get("symbols", ""))
     if tool_name == "backtest_strategy":
         return f"{params.get('strategy', '')} {params.get('symbol', '')}"
-    if tool_name == "web_search":
-        return "web search"
-    if tool_name == "search_web":
-        return "web search"
+    if tool_name in ("web_search", "search_web"):
+        return _short(params.get("query", "") or "web search")
     if tool_name == "web_fetch":
-        return "web fetch"
+        _u = str(params.get("url", ""))
+        _u = _u.split("://", 1)[-1]  # drop scheme; host+path is the signal
+        return _short(_u or "web fetch")
     if tool_name == "analyze_news":
         return params.get("symbol", params.get("query", ""))
     if tool_name.startswith("mcp__"):
         return "MCP"
     if tool_name.startswith("skill") or tool_name in {"TaskCreate", "TaskUpdate"}:
         return "skill"
-    # Fallback: show first value
+    # Fallback: first short scalar param is far more useful than "tool"
+    for _v in params.values():
+        if isinstance(_v, (str, int, float)) and str(_v).strip():
+            return _short(_v, 40)
     return "tool"
 
 

@@ -7,6 +7,7 @@ Rich console and global state defaults.
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import re
 import shlex
@@ -401,12 +402,23 @@ def tool_web_fetch(params: dict) -> dict:
         import urllib.request as _ur
         import ssl as _ssl
         _prx = _ur.getproxies()
-        headers = {
-            "User-Agent": (
+        # SEC EDGAR rejects browser-spoofed UAs from scripts (403) and requires
+        # a declarative UA with contact info — the root cause of "verify via
+        # 10-Q" tasks silently degrading to aggregator sites. Honor SEC's rule
+        # for sec.gov; keep a browser UA for sites that block obvious bots.
+        from urllib.parse import urlparse as _urlparse
+        _host = (_urlparse(url).hostname or "").lower()
+        if _host == "sec.gov" or _host.endswith(".sec.gov"):
+            _contact = os.environ.get("ARIA_SEC_CONTACT", "").strip() or "research@aria-code.local"
+            _ua = f"aria-code research client ({_contact})"
+        else:
+            _ua = (
                 "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
                 "Chrome/124.0 Safari/537.36"
-            ),
+            )
+        headers = {
+            "User-Agent": _ua,
             "Accept": "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8",
         }
         _gh_m = re.match(
@@ -418,7 +430,10 @@ def tool_web_fetch(params: dict) -> dict:
         import requests as _req
         s = _req.Session()
         s.proxies = _prx
-        s.verify = False
+        # Certificate verification ON by default — research data fetched over
+        # an unverified channel is tamperable. ARIA_WEB_FETCH_INSECURE=1 is
+        # the explicit escape hatch for TLS-intercepting corporate proxies.
+        s.verify = os.environ.get("ARIA_WEB_FETCH_INSECURE", "") != "1"
         r = s.get(url, headers=headers, timeout=timeout)
         r.raise_for_status()
         raw = r.text

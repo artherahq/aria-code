@@ -74,7 +74,7 @@ class TerminalRuntimeEventConsumer:
         set_robot_state: Callable[[Any], None] | None = None,
         streaming_state: Any = None,
         print_tool_call: Callable[[str, dict], None] | None = None,
-        print_tool_done: Callable[[str, int, bool], None] | None = None,
+        print_tool_done: Callable[..., None] | None = None,
         fallback_from: str = "local",
         live_update_interval: float = 0.08,
         ui_lang: str = "en",
@@ -447,7 +447,14 @@ class TerminalRuntimeEventConsumer:
         elapsed_ms = int((time.time() - self.tool_start_times.pop(tool, time.time())) * 1000)
         ok = not (isinstance(summary, dict) and not summary.get("success", True))
         if self.print_tool_done is not None:
-            self.print_tool_done(tool, elapsed_ms, success=ok)
+            # Surface the failure reason on the ✗ line — a red cross with no
+            # explanation leaves both the user and the reviewer blind to WHY
+            # (observed in the channels drill: peer_comparison failed 4× with
+            # nothing on screen).
+            detail = ""
+            if not ok and isinstance(summary, dict):
+                detail = str(summary.get("error") or "")[:90]
+            self.print_tool_done(tool, elapsed_ms, success=ok, summary=detail)
 
         ts = time.strftime("%H:%M:%S")
         entry = f"[{ts}] {tool}: {str(summary)[:100]}"
