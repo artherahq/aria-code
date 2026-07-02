@@ -316,6 +316,40 @@ class TestPromptRouting(unittest.TestCase):
         self.assertTrue(_is_stock_chart_analysis_request("生成Apple公司的股票k线图要近一年的图表"))
         self.assertTrue(_is_stock_chart_analysis_request("画 AAPL 的近一年走势图"))
 
+    def test_chart_keyword_without_symbol_does_not_route(self):
+        # Regression: "你会制作图表和根据我的现有数据去分析吗" (a capability
+        # question) was routed as `/chart <whole sentence> 1y`, which then
+        # tried to fetch market data for the sentence and failed. A chart
+        # keyword with no resolvable symbol must fall through to the LLM.
+        from unittest import mock
+        from apps.cli.commands import market as market_mod
+        with mock.patch.object(market_mod, "_route_symbols", return_value=[]):
+            routed = route_top_level_text(
+                "你会制作图表和根据我的现有数据去分析吗",
+                {"/chart", "/dashboard", "/report"},
+            )
+        self.assertIsNone(routed)
+
+    def test_report_keyword_without_symbol_does_not_route(self):
+        from unittest import mock
+        from apps.cli.commands import market as market_mod
+        with mock.patch.object(market_mod, "_route_symbols", return_value=[]):
+            routed = route_top_level_text(
+                "你能生成研究报告吗", {"/chart", "/dashboard", "/report"}
+            )
+        self.assertIsNone(routed)
+
+    def test_chart_keyword_with_symbol_still_routes(self):
+        from unittest import mock
+        from apps.cli.commands import market as market_mod
+        with mock.patch.object(market_mod, "_route_symbols", return_value=["AAPL"]):
+            routed = route_top_level_text(
+                "画一张K线图看看", {"/chart", "/dashboard", "/report"}
+            )
+        self.assertIsNotNone(routed)
+        self.assertEqual(routed.command, "/chart")
+        self.assertIn("AAPL", routed.args)
+
     def test_visual_market_artifact_request_routes_away_from_snapshot(self):
         self.assertTrue(_is_visual_market_artifact_request("生成Apple公司的股票K线图"))
         self.assertTrue(_is_visual_market_artifact_request("生成今日A股晨报看板"))
