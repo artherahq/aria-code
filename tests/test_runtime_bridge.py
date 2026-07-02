@@ -54,7 +54,7 @@ def test_run_chat_via_runtime_can_return_gateway_metadata(monkeypatch):
 
 def test_run_chat_via_runtime_executes_a_tool_then_finishes(monkeypatch):
     """The bridge must run a requested tool through ToolExecutor and continue —
-    the agentic path use_runtime_loop relies on."""
+    the agentic path every send_message turn now runs through."""
     calls = {"n": 0}
 
     async def fake_provider_fn(message, history, *, on_token=None, **kwargs):

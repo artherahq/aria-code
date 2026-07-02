@@ -12,8 +12,9 @@ class ArchitectureReportTests(unittest.TestCase):
     def test_report_surfaces_runtime_next_step(self):
         text = "\n".join(format_architecture_report(self.layers, self.counts, rich=False))
         self.assertIn("runtime", text)
-        # the runtime layer's documented next step is the run_agent cutover
-        self.assertIn("run_agent", text)
+        # the run_agent cutover completed 2026-07 (inline loop retired); the
+        # documented next step is decomposing send_message's remaining sections
+        self.assertIn("send_message", text)
 
     def test_every_layer_listed(self):
         text = "\n".join(format_architecture_report(self.layers, self.counts, rich=False))
