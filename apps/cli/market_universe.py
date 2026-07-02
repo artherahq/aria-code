@@ -205,6 +205,23 @@ def ensure_market_universe(*, force: bool = False) -> list[MarketSymbol]:
     return fetched
 
 
+def _find_mention(low_text: str, needle: str) -> int:
+    """Position of *needle* in lowercased text, or -1.
+
+    ASCII needles must sit on word boundaries — plain substring matching
+    turned "whether" into an ETH hit and "gateway" into GE (observed in the
+    channels e2e drill). CJK names keep substring semantics: Chinese has no
+    word boundaries, which is why find() was used originally.
+    """
+    n = str(needle or "").lower()
+    if not n:
+        return -1
+    if re.fullmatch(r"[a-z0-9.\-]+", n):
+        m = re.search(rf"(?<![a-z0-9]){re.escape(n)}(?![a-z0-9])", low_text)
+        return m.start() if m else -1
+    return low_text.find(n)
+
+
 def resolve_market_mentions(
     text: str,
     *,
@@ -217,7 +234,7 @@ def resolve_market_mentions(
     low = text.lower()
     hits: list[tuple[int, MarketSymbol]] = []
     for alias, item in sorted(STATIC_MARKET_ALIASES.items(), key=lambda kv: -len(kv[0])):
-        idx = low.find(alias.lower())
+        idx = _find_mention(low, alias)
         if idx >= 0:
             hits.append((idx, item))
 
@@ -225,7 +242,7 @@ def resolve_market_mentions(
         for item in sorted(items, key=lambda s: -len(s.name)):
             if not item.name:
                 continue
-            idx = low.find(item.name.lower())
+            idx = _find_mention(low, item.name)
             if idx >= 0:
                 hits.append((idx, item))
 

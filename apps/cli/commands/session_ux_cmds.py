@@ -104,10 +104,40 @@ class SessionUxCommandsMixin:
             else:
                 print(f"{'You' if role == 'user' else 'Aria'}: {content}")
 
+    def _record_context_checkpoint(self, kind: str, envelope: dict | None = None) -> None:
+        """Persist the pre-compaction conversation (aria.context_checkpoint.v1).
+
+        Best-effort by design: checkpointing must never turn a working
+        compaction into a failure, so every error is swallowed after a debug
+        log. Retention (keep-per-session / max-age) comes from config with
+        the defaults decided for the schema.
+        """
+        try:
+            from packages.aria_services.context_checkpoints import (
+                ContextCheckpointStore,
+                default_checkpoint_root,
+            )
+            cfg = self.terminal.config
+            store = ContextCheckpointStore(
+                default_checkpoint_root(),
+                keep_per_session=int(cfg.get("context_checkpoint_keep", 5) or 5),
+                max_age_days=int(cfg.get("context_checkpoint_max_age_days", 30) or 30),
+            )
+            store.record(
+                getattr(self.terminal, "session_id", "session"),
+                self.terminal.conversation,
+                kind=kind,
+                envelope=envelope,
+            )
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).debug("context checkpoint skipped: %s", exc)
+
     def cmd_compact(self, args: str):
         if "--hard" in args:
             if len(self.terminal.conversation) > 10:
                 kept = self.terminal.conversation[-6:]
+                self._record_context_checkpoint("hard")
                 self.terminal.conversation = kept
                 console.print(f"[dim]Hard-compacted to last {len(kept)} messages[/dim]" if HAS_RICH
                               else f"Hard-compacted to {len(kept)} messages")
@@ -126,6 +156,7 @@ class SessionUxCommandsMixin:
                     self.terminal.conversation,
                     model_key=self.terminal.config.get("model", "qwen2.5:7b"),
                 )
+                self._record_context_checkpoint("fallback")
                 self.terminal.conversation = (
                     compacted
                     if len(compacted) < len(self.terminal.conversation)
@@ -174,6 +205,7 @@ class SessionUxCommandsMixin:
                 compacted = context_service.compact_messages(conv)
             except Exception:
                 compacted = []
+            self._record_context_checkpoint("fallback")
             self.terminal.conversation = compacted if compacted and len(compacted) < len(conv) else conv[-8:]
             if not silent:
                 console.print("[dim]Compacted (summary failed, used local fallback)[/dim]" if HAS_RICH
@@ -181,6 +213,14 @@ class SessionUxCommandsMixin:
             return
 
         envelope = context_service.build_summary_envelope(conv, summary)
+        self._record_context_checkpoint(
+            "compact",
+            envelope={
+                "old_message_count": envelope.old_message_count,
+                "new_message_count": envelope.new_message_count,
+                "tail_message_count": envelope.tail_message_count,
+            },
+        )
         self.terminal.conversation = envelope.messages
         new_count = len(self.terminal.conversation)
         old_count = len(conv)

@@ -246,9 +246,21 @@ class DiagnosticOpsCommandsMixin:
         try:
             from doctor import run_doctor
 
+            _ctx_stats = None
+            try:
+                from packages.aria_services.context import context_health_snapshot
+                _mc = get_model_cfg(self.terminal.config.get("model", "qwen2.5:7b"))
+                _ctx_stats = context_health_snapshot(
+                    self.terminal.conversation,
+                    max_tokens=int(_mc.get("num_ctx", 16384)),
+                    threshold=float(self.terminal.config.get("auto_compact_threshold", 0.78)),
+                )
+            except Exception:
+                _ctx_stats = None
             report = run_doctor(
                 self.terminal.config,
                 check_network="--network" in (args or "").split(),
+                context_stats=_ctx_stats,
             )
             if HAS_RICH:
                 from rich.table import Table as _DoctorTable

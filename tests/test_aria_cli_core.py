@@ -478,6 +478,38 @@ class TestSessionManager(unittest.TestCase):
         self.assertIn("artifact_summary", bundle)
         self.assertEqual(bundle["architecture"]["schema_version"], "aria.agent-architecture.v1")
 
+    def test_bundle_carries_doctor_and_mcp_status_when_provided(self):
+        from types import SimpleNamespace
+        fake_doctor = SimpleNamespace(
+            status="warn", passed=3, warnings=1, errors=0,
+            checks=[SimpleNamespace(name="python", status="ok", detail="3.12", suggestion="")],
+        )
+        bundle = build_session_diagnostic_bundle(
+            session_id=self.test_session_id,
+            conversation=[],
+            config={},
+            doctor_report=fake_doctor,
+            mcp_status=[{"name": "quant", "alive": True, "circuit": "closed (0 recent failures)"}],
+        )
+        self.assertEqual(bundle["doctor"]["status"], "warn")
+        self.assertEqual(bundle["doctor"]["checks"][0]["name"], "python")
+        self.assertEqual(bundle["mcp_servers"][0]["circuit"], "closed (0 recent failures)")
+
+    def test_bundle_omits_doctor_and_mcp_when_absent(self):
+        bundle = build_session_diagnostic_bundle(
+            session_id=self.test_session_id, conversation=[], config={},
+        )
+        self.assertNotIn("doctor", bundle)
+        self.assertNotIn("mcp_servers", bundle)
+        self.assertNotIn("context_health", bundle)
+
+    def test_bundle_carries_context_health_when_provided(self):
+        bundle = build_session_diagnostic_bundle(
+            session_id=self.test_session_id, conversation=[], config={},
+            context_health={"estimated_tokens": 42, "max_tokens": 1000, "fill_ratio": 0.042},
+        )
+        self.assertEqual(bundle["context_health"]["estimated_tokens"], 42)
+
     def test_build_session_export_payload_supports_bundle_and_sft(self):
         conversation = [
             {"role": "user", "content": "How is AAPL doing?"},

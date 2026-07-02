@@ -1,5 +1,6 @@
 """Safety and permission primitives for Aria Code."""
 
+from .service import SafetyService
 from .permissions import (
     PermissionDecision,
     PermissionMode,
@@ -11,6 +12,7 @@ from .permissions import (
 )
 
 __all__ = [
+    "SafetyService",
     "PermissionDecision",
     "PermissionMode",
     "PermissionService",

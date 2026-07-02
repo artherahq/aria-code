@@ -168,6 +168,11 @@ from apps.cli.tools.notebook_tools import (
     tool_notebook_read as _src_notebook_read,
     tool_notebook_edit as _src_notebook_edit,
 )
+from apps.cli.tools.file_tools import (
+    tool_read_file   as _src_read_file,
+    tool_list_files  as _src_list_files,
+    tool_search_code as _src_search_code,
+)
 from apps.cli.tools.market_tools import (
     tool_get_market_data    as _src_get_market_data,
     tool_get_market_history as _src_get_market_history,
@@ -2011,26 +2016,8 @@ def _tool_analyze_file(params: dict) -> dict:
 
 
 def _tool_read_file(params: dict) -> dict:
-    """Read file contents with optional line range."""
-    path = params.get("path", "")
-    if not path:
-        return {"success": False, "error": "Missing 'path' parameter"}
-    try:
-        offset = int(params.get("offset", 0) or 0)
-        limit = int(params.get("limit", 0) or 0)
-        if not offset and not limit:
-            limit = 160
-        result = WorkspaceFiles().read_file(path, offset=offset, limit=limit)
-        content = result.content
-        if limit and result.lines >= limit and "use offset/limit to read more" not in content:
-            content += "\n... [default read limit applied — use offset/limit to read more]"
-        return {"success": True, "data": {
-            "path": result.path, "lines": result.lines,
-            "content": content
-        }}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
+    """Thin shim — implementation in apps/cli/tools/file_tools.py."""
+    return _src_read_file(params)
 
 def _strip_markdown_fences(content: str) -> str:
     """Thin shim — implementation in apps/cli/tools/write_tools.py."""
@@ -2075,35 +2062,12 @@ def _tool_update_todos(params: dict) -> dict:
 
 
 def _tool_list_files(params: dict) -> dict:
-    """List files in a directory, optionally matching a glob pattern."""
-    path = params.get("path", ".")
-    pattern = params.get("pattern", "*")
-    try:
-        data = WorkspaceFiles().list_files(path, pattern)
-        return {"success": True, "data": {
-            "path": data["path"], "pattern": data["pattern"],
-            "count": data["count"], "items": data["items"]
-        }}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
+    """Thin shim — implementation in apps/cli/tools/file_tools.py."""
+    return _src_list_files(params)
 
 def _tool_search_code(params: dict) -> dict:
-    """Search for a pattern in files (like grep)."""
-    pattern = params.get("pattern", "")
-    path = params.get("path", ".")
-    file_glob = params.get("glob", "**/*.py")
-    if not pattern:
-        return {"success": False, "error": "Missing 'pattern' parameter"}
-    try:
-        data = WorkspaceFiles().search_code(pattern, path, file_glob)
-        return {"success": True, "data": {
-            "pattern": data["pattern"], "path": data["path"],
-            "count": data["count"], "matches": data["matches"]
-        }}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
+    """Thin shim — implementation in apps/cli/tools/file_tools.py."""
+    return _src_search_code(params)
 
 def _tool_run_command(params: dict) -> dict:
     """Run a shell command — thin wrapper supplying global defaults."""
@@ -4667,32 +4631,40 @@ def _format_tool_params(tool_name: str, params: dict) -> str:
     """Format tool params into a short, target-safe UI hint."""
     if not params:
         return ""
+    def _short(value: object, limit: int = 60) -> str:
+        text = str(value or "").strip().replace("\n", " ")
+        return text[: limit - 1] + "…" if len(text) > limit else text
+
     if tool_name in ("read_file", "write_file", "edit_file"):
-        return "file tool"
+        # Basename only — informative without leaking full workspace paths.
+        return _short(pathlib.Path(str(params.get("path", ""))).name or "file tool", 40)
     if tool_name == "run_command":
         return "shell tool"
     if tool_name == "list_files":
-        return "file tool"
+        return _short(params.get("pattern") or params.get("path") or "file tool", 40)
     if tool_name == "search_code":
-        return "file tool"
+        return _short(params.get("pattern", "") or "file tool", 40)
     if tool_name in ("get_market_data", "get_market_history", "get_crypto_data", "get_forex_data",
                       "get_commodities_data", "get_futures_data", "get_bonds_data"):
         return params.get("symbol", params.get("symbols", ""))
     if tool_name == "backtest_strategy":
         return f"{params.get('strategy', '')} {params.get('symbol', '')}"
-    if tool_name == "web_search":
-        return "web search"
-    if tool_name == "search_web":
-        return "web search"
+    if tool_name in ("web_search", "search_web"):
+        return _short(params.get("query", "") or "web search")
     if tool_name == "web_fetch":
-        return "web fetch"
+        _u = str(params.get("url", ""))
+        _u = _u.split("://", 1)[-1]  # drop scheme; host+path is the signal
+        return _short(_u or "web fetch")
     if tool_name == "analyze_news":
         return params.get("symbol", params.get("query", ""))
     if tool_name.startswith("mcp__"):
         return "MCP"
     if tool_name.startswith("skill") or tool_name in {"TaskCreate", "TaskUpdate"}:
         return "skill"
-    # Fallback: show first value
+    # Fallback: first short scalar param is far more useful than "tool"
+    for _v in params.values():
+        if isinstance(_v, (str, int, float)) and str(_v).strip():
+            return _short(_v, 40)
     return "tool"
 
 
@@ -5597,7 +5569,7 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
             "/license":   (self.cmd_license,  "Show feature license/entitlement status"),
             "/architecture": (self.cmd_architecture, "Show layered architecture contract: /architecture [--gaps]"),
             "/install":   (self.cmd_install,  "Detect & install missing deps: /install [pkg|--auto|--required]"),
-            "/mcp":       (self.cmd_mcp,      "MCP servers: /mcp status|tools|reload"),
+            "/mcp":       (self.cmd_mcp,      "MCP servers: /mcp status|tools|reload [server]"),
             "/providers": (self.cmd_providers,"List local LLM backends and status"),
             "/ariarc":    (self.cmd_ariarc,   "Show .ariarc project config: /ariarc [reload]"),
             "/skills":    (self.cmd_skills,   "List all available skills"),
@@ -7320,12 +7292,29 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
     # ---- MCP server management ----
 
     async def cmd_mcp(self, args: str):
-        """Manage MCP servers: /mcp status | /mcp tools | /mcp reload"""
+        """Manage MCP servers: /mcp status | /mcp tools | /mcp reload [server]"""
         if not _HAS_MCP:
             console.print("  [dim]mcp_client.py not available[/dim]" if HAS_RICH else "MCP not available")
             return
         sub = args.strip().lower()
         reg = self.terminal._mcp_registry
+
+        _parts = sub.split()
+        if _parts and _parts[0] in ("reload", "restart") and len(_parts) > 1:
+            # Per-server reload: restart one subprocess + reset its circuit,
+            # without tearing down every other server.
+            _name = args.strip().split()[1]
+            if not reg:
+                console.print("  [dim]No MCP servers running[/dim]" if HAS_RICH else "No MCP servers")
+                return
+            ok = await reg.reload_server(_name)
+            msg = (f"MCP server {_name!r} reloaded" if ok
+                   else f"MCP server {_name!r} not found or failed to restart")
+            if HAS_RICH:
+                console.print(f"  [{'green' if ok else 'red'}]{msg}[/{'green' if ok else 'red'}]")
+            else:
+                print(f"  {msg}")
+            return
 
         if sub in ("reload", "restart"):
             if reg:

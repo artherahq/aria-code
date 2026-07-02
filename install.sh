@@ -47,18 +47,22 @@ PYTHON="${ARIA_PYTHON:-python3}"
 MODE="full"
 UPGRADE=0
 NO_WIZARD=0
+REBUILD=0
 for arg in "$@"; do
     case "$arg" in
         --core)    MODE="core" ;;
         --dev)     MODE="dev" ;;
         --upgrade) UPGRADE=1 ;;
+        --rebuild) REBUILD=1 ;;
         --no-wizard) NO_WIZARD=1 ;;
         --help|-h)
-            echo "Usage: bash install.sh [--core|--dev|--upgrade|--no-wizard]"
+            echo "Usage: bash install.sh [--core|--dev|--upgrade|--rebuild|--no-wizard]"
             echo "  (no flag)    Full install: core + data sources + files + charts"
             echo "  --core       Slim: CLI + yfinance only (pip install aria-code)"
             echo "  --dev        Full + brokers + backtest + pytest/dev tools"
             echo "  --upgrade    Upgrade all existing packages"
+            echo "  --rebuild    Remove the existing venv and recreate it (fixes Python drift"
+            echo "               reported by /doctor after a system Python upgrade)"
             echo "  --no-wizard  Skip interactive setup wizard"
             exit 0 ;;
         *) warn "Unknown flag: $arg (ignored)" ;;
@@ -71,6 +75,20 @@ case "$MODE" in
     dev)  EXTRA="all" ;;
     *)    EXTRA="full" ;;
 esac
+
+# ── Rebuild: drop the existing venv so it is recreated below ──
+# Guard: only delete a directory that actually looks like a virtualenv —
+# ARIA_VENV could point anywhere, and rm -rf on a wrong path is unrecoverable.
+if [[ "$REBUILD" == "1" && -d "$VENV_DIR" ]]; then
+    if [[ -f "$VENV_DIR/pyvenv.cfg" ]]; then
+        info "Rebuilding virtual environment: $VENV_DIR"
+        rm -rf "$VENV_DIR"
+        ok "Old venv removed — a fresh one will be created with the current Python"
+    else
+        err "--rebuild: $VENV_DIR has no pyvenv.cfg — not a virtualenv, refusing to delete"
+        exit 1
+    fi
+fi
 
 # ── China mirror support (avoids GitHub / PyPI timeouts) ──────
 # Opt in with ARIA_CN=1, or it is auto-applied as a retry when a download fails.

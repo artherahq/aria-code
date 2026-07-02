@@ -46,7 +46,7 @@ def test_terminal_runtime_consumer_handles_runtime_events(capsys):
         set_robot_state=lambda state: states.append(state),
         streaming_state="streaming",
         print_tool_call=lambda tool, params: tool_calls.append((tool, params)),
-        print_tool_done=lambda tool, elapsed, success: tool_done.append((tool, success)),
+        print_tool_done=lambda tool, elapsed, success, summary="": tool_done.append((tool, success)),
     )
 
     consumer.handle_runtime_event(AgentEventToken("hi"))

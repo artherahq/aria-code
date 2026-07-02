@@ -655,6 +655,54 @@ Analyze NVDA momentum      → Full AI analysis
 
 ---
 
+## 📡 TradingView Alerts
+
+Pipe TradingView alerts into Aria: the daemon receives the webhook, verifies
+it, and runs a tool-less AI analysis through the shared runtime gateway, then
+pushes the result to your notify channels (Telegram / Feishu).
+
+### Setup
+
+```env
+ARIA_WEBHOOK_SECRET=your-strong-passphrase   # REQUIRED for non-local use
+ARIA_WEBHOOK_HOST=127.0.0.1                  # bind address (default local-only)
+ARIA_WEBHOOK_PORT=8765
+ARIA_DAEMON_MODEL=qwen2.5:7b                 # model for alert analysis
+```
+
+```bash
+python3 aria_daemon.py start
+# endpoint: POST http://127.0.0.1:8765/api/v1/webhook/tradingview
+```
+
+### TradingView alert message (Webhook URL → your public endpoint)
+
+```json
+{
+  "symbol": "{{ticker}}",
+  "action": "{{strategy.order.action}}",
+  "price": "{{close}}",
+  "message": "MA cross on {{interval}}",
+  "passphrase": "your-strong-passphrase"
+}
+```
+
+### Security model
+
+- **Passphrase (fail-closed):** with `ARIA_WEBHOOK_SECRET` set, alerts without
+  a matching `passphrase` are rejected (constant-time compare). TradingView
+  cannot send custom headers, so the body passphrase is the documented way.
+- **Open-mode guard:** with *no* secret and *no* `WEBHOOK_TOKEN` configured,
+  only loopback clients may submit — a non-local request gets `403` with a
+  fix-it message instead of silently accepting injected buy/sell alerts.
+- **HMAC option:** a fronting relay that can sign requests may send
+  `sha256=<hex>` of the raw body; HMAC verification never runs in open mode.
+- **Analysis, not trading:** the alert turn runs with an empty tool set and a
+  prompt that forbids order placement. Order *previews* (when a broker is
+  configured) still require explicit confirmation via the preview flow.
+
+---
+
 ## 🏗️ Architecture
 
 ```

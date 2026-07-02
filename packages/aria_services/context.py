@@ -235,6 +235,17 @@ class ContextService:
         )
 
 
+def context_health_snapshot(
+    messages: Iterable[dict],
+    *,
+    max_tokens: int,
+    threshold: float = 0.78,
+) -> Dict[str, Any]:
+    """One-call context-health dict for /doctor and the support bundle."""
+    service = ContextService(ContextPolicy(max_tokens=max_tokens, threshold=threshold))
+    return service.compaction_decision(list(messages)).to_dict()
+
+
 def build_context_service(
     *,
     max_tokens: int = 16384,

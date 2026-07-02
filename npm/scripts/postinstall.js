@@ -18,6 +18,7 @@ const fs       = require("fs");
 const path     = require("path");
 const readline = require("readline");
 const { resolveAriaPaths } = require("../lib/paths");
+const { parsePyvenvCfg, venvDriftReason } = require("../lib/venv");
 
 // ── Colours ──────────────────────────────────────────────────────────────────
 const C = {
@@ -346,6 +347,28 @@ function ensureVenv(python, uv) {
   const venvPip  = PLATFORM === "win32"
     ? path.join(venvDir, "Scripts", "pip.exe")
     : path.join(venvDir, "bin", "pip");
+
+  // Drift-aware repair (twin of install.sh --rebuild): if the venv exists but
+  // its base interpreter vanished (system Python upgrade), its python won't
+  // run, or its recorded major.minor differs from what it now reports, remove
+  // it so the creation branches below rebuild with the current Python.
+  // Safety: a directory without pyvenv.cfg is never touched.
+  const cfgPath = path.join(venvDir, "pyvenv.cfg");
+  if (fs.existsSync(venvPy) && fs.existsSync(cfgPath)) {
+    const cfgText = fs.readFileSync(cfgPath, "utf8");
+    const home = parsePyvenvCfg(cfgText).home;
+    const runningVersion =
+      capture(venvPy, ["-c", "import sys;print(f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}')"]) || null;
+    const driftReason = venvDriftReason({
+      cfgText,
+      homeExists: Boolean(home) && fs.existsSync(home),
+      runningVersion,
+    });
+    if (driftReason) {
+      warn(`venv drift detected: ${driftReason} — rebuilding with the current Python`);
+      fs.rmSync(venvDir, { recursive: true, force: true });
+    }
+  }
 
   // Editable install of the cloned repo with the "full" feature set; deps come
   // from pyproject.toml (single source of truth) rather than requirements.txt.
