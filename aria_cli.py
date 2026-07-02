@@ -9760,7 +9760,7 @@ class ArtheraTerminal:
                             print(f"  {ln}")
                 console.print() if HAS_RICH else print()
 
-        # --- End of agentic loop ---
+        # --- Turn finished (runtime loop done) — render + record the outcome ---
         _esc_watcher.stop()
         self._streaming = False
         if result.get("cancelled"):

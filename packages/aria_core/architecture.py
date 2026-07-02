@@ -86,11 +86,11 @@ _ARCHITECTURE_LAYERS: Tuple[ArchitectureLayer, ...] = (
         name="runtime",
         responsibility="Agent turn loop, planning, tool execution, retries, streaming, and interruption handling.",
         target_state="Runtime is separate from UI and business services, with typed tool calls, retries, cancellation, and traces.",
-        current_state="A public packages.aria_sdk facade owns SDK-style query/result events, provider selection, streaming normalization, and the reusable runtime tool-turn loop; CLI rendering/approval is consumed through apps.cli.runtime_consumer. The CLI chat turn can now opt into run_agent via apps.cli.providers.runtime_bridge (config use_runtime_loop), with route-aware provider/fallback decisions in apps.cli.providers.chat_routing; send_message falls back to the inline loop on any error.",
+        current_state="A public packages.aria_sdk facade owns SDK-style query/result events, provider selection, streaming normalization, and the reusable runtime tool-turn loop; CLI rendering/approval is consumed through apps.cli.runtime_consumer. Every CLI chat turn runs through run_agent via apps.cli.providers.runtime_bridge and runtime.gateway (the inline send_message loop was retired 2026-07 after real-turn validation), with route-aware provider/fallback decisions in apps.cli.providers.chat_routing, per-tool approval and execution context threaded into run_agent's tool loop, and a single direct cloud rescue on runtime failure.",
         status=LayerStatus.PARTIAL,
         source_paths=("aria_cli.py", "runtime/", "packages/aria_sdk/", "apps/cli/runtime_consumer.py", "apps/cli/deterministic.py", "apps/cli/providers/"),
         depends_on=("settings", "tools", "safety", "context"),
-        next_steps=("Verify the use_runtime_loop path in a live REPL, default it on, then retire the inline send_message loop so the turn runs entirely through run_agent.",),
+        next_steps=("Fold send_message's remaining pre-turn (routing/decomposition/context injection) and post-turn (rendering/history/metrics) sections into testable modules, mirroring turn_planning/prompt_assembly.",),
     ),
     ArchitectureLayer(
         name="tools",

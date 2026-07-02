@@ -8,9 +8,12 @@ The documented runtime next step is to route the CLI tool loop through
   • make_provider_fn()     — selects the provider (chat_routing) + streams it
   • run_chat_via_runtime() — drives run_agent, renders via callbacks, returns text
 
-It is opt-in: ``send_message`` only uses it when ``config['use_runtime_loop']`` is
-on, and falls back to the proven inline loop on any error. That keeps the live
-path untouched until the runtime path is verified in a real REPL.
+This is THE chat path: ``send_message`` runs every turn through it (the old
+inline per-round loop was retired in 2026-07 after the runtime path was
+validated with real turns). Tool approval and execution context are threaded
+through to run_agent's tool loop; on failure send_message attempts one direct
+cloud rescue (``providers/llm/registry.stream_cloud_fallback``) before
+presenting the error.
 """
 
 from __future__ import annotations
