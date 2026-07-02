@@ -70,6 +70,9 @@ async def run_turn(
     on_status: Optional[Callable[[str, str], None]] = None,
     cancel_event=None,
     max_rounds: int = 30,
+    confirm_tools=(),
+    approval_callback: Optional[Callable] = None,
+    approval_applier: Optional[Callable] = None,
 ) -> TurnResult:
     """Drive one ``run_agent`` turn; return its text + lifecycle as a TurnResult.
 
@@ -94,7 +97,13 @@ async def run_turn(
         history,
         provider_fn=provider_fn,
         tool_executor=tool_executor,
-        options=AgentOptions(max_rounds=max_rounds, tool_schemas=schemas),
+        options=AgentOptions(
+            max_rounds=max_rounds,
+            tool_schemas=schemas,
+            confirm_tools=frozenset(confirm_tools or ()),
+            approval_callback=approval_callback,
+            approval_applier=approval_applier,
+        ),
         on_token=_on_token,         # streamed live (run_agent emits no token events)
         on_thinking=on_thinking,    # streamed live (no thinking events either)
         cancel_event=cancel_event,
