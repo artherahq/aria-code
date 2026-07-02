@@ -208,3 +208,36 @@ def test_run_doctor_includes_python_venv_check_inside_venv(monkeypatch, tmp_path
     names = {c.name: c for c in report.checks}
     assert "python_venv" in names
     assert names["python_venv"].status == "ok"
+
+
+def test_run_doctor_context_check_states(monkeypatch, tmp_path):
+    monkeypatch.setenv("ARIA_ARTIFACT_ROOT", str(tmp_path / "artifacts"))
+    base = {"estimated_tokens": 100, "max_tokens": 1000, "fill_pct": 10,
+            "message_count": 4, "threshold": 0.78}
+    ok = run_doctor({}, cwd=tmp_path, context_stats={**base, "fill_ratio": 0.10})
+    warn = run_doctor({}, cwd=tmp_path, context_stats={**base, "fill_ratio": 0.80, "fill_pct": 80})
+    err = run_doctor({}, cwd=tmp_path, context_stats={**base, "fill_ratio": 0.96, "fill_pct": 96})
+    def ctx(report):
+        return {c.name: c for c in report.checks}["context"]
+    assert ctx(ok).status == "ok" and ctx(ok).suggestion == ""
+    assert ctx(warn).status == "warn" and "/compact" in ctx(warn).suggestion
+    assert ctx(err).status == "err"
+    assert "100/1000 tokens" in ctx(ok).detail
+
+
+def test_run_doctor_omits_context_check_without_stats(monkeypatch, tmp_path):
+    monkeypatch.setenv("ARIA_ARTIFACT_ROOT", str(tmp_path / "artifacts"))
+    report = run_doctor({}, cwd=tmp_path)
+    assert "context" not in {c.name for c in report.checks}
+
+
+def test_context_health_snapshot_shape():
+    from packages.aria_services.context import context_health_snapshot
+    snap = context_health_snapshot(
+        [{"role": "user", "content": "x" * 300}], max_tokens=2048, threshold=0.78,
+    )
+    assert snap["estimated_tokens"] == 100
+    # ContextPolicy.normalized() floors max_tokens at 1024; 2048 passes through.
+    assert snap["max_tokens"] == 2048
+    assert snap["message_count"] == 1
+    assert 0 < snap["fill_ratio"] < 1

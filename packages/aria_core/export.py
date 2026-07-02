@@ -67,6 +67,7 @@ def build_session_diagnostic_bundle(
     artifact_summary: Optional[dict] = None,
     doctor_report: Any = None,
     mcp_status: Optional[list] = None,
+    context_health: Optional[dict] = None,
 ) -> Dict[str, Any]:
     """Build a stable export bundle for debugging and replay."""
     config = dict(config or {})
@@ -120,6 +121,8 @@ def build_session_diagnostic_bundle(
             bundle["doctor"] = dict(doctor_report) if isinstance(doctor_report, dict) else {}
     if mcp_status is not None:
         bundle["mcp_servers"] = list(mcp_status)
+    if context_health is not None:
+        bundle["context_health"] = dict(context_health)
     if artifact_summary is not None:
         bundle["artifact_summary"] = dict(artifact_summary)
     else:

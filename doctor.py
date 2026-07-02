@@ -467,6 +467,7 @@ def run_doctor(
     *,
     cwd: Optional[Path] = None,
     check_network: bool = False,
+    context_stats: Optional[Dict[str, Any]] = None,
 ) -> DoctorReport:
     """Run local-first diagnostics without mutating user configuration."""
 
@@ -483,6 +484,18 @@ def run_doctor(
     drift = _check_python_drift()
     if drift is not None:
         checks.append(drift)
+
+    if context_stats:
+        _fill = float(context_stats.get("fill_ratio") or 0.0)
+        _thr = float(context_stats.get("threshold") or 0.78)
+        _ctx_status = "ok" if _fill < _thr else ("warn" if _fill < 0.95 else "err")
+        checks.append(_check(
+            "context",
+            _ctx_status,
+            f"{context_stats.get('estimated_tokens', 0)}/{context_stats.get('max_tokens', 0)} tokens "
+            f"({context_stats.get('fill_pct', 0)}%) across {context_stats.get('message_count', 0)} messages",
+            "" if _ctx_status == "ok" else "/compact to shrink the conversation before the window overflows.",
+        ))
 
     for module, purpose in _iter_required_modules():
         if _has_module(module):

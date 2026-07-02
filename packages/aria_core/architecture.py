@@ -79,7 +79,7 @@ _ARCHITECTURE_LAYERS: Tuple[ArchitectureLayer, ...] = (
         current_state="ContextService owns pressure checks, local compaction, summary prompts, and resume envelopes; durable checkpoints are still pending.",
         status=LayerStatus.PARTIAL,
         source_paths=("packages/aria_services/context.py", "apps/cli/message_processing.py", "apps/cli/commands/session_ux_cmds.py"),
-        next_steps=("Persist compaction checkpoints and expose context health through /doctor and support bundles.",),
+        next_steps=("Persist compaction checkpoints (context health is now exposed: /doctor runs a context check and /export bundle carries context_health via packages.aria_services.context.context_health_snapshot).",),
         blockers=("Choose artifact schema and retention policy for compact/resume checkpoints.",),
     ),
     ArchitectureLayer(

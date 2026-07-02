@@ -143,6 +143,7 @@ class SessionCommandsMixin:
             provider_health = []
             doctor_report = None
             mcp_status = None
+            context_health = None
             if fmt == "bundle":
                 try:
                     from packages.aria_services.provider_health import GLOBAL_PROVIDER_HEALTH
@@ -161,6 +162,16 @@ class SessionCommandsMixin:
                     mcp_status = _reg.status() if _reg else None
                 except Exception:
                     mcp_status = None
+                try:
+                    from packages.aria_services.context import context_health_snapshot
+                    _mc = get_model_cfg(self.terminal.config.get("model", "qwen2.5:7b"))
+                    context_health = context_health_snapshot(
+                        self.terminal.conversation,
+                        max_tokens=int(_mc.get("num_ctx", 16384)),
+                        threshold=float(self.terminal.config.get("auto_compact_threshold", 0.78)),
+                    )
+                except Exception:
+                    context_health = None
             content, ext, prefix = build_session_export_payload(
                 fmt,
                 self.terminal.conversation,
@@ -170,6 +181,7 @@ class SessionCommandsMixin:
                 provider_health=provider_health,
                 doctor_report=doctor_report,
                 mcp_status=mcp_status,
+                context_health=context_health,
             )
         except ValueError as exc:
             if fmt == "sft" and "No user→assistant pairs" in str(exc):

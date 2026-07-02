@@ -501,6 +501,14 @@ class TestSessionManager(unittest.TestCase):
         )
         self.assertNotIn("doctor", bundle)
         self.assertNotIn("mcp_servers", bundle)
+        self.assertNotIn("context_health", bundle)
+
+    def test_bundle_carries_context_health_when_provided(self):
+        bundle = build_session_diagnostic_bundle(
+            session_id=self.test_session_id, conversation=[], config={},
+            context_health={"estimated_tokens": 42, "max_tokens": 1000, "fill_ratio": 0.042},
+        )
+        self.assertEqual(bundle["context_health"]["estimated_tokens"], 42)
 
     def test_build_session_export_payload_supports_bundle_and_sft(self):
         conversation = [

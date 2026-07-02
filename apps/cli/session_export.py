@@ -29,6 +29,7 @@ def build_session_export_payload(
     provider_health: Optional[list] = None,
     doctor_report: Any = None,
     mcp_status: Optional[list] = None,
+    context_health: Optional[dict] = None,
 ) -> tuple[str, str, str]:
     """Return (content, extension, suggested_filename_prefix)."""
     fmt = (fmt or "json").lower().strip()
@@ -85,6 +86,7 @@ def build_session_export_payload(
             artifact_summary=build_artifact_summary(),
             doctor_report=doctor_report,
             mcp_status=mcp_status,
+            context_health=context_health,
         )
         return json.dumps(bundle, indent=2, ensure_ascii=False), "json", "aria_bundle"
 
