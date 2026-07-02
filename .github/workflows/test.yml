@@ -7,6 +7,18 @@ on:
   workflow_dispatch:
 
 jobs:
+  npm-wrapper:
+    name: npm wrapper tests (node)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Wrapper unit tests (paths + venv drift)
+        working-directory: npm
+        run: npm test
+
   pytest:
     name: pytest (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest

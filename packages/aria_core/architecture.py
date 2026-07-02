@@ -49,10 +49,10 @@ _ARCHITECTURE_LAYERS: Tuple[ArchitectureLayer, ...] = (
         name="launcher",
         responsibility="Stable executable entrypoint, runtime selection, and dependency bootstrap.",
         target_state="Shell entrypoints resolve the repo, use a controlled virtualenv, and never depend on the caller's random Python.",
-        current_state="aria and aria-code bootstrap local dependencies. /doctor now runs a python_venv drift check (pyvenv.cfg recorded version vs the running interpreter, and whether the venv's base interpreter still exists — the Homebrew-upgrade breakage) with the rebuild command as its suggestion.",
+        current_state="aria and aria-code bootstrap local dependencies. /doctor runs a python_venv drift check (pyvenv.cfg recorded version vs the running interpreter, and whether the venv's base interpreter still exists — the Homebrew-upgrade breakage); install.sh --rebuild and npm run repair both perform the drift-aware venv rebuild it suggests (repair auto-detects drift via npm/lib/venv.js before reusing an existing venv).",
         status=LayerStatus.PARTIAL,
         source_paths=("aria-code", "install.sh", "doctor.py"),
-        next_steps=("Have npm run repair perform the same drift-aware venv rebuild that install.sh --rebuild does for repo checkouts.",),
+        next_steps=("Exercise the drift rebuild end-to-end on a real system-Python upgrade, then consider promoting launcher to ok.",),
     ),
     ArchitectureLayer(
         name="settings",

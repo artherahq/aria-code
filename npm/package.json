@@ -21,7 +21,8 @@
   "scripts": {
     "postinstall":   "node scripts/postinstall.js",
     "repair":        "node scripts/postinstall.js",
-    "update-engine": "node scripts/postinstall.js"
+    "update-engine": "node scripts/postinstall.js",
+    "test":          "node tests/paths.test.js && node tests/venv.test.js"
   },
   "engines": {
     "node": ">=16.0.0"
