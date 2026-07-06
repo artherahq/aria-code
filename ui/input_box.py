@@ -305,7 +305,9 @@ def _status_bar(cfg: PanelInputConfig) -> list:
 
     ratio = cfg.est_tokens / max(cfg.max_tokens, 1)
     tc = "tok-crit" if ratio >= 0.85 else ("tok-warn" if ratio >= 0.60 else "st-cwd")
-    context_label = "ctx <1%" if cfg.est_tokens > 0 and ratio < 0.01 else f"ctx {ratio:.0%}"
+    # ratio<1% 一律显示 "<1%"(含估算为 0 的首帧)——"ctx 0%" 是误导:
+    # 系统提示/skills 一定占用了上下文,只是估算看不见。
+    context_label = "ctx <1%" if ratio < 0.01 else f"ctx {ratio:.0%}"
     parts += [("class:st-sep", "  ·  "), (f"class:{tc}", context_label)]
 
     shortcuts = (

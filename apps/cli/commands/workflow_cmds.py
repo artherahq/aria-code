@@ -171,6 +171,115 @@ class WorkflowCommandsMixin:
         else:
             print(f"Undone ({removed} removed)")
 
+    def cmd_rewind(self, args: str):
+        """Restore code checkpoints, conversation history, or both."""
+        from runtime.checkpoints import (
+            CheckpointConflictError,
+            CheckpointNotFoundError,
+            CheckpointStore,
+        )
+
+        parts = [part for part in args.strip().split() if part]
+        assume_yes = "--yes" in parts or "-y" in parts
+        parts = [part for part in parts if part not in {"--yes", "-y"}]
+        mode = parts[0].lower() if parts else "code"
+        identifier = parts[1] if len(parts) > 1 else ""
+        is_zh = str(self.terminal.config.get("ui_lang", "en")).lower().startswith("zh")
+
+        if mode in {"conversation", "chat"}:
+            self.cmd_undo("")
+            return
+        if mode not in {"code", "both", "list"}:
+            identifier = parts[0]
+            mode = "code"
+
+        try:
+            store = CheckpointStore()
+        except Exception as exc:
+            message = f"无法打开检查点存储: {exc}" if is_zh else f"Cannot open checkpoint store: {exc}"
+            console.print(f"[red]{message}[/red]" if HAS_RICH else message)
+            return
+
+        if mode == "list":
+            records = store.list(session_id=self.terminal.session_id, status="active", limit=12)
+            if not records:
+                records = store.list(status="active", limit=12)
+            if not records:
+                message = "没有可恢复的代码检查点" if is_zh else "No active code checkpoints"
+                console.print(f"[dim]{message}[/dim]" if HAS_RICH else message)
+                return
+            if HAS_RICH:
+                console.print()
+                console.print("  [bold]Code checkpoints[/bold]")
+                for record in records:
+                    paths = ", ".join(pathlib.Path(item.path).name for item in record.files)
+                    run_label = (record.run_id or "standalone")[:10]
+                    console.print(
+                        f"  [#C08050]{record.checkpoint_id[:10]}[/#C08050]  "
+                        f"[dim]{run_label:<10} · {record.source:<10} · {paths}[/dim]"
+                    )
+                console.print()
+            else:
+                for record in records:
+                    paths = ", ".join(pathlib.Path(item.path).name for item in record.files)
+                    print(f"{record.checkpoint_id[:10]} {record.run_id or '-'} {record.source} {paths}")
+            return
+
+        if not assume_yes:
+            prompt = (
+                "  恢复代码到检查点状态？检查点之后的修改不会被覆盖，存在冲突时会停止。 [y/N] "
+                if is_zh else
+                "  Rewind code to its checkpoint? Later changes are protected by conflict checks. [y/N] "
+            )
+            try:
+                answer = (console.input(prompt) if HAS_RICH else input(prompt)).strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                return
+            if answer not in {"y", "yes"}:
+                message = "已取消" if is_zh else "Cancelled"
+                console.print(f"[dim]{message}[/dim]" if HAS_RICH else message)
+                return
+
+        try:
+            if identifier:
+                checkpoint = store.get(identifier)
+                if checkpoint is not None:
+                    result = store.restore_checkpoint(checkpoint.checkpoint_id)
+                else:
+                    result = store.restore_run(identifier)
+            else:
+                try:
+                    result = store.restore_latest(session_id=self.terminal.session_id)
+                except CheckpointNotFoundError:
+                    result = store.restore_latest()
+        except CheckpointConflictError as exc:
+            message = f"恢复已停止: {exc}" if is_zh else f"Rewind stopped: {exc}"
+            console.print(f"[red]{message}[/red]" if HAS_RICH else message)
+            return
+        except CheckpointNotFoundError:
+            message = "未找到可恢复的检查点" if is_zh else "No restorable checkpoint found"
+            console.print(f"[dim]{message}[/dim]" if HAS_RICH else message)
+            return
+        except Exception as exc:
+            message = f"恢复失败: {exc}" if is_zh else f"Rewind failed: {exc}"
+            console.print(f"[red]{message}[/red]" if HAS_RICH else message)
+            return
+
+        if mode == "both":
+            self.cmd_undo("")
+        count = len(result.restored_paths)
+        message = (
+            f"已恢复 {count} 个文件" if is_zh else f"Rewound {count} file{'s' if count != 1 else ''}"
+        )
+        if HAS_RICH:
+            console.print(f"[green]✓[/green] [dim]{message}[/dim]")
+            for path in result.restored_paths:
+                console.print(f"  [dim]{path}[/dim]")
+        else:
+            print(message)
+            for path in result.restored_paths:
+                print(f"  {path}")
+
     async def cmd_retry(self, args: str):
         last_user_msg = None
         for i in range(len(self.terminal.conversation) - 1, -1, -1):

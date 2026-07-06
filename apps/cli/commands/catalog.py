@@ -58,7 +58,7 @@ WATCHABLE_DIRECT_COMMANDS: FrozenSet[str] = frozenset(
 VISIBLE_SLASH_COMMANDS: FrozenSet[str] = frozenset({
     # Session
     "/help", "/clear", "/compact", "/cost", "/status", "/health",
-    "/regen", "/undo", "/copy", "/recap", "/btw",
+    "/regen", "/undo", "/rewind", "/copy", "/recap", "/btw",
     # Sessions
     "/save", "/load", "/sessions", "/recall", "/export",
     # Config

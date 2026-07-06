@@ -46,6 +46,50 @@ class TestSpawnTask:
         result = tool_spawn_task({"prompt": "test"})
         assert result["status"] == "pending"
 
+    def test_default_task_is_read_only_and_shared(self):
+        result = tool_spawn_task({"prompt": "inspect code"})
+        task = _TASKS[result["task_id"]]
+        assert task.mode == "read-only"
+        assert task.isolation == "shared"
+
+    def test_write_task_defaults_to_worktree_isolation(self):
+        result = tool_spawn_task({"prompt": "edit code", "mode": "workspace-write"})
+        task = _TASKS[result["task_id"]]
+        assert task.mode == "workspace-write"
+        assert task.isolation == "worktree"
+
+    def test_invalid_execution_mode_is_rejected(self):
+        result = tool_spawn_task({"prompt": "test", "mode": "full-access"})
+        assert result["success"] is False
+
+    def test_write_task_cannot_use_shared_workspace(self):
+        result = tool_spawn_task({
+            "prompt": "edit code",
+            "mode": "workspace-write",
+            "isolation": "shared",
+        })
+        assert result["success"] is False
+        assert "require worktree" in result["error"]
+
+    async def test_registered_runner_receives_task_contract(self):
+        captured = {}
+
+        async def runner(prompt, task):
+            captured["prompt"] = prompt
+            captured["task"] = task
+            return "inspection complete"
+
+        register_runner(runner)
+        result = tool_spawn_task({"prompt": "inspect", "_workspace": "/tmp"})
+        task = _TASKS[result["task_id"]]
+        await task.async_task
+
+        assert task.status == "done"
+        assert task.result == "inspection complete"
+        assert captured["task"] is task
+        assert "Subagent execution contract" in captured["prompt"]
+        assert "Workspace: /tmp" in captured["prompt"]
+
 
 class TestTaskStatus:
     def test_status_of_existing_task(self):

@@ -41,6 +41,7 @@ from apps.cli.commands.report import (
     update_report_index,
 )
 from apps.cli.commands.team import (
+    build_team_agent_data,
     build_team_market_context,
     build_team_report_markdown,
     clean_team_synthesis_text,
@@ -396,6 +397,7 @@ def test_team_table_rows_are_stable_for_plain_and_rich_rendering():
         SimpleNamespace(
             agent="technical",
             success=True,
+            degraded=True,
             signal="BUY",
             confidence=0.678,
             key_points=["这是一段很长很长的关键点，用来验证窄屏表格会被稳定截断"],
@@ -434,7 +436,7 @@ def test_team_table_rows_are_stable_for_plain_and_rich_rendering():
     assert rows[2].key_point == "信号分歧调解"
 
     plain = render_team_rows_plain(rows)
-    assert plain[0].startswith("  OK [technical] BUY (68%)")
+    assert plain[0].startswith("  DEG [technical] BUY (68%)")
     assert plain[1].startswith("  WARN [risk] HOLD (-)")
 
 
@@ -678,7 +680,7 @@ async def test_run_team_analysis_captures_noisy_output_and_sanitizes(monkeypatch
     assert result.symbol == "NVDA"
     assert result.team_result is team_result
     assert result.data_bundle is data_bundle
-    assert result.quality_notes == ["cleaned"]
+    assert result.quality_notes[0] == "cleaned"
     assert "noisy progress" in result.captured_noise
     assert calls["bundle_symbol"] == "NVDA"
     assert calls["team"]["agents"] == ["technical", "risk"]
@@ -687,6 +689,9 @@ async def test_run_team_analysis_captures_noisy_output_and_sanitizes(monkeypatch
     assert calls["team"]["on_token"] is None
     assert calls["team"]["market_context"]["quote"]["price"] == 100
     assert "price=USD 100" in calls["team"]["market_context"]["market_data_block"]
+    assert calls["team"]["agent_data"] == {}
+    assert result.quality_assessment["decision"] == "blocked"
+    assert "no agent produced usable analysis" in result.quality_notes
 
 
 def test_team_report_builder_and_save_write_quality_metadata(monkeypatch, tmp_path):
@@ -736,6 +741,7 @@ def test_team_report_builder_and_save_write_quality_metadata(monkeypatch, tmp_pa
     assert "是否过期: `yes`" in markdown
     assert "当前参考价: `USD 204.87`" in markdown
     assert "技术指标" in markdown
+    assert "判定: `blocked`" in markdown
     assert "TECHNICAL (UNUSABLE)" in markdown
 
     saved = save_team_report(
@@ -755,6 +761,8 @@ def test_team_report_builder_and_save_write_quality_metadata(monkeypatch, tmp_pa
 
     assert "数据错误: `technical unavailable`" in text
     assert metadata["kind"] == "team_report"
+    assert metadata["status"] == "data_unavailable"
+    assert metadata["data"]["quality_gate"]["decision"] == "blocked"
     assert metadata["data"]["agent_count"] == 1
     assert metadata["data"]["failed_agents"] == ["technical"]
     assert metadata["data"]["quote"]["price"] == 204.87
@@ -793,6 +801,25 @@ def test_build_team_market_context_extracts_real_snapshot_fields():
     assert context["market_snapshot"]["analyst_target"] == 310.0
     assert "providers=finnhub, yfinance, local_pandas" in context["market_data_block"]
     assert "rsi=39.1" in context["market_data_block"]
+
+
+def test_build_team_agent_data_reuses_bundle_and_computes_risk():
+    rows = [
+        {"close": 100 + index, "volume": 1_000_000 + index * 1000}
+        for index in range(40)
+    ]
+    bundle = SimpleNamespace(
+        quote={"price": 139.0},
+        fundamentals={"pe_ratio": 20.0, "roe": 12.0},
+        technical={"rsi": 55.0, "ma20": 130.0},
+        history={"data": rows},
+    )
+
+    prepared = build_team_agent_data(bundle)
+
+    assert prepared["technical"]["history"]["rsi"] == 55.0
+    assert prepared["fundamental"]["fundamentals"]["pe_ratio"] == 20.0
+    assert prepared["risk"]["risk_metrics"]["ann_vol"] >= 0
 
 
 def test_team_quote_snapshot_downgrades_complete_when_visible_fields_are_missing():

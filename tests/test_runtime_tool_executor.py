@@ -1,4 +1,5 @@
 import unittest
+import asyncio
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -62,6 +63,31 @@ class RuntimeToolExecutorTests(unittest.TestCase):
         self.assertEqual(captured["_run_id"], "run-123")
         self.assertEqual(captured["_session_id"], "session-456")
         self.assertNotIn("public", captured)
+
+    def test_remote_research_create_receives_run_correlation(self):
+        captured = {}
+
+        async def remote(tool_name, params):
+            captured.update(params)
+            return {"success": True, "run": {"run_id": "research-1"}}
+
+        executor = ToolExecutor(
+            {},
+            remote_executor=remote,
+            execution_context=lambda: {
+                "_run_id": "aria-run-123",
+                "_trace_id": "trace-456",
+            },
+        )
+
+        result = asyncio.run(executor.execute(
+            "mcp__arthera_quant_engine__research_run_create",
+            {"tenant_id": "local"},
+        ))
+
+        self.assertTrue(result["success"])
+        self.assertEqual(captured["control_run_id"], "aria-run-123")
+        self.assertEqual(captured["trace_id"], "trace-456")
 
     def test_isolated_workspace_resolves_relative_paths(self):
         captured = {}

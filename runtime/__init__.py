@@ -36,6 +36,25 @@ from .agent_loop import (
 from .gateway import TurnResult, run_turn
 from .approval import ApprovalDecision, apply_approval_decision
 from .events import RuntimeEvent, RuntimeTrace, ToolCallRecord, TurnResultRecord
+from .run_state import (
+    ACTIVE_RUN_STATUSES,
+    TERMINAL_RUN_STATUSES,
+    InvalidRunTransition,
+    RunStatus,
+    can_transition,
+    is_terminal,
+    require_transition,
+)
+from .run_store import RunEventRecord, RunNotFoundError, RunRecord, RunStore
+from .checkpoints import (
+    CheckpointConflictError,
+    CheckpointFile,
+    CheckpointNotFoundError,
+    CheckpointRecord,
+    CheckpointStore,
+    RestoreResult,
+)
+from .worktrees import WorktreeApplyResult, WorktreeError, WorktreeManager, WorktreeSpec
 from .tool_executor import ToolExecutor
 from .tool_policy import check_tool_policy, add_to_policy, remove_from_policy, load_tool_policy
 from .subagent import (
@@ -68,6 +87,24 @@ __all__ = [
     "ApprovalDecision",
     "RuntimeEvent",
     "RuntimeTrace",
+    "RunEventRecord",
+    "RunNotFoundError",
+    "RunRecord",
+    "RunStatus",
+    "RunStore",
+    "InvalidRunTransition",
+    "CheckpointConflictError",
+    "CheckpointFile",
+    "CheckpointNotFoundError",
+    "CheckpointRecord",
+    "CheckpointStore",
+    "RestoreResult",
+    "WorktreeError",
+    "WorktreeApplyResult",
+    "WorktreeManager",
+    "WorktreeSpec",
+    "ACTIVE_RUN_STATUSES",
+    "TERMINAL_RUN_STATUSES",
     "ToolCallRecord",
     "TurnResultRecord",
     "ToolBatchState",
@@ -88,6 +125,9 @@ __all__ = [
     "run_parallel_tools",
     "run_serial_tool",
     "split_tool_calls",
+    "can_transition",
+    "is_terminal",
+    "require_transition",
     "check_tool_policy",
     "add_to_policy",
     "remove_from_policy",

@@ -536,6 +536,23 @@ class AgentErrorPresentation:
         normalized = error or "Unknown error"
         lowered = normalized.lower()
         is_zh = str(lang or "zh").lower().startswith("zh")
+        if "aria-4223" in lowered:
+            return cls(
+                error=normalized,
+                level="warning",
+                lines=[
+                    (
+                        "当前请求需要实时、可验证的金融数据，但本轮没有取得有效工具结果。"
+                        if is_zh else
+                        "This request requires current verified financial data, but no usable tool result was obtained."
+                    ),
+                    (
+                        "未生成市场结论。请检查数据源或运行 /doctor 后重试。"
+                        if is_zh else
+                        "No market conclusion was generated. Check data sources or run /doctor, then retry."
+                    ),
+                ],
+            )
         if lowered.startswith("missing_api_key:"):
             provider = normalized.split(":", 1)[1] or "provider"
             return cls(
@@ -613,16 +630,17 @@ class AgentErrorPresentation:
         if normalized == "empty_response":
             return cls(
                 error=normalized,
-                level="warning",
+                # error 而非 warning:本轮已终止,视觉上必须与普通提示区分
+                level="error",
                 lines=(
                     [
-                        "模型返回了空响应，已停止本轮。",
-                        "请重试；若持续出现，请使用 /health 检查当前模型与 Provider。",
+                        "模型连续返回空响应（已自动重试 1 次），本轮停止。",
+                        "可换个说法重试；若持续出现，请使用 /health 检查当前模型与 Provider。",
                     ]
                     if is_zh else
                     [
-                        "The model returned no visible response, so this turn was stopped.",
-                        "Retry once. If it persists, run /health to check the model and provider.",
+                        "The model returned no visible response twice (auto-retried once), so this turn was stopped.",
+                        "Try rephrasing. If it persists, run /health to check the model and provider.",
                     ]
                 ),
             )
@@ -1144,6 +1162,9 @@ class AgentOptions:
     confirm_tools: FrozenSet[str] = field(default_factory=frozenset)
     approval_callback: Optional[ApprovalCallback] = None
     approval_applier: Optional[Callable[[dict, "ApprovalDecision"], dict]] = None
+    requires_evidence: bool = False
+    grounding_tools: FrozenSet[str] = field(default_factory=frozenset)
+    evidence_already_grounded: bool = False
 
 
 # ── run_agent() ───────────────────────────────────────────────────────────────
@@ -1206,10 +1227,22 @@ async def run_agent(
     turn_state = AgentTurnState(provider="unknown")
     start_time = time.time()
     current_message = prompt
+    if opts.requires_evidence:
+        available_grounding_tools = ", ".join(sorted(opts.grounding_tools)[:20]) or "(none)"
+        current_message = (
+            "[Grounding requirement]\n"
+            "This request requires current, auditable financial evidence. Call at least "
+            "one applicable grounding tool before producing a market conclusion. If the "
+            "tool fails or data is unavailable, report that limitation and do not infer "
+            "prices, metrics, recommendations, or forecasts.\n"
+            f"Grounding tools: {available_grounding_tools}\n\n"
+            f"[User request]\n{prompt}"
+        )
     token_count = 0
     thinking_tokens = 0
     result: dict = {}
     loop_guard = LoopGuard()
+    grounded_results = 1 if opts.evidence_already_grounded else 0
 
     for round_num in range(opts.max_rounds):
         # ── Provider call ────────────────────────────────────────────────────
@@ -1221,7 +1254,7 @@ async def run_agent(
             response_text += tok
             _round_tokens += 1
             token_count += 1
-            if on_token is not None:
+            if on_token is not None and (not opts.requires_evidence or grounded_results > 0):
                 on_token(tok)
 
         def _wrap_on_thinking(content: str) -> None:
@@ -1262,6 +1295,18 @@ async def run_agent(
 
         pending = result.get("tool_calls_pending", [])
         if not pending:
+            if opts.requires_evidence and grounded_results == 0:
+                yield AgentEventStatus(
+                    state="evidence_required",
+                    message="No usable financial evidence tool result was obtained",
+                )
+                yield AgentEventError(
+                    error=(
+                        "[ARIA-4223] Current verified financial data is required, "
+                        "but no usable evidence tool result was obtained."
+                    )
+                )
+                return
             break
         for tool_call in pending:
             yield AgentEventToolCall(
@@ -1295,6 +1340,24 @@ async def run_agent(
 
         for activity in tool_turn_result.activities:
             turn_state.tools_used.append(activity.tool)
+            canonical_tool = str(activity.tool).rsplit("__", 1)[-1]
+            allowed_tools = {
+                str(name).rsplit("__", 1)[-1]
+                for name in opts.grounding_tools
+            }
+            result_payload = dict(activity.result or {})
+            usable_payload = {
+                key: value
+                for key, value in result_payload.items()
+                if key not in {"success", "cached", "elapsed_ms"}
+            }
+            if (
+                canonical_tool in allowed_tools
+                and result_payload.get("success") is not False
+                and not result_payload.get("error")
+                and any(value not in (None, "", [], {}) for value in usable_payload.values())
+            ):
+                grounded_results += 1
             yield AgentEventToolResult(
                 tool=activity.tool,
                 result=activity.result,

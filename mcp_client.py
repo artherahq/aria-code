@@ -435,11 +435,31 @@ class MCPToolRegistry:
                 }
 
         result = await srv.call_tool(tool_name, arguments)
+
+        # 上游限流(429/too many requests):短退避后重试一次。
+        # 与 market_data_client 的报价路径同策略,MCP 工具在此统一收口。
+        if not result.get("success") and self._looks_rate_limited(result):
+            logger.warning(
+                "[MCP:%s] %s rate-limited upstream; retrying once in 3s",
+                srv_name, tool_name,
+            )
+            await asyncio.sleep(3.0)
+            result = await srv.call_tool(tool_name, arguments)
+
         if result.get("success"):
             circuit.record_success()
+        elif self._looks_rate_limited(result):
+            # 限流是上游数据源配额问题,不是本服务器故障——不计入熔断,
+            # 否则一波限流会把整个服务器禁用,殃及无关工具。错误仍如实上抛。
+            pass
         else:
             circuit.record_failure()
         return result
+
+    @staticmethod
+    def _looks_rate_limited(result: Dict[str, Any]) -> bool:
+        text = str(result.get("error") or result.get("result") or "").lower()
+        return any(t in text for t in ("rate limit", "rate-limit", "rate limited", "too many requests", "429"))
 
     async def reload_server(self, srv_name: str) -> bool:
         """Force stop/start of one server and reset its circuit (reload policy)."""

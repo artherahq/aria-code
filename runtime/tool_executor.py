@@ -40,7 +40,12 @@ class ToolExecutor:
         if tool_name not in self.local_tools:
             return {"success": False, "error": f"Unknown local tool: {tool_name}"}
         handler = self.local_tools[tool_name][0]
-        params = self._prepare_params(tool_name, params, include_execution_context=True)
+        params = self._prepare_params(
+            tool_name,
+            params,
+            include_execution_context=True,
+            bind_research_context=True,
+        )
         context_error = params.pop("_execution_context_error", None)
         if context_error:
             result = {"success": False, "error": context_error}
@@ -55,7 +60,7 @@ class ToolExecutor:
             return await loop.run_in_executor(None, self.execute_local, tool_name, params)
         if self.remote_executor is None:
             return {"success": False, "error": f"Unknown tool: {tool_name}"}
-        params = self._prepare_params(tool_name, params)
+        params = self._prepare_params(tool_name, params, bind_research_context=True)
         start = time.time()
         self._run_hook("pre_tool", tool_name, params)
         self.trace.emit("tool_call", {"tool": tool_name, "params": params})
@@ -101,15 +106,21 @@ class ToolExecutor:
         params: dict,
         *,
         include_execution_context: bool = False,
+        bind_research_context: bool = False,
     ) -> dict:
         prepared = dict(params or {})
-        if include_execution_context and self.execution_context is not None:
+        if self.execution_context is not None and (
+            include_execution_context or bind_research_context
+        ):
             try:
                 context = dict(self.execution_context() or {})
-                for key, value in context.items():
-                    if str(key).startswith("_") and value is not None:
-                        prepared.setdefault(str(key), value)
-                self._bind_workspace(tool_name, prepared, context)
+                if include_execution_context:
+                    for key, value in context.items():
+                        if str(key).startswith("_") and value is not None:
+                            prepared.setdefault(str(key), value)
+                    self._bind_workspace(tool_name, prepared, context)
+                if bind_research_context:
+                    self._bind_research_run(tool_name, prepared, context)
             except Exception:
                 pass
         if tool_name == "run_command":
@@ -117,6 +128,23 @@ class ToolExecutor:
             prepared.setdefault("permission_mode", self.config.get("permission_mode", "workspace-write"))
             prepared.setdefault("network_enabled", bool(self.config.get("network_enabled", True)))
         return prepared
+
+    @staticmethod
+    def _bind_research_run(
+        tool_name: str,
+        prepared: dict,
+        context: Mapping[str, Any],
+    ) -> None:
+        """Correlate an institutional research run with its upstream Aria run."""
+        canonical_name = str(tool_name).rsplit("__", 1)[-1]
+        if canonical_name != "research_run_create":
+            return
+        control_run_id = context.get("_run_id")
+        trace_id = context.get("_trace_id") or control_run_id
+        if control_run_id:
+            prepared.setdefault("control_run_id", str(control_run_id))
+        if trace_id:
+            prepared.setdefault("trace_id", str(trace_id))
 
     @staticmethod
     def _bind_workspace(tool_name: str, prepared: dict, context: Mapping[str, Any]) -> None:

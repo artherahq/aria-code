@@ -4798,8 +4798,29 @@ def _print_tool_done(tool_name: str, elapsed_ms: int, success: bool = True, summ
         return
     action = _TOOL_ACTION_LABELS.get(tool_name, tool_name.replace("_", " "))
     icon   = "[green]✓[/green]" if success else "[red]✗[/red]"
-    t_str  = f"  [dim]({elapsed_ms}ms)[/dim]" if elapsed_ms > 0 else ""
-    s_str  = f"  [dim]{summary}[/dim]"        if summary    else ""
+    t_txt  = f"({elapsed_ms}ms)" if elapsed_ms > 0 else ""
+    if summary:
+        # 单行预算:summary 按显示宽度(CJK 记 2 格)截断,保证图标+动作+摘要+时长
+        # 排在同一行——否则 Rich 整行回卷,时长 chip 顶格孤立在下一行,树形缩进被破坏。
+        # 错误文本可能含 [] 等 Rich 标记字符,一并转义防串样式。
+        import shutil as _sh
+        from rich.cells import cell_len as _cl
+        from rich.markup import escape as _esc
+        cols   = _sh.get_terminal_size((100, 24)).columns
+        fixed  = 5 + _cl(action) + (2 + len(t_txt) if t_txt else 0) + 2
+        budget = max(12, cols - fixed)
+        if _cl(summary) > budget:
+            out, w = [], 0
+            for ch in summary:
+                cw = _cl(ch)
+                if w + cw > budget - 1:
+                    break
+                out.append(ch)
+                w += cw
+            summary = "".join(out) + "…"
+        summary = _esc(summary)
+    s_str = f"  [dim]{summary}[/dim]" if summary else ""
+    t_str = f"  [dim]{t_txt}[/dim]"   if t_txt   else ""
     console.print(f"  {icon}  [dim]{action}[/dim]{s_str}{t_str}")
 
 
@@ -9610,31 +9631,60 @@ class ArtheraTerminal:
         # only a confirmed-successful turn clears it.
         _rt_sys_ov = getattr(self, "_system_override", None)
         _rt_turn = None
-        try:
-            _rt_turn = await run_chat_via_runtime(
-                prompt=current_message, history=self.conversation[:-1],
-                local_tools=LOCAL_TOOLS, tool_schemas=LOCAL_TOOL_SCHEMAS,
-                model=model, config=self.config, api_url=self.api_url,
-                ollama_url=self.config.get("ollama_url", "http://localhost:11434"),
-                cancel_event=self.cancel_event,
-                on_token=on_token, on_thinking=on_thinking,
-                on_tool_call=on_tool_call,
-                on_tool_result=on_tool_result, on_status=on_status,
-                thinking_mode=thinking_mode, user_context=user_context,
-                auth_token=auth_token, project_context=_PROJECT_CONTEXT,
-                system_override=_rt_sys_ov,
-                max_rounds=hard_max_rounds,
-                confirm_tools=_CONFIRM_TOOLS,
-                approval_callback=_approval_callback,
-                approval_applier=_approval_applier,
-                execution_context=lambda: {
-                    "_run_id": self._active_run_id,
-                    "_session_id": self.session_id,
-                },
-                return_result=True,
+        from packages.aria_services.research_protocol import (
+            grounding_tool_names,
+            requires_financial_evidence,
+        )
+        _requires_financial_evidence = requires_financial_evidence(message)
+        # 空响应自动重试:云端模型偶发空补全时,同 provider 重放本轮一次,
+        # 而不是把"请重试"推给用户(60s 的工具结果/思考不该因一次抽风作废)。
+        # 仅对 empty_response 重试;其他错误(配额/鉴权等)走原有 rescue 链。
+        for _rt_attempt in range(2):
+            try:
+                _rt_turn = await run_chat_via_runtime(
+                    prompt=current_message, history=self.conversation[:-1],
+                    local_tools=LOCAL_TOOLS, tool_schemas=LOCAL_TOOL_SCHEMAS,
+                    model=model, config=self.config, api_url=self.api_url,
+                    ollama_url=self.config.get("ollama_url", "http://localhost:11434"),
+                    cancel_event=self.cancel_event,
+                    on_token=on_token, on_thinking=on_thinking,
+                    on_tool_call=on_tool_call,
+                    on_tool_result=on_tool_result, on_status=on_status,
+                    thinking_mode=thinking_mode, user_context=user_context,
+                    auth_token=auth_token, project_context=_PROJECT_CONTEXT,
+                    system_override=_rt_sys_ov,
+                    max_rounds=hard_max_rounds,
+                    confirm_tools=_CONFIRM_TOOLS,
+                    approval_callback=_approval_callback,
+                    approval_applier=_approval_applier,
+                    requires_evidence=_requires_financial_evidence,
+                    grounding_tools=grounding_tool_names(LOCAL_TOOL_SCHEMAS),
+                    evidence_already_grounded=bool(
+                        _det_wants_analysis and deterministic.get("success")
+                    ),
+                    execution_context=lambda: {
+                        "_run_id": self._active_run_id,
+                        "_session_id": self.session_id,
+                    },
+                    return_result=True,
+                )
+            except Exception as _rt_err:
+                logger.error("Runtime turn failed: %s", _rt_err)
+                _rt_turn = None
+
+            _rt_probe_text = getattr(_rt_turn, "text", "") if _rt_turn is not None else ""
+            _rt_probe_cancelled = bool(getattr(_rt_turn, "cancelled", False)) or bool(
+                self.cancel_event is not None and self.cancel_event.is_set()
             )
-        except Exception as _rt_err:
-            logger.error("Runtime turn failed: %s", _rt_err)
+            if _rt_probe_cancelled or (_rt_probe_text or "").strip():
+                break
+            _rt_probe_err = (
+                getattr(_rt_turn, "error", None) if _rt_turn is not None else None
+            ) or "empty_response"
+            if _rt_attempt == 0 and "empty_response" in str(_rt_probe_err) and "ARIA-4223" not in str(_rt_probe_err):
+                logger.warning("Empty model response; auto-retrying the turn once")
+                continue
+            break
 
         response_text = stream_consumer.response_text
         token_count = stream_consumer.token_count
@@ -9669,6 +9719,16 @@ class ArtheraTerminal:
                 "tools_used": list(getattr(_rt_final, "tools", []) or []),
                 "sources": list(getattr(_rt_final, "sources", []) or []),
             }
+            # 状态条 ctx% 的真实数据源:provider 上报的本轮上下文占用
+            # (prompt 含系统提示/skills,字符估算看不见这部分)。
+            try:
+                self._last_prompt_tokens = int(
+                    (getattr(_rt_metadata, "prompt_tokens", 0) or 0)
+                    + (getattr(_rt_metadata, "completion_tokens", 0) or 0)
+                )
+                self._last_prompt_tokens_msgs = len(self.conversation)
+            except Exception:
+                pass
             response_text = stream_consumer.response_text or _rt_text
             turn_state.provider = _rt_provider
             turn_state.apply_model_result(result, response_text)
@@ -9683,7 +9743,7 @@ class ArtheraTerminal:
             result = {"success": False, "error": str(_err), "response": "", "cancelled": False}
             _fallback_mode = str(self.config.get("provider_fallback", "configured")).lower()
             _rescue = None
-            if _fallback_mode != "off":
+            if _fallback_mode != "off" and "ARIA-4223" not in str(_err):
                 try:
                     from providers.llm.registry import stream_cloud_fallback
                     _rescue = await stream_cloud_fallback(
@@ -9741,9 +9801,10 @@ class ArtheraTerminal:
                 if error_presentation.use_generic_error_prefix:
                     _print_error(error_presentation.lines[0])
                 else:
+                    _tone = "red" if error_presentation.level == "error" else "yellow"
                     for idx, ln in enumerate(error_presentation.lines):
                         if HAS_RICH:
-                            style = "bold yellow" if idx == 0 and len(error_presentation.lines) > 1 else "yellow"
+                            style = f"bold {_tone}" if idx == 0 and len(error_presentation.lines) > 1 else _tone
                             console.print(f"  [{style}]{ln}[/{style}]")
                         else:
                             print(f"  {ln}")
@@ -9874,9 +9935,10 @@ class ArtheraTerminal:
                     "empty_response",
                     lang=self.config.get("ui_lang", "en") or "en",
                 )
+                _tone = "red" if presentation.level == "error" else "yellow"
                 for idx, line in enumerate(presentation.lines):
                     if HAS_RICH:
-                        style = "bold yellow" if idx == 0 else "yellow"
+                        style = f"bold {_tone}" if idx == 0 else _tone
                         console.print(f"  [{style}]{line}[/{style}]")
                     else:
                         print(f"  {line}")
@@ -10339,7 +10401,17 @@ class ArtheraTerminal:
 
     def _bottom_toolbar_parts(self):
         from ui.banner import bottom_toolbar_parts as _btp
-        return _btp(self.conversation, self.config, self._actual_model, get_model_cfg)
+        # /clear、/compact 等把对话截短后,上一轮的真实 token 计数即失效
+        # (自愈式判定,免去在每个重置点手工清零)。
+        known = getattr(self, "_last_prompt_tokens", 0)
+        if len(self.conversation) < getattr(self, "_last_prompt_tokens_msgs", 0):
+            known = 0
+            self._last_prompt_tokens = 0
+            self._last_prompt_tokens_msgs = 0
+        return _btp(
+            self.conversation, self.config, self._actual_model, get_model_cfg,
+            known_context_tokens=known,
+        )
 
     async def _maybe_auto_compact_before_turn(self, incoming_content: str = "") -> bool:
         """Compact history before a request enters the model when context is hot."""

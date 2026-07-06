@@ -418,6 +418,14 @@ class TerminalRuntimeEventConsumer:
 
     def on_thinking(self, content: str) -> None:
         self.set_phase(TurnPhase.THINKING)
+        if self.thinking_finished:
+            # 工具调用后的新一段思考:重置段状态,否则上一段的 finished 闩锁
+            # 让本段永远无法 finalize,"思考中 …(N tokens)"活行被冻结在滚动区
+            # (即多条思考行并存的根因)。full_buf 不清,Ctrl+O 展开保留全部段落。
+            self.thinking_finished = False
+            self.thinking_shown = False
+            self.thinking_tokens = 0
+            self.thinking_preview_buf = []
         if not self.thinking_shown:
             self.stop_spinner()
             self.thinking_start = time.time()
@@ -426,9 +434,10 @@ class TerminalRuntimeEventConsumer:
         if self.thinking_tokens % 30 == 1:
             elapsed = time.time() - self.thinking_start
             label = "思考中" if self.ui_lang.lower().startswith("zh") else "Thinking"
+            # 与 finalize 行(思考 Xs · N tokens)同格式,避免括号/点分隔两种样式并存
             sys.stdout.write(
-                f"\r  \033[2m✻\033[0m \033[2m{label}  {elapsed:.1f}s  "
-                f"({self.thinking_tokens} tokens)\033[0m    "
+                f"\r  \033[2m✻\033[0m \033[2m{label}  {elapsed:.1f}s"
+                f"  ·  {self.thinking_tokens} tokens\033[0m    "
             )
             sys.stdout.flush()
         if len("".join(self.thinking_preview_buf)) < 300:
