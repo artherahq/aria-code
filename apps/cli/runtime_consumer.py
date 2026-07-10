@@ -12,6 +12,7 @@ import sys
 import time
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from typing import Any, Callable
 
 from runtime import (
@@ -29,6 +30,30 @@ _REPETITION_NOTICE = (
     "\n\n> 已检测到模型开始重复输出，已自动停止展开。"
     "上方结果仍然有效；如需继续，请指定要补充的部分。"
 )
+
+
+def _redact_activity_text(value: Any, limit: int = 90) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    text = re.sub(
+        r"(?i)(api[_-]?key|token|password|secret)(\s*[=:]\s*|\s+)[^\s]+",
+        r"\1\2***",
+        text,
+    )
+    return text[:limit]
+
+
+def _tool_activity_hint(tool: str, params: dict[str, Any]) -> str:
+    """Return one safe, useful argument for a compact activity row."""
+    if not isinstance(params, dict):
+        return ""
+    for key in ("path", "file_path", "filename", "file"):
+        if params.get(key):
+            return Path(str(params[key])).name[:90]
+    for key in ("symbol", "ticker", "query", "q", "command", "url", "task"):
+        if params.get(key):
+            return _redact_activity_text(params[key])
+    title = params.get("title")
+    return _redact_activity_text(title) if title else ""
 
 
 class TurnPhase(str, Enum):
@@ -107,7 +132,8 @@ class TerminalRuntimeEventConsumer:
         self.thinking_finished = False
         self.thinking_preview_buf: list[str] = []
         self.thinking_full_buf: list[str] = []
-        self.tool_start_times: dict[str, float] = {}
+        self.tool_start_times: dict[str, list[float]] = {}
+        self.tool_params: dict[str, list[dict[str, Any]]] = {}
         self.repetition_stopped = False
         self.repetition_notice_printed = False
         self.response_started = False
@@ -450,10 +476,20 @@ class TerminalRuntimeEventConsumer:
         self._finish_thinking()
         if self.print_tool_call is not None:
             self.print_tool_call(tool, params if isinstance(params, dict) else {})
-        self.tool_start_times[tool] = time.time()
+        self.tool_start_times.setdefault(tool, []).append(time.time())
+        safe_params = dict(params) if isinstance(params, dict) else {}
+        self.tool_params.setdefault(tool, []).append(safe_params)
 
     def on_tool_result(self, tool: str, summary: Any) -> None:
-        elapsed_ms = int((time.time() - self.tool_start_times.pop(tool, time.time())) * 1000)
+        starts = self.tool_start_times.get(tool) or []
+        started_at = starts.pop(0) if starts else time.time()
+        if not starts:
+            self.tool_start_times.pop(tool, None)
+        elapsed_ms = int((time.time() - started_at) * 1000)
+        params_queue = self.tool_params.get(tool) or []
+        params = params_queue.pop(0) if params_queue else {}
+        if not params_queue:
+            self.tool_params.pop(tool, None)
         ok = not (isinstance(summary, dict) and not summary.get("success", True))
         if self.print_tool_done is not None:
             # Surface the failure reason on the ✗ line — a red cross with no
@@ -466,7 +502,17 @@ class TerminalRuntimeEventConsumer:
             self.print_tool_done(tool, elapsed_ms, success=ok, summary=detail)
 
         ts = time.strftime("%H:%M:%S")
-        entry = f"[{ts}] {tool}: {str(summary)[:100]}"
+        icon = "✓" if ok else "✗"
+        hint = _tool_activity_hint(tool, params)
+        duration = f"{elapsed_ms}ms" if elapsed_ms < 1000 else f"{elapsed_ms / 1000:.1f}s"
+        entry = f"{ts}  {icon} {tool}"
+        if hint:
+            entry += f"  {hint}"
+        entry += f"  · {duration}"
+        if not ok and isinstance(summary, dict):
+            error = _redact_activity_text(summary.get("error"), limit=100)
+            if error:
+                entry += f"  · {error}"
         self.terminal._transcript_log.append(entry)
         if len(self.terminal._transcript_log) > 100:
             self.terminal._transcript_log = self.terminal._transcript_log[-100:]

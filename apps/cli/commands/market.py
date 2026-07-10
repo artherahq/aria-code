@@ -87,6 +87,24 @@ _CHART_CONTEXT_TOKEN_BLOCKLIST = {
     "AVERAGE", "RETURN", "RETURNS", "TREND", "MOMENTUM",
 }
 
+_NEWS_DISCUSSION_HINTS = (
+    "新闻面", "技术面", "还有用吗", "是否有用", "你觉得", "怎么看",
+    "区别", "关系", "怎么结合", "如何结合", "为什么",
+)
+_NEWS_LOOKUP_HINTS = (
+    "最新新闻", "最近新闻", "相关新闻", "今日新闻", "新闻有哪些",
+    "查新闻", "搜新闻", "搜索新闻", "找新闻", "获取新闻",
+    "latest news", "recent news", "find news", "search news",
+)
+
+
+def _is_news_discussion(text: str) -> bool:
+    """True when 'news' is a discussion topic rather than a lookup request."""
+    low = (text or "").lower()
+    if any(hint in low for hint in _NEWS_LOOKUP_HINTS):
+        return False
+    return "新闻" in low and any(hint in low for hint in _NEWS_DISCUSSION_HINTS)
+
 
 def _news_topic(text: str, symbols: list[str]) -> str:
     low = text.lower()
@@ -304,7 +322,7 @@ def route_top_level_text(user_input: str, available_commands: set[str]) -> Route
                     continue  # same rule as /chart: no symbol → not a report request
                 args = " ".join(part for part in [symbol, f"--type {report_type}" if report_type else "", f"--format {fmt}" if fmt else ""] if part)
                 return RoutedCommand(command=command, args=args)
-    if "/news" in available_commands and any(k in low for k in (
+    if "/news" in available_commands and not _is_news_discussion(stripped) and any(k in low for k in (
         "新闻", "消息", "最新进展", "最近进展", "news", "latest", "recent",
     )):
         symbols = _route_symbols(stripped)

@@ -10,6 +10,8 @@ import pytest
 from apps.cli.commands.catalog import DIRECT_COMMAND_MAP, VISIBLE_SLASH_COMMANDS
 from apps.cli.commands.market_context import build_analyze_context, build_analyze_prompt
 from apps.cli.message_processing import context_compaction_decision, estimate_message_tokens
+from apps.cli.intent_router import build_intent_route
+from apps.cli.market_universe import resolve_market_symbol
 from apps.cli.commands.market import (
     parse_analysis_args,
     parse_symbols,
@@ -28,6 +30,7 @@ from apps.cli.utils.market_detect import (
     _is_broker_setup_intent,
 )
 from apps.cli.commands.report import (
+    apply_report_quality_gate,
     all_agents_failed,
     build_markdown_report_prompt,
     clean_markdown_report_response,
@@ -36,6 +39,7 @@ from apps.cli.commands.report import (
     markdown_data_block,
     parse_report_args,
     report_agent_names,
+    report_agent_health,
     report_file_size_kb,
     save_markdown_report,
     update_report_index,
@@ -376,6 +380,22 @@ def test_top_level_market_router_maps_news_language_to_news_command():
     assert routed.text == "/news SpaceX"
 
 
+def test_news_methodology_question_stays_in_conversation():
+    text = "要基于新闻面进行分析，你觉得技术面还有用吗"
+
+    assert route_top_level_text(text, {"/news", "/analyze"}) is None
+    route = build_intent_route(text)
+    assert route.primary == "general"
+    assert route.wants_market_prefetch is False
+
+
+def test_critical_a_share_name_resolves_before_market_fetch():
+    assert resolve_market_symbol("分析四环生物股票和成交量") == "000518"
+    routed = route_top_level_text("分析 四环生物 成交量", {"/analyze"})
+    assert routed is not None
+    assert routed.text == "/analyze 000518 --focus volume --lang zh"
+
+
 def test_team_args_parser_and_symbol_resolution_are_ui_free():
     parsed = parse_team_args("nvda --agents macro,technical --full")
     assert parsed.symbols_raw == ["nvda"]
@@ -566,6 +586,26 @@ def test_report_helpers_cover_agent_selection_failure_and_size(tmp_path):
     assert all_agents_failed(mixed_team) is False
     assert all_agents_failed(SimpleNamespace(results=[])) is False
 
+    partial_team = SimpleNamespace(
+        confidence=0.80,
+        final_signal="BUY",
+        results=[
+            SimpleNamespace(agent="macro", success=False),
+            SimpleNamespace(agent="fundamental", success=False),
+            SimpleNamespace(agent="technical", success=True),
+            SimpleNamespace(agent="risk", success=False),
+        ],
+    )
+    health = apply_report_quality_gate(
+        partial_team, ["macro", "fundamental", "technical", "risk"]
+    )
+    assert health == report_agent_health(
+        partial_team, ["macro", "fundamental", "technical", "risk"]
+    )
+    assert health["succeeded"] == 1
+    assert health["failed"] == 3
+    assert partial_team.confidence <= 0.29
+
     report_path = tmp_path / "report.html"
     report_path.write_text("x", encoding="utf-8")
     assert report_file_size_kb(report_path) == 1
@@ -634,6 +674,8 @@ async def test_generate_html_report_runs_team_and_generator(monkeypatch, tmp_pat
     assert calls["team"]["agents"] == report_agent_names("deep")
     assert calls["team"]["data_router"] == "router"
     assert callable(calls["team"]["on_token"])
+    assert calls["team"]["timeout_per_agent"] == 40.0
+    assert calls["team"]["synthesis_timeout"] == 20.0
     assert calls["report"] == {
         "symbol": "AAPL",
         "team_result": team_result,

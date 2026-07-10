@@ -26,6 +26,7 @@ class MarketSymbol:
 STATIC_MARKET_ALIASES: dict[str, MarketSymbol] = {
     # A-share fixes and high-frequency names not guaranteed in older static maps
     "斯迪克": MarketSymbol("斯迪克", "300806", "CN", "static"),
+    "四环生物": MarketSymbol("四环生物", "000518", "CN", "static"),
     # China / HK indices
     "上证指数": MarketSymbol("上证指数", "000001.SS", "INDEX", "static"),
     "上证": MarketSymbol("上证指数", "000001.SS", "INDEX", "static"),
@@ -267,8 +268,85 @@ def resolve_market_mentions(
     return ordered
 
 
+def ambiguous_market_candidates(
+    text: str,
+    *,
+    limit: int = 20,
+    load_universe: Callable[[], list[MarketSymbol]] | None = None,
+) -> list[tuple[int, str, list[MarketSymbol]]]:
+    """Return same-name mentions that map to more than one market symbol.
+
+    Different assets mentioned in one sentence are not considered ambiguous;
+    candidates must start at the same position and have the same display name.
+    """
+    # Ambiguity checks run on every natural-language message, so they must stay
+    # cache-only.  A missing cache must not turn an ordinary methodology
+    # question into a slow network refresh.
+    loader = load_universe or _load_cache
+    hits = resolve_market_mentions(text, limit=limit, load_universe=loader)
+    return _ambiguous_groups_from_hits(hits)
+
+
+def _ambiguous_groups_from_hits(
+    hits: Iterable[tuple[int, MarketSymbol]],
+) -> list[tuple[int, str, list[MarketSymbol]]]:
+    grouped: dict[tuple[int, str], list[MarketSymbol]] = {}
+    display_names: dict[tuple[int, str], str] = {}
+    for position, item in hits:
+        normalized_name = re.sub(r"\s+", "", item.name).casefold()
+        key = (position, normalized_name)
+        grouped.setdefault(key, []).append(item)
+        display_names[key] = item.name
+
+    ambiguous: list[tuple[int, str, list[MarketSymbol]]] = []
+    for key, candidates in grouped.items():
+        unique: list[MarketSymbol] = []
+        seen: set[str] = set()
+        for candidate in candidates:
+            symbol = candidate.symbol.upper()
+            if symbol not in seen:
+                unique.append(candidate)
+                seen.add(symbol)
+        if len(unique) > 1:
+            ambiguous.append((key[0], display_names[key], unique))
+    ambiguous.sort(key=lambda item: item[0])
+    return ambiguous
+
+
+def select_market_candidate(reply: str, candidates: Iterable[MarketSymbol]) -> MarketSymbol | None:
+    """Resolve a short clarification reply to one of the offered candidates."""
+    options = list(candidates)
+    text = str(reply or "").strip()
+    if not text:
+        return None
+    normalized = re.sub(r"\s+", "", text).casefold()
+    for option in options:
+        market_aliases = {
+            "CN": {"a股", "沪深", "中国a股"},
+            "HK": {"港股", "香港"},
+            "US": {"美股", "美国"},
+            "EU": {"欧股", "欧洲"},
+        }.get(option.market.upper(), set())
+        labels = {
+            option.symbol,
+            option.name,
+            option.market,
+            f"{option.name}{option.symbol}",
+            f"{option.name}{option.market}",
+            *market_aliases,
+        }
+        if normalized in {re.sub(r"\s+", "", value).casefold() for value in labels if value}:
+            return option
+    if text.isdigit():
+        index = int(text) - 1
+        return options[index] if 0 <= index < len(options) else None
+    return None
+
+
 def resolve_market_symbol(text: str) -> str:
-    hits = resolve_market_mentions(text, limit=1)
+    hits = resolve_market_mentions(text, limit=20)
+    if _ambiguous_groups_from_hits(hits):
+        return ""
     return hits[0][1].symbol if hits else ""
 
 

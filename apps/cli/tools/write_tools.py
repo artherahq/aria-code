@@ -539,6 +539,22 @@ def tool_write_file(params: dict) -> dict:
             "applied":        True,
             "user_message":   f"文件已保存到: {p}  打开所在目录: {_reveal_hint}",
         }
+        try:
+            from artifacts import register_existing_artifact
+
+            artifact = register_existing_artifact(
+                p,
+                topic=str(params.get("artifact_topic") or ""),
+                kind=str(params.get("artifact_kind") or ""),
+                metadata={"source": "write_file"},
+            )
+            if artifact is not None:
+                _wdata["artifact_registered"] = True
+                _wdata["artifact_metadata_path"] = str(artifact.metadata_path)
+        except Exception:
+            # Artifact indexing is convenience metadata; a successful file
+            # write must not be downgraded if indexing is unavailable.
+            pass
         if checkpoint_id:
             _wdata["checkpoint_id"] = checkpoint_id
         if checkpoint_error:

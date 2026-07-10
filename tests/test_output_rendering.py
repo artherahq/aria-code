@@ -444,6 +444,39 @@ def test_repetition_stopped_text_is_recovered_for_display():
     assert "已检测到模型开始重复输出" in recovered
 
 
+def test_repetition_recovery_drops_unfinished_markdown_table():
+    import aria_cli
+
+    text = (
+        "## 短期预测\n"
+        "| 场景 | 价格区间 | 触发条件 |\n"
+        "| --- | --- | --- |\n"
+        "*[model stopped — repetition detected]*"
+    )
+
+    recovered = aria_cli._recover_repetition_stopped_text(text)
+
+    assert "| 场景 |" not in recovered
+    assert "未完成的尾部已隐藏" in recovered
+
+
+def test_narrow_terminal_converts_markdown_table_to_stacked_records():
+    from ui.render.output import adapt_markdown_for_width
+
+    source = (
+        "| 维度 | 观察 | 结论 |\n"
+        "| --- | --- | --- |\n"
+        "| 趋势 | 价格高于 MA20 | 偏多 |"
+    )
+
+    adapted = adapt_markdown_for_width(source, 80)
+
+    assert "| --- |" not in adapted
+    assert "- **维度**：趋势" in adapted
+    assert "  - **观察**：价格高于 MA20" in adapted
+    assert adapt_markdown_for_width(source, 120) == source
+
+
 def test_turn_footer_defaults_to_compact_without_token_noise():
     from runtime import AgentTurnState
     from ui.render.output import format_turn_footer

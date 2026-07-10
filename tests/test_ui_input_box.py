@@ -68,6 +68,10 @@ class InputBoxTests(unittest.TestCase):
         with patch.dict("os.environ", {"ARIA_INPUT_THEME": "dark"}, clear=False):
             self.assertEqual(detect_terminal_theme(), "dark")
 
+    def test_apple_terminal_defaults_to_light_without_color_metadata(self):
+        with patch.dict("os.environ", {"TERM_PROGRAM": "Apple_Terminal"}, clear=True):
+            self.assertEqual(detect_terminal_theme(), "light")
+
     @patch("ui.input_box.shutil.get_terminal_size", return_value=os.terminal_size((80, 24)))
     def test_status_bar_prioritizes_runtime_state_without_repeating_full_path(self, _size):
         config = PanelInputConfig(
@@ -106,6 +110,24 @@ class InputBoxTests(unittest.TestCase):
 
         self.assertIn("ctx <1%", text)
         self.assertNotIn("ctx 0%", text)
+
+    @patch("ui.input_box.shutil.get_terminal_size", return_value=os.terminal_size((80, 24)))
+    def test_chinese_status_bar_uses_readable_labels(self, _size):
+        config = PanelInputConfig(
+            theme="light",
+            lang="zh",
+            model_label="gpt-oss:120b-cloud",
+            cwd="/tmp/project",
+            est_tokens=4096,
+            max_tokens=16384,
+            permission_mode="workspace-write",
+        ).resolved()
+
+        text = "".join(fragment for _, fragment in _status_bar(config))
+
+        self.assertIn("可写", text)
+        self.assertIn("上下文25%", text)
+        self.assertNotIn(" ·  rw", text)
 
     def test_placeholder_processor_adds_prefix_and_placeholder_when_empty(self):
         prefix_frags = [("class:prompt", "> ")]

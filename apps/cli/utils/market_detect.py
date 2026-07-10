@@ -26,6 +26,9 @@ _STOCK_PATTERN = _re_sym.compile(
 _CRYPTO_WORDS = {"比特币":"BTC","以太坊":"ETH","狗狗币":"DOGE","索拉纳":"SOL","BTC":"BTC","ETH":"ETH"}
 
 _COMPANY_TO_TICKER = {
+    # Critical aliases are duplicated here as a fallback when the market
+    # universe module/cache is unavailable.
+    "四环生物": "000518",
     # ══════════════════════════════════════════════════════════════════════
     # A股 — 银行
     # ══════════════════════════════════════════════════════════════════════

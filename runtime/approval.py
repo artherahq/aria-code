@@ -14,6 +14,8 @@ class ApprovalDecision:
     user_approved: bool = False
     upgrade_policy: bool = False
     auto_approve_session: bool = False
+    tool_scope: str = ""
+    command_prefix: tuple[str, ...] = ()
     reason: str = ""
 
     @classmethod
@@ -24,6 +26,8 @@ class ApprovalDecision:
         user_approved: bool = False,
         upgrade_policy: bool = False,
         auto_approve_session: bool = False,
+        tool_scope: str = "",
+        command_prefix: tuple[str, ...] = (),
         reason: str = "",
     ) -> "ApprovalDecision":
         return cls(
@@ -32,6 +36,8 @@ class ApprovalDecision:
             user_approved=user_approved,
             upgrade_policy=upgrade_policy,
             auto_approve_session=auto_approve_session,
+            tool_scope=tool_scope,
+            command_prefix=command_prefix,
             reason=reason,
         )
 

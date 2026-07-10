@@ -61,6 +61,11 @@ def _detect_terminal_theme() -> str:
             return "dark" if int(colorfgbg.split(";")[-1]) < 8 else "light"
         except ValueError:
             pass
+    # macOS appearance is not the Terminal profile appearance. Apple Terminal's
+    # default Basic profile is light even when the OS itself is in dark mode;
+    # using AppleInterfaceStyle here produced pale dark-theme headings on white.
+    if os.getenv("TERM_PROGRAM", "") == "Apple_Terminal":
+        return "light"
     if os.uname().sysname == "Darwin":
         try:
             r = subprocess.run(
@@ -129,6 +134,9 @@ if HAS_RICH:
 
     def make_markdown(markup: str) -> Markdown:
         """Create Markdown with Aria's low-saturation terminal theme."""
+        from ui.render.output import adapt_markdown_for_width
+
+        markup = adapt_markdown_for_width(markup, getattr(console, "width", 80))
         return Markdown(
             markup,
             code_theme="bw",

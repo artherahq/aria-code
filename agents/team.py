@@ -52,6 +52,7 @@ class AgentTeam:
         on_agent_done: Optional[Callable[[str, AgentResult], None]] = None,
         on_synthesis_start: Optional[Callable[[List["AgentResult"]], None]] = None,
         timeout_per_agent: float = 60.0,
+        synthesis_timeout: float | None = None,
         lang: str = "zh",
     ):
         self.llm                = llm_provider
@@ -60,6 +61,11 @@ class AgentTeam:
         self.on_agent_done      = on_agent_done
         self.on_synthesis_start = on_synthesis_start
         self.timeout            = timeout_per_agent
+        self.synthesis_timeout  = (
+            float(synthesis_timeout)
+            if synthesis_timeout is not None
+            else min(float(timeout_per_agent), 30.0)
+        )
         self.lang               = lang
 
     def _build_agent(self, name: str) -> Optional[BaseAgent]:
@@ -74,6 +80,15 @@ class AgentTeam:
             on_token=self.on_token,
             lang=self.lang,
         )
+
+    def _emit_agent_done(self, name: str, result: AgentResult) -> None:
+        """Notify UI adapters without allowing rendering errors to fail agents."""
+        if not self.on_agent_done:
+            return
+        try:
+            self.on_agent_done(name, result)
+        except Exception as exc:
+            logger.debug("[%s] completion callback failed: %s", name, exc)
 
     @staticmethod
     def _fallback_data_is_usable(agent_name: str, data: Dict[str, Any]) -> bool:
@@ -139,8 +154,7 @@ class AgentTeam:
             result = await asyncio.wait_for(
                 operation, timeout=self.timeout
             )
-            if self.on_agent_done:
-                self.on_agent_done(agent.name, result)
+            self._emit_agent_done(agent.name, result)
             return result
         except asyncio.TimeoutError:
             logger.warning(f"[{agent.name}] 超时 ({self.timeout}s)")
@@ -148,19 +162,14 @@ class AgentTeam:
                 agent, symbol, prefetched_data, "timeout"
             )
             if fallback is not None:
-                if self.on_agent_done:
-                    self.on_agent_done(agent.name, fallback)
+                self._emit_agent_done(agent.name, fallback)
                 return fallback
             _timeout_result = AgentResult(
                 agent=agent.name, symbol=symbol,
                 analysis="", confidence=0.0, error="timeout",
             )
             # Still emit the leaf so the streaming tree shows ⎿ ⏺ <agent> 超时
-            if self.on_agent_done:
-                try:
-                    self.on_agent_done(agent.name, _timeout_result)
-                except Exception:
-                    pass
+            self._emit_agent_done(agent.name, _timeout_result)
             return _timeout_result
         except Exception as exc:
             reason = f"{type(exc).__name__}: {exc}"
@@ -169,8 +178,7 @@ class AgentTeam:
                 agent, symbol, prefetched_data, reason
             )
             if fallback is not None:
-                if self.on_agent_done:
-                    self.on_agent_done(agent.name, fallback)
+                self._emit_agent_done(agent.name, fallback)
                 return fallback
             failed = AgentResult(
                 agent=agent.name,
@@ -179,11 +187,7 @@ class AgentTeam:
                 confidence=0.0,
                 error=reason,
             )
-            if self.on_agent_done:
-                try:
-                    self.on_agent_done(agent.name, failed)
-                except Exception:
-                    pass
+            self._emit_agent_done(agent.name, failed)
             return failed
 
     async def run(
@@ -251,7 +255,11 @@ class AgentTeam:
 
         # synthesis — 把 agent 结果打包进 data，直接调 analyze() 而非 run()
         synthesis_text = ""
-        if "synthesis" in names_to_run or len(agent_objects) >= 2:
+        successful_results = [result for result in results if result.success]
+        should_synthesize = bool(successful_results) and (
+            "synthesis" in names_to_run or len(successful_results) >= 2
+        )
+        if should_synthesize:
             synth_cls = get_registry().get("synthesis")
             if synth_cls:
                 synth_agent = synth_cls(
@@ -269,7 +277,7 @@ class AgentTeam:
                 try:
                     synth_result = await asyncio.wait_for(
                         synth_agent.analyze(symbol, synth_data),
-                        timeout=self.timeout,
+                        timeout=self.synthesis_timeout,
                     )
                     synthesis_text = synth_result.analysis
                 except Exception as e:
@@ -304,6 +312,8 @@ async def run_team(
     lang: str = "zh",
     market_context: Optional[Dict[str, Any]] = None,
     agent_data: Optional[Dict[str, Dict[str, Any]]] = None,
+    timeout_per_agent: float = 60.0,
+    synthesis_timeout: float | None = None,
 ) -> TeamResult:
     """
     便捷函数，替代原 financial_agents.run_team_analysis()。
@@ -319,6 +329,8 @@ async def run_team(
         on_token=on_token,
         on_agent_done=on_agent_done,
         on_synthesis_start=on_synthesis_start,
+        timeout_per_agent=timeout_per_agent,
+        synthesis_timeout=synthesis_timeout,
         lang=lang,
     )
     return await team.run(

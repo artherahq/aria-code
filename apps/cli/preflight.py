@@ -268,13 +268,23 @@ def build_intent_preflight(
 
     if "file_analysis" in intents:
         service("file_parser")
-        _add_req(python_reqs, "pandas")
-        _add_req(python_reqs, "openpyxl")
-        _add_req(python_reqs, "pdfplumber")
-        _add_req(python_reqs, "pypdf")
-        _add_req(python_reqs, "docx")
-        _add_req(python_reqs, "bs4")
-        _add_req(python_reqs, "PIL")
+        # Request only the parser needed by the referenced file type.  Listing
+        # every possible parser for two DOCX files made preflight look like a
+        # system audit and led users to install unrelated PDF/Excel packages.
+        if _contains_any(low, (".xlsx", ".xls", " excel", "excel文件")):
+            _add_req(python_reqs, "pandas")
+            _add_req(python_reqs, "openpyxl")
+        if _contains_any(low, (".csv", ".tsv", "csv文件")):
+            _add_req(python_reqs, "pandas")
+        if _contains_any(low, (".pdf", "pdf文件")):
+            _add_req(python_reqs, "pdfplumber")
+            _add_req(python_reqs, "pypdf")
+        if _contains_any(low, (".docx", ".doc", "word文件", "word文档")):
+            _add_req(python_reqs, "docx")
+        if _contains_any(low, (".html", ".htm", "html文件")):
+            _add_req(python_reqs, "bs4")
+        if _contains_any(low, (".png", ".jpg", ".jpeg", ".webp", "图片文件")):
+            _add_req(python_reqs, "PIL")
 
     for _, (module, aliases) in _BROKER_MODULES.items():
         if _contains_any(low, aliases):
@@ -457,41 +467,36 @@ def format_preflight_plain(report: IntentPreflight) -> str:
     plan = build_install_plan(report)
 
     if not report.has_required_findings:
-        lines = ["依赖提示：可选增强能力缺失，当前会使用内置/降级实现。"]
+        lines = ["可选增强未安装；当前任务会继续使用内置或降级实现。"]
         if report.missing_python:
-            reqs = ", ".join(f"{r.package}({r.purpose})" for r in report.missing_python)
-            lines.append("可选 Python 包: " + reqs)
+            reqs = "、".join(f"{r.package}（{r.purpose}）" for r in report.missing_python)
+            lines.append("增强包：" + reqs)
         if report.missing_commands:
             tools = ", ".join(plan.command_hints)
-            lines.append("可选工具: " + tools)
+            lines.append("增强工具：" + tools)
         if report.missing_env:
             envs = ", ".join(plan.env_hints)
-            lines.append("可选环境变量: " + envs)
-        if plan.pip_command:
-            lines.append("选择安装: /install --auto（all/required/optional/custom/plan/skip）或 " + plan.pip_command)
+            lines.append("可选配置：" + envs)
+        if plan.pip_packages:
+            lines.append("需要时运行 /install --auto；安装会进入 Aria 当前环境。")
         elif plan.has_actions:
-            lines.append("配置: 按上方提示手动配置，或用 /setup 查看配置向导。")
+            lines.append("需要时运行 /setup 查看配置向导。")
         return "\n".join(lines)
 
-    lines = ["依赖预检：当前请求可能需要补充本机能力"]
-    if report.intents:
-        lines.append("意图: " + ", ".join(report.intents))
-    if report.services:
-        lines.append("服务: " + ", ".join(report.services))
+    lines = ["本次任务缺少必要能力："]
     if report.missing_python:
-        reqs = ", ".join(f"{r.package}({r.purpose})" for r in report.missing_python)
-        lines.append("缺少 Python 包: " + reqs)
-        if plan.pip_command:
-            lines.append("安装命令: " + plan.pip_command)
+        for req in report.missing_python:
+            requirement = "必要" if req.required else "可选"
+            lines.append(f"- {req.package}：{req.purpose}（{requirement}）")
     if report.missing_commands:
         for hint in plan.command_hints:
-            lines.append("缺少工具: " + hint)
+            lines.append("- " + hint)
     if report.missing_env:
         envs = ", ".join(plan.env_hints)
-        lines.append("可选环境变量未配置: " + envs)
+        lines.append("可选配置：" + envs)
     if plan.has_actions:
         if plan.pip_packages:
-            lines.append("选择安装: 运行 /install --auto 进入选择器，或 /install 扫描全部缺失。")
+            lines.append("运行 /install --auto 安装到 Aria 当前环境；完成后会自动刷新工具能力。")
         else:
-            lines.append("Aria 不会自动安装；按上方提示手动配置，或用 /setup 查看配置向导。")
+            lines.append("运行 /setup 查看配置向导；Aria 不会静默修改系统环境。")
     return "\n".join(lines)
