@@ -7,6 +7,11 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime
 
+try:
+    from packages.aria_skills.loader import CORE_FILE_TOOLS as _CORE_FILE_TOOLS
+except Exception:
+    _CORE_FILE_TOOLS: frozenset[str] = frozenset()
+
 
 def _try_inject_file_paths(_message: str) -> str:
     """Legacy hook retained for the extracted stream implementation.
@@ -107,12 +112,17 @@ def _finance_tool_schema_allowed(
 
 
 def _skill_tool_schema_allowed(schema: dict, allowed_names: set[str]) -> bool:
-    """Match a Skill policy against local and namespaced MCP tool schemas."""
+    """Match a Skill policy against local and namespaced MCP tool schemas.
+
+    Core file I/O tools (read_file, write_file, ...) are always allowed
+    regardless of the skill's policy — see CORE_FILE_TOOLS for why.
+    """
     name = str(schema.get("function", {}).get("name", ""))
-    if name in allowed_names:
+    if name in _CORE_FILE_TOOLS or name in allowed_names:
         return True
     if name.startswith("mcp__"):
-        return name.rsplit("__", 1)[-1] in allowed_names
+        short_name = name.rsplit("__", 1)[-1]
+        return short_name in _CORE_FILE_TOOLS or short_name in allowed_names
     return False
 
 

@@ -98,6 +98,31 @@ def test_skill_policy_matches_local_and_namespaced_mcp_tools_only():
     assert not _skill_tool_schema_allowed(denied_schema, allowed)
 
 
+def test_core_file_tools_stay_available_despite_narrow_skill_policy():
+    """Regression for the 2026-07-15 incident: equity-research-report's policy
+    listed only research tools; a request to convert an *existing* file to
+    PDF matched on the term "报告" and activated it anyway, which then
+    silently stripped read_file/write_file from the model's tool schema —
+    the model could only say "please paste the file contents". Core file I/O
+    and deliverable-export tools must stay available no matter what a
+    skill's allowed_tools declares.
+    """
+    narrow_policy = {"get_market_data", "web_search"}  # no read_file, no write_file
+
+    for tool_name in (
+        "read_file", "write_file", "edit_file", "multi_edit",
+        "analyze_file", "write_spreadsheet", "export_markdown_pdf",
+    ):
+        schema = {"function": {"name": tool_name}}
+        assert _skill_tool_schema_allowed(schema, narrow_policy), (
+            f"{tool_name} must stay available even when a skill's policy omits it"
+        )
+
+    # The filter should still deny tools that are genuinely outside both the
+    # core set and the skill's declared policy — this isn't a blanket bypass.
+    assert not _skill_tool_schema_allowed({"function": {"name": "run_command"}}, narrow_policy)
+
+
 def test_report_quality_mcp_tool_gets_research_quality_capability():
     spec = mcp_tool_to_spec(
         {

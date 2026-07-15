@@ -13,6 +13,24 @@ import re
 from typing import Iterable, Sequence
 
 
+#: Basic file I/O and deliverable-export tools that stay available no matter
+#: which skill is active or what its `allowed_tools` policy declares.
+#:
+#: Why: a skill's allowed_tools is a *domain* policy (which market-data/
+#: research tools may run), not a statement about whether the model may read
+#: or write files. Observed failure: the "equity-research-report" skill's
+#: policy listed only research tools; matched on the CJK term "报告" against
+#: a user request to convert an *existing* file to PDF; once activated it
+#: silently stripped read_file/write_file from the tool schema, and the model
+#: could only reply "please paste the file contents" — it had no idea the
+#: tool had been taken away. Keeping these core tools exempt means a
+#: mismatched skill activation degrades to "runs extra irrelevant workflow
+#: steps" instead of "loses the ability to read a file the user pointed to".
+CORE_FILE_TOOLS: frozenset[str] = frozenset({
+    "read_file", "analyze_file", "write_file", "edit_file", "multi_edit",
+    "write_spreadsheet", "export_markdown_pdf",
+})
+
 _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 _QUALIFIED_NAME_RE = re.compile(
     r"^[a-z0-9][a-z0-9-]{0,63}:[a-z0-9][a-z0-9-]{0,63}$"
