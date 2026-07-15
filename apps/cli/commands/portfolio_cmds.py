@@ -260,7 +260,7 @@ class PortfolioCommandsMixin:
             /report AAPL --format md      # Markdown 投研报告（离线可用）
             /report AAPL --type deep      # 深度研报（8页）
             /report AAPL --type brief     # 简评（1页）
-            /report AAPL --pdf            # 同时导出 PDF（需 weasyprint 或 wkhtmltopdf）
+            /report AAPL --pdf            # 同时导出 PDF（自动检测 Chrome/Edge，macOS 零安装）
         """
         from datetime import datetime as _dt
 
@@ -346,6 +346,35 @@ class PortfolioCommandsMixin:
                     console.print(f"  [dim]预览: open {out_f}[/dim]\n")
                 else:
                     print(f"\n  Saved: {out_f}")
+
+                # ── Markdown 报告 → 排版 PDF（--pdf；中英文模板自动检测）──
+                if export_pdf_flag:
+                    from pathlib import Path as _Path  # mixin 重绑定后无模块级 Path
+                    try:
+                        from markdown_pdf import markdown_to_pdf as _md_to_pdf
+                        _pdf_out = await asyncio.get_event_loop().run_in_executor(
+                            None,
+                            lambda: _md_to_pdf(_Path(out_f),
+                                               _Path(out_f).with_suffix(".pdf")),
+                        )
+                        if _pdf_out:
+                            if HAS_RICH:
+                                console.print(
+                                    f"  [green]PDF 导出成功[/green]  "
+                                    f"[link={_pdf_out}]{_pdf_out.name}[/link]"
+                                )
+                            else:
+                                print(f"  PDF: {_pdf_out}")
+                            import subprocess as _subp_md
+                            try:
+                                _subp_md.Popen(["open", str(_pdf_out)])
+                            except Exception:
+                                pass
+                        else:
+                            _msg = "PDF 导出失败：安装 Chrome/Edge，或 pip install pyobjc-framework-WebKit"
+                            console.print(f"  [yellow]{_msg}[/yellow]") if HAS_RICH else print(f"  {_msg}")
+                    except Exception as _pdf_exc:
+                        logger.debug("[report] md pdf export error: %s", _pdf_exc)
             return
 
         # ── HTML 研报（Bloomberg 暗色主题）────────────────────────────────
@@ -481,7 +510,7 @@ class PortfolioCommandsMixin:
                     except Exception:
                         pass
                 else:
-                    _hint = "pip install weasyprint  或  brew install wkhtmltopdf"
+                    _hint = "安装 Chrome/Edge 即可（自动检测），或 pip install weasyprint / brew install wkhtmltopdf"
                     if HAS_RICH:
                         console.print(
                             f"  [yellow]PDF 导出失败[/yellow]  "

@@ -2197,6 +2197,24 @@ if _HAS_PLUGIN:
     except Exception as _exc:
         logger.debug("Plugin tool registration error: %s", _exc)
 
+# ── Register spreadsheet deliverable tools (structured xlsx writer) ────────
+try:
+    from spreadsheet_tools import register_spreadsheet_tools as _reg_xlsx
+    _n_xlsx = _reg_xlsx(LOCAL_TOOLS, LOCAL_TOOL_SCHEMAS)
+    if _n_xlsx:
+        logger.info("Registered %d spreadsheet tools", _n_xlsx)
+except Exception as _exc:
+    logger.debug("Spreadsheet tools init error: %s", _exc)
+
+# ── Register markdown→PDF deliverable tools (styled zh/en report render) ───
+try:
+    from markdown_pdf import register_markdown_pdf_tools as _reg_mdpdf
+    _n_mdpdf = _reg_mdpdf(LOCAL_TOOLS, LOCAL_TOOL_SCHEMAS)
+    if _n_mdpdf:
+        logger.info("Registered %d markdown-pdf tools", _n_mdpdf)
+except Exception as _exc:
+    logger.debug("Markdown-pdf tools init error: %s", _exc)
+
 # Ollama tool schemas (for function calling) — extend so finance schemas added above are kept
 def _todo_schema():
     from apps.cli.todo_tracker import UPDATE_TODOS_SCHEMA
