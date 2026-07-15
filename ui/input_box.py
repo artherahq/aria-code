@@ -143,7 +143,7 @@ class PanelInputConfig:
         )
         if theme == "dark":
             return replace(self, theme=theme, placeholder=placeholder,
-                fg="#c9d1d9",
+                fg="#ffffff",
                 accent="#3fb950", accent_y="#d29922", accent_b="#79c0ff",
                 muted="#6e7781", dim="#484f58", sep="#2d333b",
                 input_bg="default",   # transparent — box border defines the zone
