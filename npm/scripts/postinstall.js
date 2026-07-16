@@ -290,7 +290,13 @@ function ensureRepo() {
 // ── uv helpers (fast Python package manager) ─────────────────────────────────
 
 function uvLocalPath() {
-  const home = process.env.HOME || process.env.USERPROFILE || "";
+  // astral.sh's installer targets %USERPROFILE%\.local\bin on Windows —
+  // prefer that over HOME there, since HOME is either unset on stock
+  // cmd/PowerShell or, in some terminal emulators (Git Bash/MSYS), set to a
+  // different path than the installer actually used.
+  const home = PLATFORM === "win32"
+    ? (process.env.USERPROFILE || process.env.HOME || "")
+    : (process.env.HOME || process.env.USERPROFILE || "");
   return path.join(home, ".local", "bin", PLATFORM === "win32" ? "uv.exe" : "uv");
 }
 
@@ -303,17 +309,27 @@ function findUv() {
 
 function installUv() {
   info("Installing uv (fast Python package manager)…");
-  let r;
   if (PLATFORM === "win32") {
-    r = spawnSync("powershell", ["-ExecutionPolicy", "ByPass", "-c",
+    spawnSync("powershell", ["-ExecutionPolicy", "ByPass", "-c",
       "irm https://astral.sh/uv/install.ps1 | iex"], { stdio: "inherit" });
   } else {
-    r = spawnSync("/bin/bash", ["-c",
+    spawnSync("/bin/bash", ["-c",
       "curl -LsSf https://astral.sh/uv/install.sh | sh"], { stdio: "inherit" });
   }
-  if (r && r.status === 0) {
-    const uv = findUv();
-    if (uv) ok("uv installed");
+
+  // Trust the filesystem, not the installer script's exit code. Both the
+  // Windows (irm|iex) and Unix (curl|sh) installers can legitimately return
+  // a non-zero status for reasons unrelated to install success — e.g. the
+  // Windows installer can't rewrite PATH for the *already-open* shell that
+  // spawned it, and some versions signal that with a non-zero exit even
+  // though uv.exe/uv was written to disk correctly. Checking r.status here
+  // was causing every affected Windows install to report "uv failed", fall
+  // through to system-Python detection, and hard-exit with "Python 3.10+
+  // required" on machines that only ever needed uv (which manages its own
+  // Python) — not a real installation failure, just a wrong success check.
+  const uv = findUv();
+  if (uv) {
+    ok("uv installed");
     return uv;
   }
   warn("uv install failed — falling back to python venv + pip");

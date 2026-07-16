@@ -1,13 +1,24 @@
 {
   "name": "@artheras/aria-code",
-  "version": "4.1.4",
+  "version": "4.1.5",
   "description": "AI-powered financial terminal — local LLM + 19+ cloud providers + real-time market data",
   "keywords": [
-    "ai", "llm", "finance", "trading", "terminal", "cli",
-    "stocks", "quantitative", "ollama", "investment", "quant"
+    "ai",
+    "llm",
+    "finance",
+    "trading",
+    "terminal",
+    "cli",
+    "stocks",
+    "quantitative",
+    "ollama",
+    "investment",
+    "quant"
   ],
   "homepage": "https://github.com/artherahq/aria-code#readme",
-  "bugs": { "url": "https://github.com/artherahq/aria-code/issues" },
+  "bugs": {
+    "url": "https://github.com/artherahq/aria-code/issues"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/artherahq/aria-code.git"
@@ -16,13 +27,13 @@
   "author": "Cinsoul",
   "bin": {
     "aria-code": "bin/aria-code.js",
-    "aria":      "bin/aria-code.js"
+    "aria": "bin/aria-code.js"
   },
   "scripts": {
-    "postinstall":   "node scripts/postinstall.js",
-    "repair":        "node scripts/postinstall.js",
+    "postinstall": "node scripts/postinstall.js",
+    "repair": "node scripts/postinstall.js",
     "update-engine": "node scripts/postinstall.js",
-    "test":          "node tests/paths.test.js && node tests/venv.test.js"
+    "test": "node tests/paths.test.js && node tests/venv.test.js"
   },
   "engines": {
     "node": ">=16.0.0"
