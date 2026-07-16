@@ -21,7 +21,7 @@ brokers/registry.py — 券商注册表 & 连接管理器
 from __future__ import annotations
 
 import logging
-from typing import Dict, List, Optional, Type
+from typing import Any, Dict, List, Optional, Type
 
 from .base   import BrokerBase
 from .config import (
