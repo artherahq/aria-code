@@ -19,6 +19,55 @@ jobs:
         working-directory: npm
         run: npm test
 
+  # 2026-07-17: npm-wrapper above only unit-tests paths.js/venv.js — it never
+  # actually runs `npm install -g` end to end, so every real-world install
+  # bug found this session (uv exit-code trust, wrong git-install instructions
+  # on Windows, no PATH-reopen reminder) shipped to users without CI ever
+  # catching it, because every job in every workflow in this repo runs on
+  # ubuntu-latest only. This job actually installs the packed tarball
+  # globally and runs the resulting `aria`/`aria-code` binaries on all three
+  # platforms real users install on, so a broken postinstall.js on Windows or
+  # macOS fails CI instead of shipping silently.
+  install-smoke-test:
+    name: install smoke test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Pack the npm package
+        working-directory: npm
+        shell: bash
+        run: npm pack --pack-destination "${{ runner.temp }}"
+
+      # Isolate the runtime install dir per-run via ARIA_HOME so this never
+      # touches a pre-existing install and each matrix leg starts fresh.
+      # --foreground-scripts because npm silences postinstall output by
+      # default — without it, a hung or silently-failing install just shows
+      # "added 1 package" with no way to tell it never actually ran.
+      - name: npm install -g (runs postinstall.js for real)
+        shell: bash
+        env:
+          ARIA_HOME: ${{ runner.temp }}/aria-home
+        run: |
+          set -e
+          PKG=$(ls "${{ runner.temp }}"/artheras-aria-code-*.tgz)
+          npm install -g "$PKG" --foreground-scripts
+
+      - name: Verify the installed CLI actually runs
+        shell: bash
+        run: |
+          set -e
+          aria-code --version
+          aria --help > /dev/null
+          echo "✅ both 'aria' and 'aria-code' resolve and run on ${{ matrix.os }}"
+
   pytest:
     name: pytest (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
