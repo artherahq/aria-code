@@ -29,11 +29,38 @@ Usage:
 __version__ = "4.1.4"
 
 import sys
+
+# Windows consoles default to a legacy codepage (cp1252 etc.), not UTF-8 —
+# and this CLI's own --help text, examples, and output are intentionally
+# bilingual (Chinese + English; see the module docstring above). Any of that
+# text reaching stdout/stderr without this crashes with UnicodeEncodeError
+# (caught by CI's install-smoke-test: `aria --help` on windows-latest).
+# reconfigure() is a no-op in practice on POSIX, where stdout is already
+# UTF-8, so this is safe to run unconditionally on every platform.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError):
+        pass
+
 import os
 import asyncio
 import json
 import argparse
-import readline
+try:
+    # readline is Unix-only in the standard library — it does not exist on
+    # Windows Python at all (CI's install-smoke-test caught this: every
+    # Windows install crashed on startup with "ModuleNotFoundError: No
+    # module named 'readline'", regardless of prompt_toolkit being the
+    # preferred/primary input backend). The one place this module is
+    # actually used (readline.* calls further down) already prefers
+    # prompt_toolkit and wraps the readline fallback in its own
+    # try/except, so leaving `readline` unset here degrades correctly —
+    # the crash was purely from this unguarded top-level import running
+    # before any of that fallback logic got a chance to execute.
+    import readline
+except ImportError:
+    readline = None
 import logging
 import time
 import shlex

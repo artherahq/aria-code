@@ -13,6 +13,7 @@ import asyncio
 import os
 import shutil
 import subprocess
+import sys
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
@@ -64,7 +65,8 @@ def detect_terminal_theme() -> str:
             return "dark" if int(colorfgbg.split(";")[-1]) < 8 else "light"
         except ValueError:
             pass
-    if os.uname().sysname == "Darwin":
+    # os.uname() is Unix-only — doesn't exist on Windows at all.
+    if sys.platform == "darwin":
         try:
             r = subprocess.run(
                 ["defaults", "read", "-g", "AppleInterfaceStyle"],

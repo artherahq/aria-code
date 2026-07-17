@@ -46,6 +46,13 @@ const REPO_URL  = "https://github.com/artherahq/aria-code.git";
 let PKG_VERSION = "";
 try { PKG_VERSION = (require("../package.json").version || "").trim(); } catch { /* ignore */ }
 const RELEASE_TAG = PKG_VERSION ? `v${PKG_VERSION}` : "";
+// Test-only override for this repo's own CI install-smoke-test: without it,
+// the smoke test packs the npm wrapper from the PR branch but the Python
+// runtime (aria_cli.py etc.) still gets git-cloned from RELEASE_TAG/main —
+// meaning a fix to any runtime file could never turn CI green pre-merge, only
+// after. Real installs never set this; only the CI workflow does.
+const TEST_REF = (process.env.ARIA_INSTALL_TEST_REF || "").trim();
+const CLONE_REF = TEST_REF || RELEASE_TAG;
 const PATHS = resolveAriaPaths();
 const INSTALL_DIR = PATHS.installDir;
 const INFO_FILE   = PATHS.infoFile;
@@ -263,13 +270,15 @@ function ensureRepo() {
   if (fs.existsSync(gitDir)) {
     info(`Updating existing repo at ${INSTALL_DIR} …`);
     let moved = false;
-    if (RELEASE_TAG) {
-      // Fetch just the matching release tag (shallow) and check it out.
+    if (CLONE_REF) {
+      // Fetch just the matching ref (tag, or branch in TEST_REF mode) shallow
+      // and check it out. Plain `git fetch <ref>` resolves under refs/heads/
+      // or refs/tags/ automatically and leaves it at FETCH_HEAD.
       const f = run("git", ["-C", INSTALL_DIR, "fetch", "--depth=1", "--force",
-                            REPO_URL, `refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}`]);
+                            REPO_URL, CLONE_REF]);
       if (f.status === 0) {
-        const c = run("git", ["-C", INSTALL_DIR, "checkout", "--force", RELEASE_TAG]);
-        if (c.status === 0) { ok(`Updated to ${RELEASE_TAG}`); moved = true; }
+        const c = run("git", ["-C", INSTALL_DIR, "checkout", "--force", "FETCH_HEAD"]);
+        if (c.status === 0) { ok(`Updated to ${CLONE_REF}`); moved = true; }
       }
     }
     if (!moved) {
@@ -280,10 +289,10 @@ function ensureRepo() {
   } else {
     info(`Cloning Aria Code into ${INSTALL_DIR} …`);
     let r = { status: 1 };
-    if (RELEASE_TAG) {
-      r = run("git", ["clone", "--depth=1", "--branch", RELEASE_TAG, REPO_URL, INSTALL_DIR]);
-      if (r.status === 0) ok(`Cloned ${RELEASE_TAG} to ${INSTALL_DIR}`);
-      else warn(`Tag ${RELEASE_TAG} not on remote yet — falling back to default branch`);
+    if (CLONE_REF) {
+      r = run("git", ["clone", "--depth=1", "--branch", CLONE_REF, REPO_URL, INSTALL_DIR]);
+      if (r.status === 0) ok(`Cloned ${CLONE_REF} to ${INSTALL_DIR}`);
+      else warn(`Ref ${CLONE_REF} not on remote yet — falling back to default branch`);
     }
     if (r.status !== 0) {
       r = run("git", ["clone", "--depth=1", REPO_URL, INSTALL_DIR]);

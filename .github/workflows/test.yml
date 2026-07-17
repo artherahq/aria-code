@@ -19,6 +19,65 @@ jobs:
         working-directory: npm
         run: npm test
 
+  # 2026-07-17: npm-wrapper above only unit-tests paths.js/venv.js — it never
+  # actually runs `npm install -g` end to end, so every real-world install
+  # bug found this session (uv exit-code trust, wrong git-install instructions
+  # on Windows, no PATH-reopen reminder) shipped to users without CI ever
+  # catching it, because every job in every workflow in this repo runs on
+  # ubuntu-latest only. This job actually installs the packed tarball
+  # globally and runs the resulting `aria`/`aria-code` binaries on all three
+  # platforms real users install on, so a broken postinstall.js on Windows or
+  # macOS fails CI instead of shipping silently.
+  install-smoke-test:
+    name: install smoke test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Pack the npm package
+        working-directory: npm
+        shell: bash
+        run: npm pack --pack-destination "${{ runner.temp }}"
+
+      # Isolate the runtime install dir per-run via ARIA_HOME so this never
+      # touches a pre-existing install and each matrix leg starts fresh.
+      # --foreground-scripts because npm silences postinstall output by
+      # default — without it, a hung or silently-failing install just shows
+      # "added 1 package" with no way to tell it never actually ran.
+      #
+      # ARIA_INSTALL_TEST_REF: postinstall.js normally git-clones the Python
+      # runtime (aria_cli.py etc.) from a release tag or main — NOT from this
+      # tarball — so without this override, a fix to any runtime file would
+      # stay CI-blind until after merge (2026-07-17: caught the hard way when
+      # the readline-on-Windows fix kept "failing" here despite being correct,
+      # because CI was silently testing main's old aria_cli.py instead of the
+      # PR's). Pointing it at this run's own branch makes the smoke test
+      # actually exercise the code under review.
+      - name: npm install -g (runs postinstall.js for real)
+        shell: bash
+        env:
+          ARIA_HOME: ${{ runner.temp }}/aria-home
+          ARIA_INSTALL_TEST_REF: ${{ github.head_ref || github.ref_name }}
+        run: |
+          set -e
+          PKG=$(ls "${{ runner.temp }}"/artheras-aria-code-*.tgz)
+          npm install -g "$PKG" --foreground-scripts
+
+      - name: Verify the installed CLI actually runs
+        shell: bash
+        run: |
+          set -e
+          aria-code --version
+          aria --help > /dev/null
+          echo "✅ both 'aria' and 'aria-code' resolve and run on ${{ matrix.os }}"
+
   pytest:
     name: pytest (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
