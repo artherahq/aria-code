@@ -524,8 +524,23 @@ ${C.green}╔══════════════════════�
 
   ${C.dim}Tip: Pull a free local model for offline use:${C.reset}
   ${C.cyan}ollama pull qwen2.5:7b${C.reset}
-
 `);
+
+  if (PLATFORM === "win32") {
+    // npm's global-install shims for `aria` / `aria-code` land in
+    // %AppData%\npm, which the Node.js installer adds to the user's PATH —
+    // but cmd.exe / PowerShell only read PATH once at shell startup, not on
+    // every command. A terminal window that was already open before this
+    // install (or, worse, npm/Node itself was just installed and this is the
+    // very first shell since) will keep reporting "'aria' is not recognized"
+    // even though the install genuinely succeeded, because the shim exists
+    // but this particular shell's PATH is stale. This is the single most
+    // common "install worked, command not found" report on Windows — closing
+    // and reopening the terminal is the fix, not reinstalling.
+    warn("Windows: close this terminal window and open a new one before running 'aria' —");
+    warn("the install added it to PATH, but this window won't see that update until reopened.");
+  }
+  process.stdout.write("\n");
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
