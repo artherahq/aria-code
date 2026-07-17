@@ -4,6 +4,18 @@ All notable changes to Aria Code are documented here.
 
 ---
 
+## [4.1.7] — 2026-07-17
+
+### Fixed
+
+**Windows install and startup — genuinely broken end to end, now CI-verified on windows-latest**
+- `npm install -g` on Windows showed Linux-only `sudo apt-get install git` instructions when git was missing — added a real Windows branch (winget / git-scm.com)
+- No reminder that Windows needs a terminal reopen after install for the new PATH entry to take effect — successful installs looked like `aria` "wasn't found"
+- `aria_cli.py` unconditionally imported `readline`, a Unix-only stdlib module — crashed every Windows run at startup regardless of install success
+- Terminal dark/light theme detection called `os.uname()` (also Unix-only) in two places (`ui/console.py`, `ui/input_box.py`) — crashed immediately after the readline fix
+- `aria --help` crashed with `UnicodeEncodeError` on Windows — its own help text is intentionally bilingual (Chinese examples) and Windows consoles default to a legacy codepage that can't encode it; now forces UTF-8 stdout/stderr
+- CI's install-smoke-test itself was structurally blind to any of the above: `postinstall.js` clones the Python runtime from a GitHub release tag / `main`, never from the npm tarball, so a fix to `aria_cli.py` couldn't turn CI green until after merge — added a test-only `ARIA_INSTALL_TEST_REF` override so the smoke test actually exercises the branch under review
+
 ## [4.1.0] — 2026-06-17
 
 ### Added
