@@ -234,10 +234,21 @@ function ensureGit() {
     return;
   }
   err("git not found.");
-  if (PLATFORM === "darwin")
+  if (PLATFORM === "darwin") {
     err("Run: xcode-select --install  then re-run: npm install -g @artheras/aria-code");
-  else
+  } else if (PLATFORM === "win32") {
+    // Previously this fell into the Linux branch below and told Windows users to
+    // run `sudo apt-get install git` — a command that doesn't exist on Windows
+    // (no sudo, no apt-get), leaving them with no way to actually fix the error.
+    err("Install git for Windows, then re-run: npm install -g @artheras/aria-code");
+    if (which("winget")) {
+      err("Run: winget install --id Git.Git -e --source winget");
+    } else {
+      err("Download the installer from: https://git-scm.com/download/win");
+    }
+  } else {
     err("Run: sudo apt-get install git  then re-run: npm install -g @artheras/aria-code");
+  }
   process.exit(1);
 }
 
