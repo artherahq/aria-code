@@ -51,10 +51,20 @@ jobs:
       # --foreground-scripts because npm silences postinstall output by
       # default — without it, a hung or silently-failing install just shows
       # "added 1 package" with no way to tell it never actually ran.
+      #
+      # ARIA_INSTALL_TEST_REF: postinstall.js normally git-clones the Python
+      # runtime (aria_cli.py etc.) from a release tag or main — NOT from this
+      # tarball — so without this override, a fix to any runtime file would
+      # stay CI-blind until after merge (2026-07-17: caught the hard way when
+      # the readline-on-Windows fix kept "failing" here despite being correct,
+      # because CI was silently testing main's old aria_cli.py instead of the
+      # PR's). Pointing it at this run's own branch makes the smoke test
+      # actually exercise the code under review.
       - name: npm install -g (runs postinstall.js for real)
         shell: bash
         env:
           ARIA_HOME: ${{ runner.temp }}/aria-home
+          ARIA_INSTALL_TEST_REF: ${{ github.head_ref || github.ref_name }}
         run: |
           set -e
           PKG=$(ls "${{ runner.temp }}"/artheras-aria-code-*.tgz)
