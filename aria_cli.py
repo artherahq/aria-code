@@ -33,7 +33,20 @@ import os
 import asyncio
 import json
 import argparse
-import readline
+try:
+    # readline is Unix-only in the standard library — it does not exist on
+    # Windows Python at all (CI's install-smoke-test caught this: every
+    # Windows install crashed on startup with "ModuleNotFoundError: No
+    # module named 'readline'", regardless of prompt_toolkit being the
+    # preferred/primary input backend). The one place this module is
+    # actually used (readline.* calls further down) already prefers
+    # prompt_toolkit and wraps the readline fallback in its own
+    # try/except, so leaving `readline` unset here degrades correctly —
+    # the crash was purely from this unguarded top-level import running
+    # before any of that fallback logic got a chance to execute.
+    import readline
+except ImportError:
+    readline = None
 import logging
 import time
 import shlex
