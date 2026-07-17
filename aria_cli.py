@@ -29,6 +29,20 @@ Usage:
 __version__ = "4.1.4"
 
 import sys
+
+# Windows consoles default to a legacy codepage (cp1252 etc.), not UTF-8 —
+# and this CLI's own --help text, examples, and output are intentionally
+# bilingual (Chinese + English; see the module docstring above). Any of that
+# text reaching stdout/stderr without this crashes with UnicodeEncodeError
+# (caught by CI's install-smoke-test: `aria --help` on windows-latest).
+# reconfigure() is a no-op in practice on POSIX, where stdout is already
+# UTF-8, so this is safe to run unconditionally on every platform.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError):
+        pass
+
 import os
 import asyncio
 import json
