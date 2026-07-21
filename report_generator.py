@@ -432,15 +432,57 @@ def _e(text: str) -> str:
     return html.escape(str(text or ""))
 
 
+# export_pdf() below renders through weasyprint, which has no color-emoji glyph
+# support and no emoji font in this report's CSS font stack (see font-family
+# declarations above) — any raw emoji that reaches the page renders as a glyph
+# from a mismatched fallback font, visibly offset from the text baseline
+# ("floating" beside/above the surrounding text). Confirmed and fixed for the
+# same root cause in apps/cli/pdf_report.py (2026-07-20); this module is a
+# separate rendering system (per this file's own docstring — three independent
+# HTML/CSS stacks in this codebase, not sharing code) so it needed its own
+# copy of the fix rather than an import. Unlike pdf_report.py's structured
+# signal columns, the risk here is narrower and specific: `analysis` and
+# `key_points` are freeform LLM-authored prose (see _agent_card / synthesis),
+# and models sometimes decorate analysis text with emoji unprompted — this is
+# the one choke point (_md_to_html) all of that freeform text passes through
+# before reaching the page, so stripping here catches it regardless of which
+# caller introduces it next.
+_EMOJI_RE = _re.compile(
+    "["
+    "\U0001F300-\U0001FAFF"
+    "\U00002600-\U000027BF"
+    "\U00002B00-\U00002BFF"  # ⭐⬜ etc. — distinct block from the ↑/↓/→ arrows
+                              # (U+2190-21FF) this codebase uses elsewhere for
+                              # trend indicators; do not widen this to include it
+    "\U0001F100-\U0001F1FF"  # enclosed alphanumeric supplement (🆕🆓🆙🆒🆗 etc.)
+                              # + regional indicators (flag pairs), same block —
+                              # widened 2026-07-21, see matching note in
+                              # apps/cli/pdf_report.py's _EMOJI_RE
+    "\U0000FE0F"
+    "\U0000200D"
+    "]+"
+)
+
+
+def _strip_emoji(s: str) -> str:
+    return _EMOJI_RE.sub("", str(s or "")).strip()
+
+
 def _md_to_html(text: str, max_chars: int = 0) -> str:
     """Convert LLM-generated markdown to safe HTML for embedding in reports.
 
-    Order of operations: escape → fix &lt;br&gt; → tables → inline styles → newlines.
+    Order of operations: strip emoji → escape → fix &lt;br&gt; → tables →
+    inline styles → newlines.
     """
     if not text:
         return ""
     if max_chars and len(text) > max_chars:
         text = text[:max_chars] + "…"
+
+    # 0. Strip emoji first — see _strip_emoji's docstring above (weasyprint
+    # can't render them correctly regardless of where in the pipeline they
+    # get removed; doing it before escaping keeps this step encoding-agnostic).
+    text = _strip_emoji(text)
 
     # 1. HTML-escape all user content first (XSS prevention)
     t = html.escape(text)
@@ -1032,7 +1074,16 @@ _CSS = """
 body {
     background: var(--bg0);
     color: var(--text1);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", sans-serif;
+    /* STHeiti before PingFang SC/-apple-system: this stylesheet feeds
+       export_pdf() (weasyprint). PingFang ships as a multi-face .ttc, and
+       weasyprint has to extract/resubset a single face into a standalone
+       CID-keyed CFF font to embed it — poppler-based PDF readers parse the
+       result fine, but some other viewers mis-render it as substituted
+       glyphs (see the matching note in apps/cli/pdf_report.py, same root
+       cause, same fix, independently applied here since this is a separate
+       rendering system). STHeiti is a single-file font, no .ttc-extraction
+       step involved. */
+    font-family: "STHeiti", -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", "Helvetica Neue", sans-serif;
     font-size: 14px;
     line-height: 1.6;
     padding: 28px 24px;
