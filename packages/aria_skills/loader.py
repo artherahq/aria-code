@@ -49,6 +49,13 @@ _IGNORED_TREE_NAMES = {".DS_Store", ".pytest_cache", "__pycache__"}
 class SkillPolicy:
     allowed_tools: tuple[str, ...] = ()
     permissions: tuple[str, ...] = ()
+    # Specialist agents this skill expects to orchestrate, by registry name.
+    # Mirrors SkillSpec.agents in ..registry, which has carried the same
+    # skill→agent relationship for the built-in specs all along; this makes the
+    # portable SKILL.md catalog able to express it too. Advisory only — the
+    # loader never imports the agent registry, because it must keep working in
+    # runtimes that have no agents at all.
+    agents: tuple[str, ...] = ()
     script_execution: str = "approval"
     script_network: bool = False
     script_workspace_write: bool = False
@@ -110,6 +117,11 @@ class SkillActivation:
                 f"Integrity: {skill.integrity}",
                 f"Declared permissions: {', '.join(policy.permissions) or 'none'}",
                 f"Allowed tools: {', '.join(policy.allowed_tools) or 'runtime policy'}",
+                (
+                    f"Specialist agents: {', '.join(policy.agents)}"
+                    if policy.agents else
+                    "Specialist agents: none declared"
+                ),
                 (
                     "Bundled scripts are not pre-authorized. "
                     f"Execution mode={policy.script_execution}; network="
@@ -227,6 +239,7 @@ def _load_policy(folder: Path) -> SkillPolicy:
     return SkillPolicy(
         allowed_tools=tuple(str(item) for item in payload.get("allowed_tools") or []),
         permissions=tuple(str(item) for item in payload.get("permissions") or []),
+        agents=tuple(str(item) for item in payload.get("agents") or []),
         script_execution=str(scripts.get("execution") or "approval"),
         script_network=bool(scripts.get("network", False)),
         script_workspace_write=bool(scripts.get("workspace_write", False)),
