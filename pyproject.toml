@@ -48,6 +48,11 @@ dependencies = [
     "scipy>=1.13.0",
     "pandas_ta>=0.4.67b0; python_version >= '3.12'",  # PyPI removed 0.3.x; 0.4.x is 3.12-only. Optional — code has graceful fallback (find_spec/try-except).
     "yfinance>=0.2.55",
+    # macOS native PDF engine for /report --pdf (WKWebView.createPDF; no browser
+    # required). Non-darwin platforms use headless Chrome / weasyprint instead.
+    "pyobjc-framework-WebKit>=10.0; sys_platform == 'darwin'",
+    # Markdown deliverable rendering (markdown_pdf.py: styled zh/en report PDF)
+    "markdown>=3.6",
 ]
 
 [project.optional-dependencies]

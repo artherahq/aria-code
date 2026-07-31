@@ -16,6 +16,7 @@ from artifacts import (
     recent_artifacts_all,
     prune_artifacts,
     prune_artifacts_all,
+    register_existing_artifact,
     slugify_topic,
     user_generated_dir,
     user_output_root,
@@ -153,6 +154,31 @@ def test_recent_artifacts_all_includes_user_generated(monkeypatch, tmp_path: Pat
 
     assert {item["kind"] for item in items} >= {"market_report", "stock_chart"}
     assert any(str(tmp_path / "user-output" / "generated") in item["root"] for item in items)
+
+
+def test_register_existing_artifact_indexes_generated_file(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("ARIA_ARTIFACT_ROOT", str(tmp_path / "project-artifacts"))
+    monkeypatch.setenv("ARIA_USER_OUTPUT_ROOT", str(tmp_path / "user-output"))
+    output = user_generated_dir() / "四环生物综合报告.md"
+    output.write_text("# 四环生物\n\n完整报告内容。", encoding="utf-8")
+
+    record = register_existing_artifact(output, topic="000518")
+
+    assert record is not None
+    assert record.metadata_path.exists()
+    items = recent_artifacts_all(limit=10)
+    assert items[0]["kind"] == "markdown_document"
+    assert items[0]["topic"] == "000518"
+    assert items[0]["path"] == str(output.resolve())
+
+
+def test_register_existing_artifact_ignores_source_files(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("ARIA_USER_OUTPUT_ROOT", str(tmp_path / "user-output"))
+    source = tmp_path / "repo" / "app.py"
+    source.parent.mkdir()
+    source.write_text("print('source')", encoding="utf-8")
+
+    assert register_existing_artifact(source) is None
 
 
 def test_artifact_summary_and_prune(monkeypatch, tmp_path: Path):

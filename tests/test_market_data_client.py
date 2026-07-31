@@ -158,6 +158,10 @@ def test_ashare_quote_prefers_eastmoney():
     assert quote["name"] == "汇川技术"
     assert quote["provider"] == "eastmoney"
     assert quote["provider_chain"] == ["eastmoney"]
+    assert quote["volume"] == 12_345_600
+    assert quote["market_cap"] == 12_345
+    assert quote["volume_unit"] == "shares"
+    assert quote["market_cap_unit"] == "CNY"
 
 
 def test_ashare_quote_failure_returns_friendly_error(monkeypatch):
@@ -417,3 +421,49 @@ def test_crypto_yahoo_style_symbol_normalizes_to_ccxt_pair():
 
     assert _norm_crypto("BTC-USD") == "BTC/USDT"
     assert _norm_crypto("ETH-USD") == "ETH/USDT"
+
+
+def test_sh_index_secid_not_confused_with_sz_stock():
+    """上证指数族(000001.SS)与深市个股(000001.SZ 平安银行)共享 000 前缀,
+    secid 必须以交易所后缀为准——否则"上证指数"会返回平安银行的价格。"""
+    from market_data_client import _ashare_secid, _is_sh_index_family, _yf_ashare_symbol
+
+    assert _ashare_secid("000001", "000001.SS") == "1.000001"   # 上证综指 → 沪
+    assert _ashare_secid("000001", "000001.SZ") == "0.000001"   # 平安银行 → 深
+    assert _ashare_secid("000300", "000300.SS") == "1.000300"   # 沪深300 → 沪
+    assert _ashare_secid("600519", "") == "1.600519"            # 无后缀按前缀猜:茅台沪
+    assert _ashare_secid("000858", "") == "0.000858"            # 五粮液深
+
+    assert _is_sh_index_family("000001", "000001.SS")
+    assert not _is_sh_index_family("000001", "000001.SZ")
+
+    assert _yf_ashare_symbol("000001", "000001.SS") == "000001.SS"
+    assert _yf_ashare_symbol("000001", "") == "000001.SZ"
+
+
+def test_fallback_currency_follows_market_suffix():
+    """stooq/yfinance_download 兜底不带货币字段;按市场后缀推断,
+    不再硬编码 USD(NL 分析块的"货币单位:{currency}"直接消费该字段)。"""
+    from market_data_client import _currency_for_symbol
+
+    assert _currency_for_symbol("0700.HK") == "HKD"
+    assert _currency_for_symbol("MC.PA") == "EUR"
+    assert _currency_for_symbol("SAP.DE") == "EUR"
+    assert _currency_for_symbol("7203.T") == "JPY"
+    assert _currency_for_symbol("600519.SS") == "CNY"
+    assert _currency_for_symbol("AAPL") == "USD"
+    assert _currency_for_symbol("GC=F") == "USD"
+
+
+def test_finnhub_guard_skips_non_us_style_symbols():
+    """Finnhub 免费档只覆盖美股普通代码;指数/期货/外汇/带市场后缀符号
+    直接跳过(省一次注定失败的往返),由 yfinance 承接。"""
+    from market_data_client import _finnhub_style_symbol
+
+    assert _finnhub_style_symbol("AAPL")
+    assert _finnhub_style_symbol("NVDA")
+    assert not _finnhub_style_symbol("^GSPC")
+    assert not _finnhub_style_symbol("GC=F")
+    assert not _finnhub_style_symbol("EURUSD=X")
+    assert not _finnhub_style_symbol("0700.HK")
+    assert not _finnhub_style_symbol("SAP.DE")

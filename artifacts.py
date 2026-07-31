@@ -303,6 +303,72 @@ def write_artifact_raw_data(record: ArtifactRecord, data: Any) -> Path:
     return record.raw_data_path
 
 
+_ARTIFACT_KINDS_BY_SUFFIX = {
+    ".md": "markdown_document",
+    ".markdown": "markdown_document",
+    ".html": "html_document",
+    ".htm": "html_document",
+    ".pdf": "pdf_document",
+    ".docx": "word_document",
+    ".xlsx": "spreadsheet",
+    ".xls": "spreadsheet",
+    ".csv": "data_file",
+    ".json": "data_file",
+    ".py": "code_file",
+    ".ipynb": "notebook",
+    ".png": "image",
+    ".jpg": "image",
+    ".jpeg": "image",
+    ".svg": "image",
+}
+
+
+def register_existing_artifact(
+    path: Path | str,
+    *,
+    kind: str = "",
+    topic: str = "",
+    status: str = "complete",
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Optional[ArtifactRecord]:
+    """Register a generated file so it appears in the unified artifact list.
+
+    Only files under :func:`user_generated_dir` are registered.  This keeps
+    ordinary source-code edits out of the user's generated-output inventory.
+    Registration is best-effort and never changes the generated file itself.
+    """
+    try:
+        output_path = Path(path).expanduser().resolve()
+        generated_root = user_generated_dir(create=False).expanduser().resolve()
+        output_path.relative_to(generated_root)
+    except (OSError, RuntimeError, ValueError):
+        return None
+
+    lowered_name = output_path.name.lower()
+    if lowered_name.endswith((".metadata.json", ".raw_data.json")):
+        return None
+
+    record = ArtifactRecord(
+        category="generated/files",
+        topic=slugify_topic(topic or output_path.stem),
+        directory=output_path.parent,
+        path=output_path,
+        # Keep the output extension in sidecar names so report.md and
+        # report.html can coexist without overwriting each other's metadata.
+        metadata_path=output_path.with_name(f"{output_path.name}.metadata.json"),
+        raw_data_path=output_path.with_name(f"{output_path.name}.raw_data.json"),
+    )
+    payload: Dict[str, Any] = {
+        "kind": kind or _ARTIFACT_KINDS_BY_SUFFIX.get(output_path.suffix.lower(), "generated_file"),
+        "status": status,
+        "created_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+    }
+    if metadata:
+        payload.update(metadata)
+    write_artifact_metadata(record, payload)
+    return record
+
+
 def recent_artifacts(limit: int = 20, root: Optional[Path] = None) -> list[Dict[str, Any]]:
     """Return recent artifact metadata records, newest first."""
     base = root or artifact_root()

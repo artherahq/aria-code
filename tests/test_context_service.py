@@ -53,10 +53,10 @@ def test_context_service_local_compaction_preserves_errors_and_tail():
     compacted = service.compact_messages(messages, max_chars=100)
 
     assert compacted[0]["role"] == "system"
-    assert len(compacted) == len(messages)
-    assert "[compacted]" in compacted[1]["content"]
-    assert "Traceback: boom" in compacted[2]["content"]
-    assert "error preserved" in compacted[2]["content"]
+    joined = "\n".join(str(message.get("content", "")) for message in compacted)
+    assert len(compacted) <= len(messages)
+    assert "Traceback: boom" in joined
+    assert "failed request" in joined
     assert compacted[-1]["content"] == "tail 3"
 
 
@@ -79,6 +79,43 @@ def test_context_service_summary_prompt_and_envelope_shape():
     assert envelope.messages[0]["role"] == "user"
     assert "Session summary: AAPL was analyzed." in envelope.messages[0]["content"]
     assert envelope.messages[-1]["content"] == "Continue"
+
+
+def test_summary_envelope_bounds_recent_output_and_drops_runtime_markers():
+    service = ContextService(ContextPolicy(
+        max_tokens=4096,
+        target_ratio=0.50,
+        summary_tail_messages=4,
+    ))
+    huge = "report body\n" + ("x" * 30_000) + "\n*[model stopped — repetition detected]*"
+    messages = [
+        {"role": "user", "content": "Analyze 000518"},
+        {"role": "assistant", "content": huge},
+        {"role": "user", "content": "继续完善"},
+    ]
+
+    envelope = service.build_summary_envelope(messages, "Session summary: report generated.")
+    total_chars = sum(len(str(message.get("content", ""))) for message in envelope.messages)
+    joined = "\n".join(str(message.get("content", "")) for message in envelope.messages)
+
+    assert total_chars < 4096 * 3 * 0.55
+    assert "model stopped" not in joined
+    assert "recent message compacted" in joined
+
+
+def test_summary_envelope_does_not_nest_previous_summary_wrapper():
+    service = ContextService(ContextPolicy(summary_tail_messages=4))
+    messages = [
+        {"role": "user", "content": "[会话摘要 — 早期对话已压缩]\nold"},
+        {"role": "assistant", "content": "已获取摘要，继续之前的工作。"},
+        {"role": "user", "content": "current task"},
+    ]
+
+    envelope = service.build_summary_envelope(messages, "Session summary: current.")
+    joined = "\n".join(str(message.get("content", "")) for message in envelope.messages)
+
+    assert "old" not in joined
+    assert joined.count("Session summary: current.") == 1
 
 
 def test_message_processing_uses_context_service_compatibility_layer():

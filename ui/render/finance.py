@@ -476,7 +476,36 @@ def render_finance_result(tool_name: str, result: dict, *, console=None, has_ric
         stocks = result.get("stocks", [])
         count  = result.get("count", len(stocks))
         if has_rich:
+            from rich.markup import escape
             from rich.table import Table
+            from ui.render.responsive import StackedRecord, render_stacked_records, structured_layout
+
+            layout = structured_layout(console)
+            if layout == "stacked":
+                records = []
+                for stock in stocks[:30]:
+                    change = stock.get("change_pct") or 0
+                    color = "green" if change >= 0 else "red"
+                    pe = f"{stock.get('pe_dynamic', 0):.1f}" if stock.get("pe_dynamic") else "—"
+                    market_cap = stock.get("market_cap_yi", (stock.get("market_cap") or 0) / 1e8)
+                    records.append(StackedRecord(
+                        headline=(
+                            f"{escape(str(stock.get('code', '')))}  "
+                            f"{escape(str(stock.get('name', '')))}"
+                        ),
+                        lines=(
+                            f"[dim]价格[/dim] {stock.get('price', 0):.2f}  ·  "
+                            f"[dim]涨跌[/dim] [{color}]{change:+.2f}%[/{color}]",
+                            f"[dim]PE[/dim] {pe}  ·  [dim]市值[/dim] {market_cap:.0f} 亿",
+                        ),
+                    ))
+                render_stacked_records(
+                    console,
+                    title=f"A股筛选 · 共 {count} 只",
+                    records=records,
+                    footer=str(prov_tag).strip(),
+                )
+                return
             t = Table(title=f"A股筛选  共 {count} 只", show_header=True, box=None, padding=(0,1))
             t.add_column("代码",   style="bold", width=8)
             t.add_column("名称",   width=10)
@@ -508,7 +537,32 @@ def render_finance_result(tool_name: str, result: dict, *, console=None, has_ric
         count  = result.get("count", len(stocks))
         date_s = result.get("date", "")
         if has_rich:
+            from rich.markup import escape
             from rich.table import Table
+            from ui.render.responsive import StackedRecord, render_stacked_records, structured_layout
+
+            if structured_layout(console) == "stacked":
+                records = []
+                for stock in stocks[:30]:
+                    streak = stock.get("consecutive") or stock.get("limit_streak") or "—"
+                    records.append(StackedRecord(
+                        headline=(
+                            f"{escape(str(stock.get('code', '')))}  "
+                            f"{escape(str(stock.get('name', '')))}"
+                        ),
+                        lines=(
+                            f"[dim]连板[/dim] {escape(str(streak))}  ·  "
+                            f"[dim]类型[/dim] {escape(str(stock.get('limit_type') or '—'))}",
+                            f"[dim]首封时间[/dim] {escape(str(stock.get('first_lock_time') or '—'))}",
+                        ),
+                    ))
+                render_stacked_records(
+                    console,
+                    title=f"涨停板池 · {escape(str(date_s))} · 共 {count} 只",
+                    records=records,
+                    footer=str(prov_tag).strip(),
+                )
+                return
             t = Table(title=f"涨停板池  {date_s}  共 {count} 只",
                       show_header=True, box=None, padding=(0,1))
             t.add_column("代码",  style="bold", width=8)
@@ -716,33 +770,75 @@ def render_finance_result(tool_name: str, result: dict, *, console=None, has_ric
                     console.print(f"[dim]{broker} — 当前无持仓[/dim]")
                 return
             if has_rich:
+                from rich.markup import escape
                 from rich.table import Table
+                from ui.render.responsive import StackedRecord, render_stacked_records, structured_layout
+
+                ordered = sorted(positions, key=lambda x: -abs(x.get("market_value", 0)))
+                total_mv = sum(p.get("market_value", 0) for p in positions)
+                total_pnl = sum(p.get("pnl", 0) for p in positions)
+                total_color = "green" if total_pnl >= 0 else "red"
+                layout = structured_layout(console)
+                if layout == "stacked":
+                    records = []
+                    for p in ordered:
+                        pnl = p.get("pnl", 0)
+                        pct = p.get("pnl_pct", 0)
+                        color = "green" if pnl >= 0 else "red"
+                        records.append(StackedRecord(
+                            headline=(
+                                f"{escape(str(p.get('symbol', '')))}  "
+                                f"{escape(str(p.get('name') or '—'))}"
+                            ),
+                            lines=(
+                                f"[dim]持仓[/dim] {p.get('quantity', 0):,.0f}",
+                                f"[dim]成本[/dim] {p.get('cost', 0):.3f}  ·  "
+                                f"[dim]现价[/dim] {p.get('price', 0):.3f}",
+                                f"[dim]市值[/dim] {p.get('market_value', 0):,.2f}  ·  "
+                                f"[dim]盈亏[/dim] [{color}]{pnl:+,.2f} ({pct:+.2f}%)[/{color}]",
+                            ),
+                        ))
+                    render_stacked_records(
+                        console,
+                        title=f"{escape(str(broker))} 持仓",
+                        records=records,
+                        footer=(
+                            f"共 {len(positions)} 只 · 总市值 {total_mv:,.2f} · "
+                            f"总盈亏 [{total_color}]{total_pnl:+,.2f}[/{total_color}]"
+                        ),
+                    )
+                    return
                 t = Table(title=f"[bold]{broker}[/bold] 持仓", show_header=True, header_style="bold")
                 t.add_column("代码",   style="bold", no_wrap=True)
                 t.add_column("名称",   max_width=10)
                 t.add_column("持仓",   justify="right")
-                t.add_column("成本",   justify="right", style="dim")
-                t.add_column("现价",   justify="right")
+                if layout == "full":
+                    t.add_column("成本",   justify="right", style="dim")
+                    t.add_column("现价",   justify="right")
                 t.add_column("市值",   justify="right")
                 t.add_column("盈亏",   justify="right")
                 t.add_column("盈亏%",  justify="right")
-                for p in sorted(positions, key=lambda x: -abs(x.get("market_value", 0))):
+                for p in ordered:
                     pnl = p.get("pnl", 0)
                     pct = p.get("pnl_pct", 0)
                     c   = "green" if pnl >= 0 else "red"
-                    t.add_row(
-                        p.get("symbol",""), p.get("name","—")[:10],
-                        f"{p.get('quantity',0):,.0f}",
-                        f"{p.get('cost',0):.3f}", f"{p.get('price',0):.3f}",
+                    row = [
+                        p.get("symbol", ""), p.get("name", "—")[:10],
+                        f"{p.get('quantity', 0):,.0f}",
+                    ]
+                    if layout == "full":
+                        row.extend([f"{p.get('cost', 0):.3f}", f"{p.get('price', 0):.3f}"])
+                    row.extend([
                         f"{p.get('market_value',0):,.2f}",
                         f"[{c}]{pnl:+,.2f}[/{c}]",
                         f"[{c}]{pct:+.2f}%[/{c}]",
-                    )
+                    ])
+                    t.add_row(*row)
                 console.print(t)
-                total_mv  = sum(p.get("market_value",0) for p in positions)
-                total_pnl = sum(p.get("pnl",0) for p in positions)
-                tc = "green" if total_pnl >= 0 else "red"
-                console.print(f"  [dim]{len(positions)} 只  市值 {total_mv:,.2f}  总盈亏 [{tc}]{total_pnl:+,.2f}[/{tc}][/dim]")
+                console.print(
+                    f"  [dim]{len(positions)} 只  市值 {total_mv:,.2f}  "
+                    f"总盈亏 [{total_color}]{total_pnl:+,.2f}[/{total_color}][/dim]"
+                )
             else:
                 for p in positions:
                     print(f"  {p.get('symbol',''):<8} {p.get('name',''):<10} 持仓:{p.get('quantity',0):.0f}  盈亏:{p.get('pnl',0):+,.2f}")
@@ -755,29 +851,60 @@ def render_finance_result(tool_name: str, result: dict, *, console=None, has_ric
                     console.print(f"[dim]{broker} — 无订单记录[/dim]")
                 return
             if has_rich:
+                from rich.markup import escape
                 from rich.table import Table
+                from ui.render.responsive import StackedRecord, render_stacked_records, structured_layout
+
+                layout = structured_layout(console)
+                _ss = {"filled":"[green]成交[/green]","partial":"[yellow]部成[/yellow]",
+                       "open":"[cyan]委托中[/cyan]","cancelled":"[dim]已撤[/dim]"}
+                _sd = {"buy":"[green]买入[/green]","sell":"[red]卖出[/red]"}
+                if layout == "stacked":
+                    records = []
+                    for o in orders:
+                        avg_price = f"{o.get('avg_price', 0):.3f}" if o.get("avg_price") else "—"
+                        records.append(StackedRecord(
+                            headline=f"{escape(str(o.get('symbol', '')))}",
+                            lines=(
+                                f"[dim]方向[/dim] {_sd.get(o.get('side', ''), escape(str(o.get('side', ''))))}  ·  "
+                                f"[dim]状态[/dim] {_ss.get(o.get('status', ''), escape(str(o.get('status', ''))))}",
+                                f"[dim]委托[/dim] {o.get('quantity', 0):,.0f} @ {o.get('price', 0):.3f}",
+                                f"[dim]成交[/dim] {o.get('filled', 0):,.0f} @ {avg_price}",
+                                f"[dim]时间[/dim] {escape(str(o.get('time') or '—'))}",
+                            ),
+                        ))
+                    render_stacked_records(
+                        console,
+                        title=f"{escape(str(broker))} 订单",
+                        records=records,
+                        footer=f"共 {len(orders)} 笔",
+                    )
+                    return
                 t = Table(title=f"[bold]{broker}[/bold] 订单", show_header=True, header_style="bold")
                 t.add_column("代码",  style="bold")
                 t.add_column("方向",  justify="center")
                 t.add_column("委托量", justify="right")
-                t.add_column("成交量", justify="right")
                 t.add_column("委托价", justify="right", style="dim")
-                t.add_column("均价",   justify="right")
                 t.add_column("状态")
                 t.add_column("时间",   style="dim", max_width=14)
-                _ss = {"filled":"[green]成交[/green]","partial":"[yellow]部成[/yellow]",
-                       "open":"[cyan]委托中[/cyan]","cancelled":"[dim]已撤[/dim]"}
-                _sd = {"buy":"[green]买入[/green]","sell":"[red]卖出[/red]"}
+                if layout == "full":
+                    t.add_column("成交量", justify="right")
+                    t.add_column("均价",   justify="right")
                 for o in orders:
-                    t.add_row(
+                    row = [
                         o.get("symbol",""),
                         _sd.get(o.get("side",""), o.get("side","")),
-                        f"{o.get('quantity',0):,.0f}", f"{o.get('filled',0):,.0f}",
+                        f"{o.get('quantity',0):,.0f}",
                         f"{o.get('price',0):.3f}",
-                        f"{o.get('avg_price',0):.3f}" if o.get("avg_price") else "—",
                         _ss.get(o.get("status",""), o.get("status","")),
                         str(o.get("time",""))[:14],
-                    )
+                    ]
+                    if layout == "full":
+                        row.extend([
+                            f"{o.get('filled', 0):,.0f}",
+                            f"{o.get('avg_price', 0):.3f}" if o.get("avg_price") else "—",
+                        ])
+                    t.add_row(*row)
                 console.print(t)
             else:
                 for o in orders:

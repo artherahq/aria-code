@@ -52,6 +52,7 @@ class AgentTeam:
         on_agent_done: Optional[Callable[[str, AgentResult], None]] = None,
         on_synthesis_start: Optional[Callable[[List["AgentResult"]], None]] = None,
         timeout_per_agent: float = 60.0,
+        synthesis_timeout: float | None = None,
         lang: str = "zh",
     ):
         self.llm                = llm_provider
@@ -60,6 +61,11 @@ class AgentTeam:
         self.on_agent_done      = on_agent_done
         self.on_synthesis_start = on_synthesis_start
         self.timeout            = timeout_per_agent
+        self.synthesis_timeout  = (
+            float(synthesis_timeout)
+            if synthesis_timeout is not None
+            else min(float(timeout_per_agent), 30.0)
+        )
         self.lang               = lang
 
     def _build_agent(self, name: str) -> Optional[BaseAgent]:
@@ -75,33 +81,121 @@ class AgentTeam:
             lang=self.lang,
         )
 
-    async def _run_one(self, agent: BaseAgent, symbol: str) -> AgentResult:
+    def _emit_agent_done(self, name: str, result: AgentResult) -> None:
+        """Notify UI adapters without allowing rendering errors to fail agents."""
+        if not self.on_agent_done:
+            return
         try:
-            result = await asyncio.wait_for(
-                agent.run(symbol), timeout=self.timeout
+            self.on_agent_done(name, result)
+        except Exception as exc:
+            logger.debug("[%s] completion callback failed: %s", name, exc)
+
+    @staticmethod
+    def _fallback_data_is_usable(agent_name: str, data: Dict[str, Any]) -> bool:
+        if agent_name == "technical":
+            return bool(data.get("quote", {}).get("price") and data.get("history"))
+        if agent_name == "fundamental":
+            fundamentals = data.get("fundamentals") or {}
+            return any(
+                fundamentals.get(key) not in (None, "", 0)
+                for key in ("pe_ttm", "pe_ratio", "pb", "pb_ratio", "roe", "revenue_growth")
             )
-            if self.on_agent_done:
-                self.on_agent_done(agent.name, result)
+        if agent_name == "risk":
+            return bool(data.get("risk_metrics"))
+        return False
+
+    async def _deterministic_fallback(
+        self,
+        agent: BaseAgent,
+        symbol: str,
+        data: Optional[Dict[str, Any]],
+        reason: str,
+    ) -> Optional[AgentResult]:
+        if not data or not self._fallback_data_is_usable(agent.name, data):
+            return None
+        try:
+            fallback_agent = agent.__class__(
+                llm_provider=None,
+                data_router=None,
+                on_token=None,
+                lang=self.lang,
+            )
+            result = await fallback_agent.analyze(symbol, data)
+            result.degraded = True
+            result.confidence = min(float(result.confidence or 0), 0.45)
+            result.provenance = list(dict.fromkeys([
+                *result.provenance,
+                "prefetched_market_bundle",
+                "deterministic_template",
+            ]))
+            result.limitations = list(dict.fromkeys([
+                *result.limitations,
+                f"LLM agent unavailable: {reason}",
+            ]))
+            result.data_used = dict(result.data_used or {})
+            result.data_used["fallback_reason"] = reason
+            return result
+        except Exception as exc:
+            logger.warning("[%s] deterministic fallback failed: %s", agent.name, exc)
+            return None
+
+    async def _run_one(
+        self,
+        agent: BaseAgent,
+        symbol: str,
+        prefetched_data: Optional[Dict[str, Any]] = None,
+    ) -> AgentResult:
+        try:
+            operation = (
+                agent.analyze(symbol, prefetched_data)
+                if prefetched_data is not None
+                else agent.run(symbol)
+            )
+            result = await asyncio.wait_for(
+                operation, timeout=self.timeout
+            )
+            self._emit_agent_done(agent.name, result)
             return result
         except asyncio.TimeoutError:
             logger.warning(f"[{agent.name}] 超时 ({self.timeout}s)")
+            fallback = await self._deterministic_fallback(
+                agent, symbol, prefetched_data, "timeout"
+            )
+            if fallback is not None:
+                self._emit_agent_done(agent.name, fallback)
+                return fallback
             _timeout_result = AgentResult(
                 agent=agent.name, symbol=symbol,
                 analysis="", confidence=0.0, error="timeout",
             )
             # Still emit the leaf so the streaming tree shows ⎿ ⏺ <agent> 超时
-            if self.on_agent_done:
-                try:
-                    self.on_agent_done(agent.name, _timeout_result)
-                except Exception:
-                    pass
+            self._emit_agent_done(agent.name, _timeout_result)
             return _timeout_result
+        except Exception as exc:
+            reason = f"{type(exc).__name__}: {exc}"
+            logger.warning("[%s] failed: %s", agent.name, reason)
+            fallback = await self._deterministic_fallback(
+                agent, symbol, prefetched_data, reason
+            )
+            if fallback is not None:
+                self._emit_agent_done(agent.name, fallback)
+                return fallback
+            failed = AgentResult(
+                agent=agent.name,
+                symbol=symbol,
+                analysis="",
+                confidence=0.0,
+                error=reason,
+            )
+            self._emit_agent_done(agent.name, failed)
+            return failed
 
     async def run(
         self,
         symbol: str,
         agents: Optional[List[str]] = None,
         market_context: Optional[Dict[str, Any]] = None,
+        agent_data: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> TeamResult:
         """并行运行所有 agent，等待全部完成后汇总。"""
         names_to_run = agents or DEFAULT_TEAM
@@ -118,7 +212,8 @@ class AgentTeam:
             )
 
         # 并行执行 — return_exceptions=True 确保单个 agent 异常不取消其余 agent
-        tasks   = [self._run_one(a, symbol) for a in agent_objects]
+        prefetched = agent_data or {}
+        tasks = [self._run_one(a, symbol, prefetched.get(a.name)) for a in agent_objects]
         _raw    = await asyncio.gather(*tasks, return_exceptions=True)
         results: List[AgentResult] = []
         for _item, _agent in zip(_raw, agent_objects):
@@ -160,7 +255,11 @@ class AgentTeam:
 
         # synthesis — 把 agent 结果打包进 data，直接调 analyze() 而非 run()
         synthesis_text = ""
-        if "synthesis" in names_to_run or len(agent_objects) >= 2:
+        successful_results = [result for result in results if result.success]
+        should_synthesize = bool(successful_results) and (
+            "synthesis" in names_to_run or len(successful_results) >= 2
+        )
+        if should_synthesize:
             synth_cls = get_registry().get("synthesis")
             if synth_cls:
                 synth_agent = synth_cls(
@@ -178,7 +277,7 @@ class AgentTeam:
                 try:
                     synth_result = await asyncio.wait_for(
                         synth_agent.analyze(symbol, synth_data),
-                        timeout=self.timeout,
+                        timeout=self.synthesis_timeout,
                     )
                     synthesis_text = synth_result.analysis
                 except Exception as e:
@@ -212,6 +311,9 @@ async def run_team(
     on_synthesis_start: Optional[Callable] = None,
     lang: str = "zh",
     market_context: Optional[Dict[str, Any]] = None,
+    agent_data: Optional[Dict[str, Dict[str, Any]]] = None,
+    timeout_per_agent: float = 60.0,
+    synthesis_timeout: float | None = None,
 ) -> TeamResult:
     """
     便捷函数，替代原 financial_agents.run_team_analysis()。
@@ -227,9 +329,16 @@ async def run_team(
         on_token=on_token,
         on_agent_done=on_agent_done,
         on_synthesis_start=on_synthesis_start,
+        timeout_per_agent=timeout_per_agent,
+        synthesis_timeout=synthesis_timeout,
         lang=lang,
     )
-    return await team.run(symbol, agents=agents, market_context=market_context)
+    return await team.run(
+        symbol,
+        agents=agents,
+        market_context=market_context,
+        agent_data=agent_data,
+    )
 
 
 # ── 内部工具 ──────────────────────────────────────────────────────────────────

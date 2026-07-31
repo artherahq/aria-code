@@ -174,12 +174,74 @@ def _normalise_ashare(symbol: str) -> str:
     s = s.lstrip("0") if s.startswith(("60","00","30","68","83","87")) else s
     return s.zfill(6)
 
-def _ashare_secid(code: str) -> str:
-    """Convert 6-digit code → Eastmoney secid (1.XXXXXX or 0.XXXXXX)."""
+def _ashare_secid(code: str, original: str = "") -> str:
+    """Convert 6-digit code → Eastmoney secid (1.XXXXXX=沪 / 0.XXXXXX=深).
+
+    原符号带交易所后缀时以后缀为准:上证指数族(000001.SS 上证综指/000300.SS
+    沪深300/000905.SS 中证500…)与深市个股(000001.SZ 平安银行…)共享 000 前缀,
+    仅凭前缀猜会把"上证指数"解析成平安银行——跨市场张冠李戴。
+    """
     code = code.zfill(6)
+    o = (original or "").strip().upper()
+    if o.endswith((".SS", ".SH")):
+        return f"1.{code}"   # 上交所(含上证指数族)
+    if o.endswith(".SZ"):
+        return f"0.{code}"   # 深交所
     if code.startswith(("60", "68", "83", "87")):
         return f"1.{code}"   # 上交所
     return f"0.{code}"       # 深交所
+
+
+def _is_sh_index_family(code: str, original: str = "") -> bool:
+    """上证指数族:.SS/.SH 后缀 + 000/880/999 前缀(个股 000xxx 只在深市)。"""
+    o = (original or "").strip().upper()
+    return o.endswith((".SS", ".SH")) and code.zfill(6).startswith(("000", "880", "999"))
+
+
+def _yf_ashare_symbol(code: str, original: str = "") -> str:
+    """裸 6 位码 → yfinance 符号;原符号带后缀时以后缀为准(同 secid 的撞码问题)。"""
+    o = (original or "").strip().upper()
+    if o.endswith((".SS", ".SH")):
+        return code + ".SS"
+    if o.endswith(".SZ"):
+        return code + ".SZ"
+    return code + (".SS" if code.startswith(("6", "68", "83", "87")) else ".SZ")
+
+
+# 市场后缀 → 报价货币(兜底数据源 stooq/yfinance_download 不带货币字段时用;
+# 与 NL 分析块的"货币单位:{currency}"直接挂钩,硬编码 USD 会让欧股/港股说错货币)
+_SUFFIX_CURRENCY = {
+    ".SS": "CNY", ".SZ": "CNY", ".SH": "CNY",
+    ".HK": "HKD",
+    ".T": "JPY",
+    ".L": "GBP",
+    ".DE": "EUR", ".PA": "EUR", ".AS": "EUR", ".MI": "EUR", ".MC": "EUR",
+    ".KS": "KRW", ".KQ": "KRW",
+    ".AX": "AUD",
+    ".TO": "CAD", ".V": "CAD",
+    ".SW": "CHF",
+    ".SI": "SGD",
+}
+
+
+def _currency_for_symbol(symbol: str) -> str:
+    s = str(symbol or "").strip().upper()
+    for suffix, cur in _SUFFIX_CURRENCY.items():
+        if s.endswith(suffix):
+            return cur
+    return "USD"
+
+
+def _finnhub_style_symbol(symbol: str) -> bool:
+    """Finnhub 免费档只覆盖美股普通代码;指数(^)/期货(=F)/外汇(=X)/带市场后缀
+    的港欧日股必然失败——直接跳过省一次 6s 超时往返,由 yfinance 承接。"""
+    s = str(symbol or "").strip().upper()
+    if not s or s.startswith("^") or "=" in s:
+        return False
+    for suffix in _SUFFIX_CURRENCY:
+        if s.endswith(suffix):
+            return False
+    return True
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -391,8 +453,10 @@ class MarketDataClient:
             result = self._quote_ashare(symbol)
         elif _is_crypto(symbol):
             result = self._quote_crypto(symbol)
-        elif self._fh_key:
-            # Finnhub is primary for US/global stocks — faster, no rate limits
+        elif self._fh_key and _finnhub_style_symbol(symbol):
+            # Finnhub is primary for US stocks — faster, no rate limits.
+            # 指数/期货/外汇/带市场后缀的港欧日股不走 finnhub(免费档必失败,
+            # 白付一次往返),直接 yfinance。
             result = self._quote_finnhub(symbol)
             if not result.get("success"):
                 result = self._quote_yfinance(symbol)
@@ -732,7 +796,7 @@ class MarketDataClient:
                     "low":        round(float(last.get("Low",  0)), 2),
                     "open":       round(float(last.get("Open", 0)), 4),
                     "prev_close": prev,
-                    "currency":   "USD",
+                    "currency":   _currency_for_symbol(symbol),
                     "market":     "US",
                     "provider":   "yfinance_download",
                     "timestamp":  datetime.now().isoformat(),
@@ -915,7 +979,7 @@ class MarketDataClient:
             "low": round(float(last.get("low") or price), 2),
             "open": round(float(last.get("open") or price), 4),
             "prev_close": round(prev_close, 4),
-            "currency": "USD",
+            "currency": _currency_for_symbol(symbol),
             "market": "GLOBAL",
             "provider": "stooq",
             "provider_chain": ["yfinance", "finnhub", "stooq"],
@@ -1062,7 +1126,9 @@ class MarketDataClient:
         errors: List[str] = []
 
         # ── 优先路径: 用户配置的 Tushare（仅当 TUSHARE_TOKEN 已设置）──────────
-        _ts = self._tushare()
+        # 上证指数族(000001.SS 等)跳过 Tushare:裸 6 位码会命中同码深市个股
+        # (000001=平安银行),直接走东财(secid 已按后缀区分交易所)。
+        _ts = None if _is_sh_index_family(code, symbol) else self._tushare()
         if _ts is not None:
             try:
                 q = _ts.quote(code)
@@ -1086,7 +1152,7 @@ class MarketDataClient:
                 logger.debug("Tushare A-share quote failed %s: %s", code, ts_err)
 
         # ── 主路径: 东方财富 push2 API ─────────────────────────────────
-        secid = _ashare_secid(code)
+        secid = _ashare_secid(code, original=symbol)
         try:
             _resp = self._em_get_json(self.EM_QUOTE_URL, {
                 "secid":  secid,
@@ -1108,9 +1174,16 @@ class MarketDataClient:
                 "price":      price,
                 "change":     chg,
                 "change_pct": chg_pct,
-                "volume":     int(d.get("f47", 0)),
+                # Eastmoney push2 quote fields use lots (手) for f47 and
+                # CNY yuan for f48/f116 when fltt=2.  Normalize the public
+                # contract to shares/yuan so every downstream renderer uses
+                # the same units.
+                "volume":     int(float(d.get("f47", 0) or 0) * 100),
                 "turnover":   float(d.get("f48", 0)),
-                "market_cap": float(d.get("f116", 0)) * 1e4,
+                "market_cap": float(d.get("f116", 0)),
+                "volume_unit": "shares",
+                "turnover_unit": "CNY",
+                "market_cap_unit": "CNY",
                 "high":       float(d.get("f44", 0)),
                 "low":        float(d.get("f45", 0)),
                 "open":       float(d.get("f46", 0)),
@@ -1253,8 +1326,7 @@ class MarketDataClient:
         try:
             import yfinance as yf
             import os as _os
-            suffix = ".SS" if code.startswith(("6", "688", "83", "87")) else ".SZ"
-            yf_sym = code + suffix
+            yf_sym = _yf_ashare_symbol(code, symbol)
             # Temporarily clear proxy env vars so yfinance connects directly to Yahoo
             _proxy_backup = {k: _os.environ.pop(k, None)
                              for k in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy")}
@@ -1316,7 +1388,7 @@ class MarketDataClient:
 
     def _history_ashare(self, symbol: str, days: int, interval: str) -> Dict[str, Any]:
         code  = _normalise_ashare(symbol)
-        secid = _ashare_secid(code)
+        secid = _ashare_secid(code, original=symbol)
         errors: List[str] = []
         klt_map = {"1d": 101, "1w": 102, "1mo": 103, "1h": 60, "30m": 30}
         klt = klt_map.get(interval, 101)
@@ -1462,8 +1534,7 @@ class MarketDataClient:
         try:
             import yfinance as yf
             import os as _os
-            suffix = ".SS" if code.startswith(("6", "688", "83", "87")) else ".SZ"
-            yf_sym = code + suffix
+            yf_sym = _yf_ashare_symbol(code, symbol)
             period_map = {30: "1mo", 60: "3mo", 90: "3mo", 120: "6mo",
                           180: "6mo", 252: "1y", 365: "1y", 730: "2y"}
             period = period_map.get(days) or f"{days}d"
@@ -1521,7 +1592,7 @@ class MarketDataClient:
         # 通过 yfinance 尝试 (港股 / ADR)
         try:
             import yfinance as yf
-            yf_sym = code + ".SS" if code.startswith("6") else code + ".SZ"
+            yf_sym = _yf_ashare_symbol(code, symbol)
             return self._quote_yfinance(yf_sym)
         except Exception as e:
             return {"success": False, "error": str(e), "symbol": symbol}

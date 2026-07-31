@@ -3,6 +3,7 @@ import asyncio
 
 from runtime import (
     AgentEventComplete,
+    AgentEventError,
     AgentEventStatus,
     AgentErrorPresentation,
     AgentOptions,
@@ -48,9 +49,18 @@ class RuntimeAgentLoopTests(unittest.TestCase):
     def test_agent_error_presentation_empty_response_is_actionable(self):
         presentation = AgentErrorPresentation.from_error("empty_response")
 
-        self.assertEqual(presentation.level, "warning")
+        # error 而非 warning:空响应意味着本轮已终止(且 CLI 已自动重试过一次),
+        # 视觉上必须与可继续的普通提示区分。
+        self.assertEqual(presentation.level, "error")
         self.assertFalse(presentation.use_generic_error_prefix)
         self.assertIn("空响应", presentation.lines[0])
+
+    def test_agent_error_presentation_evidence_required_is_actionable(self):
+        presentation = AgentErrorPresentation.from_error("[ARIA-4223] evidence required")
+
+        self.assertEqual(presentation.level, "warning")
+        self.assertFalse(presentation.use_generic_error_prefix)
+        self.assertIn("可验证的金融数据", presentation.lines[0])
 
     def test_agent_error_presentation_respects_ui_language(self):
         presentation = AgentErrorPresentation.from_error("empty_response", lang="en")
@@ -462,6 +472,124 @@ class RuntimeAgentLoopTests(unittest.TestCase):
         self.assertTrue(any(isinstance(event, AgentEventStatus) and event.state == "loop_guard" for event in events))
         self.assertIsInstance(events[-1], AgentEventComplete)
         self.assertEqual(events[-1].result.provider, "fake")
+
+    def test_run_agent_blocks_ungrounded_financial_answer_and_suppresses_tokens(self):
+        streamed = []
+        prompts = []
+
+        async def provider_fn(message, history, **kwargs):
+            prompts.append(message)
+            kwargs["on_token"]("unverified answer")
+            return {
+                "success": True,
+                "response": "unverified answer",
+                "provider": "fake",
+            }
+
+        async def collect_events():
+            events = []
+            async for event in run_agent(
+                "Analyze AAPL today",
+                [],
+                provider_fn=provider_fn,
+                tool_executor=ToolExecutor({}),
+                options=AgentOptions(
+                    requires_evidence=True,
+                    grounding_tools=frozenset({"get_market_data"}),
+                ),
+                on_token=streamed.append,
+            ):
+                events.append(event)
+            return events
+
+        events = asyncio.run(collect_events())
+
+        self.assertEqual(streamed, [])
+        self.assertIn("Grounding requirement", prompts[0])
+        self.assertIn("get_market_data", prompts[0])
+        self.assertIsInstance(events[-1], AgentEventError)
+        self.assertIn("ARIA-4223", events[-1].error)
+
+    def test_run_agent_releases_output_after_grounding_tool_succeeds(self):
+        streamed = []
+        calls = {"provider": 0}
+
+        async def provider_fn(message, history, **kwargs):
+            calls["provider"] += 1
+            if calls["provider"] == 1:
+                kwargs["on_token"]("fetching")
+                return {
+                    "success": True,
+                    "response": "fetching",
+                    "provider": "fake",
+                    "tool_calls_pending": [
+                        {"tool": "get_market_data", "params": {"symbol": "AAPL"}}
+                    ],
+                }
+            kwargs["on_token"]("grounded answer")
+            return {
+                "success": True,
+                "response": "grounded answer",
+                "provider": "fake",
+            }
+
+        def market_tool(_params):
+            return {"success": True, "data": {"symbol": "AAPL", "price": 200.0}}
+
+        async def collect_events():
+            events = []
+            async for event in run_agent(
+                "Analyze AAPL today",
+                [],
+                provider_fn=provider_fn,
+                tool_executor=ToolExecutor({"get_market_data": (market_tool, "Market")}),
+                options=AgentOptions(
+                    requires_evidence=True,
+                    grounding_tools=frozenset({"get_market_data"}),
+                ),
+                on_token=streamed.append,
+            ):
+                events.append(event)
+            return events
+
+        events = asyncio.run(collect_events())
+
+        self.assertEqual(streamed, ["grounded answer"])
+        self.assertIsInstance(events[-1], AgentEventComplete)
+        self.assertEqual(events[-1].result.final_text, "grounded answer")
+
+    def test_run_agent_accepts_verified_evidence_from_preflight(self):
+        streamed = []
+
+        async def provider_fn(message, history, **kwargs):
+            kwargs["on_token"]("analysis from verified snapshot")
+            return {
+                "success": True,
+                "response": "analysis from verified snapshot",
+                "provider": "fake",
+            }
+
+        async def collect_events():
+            events = []
+            async for event in run_agent(
+                "Analyze the verified snapshot",
+                [],
+                provider_fn=provider_fn,
+                tool_executor=ToolExecutor({}),
+                options=AgentOptions(
+                    requires_evidence=True,
+                    grounding_tools=frozenset({"get_market_data"}),
+                    evidence_already_grounded=True,
+                ),
+                on_token=streamed.append,
+            ):
+                events.append(event)
+            return events
+
+        events = asyncio.run(collect_events())
+
+        self.assertEqual(streamed, ["analysis from verified snapshot"])
+        self.assertIsInstance(events[-1], AgentEventComplete)
 
     def test_tool_batch_state_cancel_and_next_turn(self):
         batch = ToolBatchState()

@@ -73,6 +73,9 @@ async def run_turn(
     confirm_tools=(),
     approval_callback: Optional[Callable] = None,
     approval_applier: Optional[Callable] = None,
+    requires_evidence: bool = False,
+    grounding_tools=(),
+    evidence_already_grounded: bool = False,
 ) -> TurnResult:
     """Drive one ``run_agent`` turn; return its text + lifecycle as a TurnResult.
 
@@ -103,6 +106,9 @@ async def run_turn(
             confirm_tools=frozenset(confirm_tools or ()),
             approval_callback=approval_callback,
             approval_applier=approval_applier,
+            requires_evidence=bool(requires_evidence),
+            grounding_tools=frozenset(grounding_tools or ()),
+            evidence_already_grounded=bool(evidence_already_grounded),
         ),
         on_token=_on_token,         # streamed live (run_agent emits no token events)
         on_thinking=on_thinking,    # streamed live (no thinking events either)

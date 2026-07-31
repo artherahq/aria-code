@@ -49,6 +49,7 @@ pdfplumber>=0.11.0      # PDF text + table extraction (preferred PDF parser)
 pypdf>=4.3.0            # PDF fallback parser (lighter, no table detection)
 python-docx>=1.1.2      # Word/DOCX: paragraphs, headings, embedded tables
 openpyxl>=3.1.5         # Excel/XLSX read+write; also used by pandas Excel engine
+markdown>=3.6           # markdown_pdf.py — styled zh/en report PDF rendering
 beautifulsoup4>=4.12.3  # HTML → clean text extraction (/file load *.html)
 Pillow>=10.4.0          # Image metadata (size, mode, EXIF); base64 for vision models
 
@@ -130,7 +131,12 @@ websockets>=12.0        # WebSocket client for aria_relay_client.py
 mplfinance>=0.12.9      # professional candlestick + volume charts in /report
 understat>=0.1.0        # football xG data (no API key required)
 ddgs>=9.0               # zero-config web search fallback (used by web_search tool; renamed from duckduckgo-search)
-# weasyprint>=60.0      # PDF export via /report --pdf (requires cairo/pango system libs)
+# PDF export via /report --pdf — engine chain (report_generator.export_pdf):
+#   1. headless Chrome/Edge/Chromium (autodetected, zero extra deps)
+#   2. macOS native WebKit (pyobjc, below — works with NO browser installed)
+#   3. weasyprint / wkhtmltopdf (optional fallbacks)
+pyobjc-framework-WebKit>=10.0; sys_platform == "darwin"
+# weasyprint>=60.0      # optional fallback engine (requires cairo/pango system libs)
 #   macOS install: brew install cairo pango libffi && pip install weasyprint
 
 # ─────────────────────────────────────────────────────────────────────────────

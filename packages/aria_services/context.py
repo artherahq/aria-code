@@ -126,22 +126,47 @@ class ContextService:
             max_chars = int(self.policy.max_tokens * 3 * self.policy.compact_ratio)
 
         total = sum(len(str(message.get("content", ""))) for message in messages)
-        if total <= max_chars or len(messages) <= self.policy.tail_messages:
+        if total <= max_chars:
             return messages
 
+        if not messages:
+            return []
+
+        if len(messages) == 1:
+            return [self._compact_recent_message(messages[0], max_chars)]
+
         system = messages[0]
-        keep_tail = min(self.policy.tail_messages, max(2, len(messages) - 1))
+        keep_tail = min(self.policy.tail_messages, max(1, len(messages) - 1))
         middle = messages[1:-keep_tail]
         tail = messages[-keep_tail:]
 
-        compacted: List[dict] = [system]
-        for message in middle:
-            compacted.append(self._compact_middle_message(message))
-        compacted.extend(tail)
-        return compacted
+        compacted_middle = [self._compact_middle_message(message) for message in middle]
+        per_tail_budget = max(500, max_chars // max(4, keep_tail + 2))
+        compacted_tail = [
+            self._compact_recent_message(message, per_tail_budget)
+            for message in tail
+            if not self._is_summary_wrapper(message)
+        ]
+        compacted: List[dict] = [system, *compacted_middle, *compacted_tail]
+        if self.estimate_message_tokens(compacted) * 3 <= max_chars:
+            return compacted
+
+        # Many old messages can still exceed the target even after each one is
+        # shortened. Collapse the middle into one deterministic envelope while
+        # retaining errors, user decisions and the bounded recent tail.
+        reserved = len(str(system.get("content", ""))) + sum(
+            len(str(message.get("content", ""))) for message in compacted_tail
+        )
+        middle_budget = max(800, max_chars - reserved - 400)
+        middle_text = self.build_summary_transcript(compacted_middle)[:middle_budget]
+        middle_envelope = {
+            "role": "user",
+            "content": f"[Earlier context compacted locally]\n{middle_text}",
+        }
+        return [system, middle_envelope, *compacted_tail]
 
     def _compact_middle_message(self, message: dict) -> dict:
-        content = str(message.get("content", ""))
+        content = self._clean_context_text(str(message.get("content", "")))
         role = str(message.get("role", ""))
 
         if role == "tool" and len(content) > 200:
@@ -170,13 +195,66 @@ class ContextService:
                 return {"role": role, "content": f"{head}\n...\n{tail} [compacted]"}
             return {"role": role, "content": content[:350] + "... [compacted]"}
 
-        return message
+        return {**message, "content": content}
+
+    @staticmethod
+    def _clean_context_text(content: str) -> str:
+        """Remove runtime-only markers and exact duplicate paragraphs."""
+        text = str(content or "")
+        runtime_markers = (
+            "*[model stopped — repetition detected]*",
+            "[model stopped — repetition detected]",
+        )
+        for marker in runtime_markers:
+            text = text.replace(marker, "")
+        paragraphs = [part.strip() for part in text.split("\n\n") if part.strip()]
+        deduped: List[str] = []
+        for paragraph in paragraphs:
+            if deduped and paragraph == deduped[-1]:
+                continue
+            deduped.append(paragraph)
+        return "\n\n".join(deduped).strip()
+
+    @staticmethod
+    def _is_summary_wrapper(message: dict) -> bool:
+        content = str(message.get("content", "")).lstrip()
+        return content.startswith((
+            "[Session summary - earlier conversation compressed]",
+            "[会话摘要 — 早期对话已压缩]",
+        )) or content in {
+            "Summary loaded. Continuing with the current task.",
+            "已获取摘要，继续之前的工作。",
+        }
+
+    def _compact_recent_message(self, message: dict, max_chars: int) -> dict:
+        """Bound a recent message so compaction actually lowers context use."""
+        content_obj = message.get("content", "")
+        if not isinstance(content_obj, str):
+            # Preserve multimodal content structures; they are rare and losing
+            # image/file blocks would be worse than keeping their metadata.
+            return message
+        content = self._clean_context_text(content_obj)
+        if len(content) <= max_chars:
+            return {**message, "content": content}
+
+        role = str(message.get("role", ""))
+        if role == "tool":
+            return self._compact_middle_message({**message, "content": content})
+
+        tail_chars = max(120, max_chars // 3)
+        head_chars = max(200, max_chars - tail_chars - 40)
+        compacted = (
+            content[:head_chars].rstrip()
+            + "\n… [recent message compacted] …\n"
+            + content[-tail_chars:].lstrip()
+        )
+        return {**message, "content": compacted}
 
     def build_summary_transcript(self, messages: List[dict]) -> str:
         parts: List[str] = []
         for message in messages:
             role = str(message.get("role", ""))
-            content = str(message.get("content", ""))
+            content = self._clean_context_text(str(message.get("content", "")))
             if role == "tool":
                 lines = [line.strip() for line in content.splitlines() if line.strip()]
                 has_error = any(
@@ -201,17 +279,26 @@ class ContextService:
             "  - All ticker symbols / asset names discussed\n"
             "  - Key numerical results (prices, rates, backtest metrics)\n"
             "  - Code files written or modified (file paths + purpose)\n"
-            "  - Errors encountered and how they were resolved\n"
+            "  - Unresolved blockers and the final resolution of past errors\n"
             "  - User preferences or decisions made\n"
             "  - The last task status (complete / in-progress / blocked)\n"
+            "Do NOT copy raw tool logs, permission prompts, install transcripts, or obsolete "
+            "statements such as 'cannot read the file' after the file was successfully read.\n"
+            "For resolved failures, keep only one short 'failed → resolved by ...' fact.\n"
             "Write in concise third-person present tense. "
             "Start with: 'Session summary: ...'\n\n"
             f"TRANSCRIPT:\n{transcript}\n\nSUMMARY:"
         )
 
     def build_summary_envelope(self, messages: List[dict], summary: str) -> ContextSummaryEnvelope:
-        tail_count = min(self.policy.summary_tail_messages, len(messages))
-        tail = messages[-tail_count:] if tail_count else []
+        eligible = [message for message in messages if not self._is_summary_wrapper(message)]
+        tail_count = min(self.policy.summary_tail_messages, len(eligible))
+        raw_tail = eligible[-tail_count:] if tail_count else []
+        target_chars = int(self.policy.max_tokens * 3 * self.policy.target_ratio)
+        wrapper_chars = len(summary) + 500
+        tail_budget = max(1600, target_chars - wrapper_chars)
+        per_message = max(500, tail_budget // max(1, tail_count))
+        tail = [self._compact_recent_message(message, per_message) for message in raw_tail]
         envelope_messages = [
             {
                 "role": "user",

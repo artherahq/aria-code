@@ -69,7 +69,10 @@ import signal
 import uuid
 import threading
 from datetime import datetime
-from typing import Optional, Dict, Any, List, Callable
+from typing import Optional, Dict, Any, List, Callable, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from brokers.base import AccountInfo
 
 from apps.cli.plotly_html import plotly_script_tag
 from apps.cli.bootstrap import (
@@ -140,6 +143,7 @@ from apps.cli.commands.report import (
     export_report_pdf,
     generate_html_report,
     parse_report_args,
+    report_agent_health,
     report_agent_names,
     report_file_size_kb,
     save_markdown_report,
@@ -2220,6 +2224,24 @@ if _HAS_PLUGIN:
     except Exception as _exc:
         logger.debug("Plugin tool registration error: %s", _exc)
 
+# ── Register spreadsheet deliverable tools (structured xlsx writer) ────────
+try:
+    from spreadsheet_tools import register_spreadsheet_tools as _reg_xlsx
+    _n_xlsx = _reg_xlsx(LOCAL_TOOLS, LOCAL_TOOL_SCHEMAS)
+    if _n_xlsx:
+        logger.info("Registered %d spreadsheet tools", _n_xlsx)
+except Exception as _exc:
+    logger.debug("Spreadsheet tools init error: %s", _exc)
+
+# ── Register markdown→PDF deliverable tools (styled zh/en report render) ───
+try:
+    from markdown_pdf import register_markdown_pdf_tools as _reg_mdpdf
+    _n_mdpdf = _reg_mdpdf(LOCAL_TOOLS, LOCAL_TOOL_SCHEMAS)
+    if _n_mdpdf:
+        logger.info("Registered %d markdown-pdf tools", _n_mdpdf)
+except Exception as _exc:
+    logger.debug("Markdown-pdf tools init error: %s", _exc)
+
 # Ollama tool schemas (for function calling) — extend so finance schemas added above are kept
 def _todo_schema():
     from apps.cli.todo_tracker import UPDATE_TODOS_SCHEMA
@@ -2720,6 +2742,11 @@ _auto_approve_session: bool = _ARIA_BOT_MODE  # Set True when user chooses "Yes,
 # More granular than _auto_approve_session: allows write_file without approving run_command.
 _session_always_allow: set = set()
 
+# Prefix-scoped run-command approvals, matching Codex's session rules.  A rule
+# such as ("python3", "/path/report.py") is safer than approving every shell
+# command while still preventing repeated prompts for the same workflow.
+_session_command_prefixes: set[tuple[str, ...]] = set()
+
 # Plan mode singleton — intercepts ALL tool calls for step-by-step approval
 _PLAN_MODE = PlanModeState()
 
@@ -2743,7 +2770,7 @@ def _show_edit_preview(params: dict):
         return
 
     p = pathlib.Path(path).expanduser().resolve()
-    short = "file tool"
+    short = p.name or "file tool"
 
     if not HAS_RICH:
         print(f"\n  Edit file  {short}")
@@ -2845,7 +2872,7 @@ def _show_write_preview(params: dict):
     content = _strip_markdown_fences(content)
 
     p = pathlib.Path(path).expanduser().resolve()
-    short = "file tool"
+    short = p.name or "file tool"
 
     existed = p.exists()
     action = "Overwrite file" if existed else "Write new file"
@@ -2883,14 +2910,47 @@ def _show_write_preview(params: dict):
 
 def _apply_tool_approval(params: dict, decision: ApprovalDecision) -> dict:
     """Apply approval state to CLI globals and execution params."""
-    global _auto_approve_session, _session_always_allow
+    global _auto_approve_session, _session_always_allow, _session_command_prefixes
     if decision.auto_approve_session:
         _auto_approve_session = True
-    # Per-tool always_allow: stored in decision's extra metadata field
-    _tool_always = getattr(decision, "_tool_always_allow", None)
-    if _tool_always:
-        _session_always_allow.add(_tool_always)
+    if decision.tool_scope:
+        _session_always_allow.add(decision.tool_scope)
+    if decision.command_prefix:
+        _session_command_prefixes.add(tuple(decision.command_prefix))
     return apply_approval_decision(params, decision)
+
+
+def _command_approval_prefix(command: str) -> tuple[str, ...]:
+    """Return a useful, bounded session prefix for one shell command."""
+    import shlex as _approval_shlex
+
+    try:
+        parts = tuple(_approval_shlex.split(str(command or "").strip()))
+    except ValueError:
+        return ()
+    if not parts:
+        return ()
+    executable = pathlib.Path(parts[0]).name.lower()
+    if executable.startswith("python"):
+        if len(parts) >= 3 and parts[1] == "-m":
+            return parts[:3]
+        if len(parts) >= 2 and parts[1].endswith(".py"):
+            return parts[:2]
+    if executable in {"pip", "pip3"} and len(parts) >= 2 and parts[1] == "install":
+        return parts[:2]
+    if executable in {"npm", "pnpm", "yarn"} and len(parts) >= 3 and parts[1] == "run":
+        return parts[:3]
+    return parts
+
+
+def _command_matches_session_prefix(command: str) -> bool:
+    import shlex as _approval_shlex
+
+    try:
+        parts = tuple(_approval_shlex.split(str(command or "").strip()))
+    except ValueError:
+        return False
+    return any(parts[:len(prefix)] == prefix for prefix in _session_command_prefixes if prefix)
 
 
 def _confirm_tool_execution_decision(tool_name: str, params: dict,
@@ -2926,6 +2986,8 @@ def _confirm_tool_execution_decision(tool_name: str, params: dict,
         if tool_name == "run_command":
             return ApprovalDecision.allow(policy=config_policy, user_approved=True)
         return ApprovalDecision.allow()
+    if tool_name == "run_command" and _command_matches_session_prefix(params.get("command", "")):
+        return ApprovalDecision.allow(policy="balanced", user_approved=True)
     # Per-tool session allow — user previously chose "Always allow [tool] this session"
     if tool_name in _session_always_allow:
         if tool_name == "run_command":
@@ -2986,27 +3048,28 @@ def _confirm_tool_execution_decision(tool_name: str, params: dict,
                     f"[dim]{cmd[:120]}[/dim]",
                     border_style="yellow", box=rich_box.ROUNDED, padding=(0, 1),
                 ))
+            _prefix = _command_approval_prefix(cmd)
+            _prefix_label = " ".join(_prefix)[:72] if _prefix else cmd[:72]
             options = [
-                ("Allow once",         "仅此次允许（不改变策略）"),
-                ("Allow & set balanced","允许并升级策略（本会话有效）"),
-                ("Yes, allow all",     "本会话内所有命令自动允许"),
-                ("No",                 "拒绝执行"),
+                ("Allow once", "仅此次允许（不改变策略）"),
+                ("Allow similar this session", f"本会话允许前缀: {_prefix_label}"),
+                ("Allow & set balanced", "允许并升级策略（本会话有效）"),
+                ("No", "拒绝执行"),
             ]
             choice = _arrow_select(options, selected=0, title="")
             if choice == 0:
                 return ApprovalDecision.allow(policy="balanced", user_approved=True)
             if choice == 1:
-                # Persist to config if possible
                 return ApprovalDecision.allow(
                     policy="balanced",
                     user_approved=True,
-                    upgrade_policy=True,
+                    command_prefix=_prefix,
                 )
             if choice == 2:
                 return ApprovalDecision.allow(
                     policy="balanced",
                     user_approved=True,
-                    auto_approve_session=True,
+                    upgrade_policy=True,
                 )
             return ApprovalDecision.deny("user denied")   # No
 
@@ -3022,9 +3085,18 @@ def _confirm_tool_execution_decision(tool_name: str, params: dict,
         pass
 
     _tool_label = {"write_file": "写文件", "edit_file": "编辑文件", "multi_edit": "批量编辑", "run_command": "运行命令"}.get(tool_name, tool_name)
+    _command_prefix = _command_approval_prefix(params.get("command", "")) if tool_name == "run_command" else ()
+    _scope_label = (
+        f"Always allow {' '.join(_command_prefix)[:64]}"
+        if _command_prefix else f"Always allow {_tool_label}"
+    )
+    _scope_help = (
+        "本会话内允许相同命令前缀"
+        if _command_prefix else f"本会话内自动允许所有 {_tool_label}"
+    )
     options = [
         ("Yes",                              ""),
-        (f"Always allow {_tool_label}",      f"本会话内自动允许所有 {_tool_label}"),
+        (_scope_label,                       _scope_help),
         ("Yes, allow all tools",             "本会话内所有工具自动允许"),
         ("No",                               ""),
     ]
@@ -3035,13 +3107,12 @@ def _confirm_tool_execution_decision(tool_name: str, params: dict,
             return ApprovalDecision.allow(policy=config_policy, user_approved=True)
         return ApprovalDecision.allow()
     if choice == 1:
-        # Per-tool always_allow for this session
-        d = ApprovalDecision.allow(
+        return ApprovalDecision.allow(
             policy=config_policy if tool_name == "run_command" else None,
             user_approved=True,
+            command_prefix=_command_prefix,
+            tool_scope="" if _command_prefix else tool_name,
         )
-        d._tool_always_allow = tool_name  # type: ignore[attr-defined]
-        return d
     if choice == 2:
         if tool_name == "run_command":
             return ApprovalDecision.allow(
@@ -3696,11 +3767,24 @@ def _recover_repetition_stopped_text(text: str) -> str:
     if marker not in (text or ""):
         return text
     clean = text.split(marker, 1)[0].rstrip()
+    # A model often starts a Markdown table immediately before entering a
+    # repetition loop.  A header plus separator without any data row is not a
+    # useful partial result and renders as raw pipes in narrow terminals.
+    lines = clean.splitlines()
+    if len(lines) >= 2:
+        separator = lines[-1].strip().strip("|").split("|")
+        if (
+            lines[-2].strip().startswith("|")
+            and separator
+            and all(re.fullmatch(r"\s*:?-{3,}:?\s*", cell or "") for cell in separator)
+        ):
+            lines = lines[:-2]
+            clean = "\n".join(lines).rstrip()
     if clean.count("```") % 2 == 1:
         clean += "\n```"
     note = (
         "\n\n> 已检测到模型开始重复输出，已自动停止展开。"
-        "上方工具结果和已生成文件仍然有效；如需继续，请指定要补充的部分或直接查看生成文件。"
+        "未完成的尾部已隐藏；成功的工具结果和已生成文件仍然有效。"
     )
     return (clean + note).strip()
 
@@ -4825,8 +4909,29 @@ def _print_tool_done(tool_name: str, elapsed_ms: int, success: bool = True, summ
         return
     action = _TOOL_ACTION_LABELS.get(tool_name, tool_name.replace("_", " "))
     icon   = "[green]✓[/green]" if success else "[red]✗[/red]"
-    t_str  = f"  [dim]({elapsed_ms}ms)[/dim]" if elapsed_ms > 0 else ""
-    s_str  = f"  [dim]{summary}[/dim]"        if summary    else ""
+    t_txt  = f"({elapsed_ms}ms)" if elapsed_ms > 0 else ""
+    if summary:
+        # 单行预算:summary 按显示宽度(CJK 记 2 格)截断,保证图标+动作+摘要+时长
+        # 排在同一行——否则 Rich 整行回卷,时长 chip 顶格孤立在下一行,树形缩进被破坏。
+        # 错误文本可能含 [] 等 Rich 标记字符,一并转义防串样式。
+        import shutil as _sh
+        from rich.cells import cell_len as _cl
+        from rich.markup import escape as _esc
+        cols   = _sh.get_terminal_size((100, 24)).columns
+        fixed  = 5 + _cl(action) + (2 + len(t_txt) if t_txt else 0) + 2
+        budget = max(12, cols - fixed)
+        if _cl(summary) > budget:
+            out, w = [], 0
+            for ch in summary:
+                cw = _cl(ch)
+                if w + cw > budget - 1:
+                    break
+                out.append(ch)
+                w += cw
+            summary = "".join(out) + "…"
+        summary = _esc(summary)
+    s_str = f"  [dim]{summary}[/dim]" if summary else ""
+    t_str = f"  [dim]{t_txt}[/dim]"   if t_txt   else ""
     console.print(f"  {icon}  [dim]{action}[/dim]{s_str}{t_str}")
 
 
@@ -4903,35 +5008,69 @@ def _print_broker_positions(positions: list, broker_label: str, currency: str = 
     if not positions:
         console.print(f"[dim]{broker_label} — 当前无持仓[/dim]")
         return
+    from rich.markup import escape as _esc
+    from ui.render.responsive import StackedRecord, render_stacked_records, structured_layout
+
+    ordered = sorted(positions, key=lambda x: -abs(x.market_value))
+    total_mv = sum(p.market_value for p in positions)
+    total_pnl = sum(p.pnl for p in positions)
+    total_color = "green" if total_pnl >= 0 else "red"
+    layout = structured_layout(console)
+    if layout == "stacked":
+        records = []
+        for p in ordered:
+            pnl_color = "green" if p.pnl >= 0 else "red"
+            records.append(StackedRecord(
+                headline=f"{_esc(str(p.symbol))}  {_esc(str(p.name or '—'))}",
+                lines=(
+                    f"[dim]持仓[/dim] {p.quantity:,.0f}  ·  [dim]可卖[/dim] {p.available_qty:,.0f}",
+                    f"[dim]成本[/dim] {p.cost_price:.3f}  ·  [dim]现价[/dim] {p.current_price:.3f}",
+                    f"[dim]市值[/dim] {p.market_value:,.2f}  ·  "
+                    f"[dim]盈亏[/dim] [{pnl_color}]{p.pnl:+,.2f} ({p.pnl_pct:+.2f}%)[/{pnl_color}]",
+                ),
+            ))
+        render_stacked_records(
+            console,
+            title=f"{_esc(str(broker_label))} 持仓",
+            records=records,
+            footer=(
+                f"共 {len(positions)} 只 · 总市值 {currency} {total_mv:,.2f} · "
+                f"总盈亏 [{total_color}]{total_pnl:+,.2f}[/{total_color}]"
+            ),
+        )
+        return
     from rich.table import Table
     tbl = Table(title=f"[bold]{broker_label}[/bold] 持仓", show_header=True, header_style="bold")
     tbl.add_column("代码",   style="bold", no_wrap=True)
     tbl.add_column("名称",   max_width=12)
     tbl.add_column("持仓",   justify="right")
-    tbl.add_column("可卖",   justify="right", style="dim")
-    tbl.add_column("成本",   justify="right", style="dim")
-    tbl.add_column("现价",   justify="right")
+    if layout == "full":
+        tbl.add_column("可卖",   justify="right", style="dim")
+        tbl.add_column("成本",   justify="right", style="dim")
+        tbl.add_column("现价",   justify="right")
     tbl.add_column("市值",   justify="right")
     tbl.add_column("盈亏",   justify="right")
     tbl.add_column("盈亏%",  justify="right")
-    total_mv = sum(p.market_value for p in positions)
-    total_pnl= sum(p.pnl         for p in positions)
-    for p in sorted(positions, key=lambda x: -abs(x.market_value)):
+    for p in ordered:
         pnl_color = "green" if p.pnl >= 0 else "red"
         pnl_sign  = "+" if p.pnl >= 0 else ""
-        tbl.add_row(
-            p.symbol, p.name[:12] or "—",
-            f"{p.quantity:,.0f}", f"{p.available_qty:,.0f}",
-            f"{p.cost_price:.3f}", f"{p.current_price:.3f}",
+        row = [p.symbol, p.name[:12] or "—", f"{p.quantity:,.0f}"]
+        if layout == "full":
+            row.extend([
+                f"{p.available_qty:,.0f}",
+                f"{p.cost_price:.3f}",
+                f"{p.current_price:.3f}",
+            ])
+        row.extend([
             f"{p.market_value:,.2f}",
             f"[{pnl_color}]{pnl_sign}{p.pnl:,.2f}[/{pnl_color}]",
             f"[{pnl_color}]{pnl_sign}{p.pnl_pct:.2f}%[/{pnl_color}]",
-        )
+        ])
+        tbl.add_row(*row)
     console.print(tbl)
-    pnl_color = "green" if total_pnl >= 0 else "red"
     console.print(
         f"  [dim]共 {len(positions)} 只  总市值 {total_mv:,.2f}  "
-        f"总盈亏 [{pnl_color}]{'+' if total_pnl>=0 else ''}{total_pnl:,.2f}[/{pnl_color}][/dim]"
+        f"总盈亏 [{total_color}]{'+' if total_pnl>=0 else ''}{total_pnl:,.2f}[/{total_color}][/dim]"
     )
 
 
@@ -4944,33 +5083,77 @@ def _print_broker_orders(orders: list, broker_label: str, status_filter: str = "
     if not orders:
         console.print(f"[dim]{broker_label} — 无 {status_filter} 订单[/dim]")
         return
-    from rich.table import Table
-    tbl = Table(title=f"[bold]{broker_label}[/bold] 订单 [dim]({status_filter})[/dim]",
-                show_header=True, header_style="bold")
-    tbl.add_column("订单号",  style="dim",   max_width=12)
-    tbl.add_column("代码",    style="bold",  no_wrap=True)
-    tbl.add_column("名称",    max_width=10)
-    tbl.add_column("方向",    justify="center")
-    tbl.add_column("类型",    style="dim")
-    tbl.add_column("委托量",  justify="right")
-    tbl.add_column("成交量",  justify="right")
-    tbl.add_column("委托价",  justify="right", style="dim")
-    tbl.add_column("均价",    justify="right")
-    tbl.add_column("状态")
-    tbl.add_column("时间",    style="dim", max_width=16)
+    from rich.markup import escape as _esc
+    from ui.render.responsive import StackedRecord, render_stacked_records, structured_layout
+
+    layout = structured_layout(console)
     _STATUS_STYLE = {"filled":"[green]成交[/green]","partial":"[yellow]部成[/yellow]",
                      "open":"[cyan]委托中[/cyan]","cancelled":"[dim]已撤[/dim]"}
     _SIDE_STYLE   = {"buy":"[green]买入[/green]","sell":"[red]卖出[/red]"}
-    for o in orders:
-        tbl.add_row(
-            o.order_id[-8:], o.symbol, o.name[:10] or "—",
-            _SIDE_STYLE.get(o.side, o.side),
-            o.order_type,
-            f"{o.quantity:,.0f}", f"{o.filled_qty:,.0f}",
-            f"{o.price:.3f}", f"{o.avg_price:.3f}" if o.avg_price else "—",
-            _STATUS_STYLE.get(o.status, o.status),
-            o.created_at[:16] if o.created_at else "—",
+    if layout == "stacked":
+        records = []
+        for o in orders:
+            avg_price = f"{o.avg_price:.3f}" if o.avg_price else "—"
+            records.append(StackedRecord(
+                headline=(
+                    f"{_esc(str(o.symbol))}  {_esc(str(o.name or '—'))}  "
+                    f"[dim]#{_esc(str(o.order_id[-8:]))}[/dim]"
+                ),
+                lines=(
+                    f"[dim]方向[/dim] {_SIDE_STYLE.get(o.side, _esc(str(o.side)))}  ·  "
+                    f"[dim]状态[/dim] {_STATUS_STYLE.get(o.status, _esc(str(o.status)))}",
+                    f"[dim]委托[/dim] {o.quantity:,.0f} @ {o.price:.3f}",
+                    f"[dim]成交[/dim] {o.filled_qty:,.0f} @ {avg_price}",
+                    f"[dim]时间[/dim] {_esc(str(o.created_at[:16] if o.created_at else '—'))}",
+                ),
+            ))
+        render_stacked_records(
+            console,
+            title=f"{_esc(str(broker_label))} 订单 · {_esc(str(status_filter))}",
+            records=records,
+            footer=f"共 {len(orders)} 笔",
         )
+        return
+    from rich.table import Table
+    tbl = Table(title=f"[bold]{broker_label}[/bold] 订单 [dim]({status_filter})[/dim]",
+                show_header=True, header_style="bold")
+    if layout == "full":
+        tbl.add_column("订单号",  style="dim",   max_width=12)
+        tbl.add_column("代码",    style="bold",  no_wrap=True)
+        tbl.add_column("名称",    max_width=10)
+        tbl.add_column("方向",    justify="center")
+        tbl.add_column("类型",    style="dim")
+        tbl.add_column("委托量",  justify="right")
+        tbl.add_column("成交量",  justify="right")
+        tbl.add_column("委托价",  justify="right", style="dim")
+        tbl.add_column("均价",    justify="right")
+        tbl.add_column("状态")
+        tbl.add_column("时间",    style="dim", max_width=16)
+    else:
+        tbl.add_column("代码",    style="bold",  no_wrap=True)
+        tbl.add_column("方向",    justify="center")
+        tbl.add_column("委托量",  justify="right")
+        tbl.add_column("委托价",  justify="right", style="dim")
+        tbl.add_column("状态")
+        tbl.add_column("时间",    style="dim", max_width=16)
+    for o in orders:
+        if layout == "full":
+            row = [
+                o.order_id[-8:], o.symbol, o.name[:10] or "—",
+                _SIDE_STYLE.get(o.side, o.side), o.order_type,
+                f"{o.quantity:,.0f}", f"{o.filled_qty:,.0f}",
+                f"{o.price:.3f}", f"{o.avg_price:.3f}" if o.avg_price else "—",
+                _STATUS_STYLE.get(o.status, o.status),
+                o.created_at[:16] if o.created_at else "—",
+            ]
+        else:
+            row = [
+                o.symbol, _SIDE_STYLE.get(o.side, o.side),
+                f"{o.quantity:,.0f}", f"{o.price:.3f}",
+                _STATUS_STYLE.get(o.status, o.status),
+                o.created_at[:16] if o.created_at else "—",
+            ]
+        tbl.add_row(*row)
     console.print(tbl)
 
 
@@ -4989,6 +5172,10 @@ def _print_preflight_notice(message: str, *, quiet: bool = False) -> bool:
         logger.debug("intent preflight failed: %s", exc)
         return False
     if not report.has_findings:
+        return False
+    # Optional accelerators and fallbacks should not interrupt a normal task.
+    # They remain visible through /preflight and /install when explicitly asked.
+    if not report.has_required_findings:
         return False
 
     text = format_preflight_plain(report)
@@ -5626,7 +5813,7 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
             "/strategy":  (self.cmd_strategy, "Strategy vault: /strategy show [name] (overview/workspace)|save|list|diff|load|review"),
             "/deploy":    (self.cmd_deploy,  "Deploy strategy to live ledger: /deploy <name> AAPL:10 | $100000 AAPL:30% | rebalance AAPL:30% | close"),
             "/accuracy":  (self.cmd_accuracy, "Prediction track record vs live prices"),
-            "/artifacts": (self.cmd_artifacts,"List or prune generated files: /artifacts [limit|stats|prune [keep] [--dry-run]]"),
+            "/artifacts": (self.cmd_artifacts,"Manage generated files: /artifacts [limit|open|reveal|path|copy-path|stats|prune]"),
             # ── Code & project ────────────────────────────────────────────────
             "/project":   (self.cmd_project,  "Project: /project load|tree|grep|ask|task|status"),
             "/init":      (self.cmd_init,     "Generate ARIA.md for current project: /init [--force]"),
@@ -5871,7 +6058,7 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
         "/report":    ("Usage: /report [SYMBOL] [--format html|md] [--output ./aria-output]", ["/report AAPL", "/report SPY --format md --output ./reports"]),
         "/dashboard": ("Usage: /dashboard  — 生成含持仓/行情/预警的个人化 HTML Dashboard，自动在浏览器打开", ["/dashboard"]),
         "/ui":        ("Usage: /ui <描述>  — 生成 Bloomberg Terminal 风格 HTML (自动暗色/亮色模式)", ["/ui 今日A股热力图", "/ui 持仓组合报告", "/ui 市场晨报看板"]),
-        "/artifacts": ("Usage: /artifacts [limit|stats|prune [keep] [--dry-run]]", ["/artifacts", "/artifacts 50", "/artifacts stats", "/artifacts prune 20"]),
+        "/artifacts": ("Usage: /artifacts [limit|open|reveal|path|copy-path|stats|prune]", ["/artifacts", "/artifacts open latest", "/artifacts reveal 2", "/artifacts copy-path 1", "/artifacts stats", "/artifacts prune 20"]),
         "/shortterm": ("Usage: /shortterm [SYMBOL]", ["/shortterm AAPL", "/shortterm sh600519"]),
         "/longterm":  ("Usage: /longterm [SYMBOL]", ["/longterm AAPL", "/longterm sh600519"]),
         # ── China market ────────────────────────────────────────────────────
@@ -5949,7 +6136,7 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
         "/logout":          ("Usage: /logout", ["/logout"]),
         "/status":          ("Usage: /status", ["/status"]),
         "/health":          ("Usage: /health", ["/health"]),
-        "/artifacts":       ("Usage: /artifacts [limit|stats|prune [keep] [--dry-run]]", ["/artifacts", "/artifacts 50", "/artifacts stats", "/artifacts prune 20"]),
+        "/artifacts":       ("Usage: /artifacts [limit|open|reveal|path|copy-path|stats|prune]", ["/artifacts", "/artifacts open latest", "/artifacts reveal 2", "/artifacts copy-path 1", "/artifacts stats", "/artifacts prune 20"]),
     }
 
     def cmd_help(self, args: str):
@@ -6093,6 +6280,7 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
         limit = 20
         keep = 20
         dry_run = False
+        selector = "latest"
         if tokens:
             head = tokens[0].lower()
             if head in {"prune", "cleanup", "gc", "purge"}:
@@ -6107,12 +6295,69 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
                         continue
             elif head in {"stats", "summary"}:
                 mode = "stats"
+            elif head in {"open", "reveal", "show", "path", "copy-path", "copy"}:
+                mode = "copy-path" if head == "copy" else head
+                selector = tokens[1] if len(tokens) > 1 else "latest"
             else:
                 try:
                     limit = int(head)
                 except Exception:
                     limit = 20
         from artifacts import artifact_summary_all, prune_artifacts_all, recent_artifacts_all
+
+        if mode in {"open", "reveal", "show", "path", "copy-path"}:
+            items = recent_artifacts_all(limit=100)
+            selected = None
+            if items:
+                if selector.lower() in {"latest", "last", "newest", "最近", "最新"}:
+                    selected = items[0]
+                elif selector.isdigit() and 1 <= int(selector) <= len(items):
+                    selected = items[int(selector) - 1]
+                else:
+                    needle = selector.lower()
+                    selected = next(
+                        (
+                            item for item in items
+                            if needle in pathlib.Path(str(item.get("path") or "")).name.lower()
+                        ),
+                        None,
+                    )
+            target = str((selected or {}).get("path") or "").strip()
+            if not target:
+                msg = f"未找到产物 {selector!r}。先运行 /artifacts 查看可用编号。"
+                console.print(f"[yellow]{msg}[/yellow]") if HAS_RICH else print(msg)
+                return
+
+            ok = True
+            error = ""
+            if mode == "open":
+                ok, error = _open_path_or_url(target)
+                action_text = "已打开"
+            elif mode in {"reveal", "show"}:
+                ok, error = _reveal_path_in_finder(target)
+                action_text = "已在访达中定位"
+            elif mode == "copy-path":
+                ok, error = _copy_text_to_clipboard(target)
+                action_text = "路径已复制"
+            else:
+                action_text = "文件路径"
+            if ok:
+                msg = f"{action_text}：{target}"
+                self.terminal._pending_market_artifact = {
+                    "kind": str((selected or {}).get("kind") or "artifact"),
+                    "path": target,
+                }
+                if HAS_RICH:
+                    console.print(f"[green]✓[/green] {msg}")
+                else:
+                    print(msg)
+            else:
+                msg = f"操作失败：{error or target}"
+                if HAS_RICH:
+                    console.print(f"[red]✗[/red] {msg}")
+                else:
+                    print(msg)
+            return
 
         if mode == "stats":
             summary = artifact_summary_all()
@@ -6168,31 +6413,29 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
             console.print(f"[dim]{msg}[/dim]") if HAS_RICH else print(msg)
             return
 
+        title = "生成的产物" if str(self.terminal.config.get("ui_lang", "en")).lower().startswith("zh") else "Generated artifacts"
         if HAS_RICH:
-            from rich.table import Table
-            table = Table(title="Generated artifacts", show_header=True, header_style="bold")
-            table.add_column("Kind", style="dim")
-            table.add_column("Status")
-            table.add_column("Topic")
-            table.add_column("File", overflow="fold")
-            table.add_column("Root", style="dim")
-            for item in items:
-                _path = item.get("path") or item.get("metadata_path") or ""
-                table.add_row(
-                    str(item.get("kind") or "artifact"),
-                    str(item.get("status") or "unknown"),
-                    str(item.get("topic") or ""),
-                    pathlib.Path(str(_path)).name if _path else "",
-                    pathlib.Path(str(item.get("root") or "")).name if item.get("root") else "",
-                )
-            console.print(table)
+            console.print(f"[bold]{title}[/bold]")
         else:
-            print("Generated artifacts")
-            for item in items:
-                _path = item.get("path") or item.get("metadata_path") or ""
-                _name = pathlib.Path(str(_path)).name if _path else ""
-                _root_name = pathlib.Path(str(item.get("root") or "")).name if item.get("root") else ""
-                print(f"- {item.get('kind')} [{item.get('status')}] {item.get('topic')}: {_name} ({_root_name})")
+            print(title)
+        for index, item in enumerate(items, start=1):
+            _path = item.get("path") or item.get("metadata_path") or ""
+            _name = pathlib.Path(str(_path)).name if _path else ""
+            _root_name = pathlib.Path(str(item.get("root") or "")).name if item.get("root") else ""
+            _status = str(item.get("status") or "unknown")
+            _icon = "✓" if _status == "complete" else "!" if _status in {"partial", "failed"} else "·"
+            _kind = str(item.get("kind") or "artifact")
+            _topic = str(item.get("topic") or "").strip()
+            _headline = f"#{index}  {_icon} {_kind}" + (f" · {_topic}" if _topic else "")
+            _detail = f"    {_name}" + (f"  ·  {_root_name}" if _root_name else "")
+            if HAS_RICH:
+                console.print(f"[bold]{_headline}[/bold]")
+                console.print(f"[dim]{_detail}[/dim]")
+            else:
+                print(_headline)
+                print(_detail)
+        hint = "操作：/artifacts open 1 · reveal 1 · copy-path 1"
+        console.print(f"[dim]{hint}[/dim]") if HAS_RICH else print(hint)
     async def cmd_analyze(self, args: str):
         return await super().cmd_analyze(args)
 
@@ -6392,39 +6635,12 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
         if not silent and HAS_RICH:
             console.print("[dim]Summarising conversation...[/dim]")
 
-        # Build a dense transcript for the summariser.
-        # Tool results get special treatment: extract status + first 3 non-empty lines
-        # rather than raw-truncating, so the summariser sees outcomes not noise.
-        transcript_parts = []
-        for m in conv:
-            role = m.get("role", "")
-            content = m.get("content", "")
-            if role == "tool":
-                lines = [ln.strip() for ln in content.splitlines() if ln.strip()]
-                has_err = any("error" in ln.lower() or "traceback" in ln.lower() for ln in lines[:10])
-                excerpt = " | ".join(lines[:3]) if lines else content[:200]
-                label = "Tool[⚠ error]" if has_err else "Tool"
-                transcript_parts.append(f"{label}: {excerpt[:300]}")
-            elif role == "user":
-                transcript_parts.append(f"User: {content[:800]}")
-            else:
-                transcript_parts.append(f"Aria: {content[:1200]}")
-        transcript = "\n\n".join(transcript_parts)
+        from packages.aria_services.context import build_context_service
 
-        summary_prompt = (
-            "You are a context compressor for a quantitative finance AI assistant.\n"
-            "Given the conversation transcript, produce a DENSE SUMMARY (≤350 words).\n"
-            "You MUST preserve:\n"
-            "  • All ticker symbols / asset names discussed\n"
-            "  • Key numerical results (prices, rates, backtest metrics)\n"
-            "  • Code files written or modified (file paths + purpose)\n"
-            "  • Errors encountered and how they were resolved\n"
-            "  • User preferences or decisions made\n"
-            "  • The last task status (complete / in-progress / blocked)\n"
-            "Write in concise third-person present tense. "
-            "Start with: 'Session summary: ...'\n\n"
-            f"TRANSCRIPT:\n{transcript}\n\nSUMMARY:"
-        )
+        model_key = self.terminal.config.get("model", "qwen2.5:7b")
+        max_ctx = int(get_model_cfg(model_key).get("num_ctx", 16384) or 16384)
+        context_service = build_context_service(max_tokens=max_ctx)
+        summary_prompt = context_service.build_summary_prompt(conv)
 
         summary = ""
         try:
@@ -6445,12 +6661,8 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
 
         if not summary:
             # Fallback: local structural compaction before hard trimming.
-            from apps.cli.message_processing import compact_messages
             try:
-                compacted = compact_messages(
-                    conv,
-                    model_key=self.terminal.config.get("model", "qwen2.5:7b"),
-                )
+                compacted = context_service.compact_messages(conv)
             except Exception:
                 compacted = []
             self.terminal.conversation = compacted if compacted and len(compacted) < len(conv) else conv[-8:]
@@ -6459,23 +6671,8 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
                               else "Compacted (summary fallback)")
             return
 
-        # Build compacted conversation: summary + last 3 pairs (6 msgs) for
-        # sufficient recency context. The summary acts as a pseudo-system message.
-        kept_tail = conv[-6:] if len(conv) >= 6 else conv[:]
-        self.terminal.conversation = [
-            {
-                "role": "user",
-                "content": (
-                    f"[会话摘要 — 早期对话已压缩]\n\n{summary}\n\n"
-                    f"[以下是最近的对话记录]"
-                )
-            },
-            {
-                "role": "assistant",
-                "content": "已获取摘要，继续之前的工作。"
-            },
-            *kept_tail,
-        ]
+        envelope = context_service.build_summary_envelope(conv, summary)
+        self.terminal.conversation = envelope.messages
         new_count = len(self.terminal.conversation)
         old_count = len(conv)
         if not silent:
@@ -8663,6 +8860,7 @@ class ArtheraTerminal:
         self._forks: List[dict] = []           # forked conversation snapshots
         self._pending_image: Optional[dict] = None  # pending vision content block
         self._pending_market_artifact: Optional[dict] = None
+        self._pending_market_resolution: Optional[dict] = None
         self._last_preflight_key: str = ""
         self._auto_compact_count: int = 0
         # ── Multi-file analysis session ──────────────────────────────────────
@@ -9186,6 +9384,70 @@ class ArtheraTerminal:
                 self._print_reference_summary(prepared)
                 message = prepared.expanded_text
                 reference_context = prepared.context_block
+
+        # Resolve same-name securities before deterministic routing or the LLM
+        # can silently pick the first ticker.  The clarification lives outside
+        # conversation history so the eventual request is recorded only once.
+        if not system_override and not message.lstrip().startswith("/"):
+            from apps.cli.market_universe import (
+                ambiguous_market_candidates,
+                select_market_candidate,
+            )
+
+            def _show_market_choices(name: str, candidates: list[Any]) -> str:
+                lines = [f"“{name}”对应多个交易标的，请先确认："]
+                for index, candidate in enumerate(candidates, start=1):
+                    lines.append(
+                        f"{index}. {candidate.name} — {candidate.symbol} · {candidate.market}"
+                    )
+                lines.append("回复编号、证券代码或市场（如“2”“1234.HK”“港股”）；输入“取消”退出。")
+                prompt = "\n".join(lines)
+                if HAS_RICH:
+                    console.print("\n[bold]Aria[/bold]  [dim]标的确认[/dim]")
+                    console.print(make_markdown(prompt))
+                    console.print()
+                else:
+                    print(f"\nAria  标的确认\n{prompt}\n")
+                return prompt
+
+            pending_resolution = dict(self._pending_market_resolution or {})
+            if pending_resolution:
+                candidates = list(pending_resolution.get("candidates") or [])
+                selected = select_market_candidate(message, candidates)
+                if message.strip().lower() in {"取消", "cancel", "算了", "不用了"}:
+                    self._pending_market_resolution = None
+                    notice = "已取消标的选择。"
+                    console.print(f"[dim]{notice}[/dim]") if HAS_RICH else print(notice)
+                    return
+                if selected is not None:
+                    original = str(pending_resolution.get("original") or "")
+                    start = int(pending_resolution.get("start") or 0)
+                    mention = str(pending_resolution.get("mention") or "")
+                    message = f"{original[:start]}{selected.symbol}{original[start + len(mention):]}"
+                    self._pending_market_resolution = None
+                    notice = f"已确认：{selected.name} · {selected.symbol} · {selected.market}"
+                    if HAS_RICH:
+                        console.print(f"[green]✓[/green] {notice}")
+                    else:
+                        print(notice)
+                elif re.fullmatch(r"[\w.^=\-]+|港股|美股|A股|沪深|香港|美国", message.strip(), re.I):
+                    _show_market_choices(str(pending_resolution.get("mention") or "该名称"), candidates)
+                    return
+                else:
+                    # A new natural-language request replaces the pending one.
+                    self._pending_market_resolution = None
+
+            ambiguous = ambiguous_market_candidates(message)
+            if ambiguous:
+                start, mention, candidates = ambiguous[0]
+                self._pending_market_resolution = {
+                    "original": message,
+                    "start": start,
+                    "mention": mention,
+                    "candidates": candidates,
+                }
+                _show_market_choices(mention, candidates)
+                return
         if (
             not system_override
             and self._pending_image is None
@@ -9637,31 +9899,60 @@ class ArtheraTerminal:
         # only a confirmed-successful turn clears it.
         _rt_sys_ov = getattr(self, "_system_override", None)
         _rt_turn = None
-        try:
-            _rt_turn = await run_chat_via_runtime(
-                prompt=current_message, history=self.conversation[:-1],
-                local_tools=LOCAL_TOOLS, tool_schemas=LOCAL_TOOL_SCHEMAS,
-                model=model, config=self.config, api_url=self.api_url,
-                ollama_url=self.config.get("ollama_url", "http://localhost:11434"),
-                cancel_event=self.cancel_event,
-                on_token=on_token, on_thinking=on_thinking,
-                on_tool_call=on_tool_call,
-                on_tool_result=on_tool_result, on_status=on_status,
-                thinking_mode=thinking_mode, user_context=user_context,
-                auth_token=auth_token, project_context=_PROJECT_CONTEXT,
-                system_override=_rt_sys_ov,
-                max_rounds=hard_max_rounds,
-                confirm_tools=_CONFIRM_TOOLS,
-                approval_callback=_approval_callback,
-                approval_applier=_approval_applier,
-                execution_context=lambda: {
-                    "_run_id": self._active_run_id,
-                    "_session_id": self.session_id,
-                },
-                return_result=True,
+        from packages.aria_services.research_protocol import (
+            grounding_tool_names,
+            requires_financial_evidence,
+        )
+        _requires_financial_evidence = requires_financial_evidence(message)
+        # 空响应自动重试:云端模型偶发空补全时,同 provider 重放本轮一次,
+        # 而不是把"请重试"推给用户(60s 的工具结果/思考不该因一次抽风作废)。
+        # 仅对 empty_response 重试;其他错误(配额/鉴权等)走原有 rescue 链。
+        for _rt_attempt in range(2):
+            try:
+                _rt_turn = await run_chat_via_runtime(
+                    prompt=current_message, history=self.conversation[:-1],
+                    local_tools=LOCAL_TOOLS, tool_schemas=LOCAL_TOOL_SCHEMAS,
+                    model=model, config=self.config, api_url=self.api_url,
+                    ollama_url=self.config.get("ollama_url", "http://localhost:11434"),
+                    cancel_event=self.cancel_event,
+                    on_token=on_token, on_thinking=on_thinking,
+                    on_tool_call=on_tool_call,
+                    on_tool_result=on_tool_result, on_status=on_status,
+                    thinking_mode=thinking_mode, user_context=user_context,
+                    auth_token=auth_token, project_context=_PROJECT_CONTEXT,
+                    system_override=_rt_sys_ov,
+                    max_rounds=hard_max_rounds,
+                    confirm_tools=_CONFIRM_TOOLS,
+                    approval_callback=_approval_callback,
+                    approval_applier=_approval_applier,
+                    requires_evidence=_requires_financial_evidence,
+                    grounding_tools=grounding_tool_names(LOCAL_TOOL_SCHEMAS),
+                    evidence_already_grounded=bool(
+                        _det_wants_analysis and deterministic.get("success")
+                    ),
+                    execution_context=lambda: {
+                        "_run_id": self._active_run_id,
+                        "_session_id": self.session_id,
+                    },
+                    return_result=True,
+                )
+            except Exception as _rt_err:
+                logger.error("Runtime turn failed: %s", _rt_err)
+                _rt_turn = None
+
+            _rt_probe_text = getattr(_rt_turn, "text", "") if _rt_turn is not None else ""
+            _rt_probe_cancelled = bool(getattr(_rt_turn, "cancelled", False)) or bool(
+                self.cancel_event is not None and self.cancel_event.is_set()
             )
-        except Exception as _rt_err:
-            logger.error("Runtime turn failed: %s", _rt_err)
+            if _rt_probe_cancelled or (_rt_probe_text or "").strip():
+                break
+            _rt_probe_err = (
+                getattr(_rt_turn, "error", None) if _rt_turn is not None else None
+            ) or "empty_response"
+            if _rt_attempt == 0 and "empty_response" in str(_rt_probe_err) and "ARIA-4223" not in str(_rt_probe_err):
+                logger.warning("Empty model response; auto-retrying the turn once")
+                continue
+            break
 
         response_text = stream_consumer.response_text
         token_count = stream_consumer.token_count
@@ -9696,6 +9987,16 @@ class ArtheraTerminal:
                 "tools_used": list(getattr(_rt_final, "tools", []) or []),
                 "sources": list(getattr(_rt_final, "sources", []) or []),
             }
+            # 状态条 ctx% 的真实数据源:provider 上报的本轮上下文占用
+            # (prompt 含系统提示/skills,字符估算看不见这部分)。
+            try:
+                self._last_prompt_tokens = int(
+                    (getattr(_rt_metadata, "prompt_tokens", 0) or 0)
+                    + (getattr(_rt_metadata, "completion_tokens", 0) or 0)
+                )
+                self._last_prompt_tokens_msgs = len(self.conversation)
+            except Exception:
+                pass
             response_text = stream_consumer.response_text or _rt_text
             turn_state.provider = _rt_provider
             turn_state.apply_model_result(result, response_text)
@@ -9710,7 +10011,7 @@ class ArtheraTerminal:
             result = {"success": False, "error": str(_err), "response": "", "cancelled": False}
             _fallback_mode = str(self.config.get("provider_fallback", "configured")).lower()
             _rescue = None
-            if _fallback_mode != "off":
+            if _fallback_mode != "off" and "ARIA-4223" not in str(_err):
                 try:
                     from providers.llm.registry import stream_cloud_fallback
                     _rescue = await stream_cloud_fallback(
@@ -9768,9 +10069,10 @@ class ArtheraTerminal:
                 if error_presentation.use_generic_error_prefix:
                     _print_error(error_presentation.lines[0])
                 else:
+                    _tone = "red" if error_presentation.level == "error" else "yellow"
                     for idx, ln in enumerate(error_presentation.lines):
                         if HAS_RICH:
-                            style = "bold yellow" if idx == 0 and len(error_presentation.lines) > 1 else "yellow"
+                            style = f"bold {_tone}" if idx == 0 and len(error_presentation.lines) > 1 else _tone
                             console.print(f"  [{style}]{ln}[/{style}]")
                         else:
                             print(f"  {ln}")
@@ -9799,6 +10101,17 @@ class ArtheraTerminal:
                 token_count=token_count,
                 thinking_tokens=thinking_tokens,
             )
+            # Repetition protection is surfaced by providers as a cancelled
+            # turn.  Sanitize the partial answer before rendering, persisting or
+            # feeding it back into the next context; otherwise the internal
+            # marker and an unfinished Markdown table leak into the conversation.
+            if stream_consumer.repetition_stopped or "*[model stopped — repetition detected]*" in (turn_result.final_text or ""):
+                from dataclasses import replace as _replace_turn_result
+
+                turn_result = _replace_turn_result(
+                    turn_result,
+                    final_text=_recover_repetition_stopped_text(turn_result.final_text),
+                )
             self._last_turn_envelope = turn_result.to_envelope()
             _turn_envelope = self._last_turn_envelope.to_dict()
             if self.runtime_trace is not None:
@@ -9819,7 +10132,8 @@ class ArtheraTerminal:
                 if turn_result.final_text and _use_batch_render[0]:
                     _stop_spinner()
                     console.print(make_markdown(_strip_latex(turn_result.final_text)))
-                console.print("\n[dim]Cancelled[/dim]")
+                _cancel_text = "已停止重复输出" if stream_consumer.repetition_stopped else "Cancelled"
+                console.print(f"\n[dim]{_cancel_text}[/dim]")
                 console.print(Rule(style="dim"))
             else:
                 if turn_result.final_text:
@@ -9901,9 +10215,10 @@ class ArtheraTerminal:
                     "empty_response",
                     lang=self.config.get("ui_lang", "en") or "en",
                 )
+                _tone = "red" if presentation.level == "error" else "yellow"
                 for idx, line in enumerate(presentation.lines):
                     if HAS_RICH:
-                        style = "bold yellow" if idx == 0 else "yellow"
+                        style = f"bold {_tone}" if idx == 0 else _tone
                         console.print(f"  [{style}]{line}[/{style}]")
                     else:
                         print(f"  {line}")
@@ -10366,7 +10681,17 @@ class ArtheraTerminal:
 
     def _bottom_toolbar_parts(self):
         from ui.banner import bottom_toolbar_parts as _btp
-        return _btp(self.conversation, self.config, self._actual_model, get_model_cfg)
+        # /clear、/compact 等把对话截短后,上一轮的真实 token 计数即失效
+        # (自愈式判定,免去在每个重置点手工清零)。
+        known = getattr(self, "_last_prompt_tokens", 0)
+        if len(self.conversation) < getattr(self, "_last_prompt_tokens_msgs", 0):
+            known = 0
+            self._last_prompt_tokens = 0
+            self._last_prompt_tokens_msgs = 0
+        return _btp(
+            self.conversation, self.config, self._actual_model, get_model_cfg,
+            known_context_tokens=known,
+        )
 
     async def _maybe_auto_compact_before_turn(self, incoming_content: str = "") -> bool:
         """Compact history before a request enters the model when context is hot."""

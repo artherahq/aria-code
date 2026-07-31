@@ -1,8 +1,10 @@
 from apps.cli.market_universe import (
     MarketSymbol,
+    ambiguous_market_candidates,
     looks_like_unresolved_market_name,
     resolve_market_mentions,
     resolve_market_symbol,
+    select_market_candidate,
 )
 
 
@@ -37,6 +39,40 @@ def test_dynamic_loader_can_resolve_full_universe_names():
     hits = resolve_market_mentions("测试股份和测试港股走势", load_universe=fake_loader)
 
     assert [item.symbol for _, item in hits] == ["301234", "1234.HK"]
+
+
+def test_same_name_symbols_require_explicit_selection():
+    candidates = [
+        MarketSymbol("同名科技", "301234", "CN", "test"),
+        MarketSymbol("同名科技", "1234.HK", "HK", "test"),
+    ]
+
+    groups = ambiguous_market_candidates(
+        "分析同名科技股票",
+        load_universe=lambda: candidates,
+    )
+
+    assert len(groups) == 1
+    position, name, options = groups[0]
+    assert position == 2
+    assert name == "同名科技"
+    assert [item.symbol for item in options] == ["301234", "1234.HK"]
+    assert select_market_candidate("2", options).symbol == "1234.HK"
+    assert select_market_candidate("301234", options).market == "CN"
+    assert select_market_candidate("不存在", options) is None
+
+
+def test_ambiguity_probe_is_cache_only(monkeypatch):
+    import apps.cli.market_universe as universe
+
+    monkeypatch.setattr(universe, "_load_cache", lambda: [])
+    monkeypatch.setattr(
+        universe,
+        "ensure_market_universe",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("network refresh should not run")),
+    )
+
+    assert ambiguous_market_candidates("你觉得技术面还有用吗") == []
 
 
 def test_unresolved_market_name_heuristic_blocks_history_inheritance():

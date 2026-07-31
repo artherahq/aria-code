@@ -111,9 +111,16 @@ def bottom_toolbar_parts(
     config: dict,
     actual_model: Optional[str],
     get_model_cfg_fn,
+    known_context_tokens: int = 0,
 ) -> tuple:
-    """Return (model_label, cwd, privacy, est_tokens, max_ctx)."""
-    est_tokens = sum(len(m.get("content", "")) for m in conversation) // 3
+    """Return (model_label, cwd, privacy, est_tokens, max_ctx).
+
+    est_tokens 优先取 provider 上一轮真实上报的 prompt+completion tokens
+    (known_context_tokens,含系统提示/skills 等字符估算看不见的开销),
+    对话字符估算仅作首轮兜底——否则加载了 skills 的会话会误显 "ctx 0%"。
+    """
+    char_est = sum(len(m.get("content", "")) for m in conversation) // 3
+    est_tokens = max(char_est, int(known_context_tokens or 0))
     mkey       = config.get("model", "qwen2.5:7b")
     max_ctx    = get_model_cfg_fn(mkey).get("num_ctx", 16384)
     cwd = os.getcwd()

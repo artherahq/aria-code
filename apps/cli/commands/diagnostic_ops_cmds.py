@@ -628,11 +628,20 @@ class DiagnosticOpsCommandsMixin:
                     ok_list.append(p)
                 except Exception:
                     fail_list.append(p)
+            # File parser availability is cached for performance.  Refresh it
+            # now so DOCX/PDF/XLSX tools work in this same Aria session.
+            try:
+                from file_analysis_tools import refresh_optional_parsers
+
+                refresh_optional_parsers()
+            except Exception:
+                pass
             if HAS_RICH:
                 console.print(f"  [green]✓ 安装完成: {', '.join(ok_list) or '—'}[/green]")
                 if fail_list:
                     console.print(f"  [yellow]⚠ 已安装但当前会话需重启才能加载: {', '.join(fail_list)}[/yellow]")
-                console.print("  [dim]提示: 部分包需重启 Aria 才能被工具加载[/dim]")
+                elif ok_list:
+                    console.print("  [dim]能力已刷新，当前会话可直接使用。[/dim]")
             else:
                 print(f"Installed: {', '.join(ok_list)}")
         else:
@@ -673,14 +682,11 @@ class DiagnosticOpsCommandsMixin:
             return
 
         if HAS_RICH:
+            from rich.markup import escape
             from rich.table import Table
             from rich import box as rich_box
-            table = Table(title="数据源状态", box=rich_box.SIMPLE, header_style="bold dim")
-            table.add_column("名称", width=16)
-            table.add_column("市场", width=20)
-            table.add_column("需要Key", width=8)
-            table.add_column("状态", width=8)
-            table.add_column("说明")
+            from ui.render.responsive import StackedRecord, render_stacked_records, structured_layout
+
             _DESC = {
                 "yfinance": "Yahoo Finance (免费)",
                 "akshare": "AkShare A股 (免费)",
@@ -690,16 +696,51 @@ class DiagnosticOpsCommandsMixin:
                 "alpha_vantage": "Alpha Vantage (免费Key)",
                 "world_bank": "世界银行 (免费)",
             }
+            source_rows = []
             for name, cls in _SOURCE_REGISTRY.items():
                 try:
-                    src = cls()
-                    configured = src.is_configured()
+                    source = cls()
+                    configured = source.is_configured()
                     status = "[green]✓ 就绪[/green]" if configured else "[dim]✗ 未配置[/dim]"
                     needs_key = "是" if cls.requires_key else "否"
                     markets = ", ".join(getattr(cls, "markets", []))
                 except Exception:
                     status, needs_key, markets = "[red]错误[/red]", "?", "?"
-                table.add_row(name, markets, needs_key, status, _DESC.get(name, ""))
+                source_rows.append((name, markets, needs_key, status, _DESC.get(name, "")))
+
+            layout = structured_layout(console)
+            if layout == "stacked":
+                records = [
+                    StackedRecord(
+                        headline=f"{escape(str(name))}  {status}",
+                        lines=(
+                            f"[dim]市场[/dim] {escape(str(markets or '—'))}  ·  "
+                            f"[dim]需要 Key[/dim] {needs_key}",
+                            f"[dim]说明[/dim] {escape(str(description or '—'))}",
+                        ),
+                    )
+                    for name, markets, needs_key, status, description in source_rows
+                ]
+                render_stacked_records(
+                    console,
+                    title="数据源状态",
+                    records=records,
+                    footer="/datasource config — 配置文件路径",
+                )
+                return
+
+            table = Table(title="数据源状态", box=rich_box.SIMPLE, header_style="bold dim")
+            table.add_column("名称", width=16)
+            table.add_column("市场", width=20)
+            table.add_column("需要Key", width=8)
+            table.add_column("状态", width=8)
+            if layout == "full":
+                table.add_column("说明")
+            for name, markets, needs_key, status, description in source_rows:
+                row = [name, markets, needs_key, status]
+                if layout == "full":
+                    row.append(description)
+                table.add_row(*row)
             console.print(table)
             console.print("  [dim]/datasource config — 配置文件路径[/dim]")
         else:

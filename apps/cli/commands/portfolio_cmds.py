@@ -260,7 +260,7 @@ class PortfolioCommandsMixin:
             /report AAPL --format md      # Markdown 投研报告（离线可用）
             /report AAPL --type deep      # 深度研报（8页）
             /report AAPL --type brief     # 简评（1页）
-            /report AAPL --pdf            # 同时导出 PDF（需 weasyprint 或 wkhtmltopdf）
+            /report AAPL --pdf            # 同时导出 PDF（自动检测 Chrome/Edge，macOS 零安装）
         """
         from datetime import datetime as _dt
 
@@ -346,6 +346,35 @@ class PortfolioCommandsMixin:
                     console.print(f"  [dim]预览: open {out_f}[/dim]\n")
                 else:
                     print(f"\n  Saved: {out_f}")
+
+                # ── Markdown 报告 → 排版 PDF（--pdf；中英文模板自动检测）──
+                if export_pdf_flag:
+                    from pathlib import Path as _Path  # mixin 重绑定后无模块级 Path
+                    try:
+                        from markdown_pdf import markdown_to_pdf as _md_to_pdf
+                        _pdf_out = await asyncio.get_event_loop().run_in_executor(
+                            None,
+                            lambda: _md_to_pdf(_Path(out_f),
+                                               _Path(out_f).with_suffix(".pdf")),
+                        )
+                        if _pdf_out:
+                            if HAS_RICH:
+                                console.print(
+                                    f"  [green]PDF 导出成功[/green]  "
+                                    f"[link={_pdf_out}]{_pdf_out.name}[/link]"
+                                )
+                            else:
+                                print(f"  PDF: {_pdf_out}")
+                            import subprocess as _subp_md
+                            try:
+                                _subp_md.Popen(["open", str(_pdf_out)])
+                            except Exception:
+                                pass
+                        else:
+                            _msg = "PDF 导出失败：安装 Chrome/Edge，或 pip install pyobjc-framework-WebKit"
+                            console.print(f"  [yellow]{_msg}[/yellow]") if HAS_RICH else print(f"  {_msg}")
+                    except Exception as _pdf_exc:
+                        logger.debug("[report] md pdf export error: %s", _pdf_exc)
             return
 
         # ── HTML 研报（Bloomberg 暗色主题）────────────────────────────────
@@ -355,24 +384,47 @@ class PortfolioCommandsMixin:
             print(f"\n  正在生成 {symbol} 研报…")
 
         _agent_names_for_report = report_agent_names(report_type)
+        def _report_agent_done(name, result):
+            success = bool(getattr(result, "success", False))
+            degraded = bool(getattr(result, "degraded", False))
+            if success:
+                icon = "≈" if degraded else "✓"
+                detail = "降级结果" if degraded else "完成"
+            else:
+                icon = "✗"
+                error = str(getattr(result, "error", "") or "失败")
+                detail = "超时" if error == "timeout" else error[:60]
+            if HAS_RICH:
+                color = "yellow" if degraded else "green" if success else "red"
+                console.print(f"  [{color}]{icon}[/{color}] {name}  [dim]{detail}[/dim]")
+            else:
+                print(f"  {icon} {name}  {detail}")
+
+        def _report_synthesis_start(results):
+            succeeded = sum(1 for result in results if getattr(result, "success", False))
+            total = len(results)
+            message = f"Agent 阶段完成 {succeeded}/{total}，正在整理报告…"
+            console.print(f"  [dim]{message}[/dim]") if HAS_RICH else print(f"  {message}")
+
         try:
             if HAS_RICH:
-                with console.status(
-                    f"[dim]{len(_agent_names_for_report)} agents 并行分析…[/dim]",
-                    spinner="dots",
-                ):
-                    _html_report = await generate_html_report(
-                        symbol=symbol,
-                        report_type=report_type,
-                        output_dir=out_dir,
-                        config=self.terminal.config,
-                    )
+                console.print(f"  [dim]{len(_agent_names_for_report)} agents 并行分析…[/dim]")
+                _html_report = await generate_html_report(
+                    symbol=symbol,
+                    report_type=report_type,
+                    output_dir=out_dir,
+                    config=self.terminal.config,
+                    on_agent_done=_report_agent_done,
+                    on_synthesis_start=_report_synthesis_start,
+                )
             else:
                 _html_report = await generate_html_report(
                     symbol=symbol,
                     report_type=report_type,
                     output_dir=out_dir,
                     config=self.terminal.config,
+                    on_agent_done=_report_agent_done,
+                    on_synthesis_start=_report_synthesis_start,
                 )
             out_f = _html_report.path
             _team_result = _html_report.team_result
@@ -392,11 +444,25 @@ class PortfolioCommandsMixin:
         path_label = _display_path(out_f, fallback="report")
         _file_kb = report_file_size_kb(out_f)
         # Check if all agents failed — show warning instead of false success
-        _all_agents_failed = all_agents_failed(_team_result)
+        _agent_health = _html_report.agent_health or report_agent_health(
+            _team_result, _agent_names_for_report
+        )
+        _all_agents_failed = all_agents_failed(_team_result) or bool(
+            _agent_health.get("expected") and not _agent_health.get("succeeded")
+        )
+        _agents_partial = bool(
+            _agent_health.get("failed") and _agent_health.get("succeeded")
+        )
         if HAS_RICH:
             if _all_agents_failed:
                 console.print(
                     f"\n  [yellow]⚠ 研报已保存（所有 Agent 分析失败，内容仅含基础数据）[/yellow]"
+                    f"  [dim]{out_f.name}  ({_file_kb}KB)[/dim]"
+                )
+            elif _agents_partial:
+                console.print(
+                    f"\n  [yellow]⚠ 研报已保存（Agent 部分完成 "
+                    f"{_agent_health['succeeded']}/{_agent_health['expected']}，结论置信度已降级）[/yellow]"
                     f"  [dim]{out_f.name}  ({_file_kb}KB)[/dim]"
                 )
             else:
@@ -407,9 +473,13 @@ class PortfolioCommandsMixin:
                 )
             console.print(f"  [dim]文件: {path_label}[/dim]")
             if _team_result:
+                _health_suffix = (
+                    f" · agents {_agent_health['succeeded']}/{_agent_health['expected']}"
+                    if _agent_health.get("failed") else ""
+                )
                 _print_verdict_banner(
                     _team_result.final_signal,
-                    subtitle=f"耗时 {_team_result.elapsed_sec:.1f}s · {len(_agent_names_for_report)} agents",
+                    subtitle=f"耗时 {_team_result.elapsed_sec:.1f}s{_health_suffix}",
                     confidence=_team_result.confidence,
                 )
         else:
@@ -440,7 +510,7 @@ class PortfolioCommandsMixin:
                     except Exception:
                         pass
                 else:
-                    _hint = "pip install weasyprint  或  brew install wkhtmltopdf"
+                    _hint = "安装 Chrome/Edge 即可（自动检测），或 pip install weasyprint / brew install wkhtmltopdf"
                     if HAS_RICH:
                         console.print(
                             f"  [yellow]PDF 导出失败[/yellow]  "
@@ -848,6 +918,7 @@ class PortfolioCommandsMixin:
                         console, name, getattr(result, "signal", None), _kp,
                         success=bool(getattr(result, "success", True)),
                         error=getattr(result, "error", None),
+                        degraded=bool(getattr(result, "degraded", False)),
                     )
                 else:
                     print(f"  ⎿ {name}  {getattr(result, 'signal', '')}  {_kp[:50]}")
@@ -925,6 +996,7 @@ class PortfolioCommandsMixin:
                         getattr(result, "signal", None), _kp,
                         success=bool(getattr(result, "success", True)),
                         error=getattr(result, "error", None),
+                        degraded=bool(getattr(result, "degraded", False)),
                     )
                 else:
                     print(f"  ⎿ {name}  {getattr(result, 'signal', '')}  {_kp[:50]}")

@@ -91,6 +91,8 @@ def default_config() -> dict:
         "input_style": "panel",
         "input_theme": "auto",
         "response_footer": "compact",
+        "report_agent_timeout": 40.0,
+        "report_synthesis_timeout": 20.0,
         "local_mode": False,
         "conversation_history": [],
         "ui_lang": "",

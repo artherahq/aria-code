@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 import uuid
 from dataclasses import asdict, dataclass, field
-from typing import Any, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 
 
 @dataclass(frozen=True)
@@ -55,14 +55,25 @@ class TurnResultRecord:
 class RuntimeTrace:
     """In-memory trace of runtime events for session replay/debugging."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        event_sink: Optional[Callable[[RuntimeEvent], None]] = None,
+    ) -> None:
         self.events: List[RuntimeEvent] = []
         self.tool_calls: List[ToolCallRecord] = []
         self.turn_results: List[TurnResultRecord] = []
+        self.event_sink = event_sink
 
     def emit(self, event_type: str, data: Dict[str, Any] | None = None) -> RuntimeEvent:
         event = RuntimeEvent.create(event_type, data)
         self.events.append(event)
+        if self.event_sink is not None:
+            try:
+                self.event_sink(event)
+            except Exception:
+                # Observability must never turn a successful tool call into a
+                # failed one. The in-memory trace remains available as fallback.
+                pass
         return event
 
     def add_tool_call(self, record: ToolCallRecord) -> None:

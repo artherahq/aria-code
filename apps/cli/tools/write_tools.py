@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import pathlib
 import re as _re
+import stat as _stat
 
 
 # ── Lazy access to aria_cli singletons ───────────────────────────────────────
@@ -131,6 +132,33 @@ def _sessions_dir() -> str:
 
 def _ChangeConflictError():
     return _ac().ChangeConflictError
+
+
+def _record_checkpoint(change, params: dict, *, existed_before: bool, before_mode: "int | None") -> tuple:
+    """Persist an applied change without making checkpoint I/O break the write."""
+    if params.get("_disable_checkpoints"):
+        return None, None
+    run_id = params.get("_run_id")
+    session_id = str(params.get("_session_id") or "")
+    if not run_id and not session_id:
+        return None, None
+    try:
+        from runtime.checkpoints import CheckpointStore
+        checkpoint = CheckpointStore().record_change(
+            path=change.path,
+            before_content=change.before_content,
+            after_content=change.after_content,
+            existed_before=existed_before,
+            before_mode=before_mode,
+            source=change.source,
+            run_id=run_id,
+            session_id=session_id,
+            label=pathlib.Path(change.path).name,
+            metadata={"change_id": change.change_id},
+        )
+        return checkpoint.checkpoint_id, None
+    except Exception as exc:
+        return None, str(exc)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -420,6 +448,9 @@ def tool_write_file(params: dict) -> dict:
                 return {"success": False, "error": "Write cancelled by user.",
                         "data": {"cancelled": True}}
 
+        existed = p.exists()
+        before_mode = _stat.S_IMODE(p.stat().st_mode) if p.is_file() else None
+
         console, has_rich = _ui()
         store = _change_store()
         change = store.stage(p, content, source="write_file")
@@ -443,6 +474,12 @@ def tool_write_file(params: dict) -> dict:
             applied = store.apply(change.change_id)
         except _ChangeConflictError() as exc:
             return {"success": False, "error": str(exc), "data": {"change_id": change.change_id}}
+        checkpoint_id, checkpoint_error = _record_checkpoint(
+            applied,
+            params,
+            existed_before=existed,
+            before_mode=before_mode,
+        )
 
         desktop = pathlib.Path.home() / "Desktop"
         is_on_desktop = str(p).startswith(str(desktop))
@@ -502,6 +539,26 @@ def tool_write_file(params: dict) -> dict:
             "applied":        True,
             "user_message":   f"文件已保存到: {p}  打开所在目录: {_reveal_hint}",
         }
+        try:
+            from artifacts import register_existing_artifact
+
+            artifact = register_existing_artifact(
+                p,
+                topic=str(params.get("artifact_topic") or ""),
+                kind=str(params.get("artifact_kind") or ""),
+                metadata={"source": "write_file"},
+            )
+            if artifact is not None:
+                _wdata["artifact_registered"] = True
+                _wdata["artifact_metadata_path"] = str(artifact.metadata_path)
+        except Exception:
+            # Artifact indexing is convenience metadata; a successful file
+            # write must not be downgraded if indexing is unavailable.
+            pass
+        if checkpoint_id:
+            _wdata["checkpoint_id"] = checkpoint_id
+        if checkpoint_error:
+            _wdata["checkpoint_error"] = checkpoint_error
         if _syntax_warn:
             _wdata["syntax_check"] = "failed"
             return {"success": True, "data": _wdata, "warning": _syntax_warn}
@@ -536,6 +593,7 @@ def tool_edit_file(params: dict) -> dict:
             return {"success": False, "error": f"Access denied: path '{p}' is outside allowed directories"}
 
         content = p.read_text(errors="replace")
+        before_mode = _stat.S_IMODE(p.stat().st_mode)
         if content.count(old_str) == 0:
             preview = "\n".join(content.splitlines()[:10])
             return {"success": False,
@@ -568,6 +626,12 @@ def tool_edit_file(params: dict) -> dict:
             applied = store.apply(change.change_id)
         except _ChangeConflictError() as exc:
             return {"success": False, "error": str(exc), "data": {"change_id": change.change_id}}
+        checkpoint_id, checkpoint_error = _record_checkpoint(
+            applied,
+            params,
+            existed_before=True,
+            before_mode=before_mode,
+        )
 
         if has_rich and console:
             parts = []
@@ -592,6 +656,10 @@ def tool_edit_file(params: dict) -> dict:
             "before_hash": applied.before_hash, "after_hash": applied.after_hash,
             "diff": applied.diff, "staged": True, "applied": True,
         }
+        if checkpoint_id:
+            _data["checkpoint_id"] = checkpoint_id
+        if checkpoint_error:
+            _data["checkpoint_error"] = checkpoint_error
         if _syntax_warn:
             _data["syntax_check"] = "failed"
             return {"success": True, "data": _data, "warning": _syntax_warn}
@@ -633,6 +701,7 @@ def tool_multi_edit(params: dict) -> dict:
             return {"success": False, "error": f"Access denied: path '{p}' is outside allowed directories"}
 
         content = p.read_text(errors="replace")
+        before_mode = _stat.S_IMODE(p.stat().st_mode)
         working = content
         applied_count = 0
         total_added = 0
@@ -683,6 +752,12 @@ def tool_multi_edit(params: dict) -> dict:
             applied = store.apply(change.change_id)
         except _ChangeConflictError() as exc:
             return {"success": False, "error": str(exc), "data": {"change_id": change.change_id}}
+        checkpoint_id, checkpoint_error = _record_checkpoint(
+            applied,
+            params,
+            existed_before=True,
+            before_mode=before_mode,
+        )
 
         if has_rich and console:
             console.print(f"  [dim]Applied {applied_count} edits "
@@ -701,6 +776,10 @@ def tool_multi_edit(params: dict) -> dict:
             "before_hash": applied.before_hash, "after_hash": applied.after_hash,
             "diff": applied.diff, "staged": True, "applied": True,
         }
+        if checkpoint_id:
+            _data["checkpoint_id"] = checkpoint_id
+        if checkpoint_error:
+            _data["checkpoint_error"] = checkpoint_error
         if _syntax_warn:
             _data["syntax_check"] = "failed"
             return {"success": True, "data": _data, "warning": _syntax_warn}

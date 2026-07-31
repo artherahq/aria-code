@@ -157,6 +157,8 @@ class TestFileTools(unittest.TestCase):
         expected = pathlib.Path(self.tmpdir) / "generated" / "relative_strategy.py"
         self.assertEqual(pathlib.Path(result["data"]["path"]), expected.resolve())
         self.assertTrue(expected.exists())
+        self.assertTrue(result["data"]["artifact_registered"])
+        self.assertTrue(pathlib.Path(result["data"]["artifact_metadata_path"]).exists())
 
     def test_stage_only_write_requires_explicit_apply(self):
         content = "import os\nimport sys\n\nx = 99\nprint('result:', x)\n"

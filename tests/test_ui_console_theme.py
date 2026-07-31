@@ -1,6 +1,8 @@
 from rich.console import Console
 
-from ui.console import _build_rich_theme, make_markdown
+from unittest.mock import patch
+
+from ui.console import _build_rich_theme, _detect_terminal_theme, make_markdown
 
 
 def test_dark_markdown_theme_avoids_black_inline_code_and_blue_purple_accents():
@@ -32,3 +34,8 @@ def test_make_markdown_uses_neutral_code_theme():
 
     assert getattr(md, "code_theme", "") == "bw"
     assert getattr(md, "inline_code_theme", "") == "bw"
+
+
+def test_rich_theme_defaults_apple_terminal_to_light_without_color_metadata():
+    with patch.dict("os.environ", {"TERM_PROGRAM": "Apple_Terminal"}, clear=True):
+        assert _detect_terminal_theme() == "light"

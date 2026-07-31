@@ -77,6 +77,11 @@ def detect_intents(message: str) -> tuple[str, ...]:
     mapped = COMMAND_INTENTS.get(cmd)
     if mapped:
         _add_unique(intents, mapped)
+        # Arguments to /file are usually filenames.  Words such as “报告” or
+        # “分析” inside those paths describe the document, not a second market
+        # command, and must not pull in report/chart dependencies.
+        if cmd == "/file":
+            return tuple(intents)
 
     if _contains_any(low, ("k线图", "k线", "k-line", "kline", "candlestick", "走势图", "图表", "chart", "plot")):
         _add_unique(intents, "chart")
@@ -112,6 +117,9 @@ def detect_intents(message: str) -> tuple[str, ...]:
         _add_unique(intents, "crypto")
     if _contains_any(low, ("足球", "球赛", "比分预测", "世界杯", "欧洲杯", "英超", "西甲", "football", "soccer", "world cup", "premier league")):
         _add_unique(intents, "sports")
+
+    if "file_analysis" in intents and "report" in intents and cmd != "/report":
+        intents = [intent for intent in intents if intent != "report"]
 
     return tuple(intents)
 
@@ -160,6 +168,17 @@ def _service_names(intents: tuple[str, ...]) -> tuple[str, ...]:
 def build_intent_route(message: str) -> IntentRoute:
     low = message.lower().strip()
     intents = detect_intents(message)
+    conceptual_market_question = (
+        any(topic in low for topic in ("新闻面", "技术面", "基本面"))
+        and any(marker in low for marker in (
+            "有用吗", "是否有用", "区别", "关系", "怎么结合", "如何结合",
+            "你觉得", "为什么",
+        ))
+        and not any(marker in low for marker in (
+            "最新", "今天", "当前", "实时", "查一下", "搜一下", "搜索",
+            "/news", "/quote", "/analyze",
+        ))
+    )
     explicit_code = _contains_any(low, (
         "代码", "脚本", "python", "程序", "实现", "开发", "修改文件",
         "写代码", "编写代码", "策略代码", "保存为.py", ".py",
@@ -186,7 +205,12 @@ def build_intent_route(message: str) -> IntentRoute:
         classifier_intent = INTENT_FINANCE
         visual_artifact = any(i in intents for i in ("chart", "dashboard", "report", "ui_artifact"))
 
-    if intents:
+    if conceptual_market_question:
+        # Methodology/capability questions need an explanation, not live market
+        # calls.  Treating the word "新闻面" as a news lookup caused the whole
+        # sentence to be forwarded to search providers as the query.
+        primary = "general"
+    elif intents:
         primary = intents[0]
     elif classifier_intent == INTENT_REALTIME:
         primary = "market_snapshot"
@@ -201,10 +225,13 @@ def build_intent_route(message: str) -> IntentRoute:
     else:
         primary = "finance"
 
-    market_related = any(i in intents for i in (
-        "market_snapshot", "market_analysis", "chart", "dashboard", "report",
-        "backtest", "strategy", "market_research",
-    )) or classifier_intent in {INTENT_ANALYSIS, INTENT_REALTIME, INTENT_FINANCE}
+    market_related = not conceptual_market_question and (
+        any(i in intents for i in (
+            "market_snapshot", "market_analysis", "chart", "dashboard", "report",
+            "backtest", "strategy", "market_research",
+        ))
+        or classifier_intent in {INTENT_ANALYSIS, INTENT_REALTIME, INTENT_FINANCE}
+    )
 
     return IntentRoute(
         message=message,
