@@ -255,6 +255,7 @@ from apps.cli.commands.market_cmds import (
     _fetch_public_news_fallback,
 )
 from apps.cli.commands.portfolio_cmds import PortfolioCommandsMixin
+from apps.cli.commands.pdf_export_cmds import PdfExportCommandsMixin
 from apps.cli.handlers.market_handlers import (
     _try_prefetch_market_data  as _src_prefetch_market_data,
     _try_handle_multi_market_snapshot  as _src_multi_snapshot,
@@ -5728,8 +5729,9 @@ _rebind_mixin_globals(WorkspaceCommandsMixin)
 _rebind_mixin_globals(ModelCommandsMixin)
 _rebind_mixin_globals(MarketCommandsMixin)
 _rebind_mixin_globals(PortfolioCommandsMixin)
+_rebind_mixin_globals(PdfExportCommandsMixin)
 
-class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommandsMixin, DataCommandsMixin, OpsCommandsMixin, DiagnosticCommandsMixin, DiagnosticOpsCommandsMixin, UiCommandsMixin, SessionUxCommandsMixin, AuthCommandsMixin, FileCommandsMixin, FxCommodityCommandsMixin, WorkflowCommandsMixin, BusinessWorkflowCommandsMixin, SessionCommandsMixin, WorkspaceCommandsMixin, ModelCommandsMixin, MarketCommandsMixin, PortfolioCommandsMixin):
+class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommandsMixin, DataCommandsMixin, OpsCommandsMixin, DiagnosticCommandsMixin, DiagnosticOpsCommandsMixin, UiCommandsMixin, SessionUxCommandsMixin, AuthCommandsMixin, FileCommandsMixin, FxCommodityCommandsMixin, WorkflowCommandsMixin, BusinessWorkflowCommandsMixin, SessionCommandsMixin, WorkspaceCommandsMixin, ModelCommandsMixin, MarketCommandsMixin, PortfolioCommandsMixin, PdfExportCommandsMixin):
     """Claude Code-style slash command system."""
 
     def _cmd_rewind_unavailable(self, args: str):
@@ -5768,6 +5770,7 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
             "/sessions":  (self.cmd_sessions, "List/search sessions: /sessions [keyword]"),
             "/recall":    (self.cmd_recall,   "Full-text session search: /recall <query>"),
             "/export":    (self.cmd_export,   "Export: /export json|csv|md|sft|bundle [file]"),
+            "/export-pdf": (self.cmd_export_pdf, "Export a structured report to a designed PDF: /export-pdf <report.md> [--theme=institutional|bloomberg] [--sections=a,b] [--exclude=x,y]"),
             # ── Config / mode ─────────────────────────────────────────────────
             "/model":     (self.cmd_model,    "Switch AI model (interactive picker)"),
             "/thinking":  (self.cmd_thinking, "Toggle extended thinking: /thinking on|off"),
@@ -6027,6 +6030,9 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
         "/login":     ("Usage: /login <email>  (password prompted securely)", ["/login user@example.com"]),
         "/whoami":    ("Usage: /whoami", ["/whoami"]),
         "/export":    ("Usage: /export [json|csv|md|sft|bundle] [file]", ["/export bundle", "/export md report.md"]),
+        "/export-pdf": ("Usage: /export-pdf <report.md> [--theme=institutional|bloomberg] [--sections=a,b] [--exclude=x,y]",
+                        ["/export-pdf research/shortterm/reports/shortterm_2026-07-17.md",
+                         "/export-pdf report.md --theme=bloomberg --exclude=新闻面"]),
         "/save":      ("Usage: /save [name]", ["/save", '/save "AAPL Strategy Research"']),
         "/load":      ("Usage: /load <session_id>", ["/load abc123"]),
         "/sessions":  ("Usage: /sessions", ["/sessions"]),
@@ -6225,7 +6231,7 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
             groups = [
                 ("Session", ["/help","/clear","/compact","/cost","/status","/health",
                              "/regen","/undo","/rewind","/copy","/recap","/btw",
-                             "/save","/load","/sessions","/export"]),
+                             "/save","/load","/sessions","/export","/export-pdf"]),
                 ("Config",  ["/model","/thinking","/config","/privacy","/local",
                              "/setup","/apikey","/doctor","/mcp"]),
                 ("Data",    ["/alert","/journal","/watch","/note","/todo","/memory",

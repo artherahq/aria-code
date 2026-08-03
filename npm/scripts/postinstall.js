@@ -39,6 +39,30 @@ const info  = (m) => log(`${C.cyan}▸${C.reset}  ${m}`);
 const step  = (n, t) => process.stdout.write(`\n${C.bold}── Step ${n}: ${t}${C.reset}\n`);
 const hr    = () => log(`${C.dim}${"─".repeat(44)}${C.reset}`);
 
+// npm 7+ silently discards a lifecycle script's stdout/stderr when it exits 0
+// (confirmed empirically, not documented behavior most users would expect)
+// unless the caller passes --foreground-scripts — which real end users never
+// do. That means everything printed by this file, including the summary
+// below, normally never reaches the terminal on a successful install. Bypass
+// by writing straight to the console device instead of the (npm-piped)
+// stdout; falls back to the ordinary write if no controlling terminal is
+// attached (e.g. real CI), which is no worse than today's behavior.
+function writeDirect(text) {
+  const devicePath = PLATFORM === "win32" ? "CONOUT$" : "/dev/tty";
+  try {
+    const fd = fs.openSync(devicePath, "w");
+    fs.writeSync(fd, text);
+    fs.closeSync(fd);
+  } catch {
+    process.stdout.write(text);
+  }
+}
+
+// Non-fatal "install succeeded but degraded" notices collected as the script
+// runs, so printSummary() can guarantee they're seen even though npm would
+// otherwise swallow them — see writeDirect() above.
+const criticalNotices = [];
+
 const PLATFORM = process.platform;   // darwin | linux | win32
 const REPO_URL  = "https://github.com/artherahq/aria-code.git";
 // Pin the clone to the release tag matching THIS npm package, so users always
@@ -353,6 +377,7 @@ function installUv() {
     return uv;
   }
   warn("uv install failed — falling back to python venv + pip");
+  criticalNotices.push("uv install failed — used the slower python venv + pip fallback instead.");
   return null;
 }
 
@@ -443,8 +468,13 @@ function ensureVenv(python, uv) {
     if (r.status !== 0) {
       warn("Full install failed — retrying with slim core so the CLI still works…");
       r = run(uv, ["pip", "install", "--python", venvPy, "-e", INSTALL_DIR], { env });
-      if (r.status === 0) ok("Core installed (optional features via /install later)");
-      else warn("Some packages failed — basic features may still work.");
+      if (r.status === 0) {
+        ok("Core installed (optional features via /install later)");
+        criticalNotices.push("Full dependency install failed — only core features installed. Run /install inside aria-code for the rest.");
+      } else {
+        warn("Some packages failed — basic features may still work.");
+        criticalNotices.push("Dependency install had failures — some features may not work. See the log above for details.");
+      }
     } else {
       ok("All dependencies installed (uv)");
     }
@@ -477,8 +507,13 @@ function ensureVenv(python, uv) {
   if (r.status !== 0) {
     warn("Full install failed — retrying with slim core…");
     r = run(venvPip, ["install", "-e", INSTALL_DIR], { env });
-    if (r.status === 0) ok("Core installed (optional features via /install later)");
-    else warn("Some packages failed — basic features may still work.");
+    if (r.status === 0) {
+      ok("Core installed (optional features via /install later)");
+      criticalNotices.push("Full dependency install failed — only core features installed. Run /install inside aria-code for the rest.");
+    } else {
+      warn("Some packages failed — basic features may still work.");
+      criticalNotices.push("Dependency install had failures — some features may not work. See the log above for details.");
+    }
   } else {
     ok("All Python dependencies installed");
   }
@@ -518,7 +553,19 @@ function writeInstallInfo(python, venv) {
 // ── Summary ───────────────────────────────────────────────────────────────────
 
 function printSummary() {
-  process.stdout.write(`
+  // Everything below goes through writeDirect(), not process.stdout.write/log/
+  // warn — on a successful install (the case we're in, by definition, since a
+  // failed one exits before reaching here) npm silently discards this
+  // script's normal stdout, so this whole function was previously invisible
+  // to real users by default. See writeDirect()'s comment for the full story.
+  let out = "";
+
+  if (criticalNotices.length) {
+    out += `\n${C.yellow}${C.bold}⚠ Install completed with warnings:${C.reset}\n`;
+    for (const notice of criticalNotices) out += `  ${C.yellow}⚠${C.reset}  ${notice}\n`;
+  }
+
+  out += `
 ${C.green}╔════════════════════════════════════════════╗
 ║  ${C.bold}Aria Code installed successfully!${C.reset}${C.green}          ║
 ╚════════════════════════════════════════════╝${C.reset}
@@ -533,7 +580,7 @@ ${C.green}╔══════════════════════�
 
   ${C.dim}Tip: Pull a free local model for offline use:${C.reset}
   ${C.cyan}ollama pull qwen2.5:7b${C.reset}
-`);
+`;
 
   if (PLATFORM === "win32") {
     // npm's global-install shims for `aria` / `aria-code` land in
@@ -546,10 +593,12 @@ ${C.green}╔══════════════════════�
     // but this particular shell's PATH is stale. This is the single most
     // common "install worked, command not found" report on Windows — closing
     // and reopening the terminal is the fix, not reinstalling.
-    warn("Windows: close this terminal window and open a new one before running 'aria' —");
-    warn("the install added it to PATH, but this window won't see that update until reopened.");
+    out += `  ${C.yellow}⚠${C.reset}  Windows: close this terminal window and open a new one before running 'aria' —\n`;
+    out += `  ${C.yellow}⚠${C.reset}  the install added it to PATH, but this window won't see that update until reopened.\n`;
   }
-  process.stdout.write("\n");
+  out += "\n";
+
+  writeDirect(out);
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
