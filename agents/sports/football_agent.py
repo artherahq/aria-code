@@ -1,7 +1,23 @@
 """
 agents/sports/football_agent.py — Football Analysis Agent
 ===========================================================
-LLM-powered football match analysis using Poisson prediction + form data.
+LLM-powered football match analysis using Elo + Dixon-Coles prediction + form data.
+
+Prediction comes from packages.quant_engine.sports.predictor (Elo ratings,
+Dixon-Coles with negative-binomial tail for lopsided matches, dynamic
+Elo/DC mixing weights, recency-form and head-to-head adjustments, and
+self-calibration), not football_data_client.predict_match — that function
+is a much simpler independent-Poisson model over a static, hand-maintained
+attack/defense lookup table with a flat home-advantage constant, no
+Dixon-Coles low-score correlation correction, and no Elo. Verified the two
+disagree by double digits on some matchups (13.1pp on a real fixture) rather
+than assuming the richer model is worth switching to on faith.
+
+football_data_client itself is left untouched — aria_feishu_bot.py calls
+predict_match directly and has its own tested formatting/localization
+pinned to that function's exact output, which is out of scope here. Only
+get_team_stats() (recent-form text, not part of either prediction model)
+is still sourced from football_data_client.
 """
 
 from __future__ import annotations
@@ -61,10 +77,19 @@ class FootballAgent:
         away_team: str,
         league: str = "pl",
         with_llm: bool = True,
+        neutral_venue: bool = False,
     ) -> MatchPrediction:
-        from football_data_client import predict_match, get_team_stats
+        from football_data_client import get_team_stats
+        from packages.quant_engine.sports.predictor import quick_predict
 
-        raw = predict_match(home_team, away_team, league)
+        # neutral_venue defaults False: club leagues (pl/bl1/sa/pd/fl1, the
+        # default `league="pl"`) really do have a home team playing at home.
+        # Pass True for a genuinely neutral-site fixture (e.g. a World Cup
+        # group match at a third country's stadium).
+        raw = quick_predict(home_team, away_team, league, neutral_venue=neutral_venue)
+        raw["most_likely_score"] = (
+            raw["top_scorelines"][0]["score"] if raw.get("top_scorelines") else "0-0"
+        )
         h_stats = get_team_stats(league, home_team)
         a_stats = get_team_stats(league, away_team)
 
@@ -73,7 +98,10 @@ class FootballAgent:
             key_factors.append(f"{home_team} 近5场: {h_stats['form']} (场均进球 {h_stats['avg_gf']})")
         if a_stats:
             key_factors.append(f"{away_team} 近5场: {a_stats['form']} (场均进球 {a_stats['avg_gf']})")
-        key_factors.append(f"主场优势系数: ×1.25 (泊松模型)")
+        key_factors.append(
+            f"模型: {raw['model']}  Elo差: {raw['elo_diff']:+.0f}"
+            f"  (DC权重{raw['w_dc']:.0%}/Elo权重{raw['w_elo']:.0%})"
+        )
 
         analysis = ""
         if with_llm and self._llm:
