@@ -65,6 +65,14 @@ All notable changes to Aria Code are documented here.
 
 ### Fixed
 
+- **`pip install aria-code` on Python 3.14 failed with an error naming neither
+  aria-code nor its cause.** `requires-python` was `>=3.10` with no upper bound,
+  so pip would start the install, resolve the core dependency `pandas_ta` →
+  `numba`, and then fail on a numba source build (`Cannot install on Python
+  version 3.14.6; only versions >=3.10,<3.14 are supported`). The bound is now
+  `>=3.10,<3.14`, so pip refuses up front with a clear "requires a different
+  Python" message. Python 3.10–3.13 are unaffected — verified 3.13 installs and
+  `aria-code --version` runs. Will be raised once numba ships 3.14 wheels
 - Dark-theme input text rendered gray instead of white
 - Core file tools (`read_file`, etc.) stayed unavailable when a restrictive skill
   policy was active

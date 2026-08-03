@@ -8,7 +8,14 @@ version = "4.2.0"
 description = "AI-powered financial terminal — local LLM + multi-source market data"
 readme = "README.md"
 license = { text = "BUSL-1.1" }
-requires-python = ">=3.10"
+# Upper bound is real, not defensive: the core dep pandas_ta pulls numba, and
+# numba hard-refuses to build on 3.14 ("only versions >=3.10,<3.14 are
+# supported"). Without this bound pip happily starts the install on 3.14 and
+# fails deep in the dependency tree on a numba source build — an error that
+# names neither aria-code nor pandas_ta. With it, pip refuses up front with a
+# clear "requires a different Python" message. Verified 3.13 installs and runs
+# (`aria-code --version` → 4.2.0); raise the bound once numba ships 3.14 wheels.
+requires-python = ">=3.10,<3.14"
 keywords = ["ai", "llm", "finance", "trading", "terminal", "cli"]
 classifiers = [
     "Development Status :: 4 - Beta",
