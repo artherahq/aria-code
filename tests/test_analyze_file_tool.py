@@ -71,3 +71,23 @@ def test_video_extensions_recognized(tmp_path):
         f.write_bytes(b"\x00" * 64)
         fc = parse_file(str(f))
         assert fc.file_type == "video", ext
+
+
+def test_optional_parser_detection_refreshes_after_install(monkeypatch):
+    import file_analysis_tools as tools
+
+    sentinel = object()
+    monkeypatch.setattr(tools, "_docx_mod", None)
+    original_try = tools._try
+
+    def fake_try(module_name):
+        if module_name == "docx":
+            return sentinel
+        return original_try(module_name)
+
+    monkeypatch.setattr(tools, "_try", fake_try)
+
+    status = tools.refresh_optional_parsers()
+
+    assert status["python-docx"] is True
+    assert tools._docx_mod is sentinel

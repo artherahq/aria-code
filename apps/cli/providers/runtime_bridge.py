@@ -176,6 +176,9 @@ async def run_chat_via_runtime(
     confirm_tools=(),
     approval_callback: Optional[Callable] = None,
     approval_applier: Optional[Callable] = None,
+    requires_evidence: bool = False,
+    grounding_tools=(),
+    evidence_already_grounded: bool = False,
 ):
     """Run one chat turn through the shared runtime Gateway.
 
@@ -207,5 +210,8 @@ async def run_chat_via_runtime(
         confirm_tools=confirm_tools,
         approval_callback=approval_callback,
         approval_applier=approval_applier,
+        requires_evidence=requires_evidence,
+        grounding_tools=grounding_tools,
+        evidence_already_grounded=evidence_already_grounded,
     )
     return result if return_result else result.text

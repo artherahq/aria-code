@@ -34,6 +34,84 @@ FINANCE_TOOL_NAMES: frozenset = frozenset({
 })
 
 
+# ── Narrow-terminal Markdown adaptation ──────────────────────────────────────
+
+_TABLE_SEPARATOR_CELL = re.compile(r"^:?-{3,}:?$")
+
+
+def _markdown_table_cells(line: str) -> list[str]:
+    """Split one simple GFM table row without leaking surrounding pipes."""
+    stripped = line.strip()
+    if not stripped.startswith("|"):
+        return []
+    return [cell.strip() for cell in stripped.strip("|").split("|")]
+
+
+def _is_markdown_table_separator(line: str) -> bool:
+    cells = _markdown_table_cells(line)
+    return bool(cells) and all(_TABLE_SEPARATOR_CELL.fullmatch(cell) for cell in cells)
+
+
+def adapt_markdown_for_width(markup: str, width: int, *, table_breakpoint: int = 96) -> str:
+    """Convert GFM tables to stacked records when the terminal is narrow.
+
+    Rich correctly renders tables, but a three-column research table inside an
+    80-column terminal has too little room for Chinese prose.  Cells are then
+    truncated or wrapped until row relationships become unreadable.  The source
+    Markdown remains unchanged in saved reports; only the terminal presentation
+    is adapted.
+    """
+    if width >= table_breakpoint or "|" not in (markup or ""):
+        return markup
+
+    lines = (markup or "").splitlines()
+    output: list[str] = []
+    index = 0
+    in_fence = False
+    while index < len(lines):
+        line = lines[index]
+        if line.lstrip().startswith("```"):
+            in_fence = not in_fence
+            output.append(line)
+            index += 1
+            continue
+
+        if (
+            not in_fence
+            and index + 1 < len(lines)
+            and line.strip().startswith("|")
+            and _is_markdown_table_separator(lines[index + 1])
+        ):
+            headers = _markdown_table_cells(line)
+            cursor = index + 2
+            rows: list[list[str]] = []
+            while cursor < len(lines) and lines[cursor].strip().startswith("|"):
+                row = _markdown_table_cells(lines[cursor])
+                if row:
+                    rows.append(row)
+                cursor += 1
+
+            if headers and rows:
+                for row in rows:
+                    pairs = [
+                        (header, row[pos] if pos < len(row) else "—")
+                        for pos, header in enumerate(headers)
+                        if header
+                    ]
+                    if not pairs:
+                        continue
+                    first_header, first_value = pairs[0]
+                    output.append(f"- **{first_header}**：{first_value or '—'}")
+                    for header, value in pairs[1:]:
+                        output.append(f"  - **{header}**：{value or '—'}")
+                index = cursor
+                continue
+
+        output.append(line)
+        index += 1
+    return "\n".join(output)
+
+
 # ── Tool display helpers ──────────────────────────────────────────────────────
 
 def tool_display_kind(tool_name: str) -> str:

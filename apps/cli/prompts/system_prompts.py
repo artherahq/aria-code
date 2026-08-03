@@ -43,6 +43,10 @@ def build_response_style_rule(lang: str) -> str:
             "- For errors or missing data: state what failed, why if known, and the exact next action.\n"
             "- Keep output compact: avoid repeated disclaimers, generic education, and duplicated sections.\n"
             "- Use Markdown tables only for dense numeric comparisons; otherwise use bullets or short prose.\n"
+            "- Keep the interactive answer near one terminal screen (about 24 lines) unless the user explicitly requests detail.\n"
+            "- If a report/file was generated, return outcome, key findings, path, and verification only; do not paste the artifact body.\n"
+            "- Never include tool traces, install attempts, recovery dialogue, or internal status messages in the final answer.\n"
+            "- Answer conceptual questions directly; use live-data tools only when current facts are required.\n"
             "- Never invent data. If a field is unavailable, say the source did not return it and continue with available data.\n\n"
         )
     return (
@@ -53,6 +57,10 @@ def build_response_style_rule(lang: str) -> str:
         "- 错误或缺数据时：说明失败点、已知原因、可执行的下一步。\n"
         "- 输出要紧凑：避免重复免责声明、泛泛教学和重复章节。\n"
         "- 数字密集对比才用 Markdown 表格；普通解释用短段落或列表。\n"
+        "- 交互回答尽量控制在一屏（约24行）；用户明确要求详细内容时除外。\n"
+        "- 已生成报告或文件时，终端只返回结果、关键发现、路径和验证，不粘贴产物全文。\n"
+        "- 最终答案不得包含工具日志、安装过程、错误恢复对话或内部状态消息。\n"
+        "- 概念咨询直接回答；只有需要当前事实时才调用实时数据工具。\n"
         "- 绝不编造数据。字段不可用时说明数据源未返回，并继续使用已有数据。\n\n"
     )
 

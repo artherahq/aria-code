@@ -65,6 +65,8 @@ def detect_terminal_theme() -> str:
             return "dark" if int(colorfgbg.split(";")[-1]) < 8 else "light"
         except ValueError:
             pass
+    if os.getenv("TERM_PROGRAM", "") == "Apple_Terminal":
+        return "light"
     # os.uname() is Unix-only — doesn't exist on Windows at all.
     if sys.platform == "darwin":
         try:
@@ -143,7 +145,7 @@ class PanelInputConfig:
         )
         if theme == "dark":
             return replace(self, theme=theme, placeholder=placeholder,
-                fg="#c9d1d9",
+                fg="#ffffff",
                 accent="#3fb950", accent_y="#d29922", accent_b="#79c0ff",
                 muted="#6e7781", dim="#484f58", sep="#2d333b",
                 input_bg="default",   # transparent — box border defines the zone
@@ -297,17 +299,25 @@ def _status_bar(cfg: PanelInputConfig) -> list:
         )
         parts += [("class:st-sep", "  ·  "), ("class:st-cwd", mcp_label)]
 
-    permission = {
-        "read-only": "ro",
-        "workspace-write": "rw",
-        "full-access": "full",
-    }.get(cfg.permission_mode, cfg.permission_mode)
+    is_zh = cfg.lang.lower().startswith("zh")
+    permission_labels = {
+        "read-only": "只读" if is_zh else "ro",
+        "workspace-write": "可写" if is_zh else "rw",
+        "full-access": "完整权限" if is_zh else "full",
+    }
+    permission = permission_labels.get(cfg.permission_mode, cfg.permission_mode)
     if permission:
         parts += [("class:st-sep", "  ·  "), ("class:st-cwd", permission)]
 
     ratio = cfg.est_tokens / max(cfg.max_tokens, 1)
     tc = "tok-crit" if ratio >= 0.85 else ("tok-warn" if ratio >= 0.60 else "st-cwd")
-    context_label = "ctx <1%" if cfg.est_tokens > 0 and ratio < 0.01 else f"ctx {ratio:.0%}"
+    # ratio<1% 一律显示 "<1%"(含估算为 0 的首帧)——"ctx 0%" 是误导:
+    # 系统提示/skills 一定占用了上下文,只是估算看不见。
+    context_prefix = "上下文" if is_zh else "ctx "
+    context_label = (
+        f"{context_prefix}<1%" if ratio < 0.01
+        else f"{context_prefix}{ratio:.0%}"
+    )
     parts += [("class:st-sep", "  ·  "), (f"class:{tc}", context_label)]
 
     shortcuts = (

@@ -77,9 +77,37 @@ def test_file_analysis_preflight_lists_parser_packages_without_paths():
     )
 
     text = format_preflight_plain(report)
-    assert "file_parser" in text
+    assert "本次任务缺少必要能力" in text
     assert "openpyxl" in text
+    assert "python-docx" not in text
+    assert "pdfplumber" not in text
     assert "/Users/" not in text
+
+
+def test_docx_preflight_only_requests_word_parser():
+    report = build_intent_preflight(
+        "/file load /Users/mac/Downloads/分析报告.docx",
+        module_available=_modules_available(),
+        command_available=_commands_available(),
+    )
+
+    packages = {req.package for req in report.missing_python}
+    text = format_preflight_plain(report)
+
+    assert packages == {"python-docx"}
+    assert "运行 /install --auto" in text
+    assert "python3 -m pip install" not in text
+
+
+def test_docx_report_filename_does_not_trigger_market_report_dependencies():
+    report = build_intent_preflight(
+        "/Users/mac/Downloads/四环生物分析报告.docx 把两份报告综合成最终报告",
+        module_available=_modules_available(),
+        command_available=_commands_available(),
+    )
+
+    assert report.intents == ("file_analysis",)
+    assert {req.package for req in report.missing_python} == {"python-docx"}
 
 
 def test_optional_only_backtest_preflight_is_compact_hint():
@@ -93,7 +121,7 @@ def test_optional_only_backtest_preflight_is_compact_hint():
 
     assert report.has_findings
     assert not report.has_required_findings
-    assert "依赖提示：可选增强能力缺失" in text
+    assert "可选增强未安装" in text
     assert "vectorbt" in text
     assert "意图:" not in text
 

@@ -35,3 +35,6 @@ reused outside Aria. Install them as a marketplace:
   dating, latest-value overwrite, same-session execution), runs the four-variant
   A–D information-set comparison and the validation gauntlet, and ships a runnable
   harness (`information_set_compare.py --demo`).
+- `equity-research-report` — builds comprehensive stock reports from normalized
+  evidence, specialist agents, deterministic fallbacks, a critic pass, and an
+  executable completion gate before a report can claim `complete`.

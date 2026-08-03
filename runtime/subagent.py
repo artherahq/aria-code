@@ -1,7 +1,8 @@
 """Background subagent task system.
 
 Allows the main agent to spawn independent sub-tasks that run concurrently.
-Tasks are tracked in memory and optionally persisted to ~/.arthera/tasks/.
+Tasks are tracked in memory; code checkpoints and applied worktree changes are
+persisted by the shared runtime store.
 
 Tool functions exposed to the LLM:
     spawn_task(prompt, context?)  → {"task_id": "abc123", "status": "pending"}
@@ -17,11 +18,12 @@ If no runner is registered, spawn_task stores the task for manual execution.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 _TASKS: Dict[str, "SubagentTask"] = {}
 _RUNNER: Optional[Callable] = None  # set by aria_cli.py
@@ -35,8 +37,18 @@ class SubagentTask:
     status: str = "pending"   # pending | running | done | failed | cancelled
     result: str = ""
     error: str = ""
+    mode: str = "read-only"
+    isolation: str = "shared"
+    workspace: str = ""
+    session_id: str = ""
+    branch: str = ""
+    diff_summary: str = ""
+    applied: bool = False
+    applied_paths: tuple[str, ...] = ()
     created_at: float = field(default_factory=time.time)
     completed_at: float = 0.0
+    async_task: Optional[asyncio.Task] = field(default=None, repr=False, compare=False)
+    worktree_spec: Optional[Any] = field(default=None, repr=False, compare=False)
 
     def age_str(self) -> str:
         elapsed = time.time() - self.created_at
@@ -52,6 +64,11 @@ class SubagentTask:
             "status": self.status,
             "prompt": self.prompt[:200] + ("…" if len(self.prompt) > 200 else ""),
             "age": self.age_str(),
+            "mode": self.mode,
+            "isolation": self.isolation,
+            "workspace": self.workspace or None,
+            "branch": self.branch or None,
+            "applied": self.applied,
         }
 
 
@@ -70,15 +87,39 @@ def tool_spawn_task(params: dict) -> dict:
     if not prompt:
         return {"success": False, "error": "Missing 'prompt'"}
 
+    mode = str(params.get("mode") or "read-only").lower()
+    isolation = str(params.get("isolation") or "auto").lower()
+    if mode not in {"read-only", "workspace-write"}:
+        return {"success": False, "error": "mode must be read-only or workspace-write"}
+    if isolation not in {"auto", "worktree", "shared"}:
+        return {"success": False, "error": "isolation must be auto, worktree, or shared"}
+    if isolation == "auto":
+        isolation = "worktree" if mode == "workspace-write" else "shared"
+    if mode == "read-only" and isolation == "worktree":
+        isolation = "shared"
+    if mode == "workspace-write" and isolation == "shared":
+        return {
+            "success": False,
+            "error": "workspace-write tasks require worktree isolation",
+        }
+
     task_id = uuid.uuid4().hex[:8]
-    task = SubagentTask(task_id=task_id, prompt=prompt, context=context)
+    task = SubagentTask(
+        task_id=task_id,
+        prompt=prompt,
+        context=context,
+        mode=mode,
+        isolation=isolation,
+        workspace=str(params.get("_workspace") or params.get("_spawn_workspace") or Path.cwd()),
+        session_id=str(params.get("_session_id") or ""),
+    )
     _TASKS[task_id] = task
 
     if _RUNNER is not None:
         try:
             loop = asyncio.get_event_loop()
             if loop.is_running():
-                asyncio.ensure_future(_run_background(task))
+                task.async_task = asyncio.ensure_future(_run_background(task))
             else:
                 loop.run_until_complete(_run_background(task))
         except Exception as exc:
@@ -92,6 +133,8 @@ def tool_spawn_task(params: dict) -> dict:
         "success": True,
         "task_id": task_id,
         "status": task.status,
+        "mode": task.mode,
+        "isolation": task.isolation,
         "message": (
             f"Task {task_id} spawned. Use task_status('{task_id}') to check progress."
             if task.status == "running" else
@@ -103,12 +146,39 @@ def tool_spawn_task(params: dict) -> dict:
 async def _run_background(task: SubagentTask) -> None:
     task.status = "running"
     try:
+        if task.mode == "workspace-write" and task.isolation == "worktree":
+            from apps.cli.config_paths import resolve_config_dir
+            from .worktrees import WorktreeManager
+
+            manager = WorktreeManager(resolve_config_dir() / "worktrees")
+            spec = manager.create(task_id=task.task_id, workspace=task.workspace)
+            task.worktree_spec = spec
+            task.workspace = spec.path
+            task.branch = spec.branch
+
         full_prompt = task.prompt
         if task.context:
             full_prompt = f"{task.context}\n\n{task.prompt}"
-        result_text = await _RUNNER(full_prompt)
+        execution_contract = (
+            "[Subagent execution contract]\n"
+            f"Mode: {task.mode}\n"
+            f"Workspace: {task.workspace}\n"
+            f"Isolation: {task.isolation}\n"
+            "Keep every file and command operation inside this workspace. "
+            "Do not spawn another subagent or push changes. Return a concise result "
+            "with changed files and verification."
+        )
+        full_prompt = f"{execution_contract}\n\n{full_prompt}"
+        runner_parameters = inspect.signature(_RUNNER).parameters
+        if len(runner_parameters) >= 2:
+            result_text = await _RUNNER(full_prompt, task)
+        else:
+            result_text = await _RUNNER(full_prompt)
         task.result = result_text or ""
         task.status = "done"
+        if task.worktree_spec is not None:
+            from .worktrees import WorktreeManager
+            task.diff_summary = WorktreeManager.diff(task.worktree_spec)
     except asyncio.CancelledError:
         task.status = "cancelled"
     except Exception as exc:
@@ -133,6 +203,10 @@ def tool_task_status(params: dict) -> dict:
         "age": task.age_str(),
         "prompt_preview": task.prompt[:100],
         "error": task.error or None,
+        "mode": task.mode,
+        "isolation": task.isolation,
+        "workspace": task.workspace or None,
+        "branch": task.branch or None,
     }
 
 
@@ -156,6 +230,11 @@ def tool_task_result(params: dict) -> dict:
         "status": task.status,
         "result": task.result,
         "age": task.age_str(),
+        "workspace": task.workspace or None,
+        "branch": task.branch or None,
+        "diff_summary": task.diff_summary or None,
+        "applied": task.applied,
+        "applied_paths": list(task.applied_paths),
     }
 
 
@@ -188,7 +267,89 @@ def tool_task_cancel(params: dict) -> dict:
         return {"success": False, "error": f"Task already in terminal state: {task.status}"}
     task.status = "cancelled"
     task.completed_at = time.time()
+    if task.async_task is not None and not task.async_task.done():
+        task.async_task.cancel()
     return {"success": True, "task_id": task_id, "cancelled": True}
+
+
+def apply_task_worktree(task_id: str, *, cleanup: bool = True) -> dict:
+    """Apply a completed isolated task to the original clean workspace."""
+    task = _TASKS.get(task_id)
+    if not task:
+        return {"success": False, "error": f"Task '{task_id}' not found"}
+    if task.status != "done":
+        return {"success": False, "error": f"Task status is '{task.status}', expected 'done'"}
+    if task.applied:
+        return {"success": False, "error": "Task changes were already applied"}
+    if task.worktree_spec is None:
+        return {"success": False, "error": "Task has no isolated worktree changes"}
+    try:
+        from .worktrees import WorktreeManager
+        from apps.cli.config_paths import resolve_config_dir
+
+        manager = WorktreeManager(resolve_config_dir() / "worktrees")
+        tracked, untracked = manager.changed_paths(task.worktree_spec)
+        target_root = Path(task.worktree_spec.repository)
+        snapshots = {}
+        for relative in (*tracked, *untracked):
+            target = target_root / relative
+            if target.is_file():
+                try:
+                    content = target.read_text(encoding="utf-8")
+                except UnicodeDecodeError:
+                    continue
+                snapshots[relative] = (
+                    True,
+                    content,
+                    target.stat().st_mode & 0o777,
+                )
+            elif not target.exists():
+                snapshots[relative] = (False, "", None)
+        result = manager.apply(task.worktree_spec)
+        checkpoint_errors = []
+        try:
+            from .checkpoints import CheckpointStore
+            checkpoint_store = CheckpointStore()
+            for relative in result.paths:
+                target = target_root / relative
+                before = snapshots.get(relative)
+                if before is None or not target.is_file():
+                    continue
+                try:
+                    after_content = target.read_text(encoding="utf-8")
+                except UnicodeDecodeError:
+                    continue
+                checkpoint_store.record_change(
+                    path=target,
+                    before_content=before[1],
+                    after_content=after_content,
+                    existed_before=before[0],
+                    before_mode=before[2],
+                    source="subagent_apply",
+                    session_id=task.session_id,
+                    label=f"task {task.task_id}: {relative}",
+                    metadata={"task_id": task.task_id, "branch": task.branch},
+                )
+        except Exception as exc:
+            checkpoint_errors.append(str(exc))
+        task.applied = True
+        task.applied_paths = result.paths
+        cleanup_error = ""
+        if cleanup:
+            try:
+                manager.remove(task.worktree_spec, force=True)
+                manager.delete_branch(task.worktree_spec, force=True)
+            except Exception as exc:
+                cleanup_error = str(exc)
+        return {
+            "success": True,
+            "task_id": task_id,
+            "paths": list(result.paths),
+            "cleanup_error": cleanup_error or None,
+            "checkpoint_errors": checkpoint_errors,
+        }
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
 
 
 # ── Tool registry (added to LOCAL_TOOLS in aria_cli.py) ───────────────────────
@@ -210,6 +371,16 @@ SUBAGENT_SCHEMAS = [
             "properties": {
                 "prompt":  {"type": "string", "description": "The task for the sub-agent to perform"},
                 "context": {"type": "string", "description": "Optional background context to inject into the sub-agent's system prompt"},
+                "mode": {
+                    "type": "string",
+                    "enum": ["read-only", "workspace-write"],
+                    "description": "Use workspace-write only when the subagent must edit code. Default: read-only.",
+                },
+                "isolation": {
+                    "type": "string",
+                    "enum": ["auto", "worktree", "shared"],
+                    "description": "auto uses a Git worktree for write tasks; shared is only valid for read-only tasks.",
+                },
             },
             "required": ["prompt"],
         },

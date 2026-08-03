@@ -26,6 +26,9 @@ class AgentResult:
     key_points:  List[str] = field(default_factory=list)   # 关键结论（用于 synthesis）
     data_used:   Dict[str, Any] = field(default_factory=dict)  # 使用的原始数据
     error:       Optional[str] = None   # 失败时的错误信息
+    degraded:    bool = False           # True when a deterministic fallback was used
+    provenance:  List[str] = field(default_factory=list)
+    limitations: List[str] = field(default_factory=list)
 
     @property
     def success(self) -> bool:
@@ -40,6 +43,9 @@ class AgentResult:
             "signal":     self.signal,
             "key_points": self.key_points,
             "error":      self.error,
+            "degraded":   self.degraded,
+            "provenance": list(self.provenance),
+            "limitations": list(self.limitations),
         }
 
 

@@ -37,6 +37,7 @@ class GeneratedHtmlReport:
     path: Path
     team_result: Any = None
     agent_names: tuple[str, ...] = ()
+    agent_health: dict[str, Any] | None = None
 
 
 def report_agent_names(report_type: str) -> list[str]:
@@ -57,6 +58,44 @@ def all_agents_failed(team_result: Any) -> bool:
     if not non_synthesis:
         return False
     return all(not getattr(result, "success", False) for result in non_synthesis)
+
+
+def report_agent_health(team_result: Any, expected_agents: list[str] | tuple[str, ...]) -> dict[str, Any]:
+    """Return deterministic completion stats for report-agent execution."""
+    expected = list(dict.fromkeys(str(name) for name in expected_agents if name))
+    results = [
+        result for result in (getattr(team_result, "results", None) or [])
+        if getattr(result, "agent", None) != "synthesis"
+    ]
+    successful = {
+        str(getattr(result, "agent", ""))
+        for result in results
+        if getattr(result, "success", False)
+    }
+    failed = [name for name in expected if name not in successful]
+    return {
+        "expected": len(expected),
+        "succeeded": len([name for name in expected if name in successful]),
+        "failed": len(failed),
+        "failed_agents": failed,
+        "complete": bool(expected) and not failed,
+    }
+
+
+def apply_report_quality_gate(team_result: Any, expected_agents: list[str] | tuple[str, ...]) -> dict[str, Any]:
+    """Cap report confidence when research agents fail or time out."""
+    health = report_agent_health(team_result, expected_agents)
+    if team_result is None or health["failed"] == 0:
+        return health
+
+    succeeded = health["succeeded"]
+    expected = max(1, health["expected"])
+    cap = 0.0 if succeeded == 0 else min(0.55, 0.20 + 0.35 * succeeded / expected)
+    current = float(getattr(team_result, "confidence", 0.0) or 0.0)
+    team_result.confidence = min(current, cap)
+    if succeeded == 0:
+        team_result.final_signal = "HOLD"
+    return health
 
 
 async def export_report_pdf(report_path: Path) -> Path | None:
@@ -95,6 +134,8 @@ async def run_report_agents(
     symbol: str,
     report_type: str,
     config: dict[str, Any],
+    on_agent_done: Any = None,
+    on_synthesis_start: Any = None,
 ) -> Any:
     from agents.team import run_team
     from datasources.router import get_router
@@ -110,12 +151,24 @@ async def run_report_agents(
     for name in noisy_loggers:
         logging.getLogger(name).setLevel(logging.ERROR)
     try:
+        try:
+            agent_timeout = max(5.0, float(config.get("report_agent_timeout", 40.0) or 40.0))
+        except (TypeError, ValueError):
+            agent_timeout = 40.0
+        try:
+            synthesis_timeout = max(5.0, float(config.get("report_synthesis_timeout", 20.0) or 20.0))
+        except (TypeError, ValueError):
+            synthesis_timeout = 20.0
         return await run_team(
             symbol=symbol,
             agents=agent_names,
             llm_provider=llm_provider,
             data_router=get_router(),
             on_token=suppress_token_stdout,
+            on_agent_done=on_agent_done,
+            on_synthesis_start=on_synthesis_start,
+            timeout_per_agent=agent_timeout,
+            synthesis_timeout=synthesis_timeout,
         )
     finally:
         for name, level in saved_levels.items():
@@ -128,6 +181,8 @@ async def generate_html_report(
     report_type: str,
     output_dir: Path | None,
     config: dict[str, Any],
+    on_agent_done: Any = None,
+    on_synthesis_start: Any = None,
 ) -> GeneratedHtmlReport:
     from report_generator import generate_report
 
@@ -138,9 +193,13 @@ async def generate_html_report(
             symbol=symbol,
             report_type=report_type,
             config=config,
+            on_agent_done=on_agent_done,
+            on_synthesis_start=on_synthesis_start,
         )
     except Exception as exc:
         logger.debug("[report] team analysis failed: %s", exc)
+
+    agent_health = apply_report_quality_gate(team_result, agent_names)
 
     path = await generate_report(
         symbol=symbol,
@@ -151,6 +210,7 @@ async def generate_html_report(
         path=path,
         team_result=team_result,
         agent_names=tuple(agent_names),
+        agent_health=agent_health,
     )
 
 

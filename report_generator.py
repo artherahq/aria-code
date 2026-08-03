@@ -881,13 +881,139 @@ async def generate_report(
 
 # ── PDF Export ────────────────────────────────────────────────────────────────
 
+# Headless Chromium-family binaries, in preference order. macOS almost always
+# has one of these installed, which makes PDF export zero-dependency there —
+# and Chrome's print engine renders our dark-theme HTML exactly like the
+# browser Cmd+P output the report was designed against.
+_CHROME_CANDIDATES = (
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+    "/Applications/Chromium.app/Contents/MacOS/Chromium",
+    "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+    "google-chrome", "chromium", "chromium-browser", "msedge",
+)
+
+
+def _find_chrome() -> Optional[str]:
+    import shutil
+    for cand in _CHROME_CANDIDATES:
+        if "/" in cand:
+            if Path(cand).exists():
+                return cand
+        elif shutil.which(cand):
+            return shutil.which(cand)
+    return None
+
+
+def _export_pdf_via_chrome(html_path: Path, pdf_path: Path) -> bool:
+    chrome = _find_chrome()
+    if not chrome:
+        return False
+    import subprocess as _sp
+    import tempfile
+    # 隔离的 user-data-dir：不碰用户浏览器配置，也避免与已运行实例抢锁
+    with tempfile.TemporaryDirectory(prefix="aria_pdf_") as tmp:
+        cmd = [
+            chrome, "--headless=new", "--disable-gpu",
+            f"--user-data-dir={tmp}",
+            "--no-pdf-header-footer",
+            f"--print-to-pdf={pdf_path}",
+            html_path.resolve().as_uri(),
+        ]
+        try:
+            r = _sp.run(cmd, capture_output=True, timeout=90)
+            if r.returncode != 0 or not pdf_path.exists():
+                # 旧版 Chrome 不认 --headless=new，回退旧旗标再试一次
+                cmd[1] = "--headless"
+                r = _sp.run(cmd, capture_output=True, timeout=90)
+            if r.returncode == 0 and pdf_path.exists() and pdf_path.stat().st_size > 0:
+                logger.info("[report] pdf via headless chrome: %s", pdf_path)
+                return True
+        except Exception as e:
+            logger.debug("[report] headless chrome failed: %s", e)
+    return False
+
+
+def _export_pdf_via_webkit(html_path: Path, pdf_path: Path) -> bool:
+    """macOS 原生 WebKit 引擎（pyobjc）——无需任何浏览器。
+
+    用离屏 WKWebView 加载 HTML，macOS 11+ 的 createPDFWithConfiguration
+    直接吐 PDF 字节。CLI 进程没有事件循环，这里手动泵 NSRunLoop。
+    """
+    import sys
+    if sys.platform != "darwin":
+        return False
+    try:
+        import objc  # noqa: F401
+        from Foundation import NSDate, NSRunLoop, NSURL
+        from WebKit import WKWebView, WKWebViewConfiguration, WKPDFConfiguration
+        from AppKit import NSApplication  # 初始化 GUI 上下文（离屏亦需）
+    except ImportError:
+        return False
+
+    try:
+        NSApplication.sharedApplication()
+        from Foundation import NSMakeRect
+        view = WKWebView.alloc().initWithFrame_configuration_(
+            NSMakeRect(0, 0, 1024, 1400), WKWebViewConfiguration.alloc().init()
+        )
+        url = NSURL.fileURLWithPath_(str(html_path.resolve()))
+        view.loadFileURL_allowingReadAccessToURL_(
+            url, NSURL.fileURLWithPath_(str(html_path.resolve().parent))
+        )
+
+        runloop = NSRunLoop.currentRunLoop()
+        deadline = 30.0
+        while view.isLoading() and deadline > 0:
+            runloop.runUntilDate_(NSDate.dateWithTimeIntervalSinceNow_(0.05))
+            deadline -= 0.05
+        if view.isLoading():
+            return False
+        # 渲染余量（inline base64 图片解码等）
+        for _ in range(10):
+            runloop.runUntilDate_(NSDate.dateWithTimeIntervalSinceNow_(0.05))
+
+        result: dict = {}
+
+        def _done(data, error):
+            result["data"], result["error"] = data, error
+
+        view.createPDFWithConfiguration_completionHandler_(
+            WKPDFConfiguration.alloc().init(), _done
+        )
+        deadline = 30.0
+        while "data" not in result and deadline > 0:
+            runloop.runUntilDate_(NSDate.dateWithTimeIntervalSinceNow_(0.05))
+            deadline -= 0.05
+
+        data = result.get("data")
+        if data is None or result.get("error") is not None:
+            logger.debug("[report] webkit pdf error: %s", result.get("error"))
+            return False
+        data.writeToFile_atomically_(str(pdf_path), True)
+        ok = pdf_path.exists() and pdf_path.stat().st_size > 0
+        if ok:
+            logger.info("[report] pdf via native WebKit: %s", pdf_path)
+        return ok
+    except Exception as e:
+        logger.debug("[report] webkit engine failed: %s", e)
+        return False
+
+
 def export_pdf(html_path: Path) -> Optional[Path]:
     """
     Convert an HTML report to PDF alongside the source file.
-    Tries weasyprint (pure Python) first, then wkhtmltopdf binary.
-    Returns the PDF path on success, None if neither tool is available.
+    Engine order: headless Chrome/Edge/Chromium → macOS native WebKit
+    (pyobjc, no browser needed) → weasyprint → wkhtmltopdf.
+    Returns the PDF path on success, None if no engine is available.
     """
     pdf_path = html_path.with_suffix(".pdf")
+
+    if _export_pdf_via_chrome(html_path, pdf_path):
+        return pdf_path
+
+    if _export_pdf_via_webkit(html_path, pdf_path):
+        return pdf_path
 
     try:
         import weasyprint
@@ -914,6 +1040,26 @@ def export_pdf(html_path: Path) -> Optional[Path]:
             logger.debug("[report] wkhtmltopdf failed: %s", e)
 
     return None
+
+
+def html_string_to_pdf(html: str, pdf_path: Path) -> Optional[Path]:
+    """任意 HTML 字符串 → PDF（供研报以外的调用方复用同一引擎链）。"""
+    import tempfile
+    pdf_path = Path(pdf_path)
+    pdf_path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        "w", suffix=".html", delete=False, encoding="utf-8"
+    ) as f:
+        f.write(html)
+        tmp_html = Path(f.name)
+    try:
+        out = export_pdf(tmp_html)
+        if out and out.exists():
+            out.replace(pdf_path)
+            return pdf_path
+        return None
+    finally:
+        tmp_html.unlink(missing_ok=True)
 
 
 # ── Reports Index ─────────────────────────────────────────────────────────────

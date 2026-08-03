@@ -417,6 +417,36 @@ class ModelCommandsMixin:
 
     def cmd_skills(self, args: str):
         """List all available skills grouped by category."""
+        import shlex
+
+        raw_parts = shlex.split(args.strip()) if args.strip() else []
+        if raw_parts and raw_parts[0].lower() == "add":
+            if len(raw_parts) < 2:
+                message = "Usage: /skills add owner/repository [--ref tag-or-sha]"
+                console.print(f"[yellow]{message}[/yellow]") if HAS_RICH else print(message)
+                return
+            ref = ""
+            if "--ref" in raw_parts:
+                ref_index = raw_parts.index("--ref")
+                if ref_index + 1 >= len(raw_parts):
+                    message = "--ref requires a tag, branch, or commit"
+                    console.print(f"[red]{message}[/red]") if HAS_RICH else print(message)
+                    return
+                ref = raw_parts[ref_index + 1]
+            try:
+                from packages.aria_skills import install_catalog
+
+                installed = install_catalog(raw_parts[1], ref=ref)
+                message = (
+                    f"Installed {installed.source.full_name} at {installed.revision[:12]} "
+                    f"with {len(installed.skills)} verified skills"
+                )
+                console.print(f"[green]{message}[/green]") if HAS_RICH else print(message)
+            except Exception as exc:
+                message = f"Skill catalog install failed: {exc}"
+                console.print(f"[red]{message}[/red]") if HAS_RICH else print(message)
+            return
+
         categories = {}
         for s in SKILLS:
             cat = s["category"]
@@ -434,6 +464,61 @@ class ModelCommandsMixin:
             "tools": "Tools",
             "code": "Code Generation",
         }
+        try:
+            from packages.aria_skills import (
+                discover_external_skills,
+                recent_skill_activation_traces,
+            )
+
+            external_skills = discover_external_skills()
+            activation_traces = recent_skill_activation_traces()
+        except Exception:
+            external_skills = []
+            activation_traces = []
+
+        subcommand = args.strip().lower()
+        if subcommand in {"trace", "traces"}:
+            if HAS_RICH:
+                console.print("\n  [bold]Skill Activation Trace[/bold]")
+                if not activation_traces:
+                    console.print("  [dim]No skill activations recorded in this session.[/dim]\n")
+                for trace in activation_traces:
+                    state = "[green]active[/green]" if trace.activated else "[red]blocked[/red]"
+                    console.print(
+                        f"  {state}  [bold]{trace.qualified_name}[/bold]  "
+                        f"[dim]{trace.reason} · score {trace.score:g} · {trace.integrity}[/dim]"
+                    )
+                console.print()
+            else:
+                print("\nSkill Activation Trace")
+                for trace in activation_traces:
+                    state = "active" if trace.activated else "blocked"
+                    print(
+                        f"  {state} {trace.qualified_name} {trace.reason} "
+                        f"score={trace.score:g} integrity={trace.integrity}"
+                    )
+            return
+
+        if subcommand in {"doctor", "status"}:
+            if HAS_RICH:
+                console.print("\n  [bold]Portable Skill Doctor[/bold]")
+                for skill in external_skills:
+                    style = "green" if skill.integrity == "verified" else "yellow"
+                    console.print(
+                        f"  [{style}]{skill.integrity:8s}[/{style}]  "
+                        f"[bold]{skill.qualified_name}[/bold]  "
+                        f"[dim]v{skill.plugin_version or '-'} · "
+                        f"scripts={skill.policy.script_execution}[/dim]"
+                    )
+                console.print()
+            else:
+                print("\nPortable Skill Doctor")
+                for skill in external_skills:
+                    print(
+                        f"  {skill.integrity:8s} {skill.qualified_name} "
+                        f"v{skill.plugin_version or '-'} scripts={skill.policy.script_execution}"
+                    )
+            return
 
         if HAS_RICH:
             console.print()
@@ -445,6 +530,16 @@ class ModelCommandsMixin:
                     console.print(f"    [bold]{s['command']:20s}[/bold][dim]{s['description']}[/dim]{args_hint}")
                 console.print()
 
+            if external_skills:
+                console.print("  [bold]Portable Workflows[/bold]")
+                for skill in external_skills:
+                    console.print(
+                        f"    [bold]${skill.qualified_name}[/bold]  "
+                        f"[dim]v{skill.plugin_version or '-'} · {skill.integrity}[/dim]\n"
+                        f"      [dim]{skill.description}[/dim]"
+                    )
+                console.print()
+
             console.print("[dim]  Type a skill command to execute, e.g. /deep-analysis AAPL[/dim]\n")
         else:
             print("\nSkills:")
@@ -453,6 +548,13 @@ class ModelCommandsMixin:
                 print(f"\n  [{label}]")
                 for s in skills:
                     print(f"    {s['command']:20s} {s['description']}")
+            if external_skills:
+                print("\n  [Portable Workflows]")
+                for skill in external_skills:
+                    print(
+                        f"    ${skill.qualified_name} v{skill.plugin_version or '-'} "
+                        f"{skill.integrity}  {skill.description}"
+                    )
 
     async def _execute_skill(self, skill: dict, args: str):
         """Execute a skill by expanding its prompt template and sending to AI."""

@@ -64,6 +64,33 @@ def test_terminal_runtime_consumer_handles_runtime_events(capsys):
     assert tool_done == [("TaskCreate", True)]
     assert terminal._task_list == [{"id": "t1", "title": "ship", "status": "done"}]
     assert terminal._transcript_log
+    assert "✓ TaskCreate" in terminal._transcript_log[-1]
+    assert "ship" in terminal._transcript_log[-1]
+    assert "{'success'" not in terminal._transcript_log[-1]
+
+
+def test_terminal_runtime_consumer_activity_log_is_compact_and_redacts_secrets():
+    terminal = _Terminal()
+    consumer = TerminalRuntimeEventConsumer(
+        terminal=terminal,
+        console=_Console(),
+        has_rich=False,
+        markdown_cls=None,
+        live_cls=None,
+        strip_latex=lambda text: text,
+    )
+
+    consumer.on_tool_call(
+        "run_command",
+        {"command": "curl https://example.test -H token=very-secret-value"},
+    )
+    consumer.on_tool_result("run_command", {"success": False, "error": "exit 1"})
+
+    entry = terminal._transcript_log[-1]
+    assert "✗ run_command" in entry
+    assert "token=***" in entry
+    assert "very-secret-value" not in entry
+    assert "exit 1" in entry
 
 
 def test_terminal_runtime_consumer_hides_repetition_marker(capsys):

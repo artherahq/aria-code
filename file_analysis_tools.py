@@ -22,6 +22,7 @@ file_analysis_tools.py — 多格式文件解析与内容提取层
 from __future__ import annotations
 
 import base64
+import importlib
 import json
 import logging
 import mimetypes
@@ -49,6 +50,39 @@ _openpyxl   = _try("openpyxl")
 _pd         = _try("pandas")
 _bs4        = _try("bs4")
 _PIL        = _try("PIL")
+
+
+def refresh_optional_parsers() -> Dict[str, bool]:
+    """Refresh optional parser imports after an in-session package install.
+
+    ``/install`` uses the running interpreter, but this module historically
+    cached failed imports for the lifetime of the process.  That made a
+    successful install look ineffective until Aria was restarted.
+    """
+    global _pdfplumber, _pypdf, _docx_mod, _openpyxl, _pd, _bs4, _PIL
+    importlib.invalidate_caches()
+    module_names = {
+        "_pdfplumber": "pdfplumber",
+        "_pypdf": "pypdf",
+        "_docx_mod": "docx",
+        "_openpyxl": "openpyxl",
+        "_pd": "pandas",
+        "_bs4": "bs4",
+        "_PIL": "PIL",
+    }
+    namespace = globals()
+    for variable, module_name in module_names.items():
+        if namespace.get(variable) is None:
+            namespace[variable] = _try(module_name)
+    return {
+        "pdfplumber": _pdfplumber is not None,
+        "pypdf": _pypdf is not None,
+        "python-docx": _docx_mod is not None,
+        "pandas": _pd is not None,
+        "openpyxl": _openpyxl is not None,
+        "beautifulsoup4": _bs4 is not None,
+        "Pillow": _PIL is not None,
+    }
 
 # ── Data structures ───────────────────────────────────────────────────────────
 
@@ -87,6 +121,7 @@ def parse_file(path_str: str, max_chars: int = MAX_TEXT_CHARS,
     max_chars: truncate text extraction at this many chars
     include_images: whether to base64-encode embedded images (expensive)
     """
+    refresh_optional_parsers()
     path = Path(path_str).expanduser().resolve()
     if not path.exists():
         return FileContent(False, "unknown", str(path), path.name, 0,
@@ -847,12 +882,4 @@ class FileSession:
 # ── Dependency check ──────────────────────────────────────────────────────────
 
 def check_parsers() -> Dict[str, bool]:
-    return {
-        "pdfplumber": _pdfplumber is not None,
-        "pypdf":      _pypdf is not None,
-        "python-docx": _docx_mod is not None,
-        "pandas":     _pd is not None,
-        "openpyxl":   _openpyxl is not None,
-        "beautifulsoup4": _bs4 is not None,
-        "Pillow":     _PIL is not None,
-    }
+    return refresh_optional_parsers()
