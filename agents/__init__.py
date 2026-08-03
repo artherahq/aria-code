@@ -24,9 +24,11 @@ agents/ — Aria Code 可组合多智能体系统
 from .base import BaseAgent, AgentResult
 from .registry import AgentRegistry, get_registry
 from .team import AgentTeam, run_team
+from .signal_scheme import SignalScheme, FINANCIAL_SCHEME, REALTY_SCHEME
 
 __all__ = [
     "BaseAgent", "AgentResult",
     "AgentRegistry", "get_registry",
     "AgentTeam", "run_team",
+    "SignalScheme", "FINANCIAL_SCHEME", "REALTY_SCHEME",
 ]

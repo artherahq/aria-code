@@ -8496,13 +8496,12 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
 
 
 def _print_realty_result(result, agent_name: str):
-    """格式化打印 realty Agent 结果"""
+    """格式化打印 realty Agent 结果（地产健康度词汇，见 agents/signal_scheme.py::REALTY_SCHEME）"""
     _SIGNAL_LABELS = {
-        "BUY": "[green]推荐/正常[/green]",
-        "STRONG_BUY": "[bold green]强烈推荐[/bold green]",
-        "HOLD": "[yellow]需观察[/yellow]",
-        "SELL": "[red]警示[/red]",
-        "STRONG_SELL": "[bold red]极高风险[/bold red]",
+        "GOOD": "[green]正常/推荐[/green]",
+        "WATCH": "[yellow]需观察[/yellow]",
+        "CONCERN": "[red]警示[/red]",
+        "SEVERE": "[bold red]极高风险[/bold red]",
     }
     if not HAS_RICH:
         print(f"\n[{agent_name}] Signal: {result.signal}  Confidence: {result.confidence:.0%}")

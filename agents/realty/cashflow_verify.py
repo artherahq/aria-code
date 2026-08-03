@@ -14,7 +14,8 @@ agents/realty/cashflow_verify.py — 流水核验 Agent
 
 输出:
     analysis    — 核验报告
-    signal      — BUY=流水真实 / HOLD=轻度异常需复核 / SELL=疑似造假/私账
+    signal      — GOOD=流水真实 / WATCH=轻度异常需复核 / CONCERN=疑似造假/私账
+                  / SEVERE=多项异常+差距极大（地产健康度尺度，见 signal_scheme.py）
     key_points  — 异常项目清单
 """
 from __future__ import annotations
@@ -174,10 +175,10 @@ def _cross_verify(
 def _verify_signal(check: Dict) -> str:
     n = check.get("anomaly_count", 0)
     gap = abs(check.get("gap_pct", 0))
-    if n == 0 and gap < 15: return "BUY"
-    if n <= 1 and gap < 30: return "HOLD"
-    if n <= 2 and gap < 50: return "SELL"
-    return "STRONG_SELL"
+    if n == 0 and gap < 15: return "GOOD"
+    if n <= 1 and gap < 30: return "WATCH"
+    if n <= 2 and gap < 50: return "CONCERN"
+    return "SEVERE"
 
 
 def _verify_confidence(check: Dict) -> float:

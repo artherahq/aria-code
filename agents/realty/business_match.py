@@ -10,7 +10,8 @@ agents/realty/business_match.py — 业态匹配 Agent
 
 输出:
     analysis    — 业态匹配建议
-    signal      — BUY=高度匹配 / HOLD=一般匹配 / SELL=低匹配
+    signal      — GOOD=高度匹配 / WATCH=一般匹配 / CONCERN=低匹配
+                  （地产健康度尺度，见 signal_scheme.py）
     key_points  — 推荐业态 Top3 + 理由
 """
 from __future__ import annotations
@@ -115,9 +116,9 @@ def _match_signal(asset: Dict, market: Dict) -> str:
     if market_score >= 7:  score += 1
     elif 0 < market_score <= 3: score -= 1
 
-    if score >= 4:  return "BUY"
-    if score >= 2:  return "HOLD"
-    return "SELL"
+    if score >= 4:  return "GOOD"
+    if score >= 2:  return "WATCH"
+    return "CONCERN"
 
 
 def _match_confidence(asset: Dict, market: Dict) -> float:

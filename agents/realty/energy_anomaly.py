@@ -13,7 +13,8 @@ agents/realty/energy_anomaly.py — 能耗异常 Agent
 
 输出:
     analysis    — 能耗分析报告
-    signal      — BUY=正常 / HOLD=轻度异常 / SELL=严重异常/疑似空置
+    signal      — GOOD=正常 / WATCH=轻度异常 / CONCERN=中度异常 / SEVERE=严重异常/疑似空置
+                  （地产健康度尺度，见 signal_scheme.py）
     key_points  — 异常指标清单
 """
 from __future__ import annotations
@@ -154,10 +155,10 @@ def _analyze_energy(
 
 def _energy_signal(check: Dict) -> str:
     n = check.get("anomaly_count", 0)
-    if n == 0: return "BUY"
-    if n == 1: return "HOLD"
-    if n == 2: return "SELL"
-    return "STRONG_SELL"
+    if n == 0: return "GOOD"
+    if n == 1: return "WATCH"
+    if n == 2: return "CONCERN"
+    return "SEVERE"
 
 
 def _energy_confidence(check: Dict) -> float:

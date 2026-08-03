@@ -10,7 +10,9 @@ agents/realty/asset_diagnosis.py — 资产诊断 Agent
 
 输出:
     analysis    — 详细分析文本
-    signal      — BUY=推荐共创 / HOLD=需观察 / SELL=建议出租或出售
+    signal      — GOOD=推荐共创 / WATCH=需观察 / CONCERN=建议出租或出售
+                  （地产健康度尺度，见 agents/signal_scheme.py::REALTY_SCHEME，
+                  不是股票 BUY/SELL 那套交易动作词汇）
     key_points  — 3-5 条关键结论
 """
 from __future__ import annotations
@@ -101,9 +103,9 @@ def _score_to_signal(asset: Dict, reno: float) -> str:
     if state != "正常":   score -= 2
     if reno > rent * 24:  score -= 1     # 改造成本超过2年租金则不划算
 
-    if score >= 4:  return "BUY"       # 非常适合共创
-    if score >= 2:  return "HOLD"      # 需进一步评估
-    return "SELL"                       # 建议传统出租或出售
+    if score >= 4:  return "GOOD"      # 非常适合共创
+    if score >= 2:  return "WATCH"     # 需进一步评估
+    return "CONCERN"                    # 建议传统出租或出售
 
 
 def _calc_confidence(asset: Dict) -> float:

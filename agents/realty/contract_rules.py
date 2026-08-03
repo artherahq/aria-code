@@ -10,7 +10,8 @@ agents/realty/contract_rules.py — 合同规则 Agent
 
 输出:
     analysis    — 合同条款草案文本
-    signal      — BUY=条款清晰可执行 / HOLD=需补充条款 / SELL=有重大风险条款
+    signal      — GOOD=条款清晰可执行 / WATCH=需补充条款 / CONCERN=有重大风险条款
+                  （地产健康度尺度，见 signal_scheme.py）
     key_points  — 关键条款摘要（保底金额/分润比例/结算周期/违约条款）
 """
 from __future__ import annotations
@@ -139,9 +140,9 @@ def _contract_signal(nego: Dict) -> str:
     if not nego.get("settlement_cycle"):   issues += 1
     if not nego.get("contract_years"):     issues += 1
 
-    if issues == 0:  return "BUY"
-    if issues <= 2:  return "HOLD"
-    return "SELL"
+    if issues == 0:  return "GOOD"
+    if issues <= 2:  return "WATCH"
+    return "CONCERN"
 
 
 def _contract_confidence(nego: Dict) -> float:

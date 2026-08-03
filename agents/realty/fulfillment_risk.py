@@ -12,7 +12,8 @@ agents/realty/fulfillment_risk.py — 履约风控 Agent
 
 输出:
     analysis    — 风险报告
-    signal      — BUY=低风险 / HOLD=中等风险 / SELL=高风险 / STRONG_SELL=极高风险
+    signal      — GOOD=低风险 / WATCH=中等风险 / CONCERN=高风险 / SEVERE=极高风险
+                  （地产健康度尺度，见 signal_scheme.py）
     key_points  — 风险事项清单（按级别）
 """
 from __future__ import annotations
@@ -134,7 +135,7 @@ def _assess_risk(
 
     # 5. 流水核验异常
     cf_signal = cf.get("signal", "")
-    if cf_signal in ("SELL", "STRONG_SELL"):
+    if cf_signal in ("CONCERN", "SEVERE"):
         risk_items.append({"level": "高",
                            "desc": f"流水核验异常（{cf.get('anomaly_summary','')}），需稽查"})
 
@@ -157,12 +158,12 @@ def _assess_risk(
 
 
 def _risk_signal(risk: Dict) -> str:
-    if risk.get("has_extreme_risk"): return "STRONG_SELL"
-    if risk.get("has_high_risk"):    return "SELL"
+    if risk.get("has_extreme_risk"): return "SEVERE"
+    if risk.get("has_high_risk"):    return "CONCERN"
     mid_count = sum(1 for r in risk.get("risk_items", []) if r["level"] == "中")
-    if mid_count >= 2:               return "SELL"
-    if mid_count >= 1:               return "HOLD"
-    return "BUY"
+    if mid_count >= 2:               return "CONCERN"
+    if mid_count >= 1:               return "WATCH"
+    return "GOOD"
 
 
 def _risk_confidence(risk: Dict, invoices: List) -> float:
