@@ -186,6 +186,12 @@ def _access_token() -> str:
 def autofill_design(template_id: str, data: Dict[str, Any], *, poll_timeout: float = 60.0) -> Dict[str, Any]:
     """Fill a Canva brand template with data and return the exported design.
 
+    `data` values must be typed DatasetValue objects per the Canva Autofill
+    API, not bare strings, e.g.:
+        {"headline": {"type": "text", "text": "Q3 Report"},
+         "chart_img": {"type": "image", "asset_id": "<uploaded-asset-id>"}}
+    Supported value "type"s: text, image, video, chart, sheet.
+
     Blocking (uses requests) — callers on an event loop should run this in
     an executor, same as every other broker/report call in this codebase.
     """
@@ -197,7 +203,7 @@ def autofill_design(template_id: str, data: Dict[str, Any], *, poll_timeout: flo
     create_resp = requests.post(
         f"{API_BASE}/autofills",
         headers=headers,
-        json={"brand_template_id": template_id, "data": data},
+        json={"type": "create_from_brand_template", "brand_template_id": template_id, "data": data},
         timeout=15,
     )
     if create_resp.status_code not in (200, 201, 202):

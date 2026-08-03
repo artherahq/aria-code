@@ -120,7 +120,7 @@ _INPUT_SCHEMAS: Dict[str, Dict[str, Any]] = {
         "type": "object",
         "properties": {
             "template_id": {"type": "string", "description": "Canva brand template id"},
-            "data": {"type": "object", "description": "Field name -> value mapping to autofill into the template"},
+            "data": {"type": "object", "description": "Field name -> typed DatasetValue, e.g. {\"headline\": {\"type\": \"text\", \"text\": \"Q3 Report\"}}. Value types: text, image, video, chart, sheet — see Canva's Autofill API docs."},
         },
         "required": ["template_id", "data"],
     },
