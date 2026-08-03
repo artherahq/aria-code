@@ -47,12 +47,24 @@ class PortfolioAgent(BaseAgent):
 
     # ── Multi-symbol interface ────────────────────────────────────────────────
 
-    async def run_portfolio(self, symbols: List[str]) -> AgentResult:
-        """Primary entry point for multi-symbol analysis."""
-        data   = await self.fetch_portfolio_data(symbols)
+    async def run_portfolio(
+        self, symbols: List[str], weights: Optional[Dict[str, float]] = None
+    ) -> AgentResult:
+        """Primary entry point for multi-symbol analysis.
+
+        weights: optional {symbol: dollar_cost_basis} from the user's real
+        holdings (portfolio_ledger.PortfolioLedger.get_positions()). Without
+        it, every position is silently treated as equal-weight — which used
+        to be the ONLY mode this agent supported, so a user who actually
+        holds 80% NVDA and 20% everything else got a risk verdict computed
+        on a fictional 1/n-weighted portfolio instead of their real exposure.
+        """
+        data   = await self.fetch_portfolio_data(symbols, weights=weights)
         return await self.analyze_portfolio(symbols, data)
 
-    async def fetch_portfolio_data(self, symbols: List[str]) -> Dict[str, Any]:
+    async def fetch_portfolio_data(
+        self, symbols: List[str], weights: Optional[Dict[str, float]] = None
+    ) -> Dict[str, Any]:
         data: Dict[str, Any] = {"symbols": symbols}
         if len(symbols) < 2:
             return data
@@ -97,8 +109,15 @@ class PortfolioAgent(BaseAgent):
             cov_matrix  = returns.cov() * 252
             valid_syms  = list(df.columns)
             n           = len(valid_syms)
-            weights     = np.ones(n) / n
-            port_vol    = float(np.sqrt(weights @ cov_matrix.values @ weights))
+            if weights and any(weights.get(s, 0) > 0 for s in valid_syms):
+                raw = np.array([max(weights.get(s, 0.0), 0.0) for s in valid_syms])
+                w_vec = raw / raw.sum() if raw.sum() > 0 else np.ones(n) / n
+                weight_source = "ledger"
+            else:
+                w_vec = np.ones(n) / n
+                weight_source = "equal"
+            port_vol = float(np.sqrt(w_vec @ cov_matrix.values @ w_vec))
+            position_weights = {s: round(float(w_vec[i]), 4) for i, s in enumerate(valid_syms)}
 
             # High correlation pairs (|r| > 0.70)
             high_corr: List[Dict] = []
@@ -112,8 +131,10 @@ class PortfolioAgent(BaseAgent):
                             "corr": round(c, 3),
                         })
 
-            # Diversification ratio: weighted avg individual vol / portfolio vol
-            avg_vol = float(np.mean([float(ann_vols.get(s, 0)) for s in valid_syms]))
+            # Diversification ratio: weighted avg individual vol / portfolio vol.
+            # Was np.mean() (unweighted) despite the comment already claiming
+            # "weighted" — with real ledger weights now available, actually weight it.
+            avg_vol = float(sum(w_vec[i] * float(ann_vols.get(s, 0)) for i, s in enumerate(valid_syms)))
             div_ratio = round(avg_vol / port_vol, 2) if port_vol > 0 else 1.0
 
             # 52-week return per symbol
@@ -140,6 +161,8 @@ class PortfolioAgent(BaseAgent):
                 "best_performer":  sorted_ret[0]  if sorted_ret else None,
                 "worst_performer": sorted_ret[-1] if sorted_ret else None,
                 "sector_map":    sector_map,
+                "position_weights": position_weights,
+                "weight_source":    weight_source,
             })
 
         except ImportError:
@@ -171,9 +194,11 @@ class PortfolioAgent(BaseAgent):
 
         valid_syms = data.get("valid_symbols", symbols)
         port_block = _format_portfolio_stats(data)
+        weight_desc = ("your actual position sizes" if data.get("weight_source") == "ledger"
+                       else "equal weight — no real position sizes available")
 
         prompt = (
-            f"Portfolio: {', '.join(valid_syms)} ({len(valid_syms)} positions, equal weight)\n\n"
+            f"Portfolio: {', '.join(valid_syms)} ({len(valid_syms)} positions, weighted by {weight_desc})\n\n"
             f"{port_block}\n\n"
             "Analyze this portfolio:\n"
             "1. Overall risk level (Low / Medium / High)\n"
@@ -217,15 +242,17 @@ def _format_portfolio_stats(d: Dict) -> str:
     vols    = d.get("ann_vols", {})
     rets    = d.get("ann_returns", {})
     rets_1y = d.get("returns_1y", {})
+    pweights = d.get("position_weights", {})
     if vols:
-        lines.append("Symbol │ Ann.Vol │ Ann.Ret │ 1Y Return")
-        lines.append("─" * 42)
+        lines.append("Symbol │ Weight │ Ann.Vol │ Ann.Ret │ 1Y Return")
+        lines.append("─" * 52)
         for sym in d.get("valid_symbols", list(vols)):
             v  = vols.get(sym, 0)
             r  = rets.get(sym, 0)
             y  = rets_1y.get(sym, 0)
+            w  = pweights.get(sym, 0)
             lines.append(
-                f"{sym:<6} │ {v*100:>6.1f}% │ {r*100:>6.1f}% │ {y*100:>+7.1f}%"
+                f"{sym:<6} │ {w*100:>5.1f}% │ {v*100:>6.1f}% │ {r*100:>6.1f}% │ {y*100:>+7.1f}%"
             )
 
     port_vol = d.get("port_vol_ann", 0)
@@ -288,7 +315,10 @@ def _estimate_confidence(d: Dict) -> float:
 def _build_key_points(d: Dict, verdict: str) -> List[str]:
     pts = []
     n   = len(d.get("valid_symbols", []))
-    pts.append(f"{n} 个标的，等权配置")
+    if d.get("weight_source") == "ledger":
+        pts.append(f"{n} 个标的，按真实持仓成本加权")
+    else:
+        pts.append(f"{n} 个标的，等权配置（无真实持仓数据，非实际风险暴露）")
 
     port_vol = d.get("port_vol_ann", 0)
     if port_vol:
