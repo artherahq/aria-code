@@ -481,6 +481,7 @@ _DATA_KEY_MAP: Dict[str, str] = {
     "polygon":      "POLYGON_API_KEY",        # US market data (free tier available)
     "fmp":          "FMP_API_KEY",            # Financial Modeling Prep (free tier)
     "twelvedata":   "TWELVEDATA_API_KEY",     # Global market data (free: 800/day)
+    "figma":        "FIGMA_API_KEY",          # Figma Personal Access Token (read-only file access)
 }
 
 # Registration / signup URLs for each data service
@@ -494,6 +495,7 @@ _DATA_SIGNUP_URLS: Dict[str, str] = {
     "polygon":      "https://polygon.io/signup",
     "fmp":          "https://financialmodelingprep.com/register",
     "twelvedata":   "https://twelvedata.com/register",
+    "figma":        "https://www.figma.com/developers/api#access-tokens",
 }
 
 # LLM provider signup URLs
@@ -5877,6 +5879,8 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
             "/apply-plan":   (self.cmd_apply_plan,   "Execute a saved plan: /apply-plan [--resume] [--from N]"),
             "/plan-report":  (self.cmd_plan_report,  "Plan run report: /plan-report [md|json] [file] [--open]"),
             "/tasks":        (self.cmd_tasks,         "Background tasks: /tasks [list|cancel <id>]"),
+            "/delegate":     (self.cmd_delegate,      'Delegate to another agent CLI: /delegate claude|codex "<prompt>"'),
+            "/canva":        (self.cmd_canva,         "Canva Connect: /canva connect <client_id> <client_secret> | status"),
             "/optimize-port":(self.cmd_optimize_port,"Portfolio optimization: /optimize-port [SYMBOL...]"),
             "/factor-lab":   (self.cmd_factor_lab,   "Factor lab: /factor-lab [SYMBOL]"),
             "/stat-arb":     (self.cmd_stat_arb,     "Statistical arbitrage: /stat-arb SYMBOL_A SYMBOL_B [period=2y]"),
@@ -6598,6 +6602,67 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
             for t in tasks:
                 preview = t.prompt[:50]
                 print(f"  {t.task_id}  {t.status:10s}  {t.age_str():>5s}  {preview}")
+
+    def cmd_delegate(self, args: str):
+        """Delegate a task to the Claude Code or Codex CLI as a background subagent."""
+        try:
+            from runtime.subagent import tool_spawn_task
+        except ImportError:
+            msg = "Subagent module not available."
+            console.print(f"[red]{msg}[/red]") if HAS_RICH else print(msg)
+            return
+
+        parts = args.strip().split(maxsplit=1)
+        if len(parts) < 2 or parts[0].lower() not in {"claude", "codex"}:
+            msg = 'Usage: /delegate claude|codex "<prompt>"'
+            console.print(f"[yellow]{msg}[/yellow]") if HAS_RICH else print(msg)
+            return
+
+        backend, prompt = parts[0].lower(), parts[1].strip().strip('"')
+        result = tool_spawn_task({
+            "prompt": prompt,
+            "backend": backend,
+            "mode": "workspace-write",
+            "isolation": "auto",
+        })
+        if not result.get("success"):
+            console.print(f"[red]{result.get('error', 'Error')}[/red]") if HAS_RICH else print(result.get("error"))
+            return
+        task_id = result["task_id"]
+        msg = f"✓ Delegated to {backend}: task {task_id}. Check with /tasks or task_status('{task_id}')."
+        console.print(f"[green]{msg}[/green]") if HAS_RICH else print(msg)
+
+    def cmd_canva(self, args: str):
+        """Manage the Canva Connect integration used for report design drafts."""
+        parts = args.strip().split(maxsplit=2)
+        sub = parts[0].lower() if parts else "status"
+
+        if sub == "connect":
+            if len(parts) < 3:
+                msg = "Usage: /canva connect <client_id> <client_secret>  (register an app first at https://www.canva.com/developers/)"
+                console.print(f"[yellow]{msg}[/yellow]") if HAS_RICH else print(msg)
+                return
+            client_id, client_secret = parts[1], parts[2]
+            from canva_client import connect as _canva_connect
+            msg = "打开浏览器完成 Canva 授权…"
+            console.print(f"[cyan]{msg}[/cyan]") if HAS_RICH else print(msg)
+            result = _canva_connect(client_id, client_secret)
+            if result.get("success"):
+                msg = "✓ Canva 已连接"
+                console.print(f"[green]{msg}[/green]") if HAS_RICH else print(msg)
+            else:
+                console.print(f"[red]{result.get('error')}[/red]") if HAS_RICH else print(result.get("error"))
+            return
+
+        if sub == "status":
+            from canva_client import _load_canva_config
+            entry = _load_canva_config()
+            msg = "✓ Canva 已连接" if entry.get("access_token") else "未连接 Canva。运行 /canva connect <client_id> <client_secret>"
+            console.print(msg) if HAS_RICH else print(msg)
+            return
+
+        msg = "Usage: /canva connect <client_id> <client_secret> | /canva status"
+        console.print(f"[yellow]{msg}[/yellow]") if HAS_RICH else print(msg)
 
     def cmd_git(self, args: str):
         return OpsCommandsMixin.cmd_git(self, args)

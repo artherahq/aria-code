@@ -51,6 +51,7 @@ def _register_all() -> None:
         "ibkr":       ("brokers.intl.ibkr_broker",     "IBKRBroker"),
         "alpaca":     ("brokers.intl.alpaca_broker",   "AlpacaBroker"),
         "webull":     ("brokers.intl.webull_broker",   "WebullBroker"),
+        "trading212": ("brokers.intl.trading212_broker", "Trading212Broker"),
     }
     for btype, (module_path, class_name) in _map.items():
         try:

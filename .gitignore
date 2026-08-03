@@ -37,6 +37,7 @@ __pycache__/
 *.egg
 *.egg-info/
 dist/
+dist-native/
 build/
 .eggs/
 .venv/

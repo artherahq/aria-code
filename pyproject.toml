@@ -75,6 +75,7 @@ files = [                          # /file load + /file analyze document parsing
     "pdfplumber>=0.11.0",
     "pypdf>=4.3.0",
     "python-docx>=1.1.2",
+    "python-pptx>=1.0.2",
     "openpyxl>=3.1.5",
     "beautifulsoup4>=4.12.3",
     "Pillow>=10.4.0",
@@ -129,6 +130,7 @@ full = [
     "pdfplumber>=0.11.0",
     "pypdf>=4.3.0",
     "python-docx>=1.1.2",
+    "python-pptx>=1.0.2",
     "openpyxl>=3.1.5",
     "beautifulsoup4>=4.12.3",
     "Pillow>=10.4.0",
@@ -144,6 +146,7 @@ all = [
     "pdfplumber>=0.11.0",
     "pypdf>=4.3.0",
     "python-docx>=1.1.2",
+    "python-pptx>=1.0.2",
     "openpyxl>=3.1.5",
     "beautifulsoup4>=4.12.3",
     "Pillow>=10.4.0",
@@ -165,6 +168,7 @@ all = [
 
 [project.scripts]
 aria-code = "apps.cli.main:main"
+aria-code-mcp = "aria_mcp_server:main"
 
 [project.urls]
 Homepage = "https://github.com/artherahq/aria-code"
@@ -178,6 +182,7 @@ py-modules = [
     "aria_cli",
     "aria_daemon",
     "aria_feishu_bot",
+    "aria_mcp_server",
     "aria_relay_client",
     "aria_relay_server",
     "aria_telegram_bot",
@@ -185,6 +190,7 @@ py-modules = [
     "artifacts",
     "backtest_engine",
     "backtest_report",
+    "canva_client",
     "change_store",
     "command_safety",
     "computer_use_tools",
@@ -194,6 +200,8 @@ py-modules = [
     "data_service",
     "demo_player",
     "doctor",
+    "external_agent_runner",
+    "figma_client",
     "file_analysis_tools",
     "finance_formulas",
     "football_data_client",
@@ -212,6 +220,7 @@ py-modules = [
     "portfolio_ledger",
     "project_tools",
     "realty_data_tools",
+    "report_exporters",
     "report_generator",
     "setup_wizard",
     "strategy_vault",

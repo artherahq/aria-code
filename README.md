@@ -182,6 +182,22 @@ mindmap
 
 ## 🚀 Quick Start
 
+### Option 0: Download the binary (no Python/Node install needed)
+
+Every tagged release publishes standalone binaries for macOS (arm64), Windows (x64), and Linux (x64) — download from the [Releases page](https://github.com/artherahq/aria-code/releases), no Python or Node.js required:
+
+```bash
+# macOS / Linux
+chmod +x aria-code-macos-arm64   # or aria-code-linux-x64
+./aria-code-macos-arm64
+```
+```powershell
+# Windows
+.\aria-code-windows-x64.exe
+```
+
+> The macOS build is signed + notarized only once `MACOS_CERTIFICATE_P12_BASE64` and the Apple notarization secrets are configured in repo Settings → Secrets (see `.github/workflows/build-native-binaries.yml`) — without them, CI still builds and smoke-tests successfully but produces an **unsigned** binary that macOS Gatekeeper will refuse to run. Until those secrets are added, get a signed macOS build by running `scripts/build_native_binary.sh --notarize` locally on a machine with the real Developer ID cert imported. Windows/Linux binaries need no signing step and run as-is.
+
 ### Option 1: Bootstrap (fresh Mac / Linux — recommended)
 
 No Node.js, Python, or Xcode required. One command handles everything:
@@ -802,6 +818,39 @@ Connect any [Model Context Protocol](https://modelcontextprotocol.io) server:
 /mcp list      # List connected MCP servers
 /mcp status    # Server health
 /mcp tools     # All available MCP tools
+```
+
+### Expose aria-code to other MCP clients
+
+aria-code can also run *as* an MCP server, so Claude Code, Codex, or any
+other MCP client can call into it directly:
+
+- `aria.market.quote` / `aria.agent.team` / `aria.artifacts.list` — live quote + technicals, multi-agent research, generated artifacts (all read-only)
+- `aria.report.generate` — fetch data and generate a full HTML research report artifact for a symbol
+- `aria.backtest.run` — run a historical strategy simulation (`buy_hold` or `sma_cross`) against real price history
+- `aria.broker.positions` / `aria.broker.list_previews` — read account/positions and recent order previews for a configured broker (US/CN/HK/UK — see `/broker`)
+- `aria.broker.preview_order` — build a risk-checked order preview. **Never places a live trade** — execution always requires a human to run `/trade confirm <preview_id>` in the aria-code terminal itself; no MCP tool can reach that step
+- `aria.report.chart` / `aria.report.pdf` / `aria.report.docx` / `aria.report.pptx` — generate a chart PNG, or render a Markdown report to PDF, an editable Word document, or a slide deck (one slide per heading) — saved to your artifacts folder
+- `aria.report.canva_design` — fill a Canva brand template with data and export a design draft (needs `/canva connect <client_id> <client_secret>` once — register an app at [canva.com/developers](https://www.canva.com/developers/) and have a brand template ready first; Canva has no API for creating a design from scratch, only autofilling an existing template)
+- `aria.figma.read_file` / `aria.figma.comments` — read a Figma file's page/frame structure (depth-limited summary) and its comments (needs `/apikey set figma <personal_access_token>` once). Read-only — Figma has no public API for writing/creating designs from a script, only its in-app Plugin API can do that
+
+```bash
+python3 aria_mcp_server.py          # dev, from the repo root
+# or, once installed: aria-code-mcp
+```
+
+Register with Claude Code:
+
+```bash
+claude mcp add aria-code -- python3 /path/to/aria-code/aria_mcp_server.py
+```
+
+Register with Codex (`~/.codex/config.toml`):
+
+```toml
+[mcp_servers.aria_code]
+command = "python3"
+args = ["/path/to/aria-code/aria_mcp_server.py"]
 ```
 
 ---

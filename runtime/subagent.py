@@ -39,6 +39,7 @@ class SubagentTask:
     error: str = ""
     mode: str = "read-only"
     isolation: str = "shared"
+    backend: str = "aria"    # aria | claude | codex — which agent actually runs the task
     workspace: str = ""
     session_id: str = ""
     branch: str = ""
@@ -66,6 +67,7 @@ class SubagentTask:
             "age": self.age_str(),
             "mode": self.mode,
             "isolation": self.isolation,
+            "backend": self.backend,
             "workspace": self.workspace or None,
             "branch": self.branch or None,
             "applied": self.applied,
@@ -89,10 +91,13 @@ def tool_spawn_task(params: dict) -> dict:
 
     mode = str(params.get("mode") or "read-only").lower()
     isolation = str(params.get("isolation") or "auto").lower()
+    backend = str(params.get("backend") or "aria").lower()
     if mode not in {"read-only", "workspace-write"}:
         return {"success": False, "error": "mode must be read-only or workspace-write"}
     if isolation not in {"auto", "worktree", "shared"}:
         return {"success": False, "error": "isolation must be auto, worktree, or shared"}
+    if backend not in {"aria", "claude", "codex"}:
+        return {"success": False, "error": "backend must be aria, claude, or codex"}
     if isolation == "auto":
         isolation = "worktree" if mode == "workspace-write" else "shared"
     if mode == "read-only" and isolation == "worktree":
@@ -110,12 +115,15 @@ def tool_spawn_task(params: dict) -> dict:
         context=context,
         mode=mode,
         isolation=isolation,
+        backend=backend,
         workspace=str(params.get("_workspace") or params.get("_spawn_workspace") or Path.cwd()),
         session_id=str(params.get("_session_id") or ""),
     )
     _TASKS[task_id] = task
 
-    if _RUNNER is not None:
+    # An external backend (claude/codex) always has a runner (the CLI itself);
+    # the "aria" backend needs one registered via register_runner().
+    if backend != "aria" or _RUNNER is not None:
         try:
             loop = asyncio.get_event_loop()
             if loop.is_running():
@@ -169,11 +177,16 @@ async def _run_background(task: SubagentTask) -> None:
             "with changed files and verification."
         )
         full_prompt = f"{execution_contract}\n\n{full_prompt}"
-        runner_parameters = inspect.signature(_RUNNER).parameters
-        if len(runner_parameters) >= 2:
-            result_text = await _RUNNER(full_prompt, task)
+        if task.backend != "aria":
+            from external_agent_runner import RUNNERS
+
+            result_text = await RUNNERS[task.backend](full_prompt, cwd=task.workspace or None)
         else:
-            result_text = await _RUNNER(full_prompt)
+            runner_parameters = inspect.signature(_RUNNER).parameters
+            if len(runner_parameters) >= 2:
+                result_text = await _RUNNER(full_prompt, task)
+            else:
+                result_text = await _RUNNER(full_prompt)
         task.result = result_text or ""
         task.status = "done"
         if task.worktree_spec is not None:
@@ -380,6 +393,11 @@ SUBAGENT_SCHEMAS = [
                     "type": "string",
                     "enum": ["auto", "worktree", "shared"],
                     "description": "auto uses a Git worktree for write tasks; shared is only valid for read-only tasks.",
+                },
+                "backend": {
+                    "type": "string",
+                    "enum": ["aria", "claude", "codex"],
+                    "description": "Which agent actually runs the task. 'aria' (default) uses this session's own loop. 'claude'/'codex' shell out to the Claude Code or Codex CLI (must be installed and on PATH) headlessly — use for coding tasks you want a different coding agent to own.",
                 },
             },
             "required": ["prompt"],

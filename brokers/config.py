@@ -189,6 +189,7 @@ _REQUIRED_FIELDS: Dict[str, List[str]] = {
     "ibkr":       ["host", "port"],           # TWS/Gateway host:port required
     "alpaca":     ["api_key", "api_secret"],
     "webull":     ["username", "password"],   # read-only, still needs credentials
+    "trading212": ["api_key"],
 }
 
 _TYPE_LABELS: Dict[str, str] = {
@@ -201,6 +202,7 @@ _TYPE_LABELS: Dict[str, str] = {
     "ibkr":       "Interactive Brokers TWS/Gateway",
     "alpaca":     "Alpaca Markets（美股 / 模拟盘）",
     "webull":     "Webull（美股）",
+    "trading212": "Trading212（英国 Invest/ISA）",
 }
 
 
@@ -348,6 +350,17 @@ _TEMPLATES: Dict[str, Dict[str, Any]] = {
         "password": "YOUR_PASSWORD",
         "device_id": "",
         "_comment": "需安装 webull: pip install webull"
+    },
+    "trading212": {
+        "id": "trading212_uk",
+        "type": "trading212",
+        "label": "Trading212 英国账户",
+        "mode": "read_only",
+        "allow_live_trade": False,
+        "require_confirm": True,
+        "api_key": "YOUR_API_KEY",
+        "base_url": "https://live.trading212.com/api/v0",
+        "_comment": "无需额外 SDK（直接 REST）。practice 账户把 base_url 换成 https://demo.trading212.com/api/v0。仅支持限价单。"
     },
 }
 
