@@ -4,6 +4,85 @@ All notable changes to Aria Code are documented here.
 
 ---
 
+## [4.2.0] — 2026-08-03
+
+### Added
+
+**Portable skill catalog — Aria now actually loads external SKILL.md workflows**
+- `ARIA_SKILLS_PATH` (or a sibling `aria-skills/skills` checkout) is discovered at
+  startup; each skill registers as `plugin:skill` and its instructions are injected
+  only when a task matches
+- Every skill tree is verified against `.claude-plugin/skills.lock.json` (SHA-256)
+  before anything runs. A skill with no lock entry can never activate automatically —
+  only by explicit `$name` invocation — and one whose contents no longer match its
+  lock is refused outright
+- `/skills doctor` — catalog integrity and declared permissions
+- `/skills trace` — why each skill was selected or blocked, with match score
+- `/skills` now lists external catalog skills alongside built-in commands
+- A skill can declare which specialist agents it orchestrates (`agents` in
+  `skill-policy.json`); the active skill's agent list is surfaced in the prompt
+
+**New commands**
+- `/export-pdf <report.md>` — renders a structured report to a designed PDF
+  (`--theme=institutional|bloomberg`, `--sections=`, `--exclude=`)
+- `/artifacts` — manage generated files: `open`, `reveal`, `path`, `copy-path`,
+  `stats`, `prune`
+- Structured Excel export and bilingual Markdown→PDF deliverables
+
+### Changed
+
+**`/portfolio analyze` now uses your real positions, not an imagined equal-weight basket**
+- Previously every risk number — portfolio volatility, diversification ratio, and the
+  HEALTHY/NEEDS_ATTENTION/HIGH_RISK verdict — was computed as if every holding were
+  the same size, regardless of what `portfolio_ledger` actually held. On a
+  90%-concentrated book the difference is 45.4% annualized vol versus 27.4%: the gap
+  between "high risk" and "medium risk" on the tool's own thresholds, and it always
+  erred toward understating a concentrated position
+- With no arguments it now reads your ledger (cost-basis weighted) instead of falling
+  through to the static watchlist; the output states which basis it used, so an
+  equal-weight run can't be mistaken for real exposure
+
+**Football prediction switched to the Elo + Dixon-Coles engine**
+- `FootballAgent` was calling a separate, simpler model: independent Poisson over a
+  fixed hand-maintained attack/defense table with a flat 1.25× home-advantage
+  constant. It now uses the Elo + Dixon-Coles predictor (negative-binomial tail for
+  lopsided fixtures, dynamic Elo/DC mixing, recency form, head-to-head,
+  self-calibration) that already shipped in the quant engine but was never wired up
+- Expect different numbers: on Germany vs Curaçao the two models' home-win
+  probabilities differ by 13.1 percentage points
+- New `neutral_venue` argument (defaults to `False`, preserving league semantics)
+
+**Agent team orchestration is no longer hardcoded to finance vocabulary**
+- ⚠️ **Behavior change:** the 9 real-estate agents (`cashflow_verify`,
+  `contract_rules`, `energy_anomaly`, `fulfillment_risk`, …) no longer emit
+  `BUY`/`HOLD`/`SELL`/`STRONG_SELL`. They now use `GOOD`/`WATCH`/`CONCERN`/`SEVERE`.
+  Each of those agents had been reusing the stock-trading words to mean nine
+  unrelated things ("cash flow is genuine", "contract terms are clean", "low
+  fulfillment risk"), which would have produced a meaningless numeric consensus the
+  moment they were run as a team. **If you parse agent output programmatically,
+  update your mapping.** Financial agents are unchanged — verified byte-for-byte
+  against the previous logic with a 20,000-case comparison
+
+### Fixed
+
+- Dark-theme input text rendered gray instead of white
+- Core file tools (`read_file`, etc.) stayed unavailable when a restrictive skill
+  policy was active
+- `weasyprint` mangled emoji and CJK glyphs in exported PDFs
+- npm `postinstall` treated a non-zero exit code as `uv` install failure even when the
+  binary had installed correctly — now checks the filesystem
+- npm `postinstall`'s critical notices (PATH reminder, terminal reopen) were being
+  swallowed instead of reaching the terminal
+
+### Internal
+
+- `send_message`'s ~580-line inline agent loop deleted; CLI, SDK and self-host backend
+  now all run the same `runtime.run_turn` path (validated with real turns —
+  plain chat, forced-inline parity, native tool-calling with multi-round recovery —
+  before removal)
+
+---
+
 ## [4.1.7] — 2026-07-17
 
 ### Fixed
