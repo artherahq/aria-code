@@ -16,10 +16,11 @@ from typing import Any, Callable, Dict, List, Optional
 
 from .base import BaseAgent, AgentResult
 from .registry import get_registry
+from .signal_scheme import SignalScheme, FINANCIAL_SCHEME
 
 logger = logging.getLogger(__name__)
 
-# 默认 team 构成
+# 默认 team 构成（金融场景；其他领域调用方应显式传 agents= 而不是依赖这个）
 DEFAULT_TEAM = ["macro", "fundamental", "technical", "risk"]
 
 
@@ -53,6 +54,7 @@ class AgentTeam:
         on_synthesis_start: Optional[Callable[[List["AgentResult"]], None]] = None,
         timeout_per_agent: float = 60.0,
         lang: str = "zh",
+        signal_scheme: SignalScheme = FINANCIAL_SCHEME,
     ):
         self.llm                = llm_provider
         self.data               = data_router
@@ -61,6 +63,10 @@ class AgentTeam:
         self.on_synthesis_start = on_synthesis_start
         self.timeout            = timeout_per_agent
         self.lang               = lang
+        # 领域可插拔的信号词汇表/表决规则；默认金融词汇，对现有调用方零行为
+        # 变化。realty/sports 等领域应传各自的 SignalScheme（见 signal_scheme.py），
+        # 而不是让自己的 agent 借用金融的 BUY/SELL 语义表达完全不同的含义。
+        self.signal_scheme      = signal_scheme
 
     def _build_agent(self, name: str) -> Optional[BaseAgent]:
         registry = get_registry()
@@ -134,7 +140,7 @@ class AgentTeam:
 
         # DebateAgent — 显式请求 OR 信号冲突时自动触发
         explicit_debate = "debate" in names_to_run
-        if explicit_debate or _needs_debate(results):
+        if explicit_debate or self.signal_scheme.needs_debate(results):
             debate_agent = self._build_agent("debate")
             if debate_agent:
                 debate_data = {"conflicting": [r.to_dict() for r in results if r.success]}
@@ -156,7 +162,7 @@ class AgentTeam:
             except Exception:
                 pass
 
-        final_signal, confidence = _vote_signal(results)
+        final_signal, confidence = self.signal_scheme.vote(results)
 
         # synthesis — 把 agent 结果打包进 data，直接调 analyze() 而非 run()
         synthesis_text = ""
@@ -183,11 +189,11 @@ class AgentTeam:
                     synthesis_text = synth_result.analysis
                 except Exception as e:
                     logger.warning(f"[synthesis] 失败: {e}")
-                    synthesis_text = _template_synthesis(results)
+                    synthesis_text = _template_synthesis(results, self.signal_scheme)
             else:
-                synthesis_text = _template_synthesis(results)
+                synthesis_text = _template_synthesis(results, self.signal_scheme)
         else:
-            synthesis_text = _template_synthesis(results)
+            synthesis_text = _template_synthesis(results, self.signal_scheme)
 
         return TeamResult(
             symbol       = symbol,
@@ -234,38 +240,17 @@ async def run_team(
 
 # ── 内部工具 ──────────────────────────────────────────────────────────────────
 
-def _needs_debate(results: List[AgentResult]) -> bool:
-    """当出现真实多空分歧（至少1个BUY + 1个SELL）时返回 True。"""
-    signals = [r.signal for r in results if r.success and r.signal]
-    bullish = sum(1 for s in signals if s in ("BUY", "STRONG_BUY"))
-    bearish = sum(1 for s in signals if s in ("SELL", "STRONG_SELL"))
-    return bullish >= 1 and bearish >= 1
+def _needs_debate(results: List[AgentResult], scheme: SignalScheme = FINANCIAL_SCHEME) -> bool:
+    """当出现真实的正/负信号分歧时返回 True（默认金融 BUY/SELL 词汇，向后兼容）。"""
+    return scheme.needs_debate(results)
 
 
-def _vote_signal(results: List[AgentResult]) -> tuple:
-    """多数表决最终信号"""
-    _SCORE = {
-        "STRONG_BUY": 2, "BUY": 1, "HOLD": 0, "SELL": -1, "STRONG_SELL": -2
-    }
-    valid = [r for r in results if r.success and r.signal in _SCORE]
-    if not valid:
-        return "HOLD", 0.0
-
-    avg_score = sum(_SCORE[r.signal] * r.confidence for r in valid) / len(valid)
-    avg_conf  = sum(r.confidence for r in valid) / len(valid)
-
-    if avg_score >= 1.5:
-        return "STRONG_BUY", avg_conf
-    if avg_score >= 0.5:
-        return "BUY", avg_conf
-    if avg_score <= -1.5:
-        return "STRONG_SELL", avg_conf
-    if avg_score <= -0.5:
-        return "SELL", avg_conf
-    return "HOLD", avg_conf
+def _vote_signal(results: List[AgentResult], scheme: SignalScheme = FINANCIAL_SCHEME) -> tuple:
+    """按置信度加权表决最终信号（默认金融词汇，向后兼容 agents/deep/pipeline.py 的直接调用）。"""
+    return scheme.vote(results)
 
 
-def _template_synthesis(results: List[AgentResult]) -> str:
+def _template_synthesis(results: List[AgentResult], scheme: SignalScheme = FINANCIAL_SCHEME) -> str:
     """无 synthesis agent 时的模板汇总"""
     if not results:
         return "分析完成，无结果。"
@@ -282,7 +267,7 @@ def _template_synthesis(results: List[AgentResult]) -> str:
         else:
             err_label = "超时" if r.error == "timeout" else (r.error or "分析失败")
             lines.append(f"**{r.agent.upper()}** ⚠️ {err_label}")
-    signal, conf = _vote_signal(results)
+    signal, conf = scheme.vote(results)
     lines.append(f"\n**综合结论**: {signal}（置信度 {conf:.0%}）")
     if failed_count == len(results):
         lines.append("\n> ⚠️ 所有 agent 均未成功，此结论仅为默认值，不具参考意义。请确认 LLM 服务正常后重试。")

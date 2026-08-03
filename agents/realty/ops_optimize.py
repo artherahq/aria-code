@@ -11,7 +11,8 @@ agents/realty/ops_optimize.py — 运营提升 Agent
 
 输出:
     analysis    — 运营优化建议
-    signal      — BUY=经营健康/高潜力 / HOLD=有改善空间 / SELL=经营不佳需干预
+    signal      — GOOD=经营健康/高潜力 / WATCH=有改善空间 / CONCERN=经营不佳 / SEVERE=急需干预
+                  （地产健康度尺度，见 signal_scheme.py）
     key_points  — Top3 优化建议
 """
 from __future__ import annotations
@@ -101,12 +102,12 @@ def _calc_metrics(project: Dict, perf: Dict, marketing: Dict, bench: Dict) -> Di
 def _ops_signal(metrics: Dict, bench: Dict) -> str:
     psm = metrics.get("revenue_per_sqm", 0)
     bench_psm = metrics.get("bench_psm", 300)
-    if bench_psm <= 0: return "HOLD"
+    if bench_psm <= 0: return "WATCH"
     ratio = psm / bench_psm
-    if ratio >= 1.2: return "BUY"
-    if ratio >= 0.8: return "HOLD"
-    if ratio >= 0.5: return "SELL"
-    return "STRONG_SELL"
+    if ratio >= 1.2: return "GOOD"
+    if ratio >= 0.8: return "WATCH"
+    if ratio >= 0.5: return "CONCERN"
+    return "SEVERE"
 
 
 def _ops_confidence(perf: Dict, marketing: Dict) -> float:

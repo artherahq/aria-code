@@ -11,7 +11,8 @@ agents/realty/exit_settlement.py — 退出清算 Agent
 
 输出:
     analysis    — 清算方案草案
-    signal      — BUY=清算顺利无纠纷 / HOLD=有待确认项 / SELL=存在较大争议
+    signal      — GOOD=清算顺利无纠纷 / WATCH=有待确认项 / CONCERN=存在较大争议
+                  （地产健康度尺度，见 signal_scheme.py）
     key_points  — 各方清算金额摘要
     data_used   — 包含 settlement_result（结构化清算数据）
 """
@@ -145,12 +146,12 @@ def _calculate_settlement(
 
 def _settlement_signal(s: Dict, reason: str) -> str:
     if s["net_settlement"] > 0 and not s["is_breach"]:
-        return "HOLD"   # 经营方有欠款但无违约，需催收
+        return "WATCH"    # 经营方有欠款但无违约，需催收
     if s["is_breach"] and s["net_settlement"] > 0:
-        return "SELL"   # 违约且有欠款
+        return "CONCERN"  # 违约且有欠款
     if s["operator_owes"] == 0 and s["platform_owes"] == 0:
-        return "BUY"    # 干净退出
-    return "HOLD"
+        return "GOOD"      # 干净退出
+    return "WATCH"
 
 
 def _settlement_confidence(fin: Dict) -> float:

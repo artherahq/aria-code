@@ -10,7 +10,8 @@ agents/realty/revenue_share.py — 分账规则 Agent
 
 输出:
     analysis    — 分账计算说明文本
-    signal      — BUY=分账正常 / HOLD=有补足情况 / SELL=流水严重不足
+    signal      — GOOD=分账正常 / WATCH=有补足情况 / CONCERN=流水勉强覆盖 / SEVERE=流水严重不足
+                  （地产健康度尺度，见 signal_scheme.py）
     key_points  — 各方金额摘要
     data_used   — 包含 split_result（可直接入库）
 """
@@ -159,12 +160,12 @@ def _split_signal(split: Dict) -> str:
     guaranteed = split.get("guaranteed", 0)
     op_net     = split.get("operator_net", 0)
 
-    if guaranteed <= 0:  return "HOLD"
+    if guaranteed <= 0:  return "WATCH"
     coverage = net / guaranteed if guaranteed else 0
-    if coverage >= 2.0 and op_net > 0:  return "BUY"
-    if coverage >= 1.0 and op_net > 0:  return "HOLD"
-    if op_net > 0 and coverage >= 0.5:  return "SELL"    # 经营方能勉强覆盖
-    return "STRONG_SELL"   # 经营方净收入为负或流水极低
+    if coverage >= 2.0 and op_net > 0:  return "GOOD"
+    if coverage >= 1.0 and op_net > 0:  return "WATCH"
+    if op_net > 0 and coverage >= 0.5:  return "CONCERN"   # 经营方能勉强覆盖
+    return "SEVERE"   # 经营方净收入为负或流水极低
 
 
 def _split_status(split: Dict) -> str:

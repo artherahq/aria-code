@@ -487,14 +487,28 @@ class PortfolioCommandsMixin:
             await self._portfolio_holdings_by_strategy()
             return
 
-        # 解析标的：命令行 > watchlist
+        # 解析标的：命令行 > 真实持仓账本 > watchlist
+        # 之前这里没有命令行参数时永远用 watchlist（等权虚构组合），哪怕
+        # portfolio_ledger 里有真实持仓也不会用——risk verdict 算的是一个
+        # 假想的等权组合，不是用户真实的仓位暴露。现在优先读真实持仓
+        # （按成本加权），ledger 为空才退回 watchlist。
+        ledger_weights: Optional[Dict[str, float]] = None
         if sym_parts:
             symbols = [s.strip(",").upper() for s in sym_parts if s.strip(",")]
         else:
-            symbols = self.terminal.config.get("watchlist", ["AAPL", "MSFT", "GOOGL", "NVDA", "TSLA"])[:10]
+            try:
+                from portfolio_ledger import PortfolioLedger as _PL_default
+                positions = _PL_default().get_positions()
+            except ImportError:
+                positions = []
+            if positions:
+                symbols = [p["symbol"].upper() for p in positions]
+                ledger_weights = {p["symbol"].upper(): p["cost_basis"] for p in positions}
+            else:
+                symbols = self.terminal.config.get("watchlist", ["AAPL", "MSFT", "GOOGL", "NVDA", "TSLA"])[:10]
 
         if not symbols:
-            msg = "请先设置 watchlist 或指定标的：/portfolio analyze AAPL TSLA MSFT"
+            msg = "请先设置 watchlist、记录持仓（/journal add buy ...）或指定标的：/portfolio analyze AAPL TSLA MSFT"
             console.print(f"[yellow]{msg}[/yellow]") if HAS_RICH else print(msg)
             return
 
@@ -508,7 +522,12 @@ class PortfolioCommandsMixin:
             pass
 
         if _use_new:
-            hdr = "分析 watchlist 组合" if not sym_parts else f"分析组合：{' '.join(symbols)}"
+            if sym_parts:
+                hdr = f"分析组合：{' '.join(symbols)}"
+            elif ledger_weights:
+                hdr = "分析真实持仓组合（按成本加权）"
+            else:
+                hdr = "分析 watchlist 组合（等权，无真实持仓数据）"
             if rebalance:
                 hdr = "再平衡方案：" + hdr
             if HAS_RICH:
@@ -535,7 +554,7 @@ class PortfolioCommandsMixin:
 
             try:
                 agent  = _PA(llm_provider=_llm, on_token=_on_tok)
-                result = await agent.run_portfolio(symbols)
+                result = await agent.run_portfolio(symbols, weights=ledger_weights)
                 print()  # 换行（流式输出后）
 
                 if not result:
