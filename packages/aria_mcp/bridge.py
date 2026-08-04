@@ -65,6 +65,38 @@ def default_exposures() -> List[MCPExposure]:
             read_only=False,
         ),
         MCPExposure(
+            "aria.report.generate_image",
+            "tool:openai_generate_image",
+            "Generate a new image from a text prompt (e.g. minimal-editorial-poster's "
+            "compiled prompt) via OpenAI's gpt-image-1. Requires an OpenAI API key "
+            "(/apikey set openai sk-... or OPENAI_API_KEY).",
+            read_only=False,
+        ),
+        MCPExposure(
+            "aria.report.edit_image",
+            "tool:openai_edit_image",
+            "Transform an existing local photo per a text prompt (duotone, background "
+            "simplification, texture overlay, etc.) via OpenAI's gpt-image-1 edits "
+            "endpoint. Requires an OpenAI API key.",
+            read_only=False,
+        ),
+        MCPExposure(
+            "aria.report.generate_image_local",
+            "tool:local_generate_image",
+            "Generate a new image from a text prompt entirely locally via a self-hosted "
+            "open-weight model (SDXL-Turbo by default) — no API key, no per-call cost, "
+            "runs on this machine. Needs the optional 'image_gen' extra installed. "
+            "First call for a given model downloads its weights (several GB).",
+            read_only=False,
+        ),
+        MCPExposure(
+            "aria.report.edit_image_local",
+            "tool:local_edit_image",
+            "Transform an existing local photo per a text prompt, entirely locally "
+            "(image-to-image, no API key). Needs the optional 'image_gen' extra installed.",
+            read_only=False,
+        ),
+        MCPExposure(
             "aria.report.canva_design",
             "tool:canva_autofill",
             "Fill a Canva brand template with data and export the design draft. "

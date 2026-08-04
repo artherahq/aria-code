@@ -116,6 +116,44 @@ _INPUT_SCHEMAS: Dict[str, Dict[str, Any]] = {
         },
         "required": ["markdown"],
     },
+    "aria.report.generate_image": {
+        "type": "object",
+        "properties": {
+            "prompt": {"type": "string", "description": "Text prompt (e.g. minimal-editorial-poster's compiled prompt)"},
+            "size": {"type": "string", "enum": ["1024x1024", "1536x1024", "1024x1536", "auto"], "description": "Default: 1024x1536 (portrait poster)"},
+            "quality": {"type": "string", "enum": ["low", "medium", "high", "auto"], "description": "Default: high"},
+        },
+        "required": ["prompt"],
+    },
+    "aria.report.edit_image": {
+        "type": "object",
+        "properties": {
+            "image_path": {"type": "string", "description": "Local path to the existing photo to transform"},
+            "prompt": {"type": "string", "description": "How to transform it, e.g. \"convert to duotone with warm ochre accent, simplify the busy rock background into flat negative space, add subtle scan-noise texture\""},
+            "size": {"type": "string", "enum": ["1024x1024", "1536x1024", "1024x1536", "auto"], "description": "Default: 1024x1536"},
+            "quality": {"type": "string", "enum": ["low", "medium", "high", "auto"], "description": "Default: high"},
+        },
+        "required": ["image_path", "prompt"],
+    },
+    "aria.report.generate_image_local": {
+        "type": "object",
+        "properties": {
+            "prompt": {"type": "string", "description": "Text prompt (e.g. minimal-editorial-poster's compiled prompt)"},
+            "width": {"type": "integer", "description": "Default: 1024"},
+            "height": {"type": "integer", "description": "Default: 1024"},
+            "steps": {"type": "integer", "description": "Inference steps; default 4 (tuned for SDXL-Turbo)"},
+        },
+        "required": ["prompt"],
+    },
+    "aria.report.edit_image_local": {
+        "type": "object",
+        "properties": {
+            "image_path": {"type": "string", "description": "Local path to the existing photo to transform"},
+            "prompt": {"type": "string", "description": "How to transform it"},
+            "strength": {"type": "number", "description": "0-1, how much to diverge from the original (default 0.6)"},
+        },
+        "required": ["image_path", "prompt"],
+    },
     "aria.report.canva_design": {
         "type": "object",
         "properties": {
@@ -191,6 +229,8 @@ _WRITE_SAFE = {
     "aria.report.canva_design", "aria.report.canva_upload_asset",
     "aria.report.docx", "aria.report.pptx",
     "aria.report.generate", "aria.backtest.run",
+    "aria.report.generate_image", "aria.report.edit_image",
+    "aria.report.generate_image_local", "aria.report.edit_image_local",
 }
 
 
@@ -477,6 +517,86 @@ async def _call_report_pptx(args: Dict[str, Any]) -> Dict[str, Any]:
     return {"success": True, "path": str(result_path)}
 
 
+async def _call_generate_image(args: Dict[str, Any]) -> Dict[str, Any]:
+    import asyncio
+    from functools import partial
+
+    from openai_image_client import generate_image
+
+    prompt = str(args.get("prompt", "")).strip()
+    if not prompt:
+        return {"success": False, "error": "prompt is required"}
+
+    loop = asyncio.get_event_loop()
+    try:
+        fn = partial(generate_image, prompt, size=args.get("size") or "1024x1536", quality=args.get("quality") or "high")
+        return await loop.run_in_executor(None, fn)
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+
+
+async def _call_edit_image(args: Dict[str, Any]) -> Dict[str, Any]:
+    import asyncio
+    from functools import partial
+
+    from openai_image_client import edit_image
+
+    image_path = str(args.get("image_path", "")).strip()
+    prompt = str(args.get("prompt", "")).strip()
+    if not image_path or not prompt:
+        return {"success": False, "error": "image_path and prompt are required"}
+
+    loop = asyncio.get_event_loop()
+    try:
+        fn = partial(edit_image, image_path, prompt, size=args.get("size") or "1024x1536", quality=args.get("quality") or "high")
+        return await loop.run_in_executor(None, fn)
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+
+
+async def _call_generate_image_local(args: Dict[str, Any]) -> Dict[str, Any]:
+    import asyncio
+    from functools import partial
+
+    from local_image_provider import generate_image_local
+
+    prompt = str(args.get("prompt", "")).strip()
+    if not prompt:
+        return {"success": False, "error": "prompt is required"}
+
+    loop = asyncio.get_event_loop()
+    fn = partial(
+        generate_image_local,
+        prompt,
+        width=int(args.get("width", 1024) or 1024),
+        height=int(args.get("height", 1024) or 1024),
+        steps=int(args.get("steps", 4) or 4),
+    )
+    try:
+        return await loop.run_in_executor(None, fn)
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+
+
+async def _call_edit_image_local(args: Dict[str, Any]) -> Dict[str, Any]:
+    import asyncio
+    from functools import partial
+
+    from local_image_provider import edit_image_local
+
+    image_path = str(args.get("image_path", "")).strip()
+    prompt = str(args.get("prompt", "")).strip()
+    if not image_path or not prompt:
+        return {"success": False, "error": "image_path and prompt are required"}
+
+    loop = asyncio.get_event_loop()
+    fn = partial(edit_image_local, image_path, prompt, strength=float(args.get("strength", 0.6) or 0.6))
+    try:
+        return await loop.run_in_executor(None, fn)
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+
+
 async def _call_canva_design(args: Dict[str, Any]) -> Dict[str, Any]:
     import asyncio
 
@@ -521,6 +641,10 @@ _HANDLERS: Dict[str, Callable[[Dict[str, Any]], Awaitable[Dict[str, Any]]]] = {
     "aria.broker.preview_order": _call_broker_preview_order,
     "aria.report.chart": _call_report_chart,
     "aria.report.pdf": _call_report_pdf,
+    "aria.report.generate_image": _call_generate_image,
+    "aria.report.edit_image": _call_edit_image,
+    "aria.report.generate_image_local": _call_generate_image_local,
+    "aria.report.edit_image_local": _call_edit_image_local,
     "aria.report.canva_design": _call_canva_design,
     "aria.report.canva_upload_asset": _call_canva_upload_asset,
     "aria.report.docx": _call_report_docx,

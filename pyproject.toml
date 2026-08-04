@@ -102,6 +102,14 @@ brokers = [
 # ── Enhanced backtesting ───────────────────────────────────────────────────────
 backtest = ["vectorbt>=0.26.2"]
 
+# ── Local, self-hosted image generation (no API key, no per-call cost) ─────────
+image_gen = [
+    "torch>=2.2.0",
+    "diffusers>=0.30.0",
+    "transformers>=4.40.0",
+    "accelerate>=0.30.0",
+]
+
 # ── Web search / browser / desktop automation ──────────────────────────────────
 web = ["ddgs>=9.0"]                                # zero-config web_search fallback
 browser = ["playwright>=1.44.0"]                   # headless browser (/browser)
@@ -208,6 +216,7 @@ py-modules = [
     "intent_classifier",
     "licensing",
     "local_finance_tools",
+    "local_image_provider",
     "local_llm_provider",
     "macro_tools",
     "market_data_client",
@@ -215,6 +224,7 @@ py-modules = [
     "memory_manager",
     "model_capability",
     "notification_tools",
+    "openai_image_client",
     "plan_utils",
     "plugin_loader",
     "portfolio_ledger",
