@@ -107,4 +107,13 @@ def default_exposures() -> List[MCPExposure]:
         MCPExposure("aria.report.pptx", "tool:report_pptx", "Render Markdown text to an editable slide deck (one slide per heading).", read_only=False),
         MCPExposure("aria.figma.read_file", "tool:figma_read_file", "Read a Figma file's page/frame structure (depth-limited summary, not the full node tree). Read-only — Figma has no API for writing designs."),
         MCPExposure("aria.figma.comments", "tool:figma_comments", "List comments on a Figma file."),
+        MCPExposure("aria.video.probe", "tool:video_probe", "Read a video's duration/resolution/codec info."),
+        MCPExposure("aria.video.trim", "tool:video_trim", "Cut a [start, end] second range out of a local video.", read_only=False),
+        MCPExposure("aria.video.concat", "tool:video_concat", "Concatenate multiple local videos in order.", read_only=False),
+        MCPExposure("aria.video.overlay_text", "tool:video_overlay_text", "Burn a text overlay onto a local video (top/bottom/center).", read_only=False),
+        MCPExposure("aria.video.overlay_audio", "tool:video_overlay_audio", "Add or replace a local video's audio track.", read_only=False),
+        MCPExposure("aria.video.convert", "tool:video_convert", "Convert a local video's format and/or reframe to a target aspect ratio (e.g. 9:16 for vertical).", read_only=False),
+        MCPExposure("aria.video.change_speed", "tool:video_change_speed", "Speed up or slow down a local video (pitch-corrected audio).", read_only=False),
+        MCPExposure("aria.video.transcribe", "tool:video_transcribe", "Transcribe a local video's speech track entirely locally (faster-whisper, no API key). Needs the optional 'video_analysis' extra installed."),
+        MCPExposure("aria.video.detect_scenes", "tool:video_detect_scenes", "Detect scene-cut timestamps in a local video via frame-histogram comparison. Needs the optional 'video' extra (opencv) installed."),
     ]

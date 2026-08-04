@@ -216,6 +216,83 @@ _INPUT_SCHEMAS: Dict[str, Dict[str, Any]] = {
         },
         "required": ["symbol"],
     },
+    "aria.video.probe": {
+        "type": "object",
+        "properties": {
+            "input_path": {"type": "string", "description": "Local path to the video"},
+        },
+        "required": ["input_path"],
+    },
+    "aria.video.trim": {
+        "type": "object",
+        "properties": {
+            "input_path": {"type": "string"},
+            "start": {"type": "number", "description": "Start time in seconds"},
+            "end": {"type": "number", "description": "End time in seconds"},
+        },
+        "required": ["input_path", "start", "end"],
+    },
+    "aria.video.concat": {
+        "type": "object",
+        "properties": {
+            "input_paths": {"type": "array", "items": {"type": "string"}, "description": "Video paths, in order"},
+        },
+        "required": ["input_paths"],
+    },
+    "aria.video.overlay_text": {
+        "type": "object",
+        "properties": {
+            "input_path": {"type": "string"},
+            "text": {"type": "string"},
+            "position": {"type": "string", "enum": ["top", "bottom", "center"], "description": "Default: bottom"},
+            "font_size": {"type": "integer", "description": "Default: 36"},
+            "font_color": {"type": "string", "description": "Default: white"},
+        },
+        "required": ["input_path", "text"],
+    },
+    "aria.video.overlay_audio": {
+        "type": "object",
+        "properties": {
+            "input_path": {"type": "string"},
+            "audio_path": {"type": "string"},
+            "replace": {"type": "boolean", "description": "true = drop original audio; false (default) = mix under it"},
+        },
+        "required": ["input_path", "audio_path"],
+    },
+    "aria.video.convert": {
+        "type": "object",
+        "properties": {
+            "input_path": {"type": "string"},
+            "output_format": {"type": "string", "description": "e.g. mp4, mov, webm"},
+            "aspect": {"type": "string", "description": "e.g. \"9:16\" — center-crop to this aspect ratio"},
+        },
+        "required": ["input_path"],
+    },
+    "aria.video.change_speed": {
+        "type": "object",
+        "properties": {
+            "input_path": {"type": "string"},
+            "factor": {"type": "number", "description": ">1 speeds up, <1 slows down"},
+        },
+        "required": ["input_path", "factor"],
+    },
+    "aria.video.transcribe": {
+        "type": "object",
+        "properties": {
+            "input_path": {"type": "string"},
+            "model_size": {"type": "string", "description": "faster-whisper model size, default 'base'"},
+            "language": {"type": "string", "description": "ISO language code; omit to auto-detect"},
+        },
+        "required": ["input_path"],
+    },
+    "aria.video.detect_scenes": {
+        "type": "object",
+        "properties": {
+            "input_path": {"type": "string"},
+            "threshold": {"type": "number", "description": "Higher = less sensitive (default 30.0)"},
+        },
+        "required": ["input_path"],
+    },
 }
 
 # Exposures that are NOT read_only (they write a local file, a preview
@@ -231,6 +308,8 @@ _WRITE_SAFE = {
     "aria.report.generate", "aria.backtest.run",
     "aria.report.generate_image", "aria.report.edit_image",
     "aria.report.generate_image_local", "aria.report.edit_image_local",
+    "aria.video.trim", "aria.video.concat", "aria.video.overlay_text",
+    "aria.video.overlay_audio", "aria.video.convert", "aria.video.change_speed",
 }
 
 
@@ -473,6 +552,166 @@ async def _call_figma_comments(args: Dict[str, Any]) -> Dict[str, Any]:
         return {"success": False, "error": str(exc)}
 
 
+async def _call_video_probe(args: Dict[str, Any]) -> Dict[str, Any]:
+    import asyncio
+
+    from video_editor import probe_video
+
+    input_path = str(args.get("input_path", "")).strip()
+    if not input_path:
+        return {"success": False, "error": "input_path is required"}
+    loop = asyncio.get_event_loop()
+    try:
+        return await loop.run_in_executor(None, probe_video, input_path)
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+
+
+async def _call_video_trim(args: Dict[str, Any]) -> Dict[str, Any]:
+    import asyncio
+    from functools import partial
+
+    from video_editor import trim_video
+
+    input_path = str(args.get("input_path", "")).strip()
+    if not input_path or "start" not in args or "end" not in args:
+        return {"success": False, "error": "input_path, start, and end are required"}
+    loop = asyncio.get_event_loop()
+    fn = partial(trim_video, input_path, float(args["start"]), float(args["end"]))
+    try:
+        return await loop.run_in_executor(None, fn)
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+
+
+async def _call_video_concat(args: Dict[str, Any]) -> Dict[str, Any]:
+    import asyncio
+
+    from video_editor import concat_videos
+
+    input_paths = args.get("input_paths") or []
+    if not isinstance(input_paths, list) or len(input_paths) < 2:
+        return {"success": False, "error": "input_paths must be a list of at least 2 paths"}
+    loop = asyncio.get_event_loop()
+    try:
+        return await loop.run_in_executor(None, concat_videos, [str(p) for p in input_paths])
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+
+
+async def _call_video_overlay_text(args: Dict[str, Any]) -> Dict[str, Any]:
+    import asyncio
+    from functools import partial
+
+    from video_editor import overlay_text
+
+    input_path = str(args.get("input_path", "")).strip()
+    text = str(args.get("text", ""))
+    if not input_path or not text:
+        return {"success": False, "error": "input_path and text are required"}
+    loop = asyncio.get_event_loop()
+    fn = partial(
+        overlay_text, input_path, text,
+        position=args.get("position") or "bottom",
+        font_size=int(args.get("font_size", 36) or 36),
+        font_color=args.get("font_color") or "white",
+    )
+    try:
+        return await loop.run_in_executor(None, fn)
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+
+
+async def _call_video_overlay_audio(args: Dict[str, Any]) -> Dict[str, Any]:
+    import asyncio
+    from functools import partial
+
+    from video_editor import overlay_audio
+
+    input_path = str(args.get("input_path", "")).strip()
+    audio_path = str(args.get("audio_path", "")).strip()
+    if not input_path or not audio_path:
+        return {"success": False, "error": "input_path and audio_path are required"}
+    loop = asyncio.get_event_loop()
+    fn = partial(overlay_audio, input_path, audio_path, replace=bool(args.get("replace", False)))
+    try:
+        return await loop.run_in_executor(None, fn)
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+
+
+async def _call_video_convert(args: Dict[str, Any]) -> Dict[str, Any]:
+    import asyncio
+    from functools import partial
+
+    from video_editor import convert_video
+
+    input_path = str(args.get("input_path", "")).strip()
+    if not input_path:
+        return {"success": False, "error": "input_path is required"}
+    loop = asyncio.get_event_loop()
+    fn = partial(convert_video, input_path, output_format=args.get("output_format"), aspect=args.get("aspect"))
+    try:
+        return await loop.run_in_executor(None, fn)
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+
+
+async def _call_video_change_speed(args: Dict[str, Any]) -> Dict[str, Any]:
+    import asyncio
+    from functools import partial
+
+    from video_editor import change_speed
+
+    input_path = str(args.get("input_path", "")).strip()
+    if not input_path or "factor" not in args:
+        return {"success": False, "error": "input_path and factor are required"}
+    loop = asyncio.get_event_loop()
+    fn = partial(change_speed, input_path, float(args["factor"]))
+    try:
+        return await loop.run_in_executor(None, fn)
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+
+
+async def _call_video_transcribe(args: Dict[str, Any]) -> Dict[str, Any]:
+    import asyncio
+    from functools import partial
+
+    from video_analysis import transcribe_video
+
+    input_path = str(args.get("input_path", "")).strip()
+    if not input_path:
+        return {"success": False, "error": "input_path is required"}
+    loop = asyncio.get_event_loop()
+    fn = partial(
+        transcribe_video, input_path,
+        model_size=args.get("model_size") or "base",
+        language=args.get("language"),
+    )
+    try:
+        return await loop.run_in_executor(None, fn)
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+
+
+async def _call_video_detect_scenes(args: Dict[str, Any]) -> Dict[str, Any]:
+    import asyncio
+    from functools import partial
+
+    from video_analysis import detect_scenes
+
+    input_path = str(args.get("input_path", "")).strip()
+    if not input_path:
+        return {"success": False, "error": "input_path is required"}
+    loop = asyncio.get_event_loop()
+    fn = partial(detect_scenes, input_path, threshold=float(args.get("threshold", 30.0) or 30.0))
+    try:
+        return await loop.run_in_executor(None, fn)
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+
+
 async def _call_report_docx(args: Dict[str, Any]) -> Dict[str, Any]:
     import asyncio
 
@@ -651,6 +890,15 @@ _HANDLERS: Dict[str, Callable[[Dict[str, Any]], Awaitable[Dict[str, Any]]]] = {
     "aria.report.pptx": _call_report_pptx,
     "aria.figma.read_file": _call_figma_read_file,
     "aria.figma.comments": _call_figma_comments,
+    "aria.video.probe": _call_video_probe,
+    "aria.video.trim": _call_video_trim,
+    "aria.video.concat": _call_video_concat,
+    "aria.video.overlay_text": _call_video_overlay_text,
+    "aria.video.overlay_audio": _call_video_overlay_audio,
+    "aria.video.convert": _call_video_convert,
+    "aria.video.change_speed": _call_video_change_speed,
+    "aria.video.transcribe": _call_video_transcribe,
+    "aria.video.detect_scenes": _call_video_detect_scenes,
     "aria.report.generate": _call_report_generate,
     "aria.backtest.run": _call_backtest_run,
 }

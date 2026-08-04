@@ -80,7 +80,8 @@ files = [                          # /file load + /file analyze document parsing
     "beautifulsoup4>=4.12.3",
     "Pillow>=10.4.0",
 ]
-video = ["opencv-python>=4.8.0"]   # analyze_file video keyframe extraction
+video = ["opencv-python>=4.8.0"]   # analyze_file video keyframe extraction; also video_analysis.detect_scenes
+video_analysis = ["faster-whisper>=1.0.0"]   # video_analysis.transcribe_video (local, no API key)
 
 # ── Broker connectivity ────────────────────────────────────────────────────────
 ibkr = ["ib_insync>=0.9.86"]
@@ -234,6 +235,8 @@ py-modules = [
     "report_generator",
     "setup_wizard",
     "strategy_vault",
+    "video_analysis",
+    "video_editor",
 ]
 
 [tool.setuptools.packages.find]
