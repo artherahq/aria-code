@@ -120,9 +120,16 @@ _INPUT_SCHEMAS: Dict[str, Dict[str, Any]] = {
         "type": "object",
         "properties": {
             "template_id": {"type": "string", "description": "Canva brand template id"},
-            "data": {"type": "object", "description": "Field name -> typed DatasetValue, e.g. {\"headline\": {\"type\": \"text\", \"text\": \"Q3 Report\"}}. Value types: text, image, video, chart, sheet — see Canva's Autofill API docs."},
+            "data": {"type": "object", "description": "Field name -> typed DatasetValue, e.g. {\"headline\": {\"type\": \"text\", \"text\": \"Q3 Report\"}, \"chart_img\": {\"type\": \"image\", \"asset_id\": \"<from aria.report.canva_upload_asset>\"}}. Value types: text, image, video, chart, sheet — see Canva's Autofill API docs."},
         },
         "required": ["template_id", "data"],
+    },
+    "aria.report.canva_upload_asset": {
+        "type": "object",
+        "properties": {
+            "file_path": {"type": "string", "description": "Local path to the image file to upload (e.g. the path returned by aria.report.chart)"},
+        },
+        "required": ["file_path"],
     },
     "aria.report.docx": {
         "type": "object",
@@ -181,7 +188,8 @@ _INPUT_SCHEMAS: Dict[str, Dict[str, Any]] = {
 # exposure stays blocked by default — see _build_tools().
 _WRITE_SAFE = {
     "aria.broker.preview_order", "aria.report.chart", "aria.report.pdf",
-    "aria.report.canva_design", "aria.report.docx", "aria.report.pptx",
+    "aria.report.canva_design", "aria.report.canva_upload_asset",
+    "aria.report.docx", "aria.report.pptx",
     "aria.report.generate", "aria.backtest.run",
 }
 
@@ -487,6 +495,23 @@ async def _call_canva_design(args: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
+async def _call_canva_upload_asset(args: Dict[str, Any]) -> Dict[str, Any]:
+    import asyncio
+
+    from canva_client import upload_asset
+
+    file_path = str(args.get("file_path", "")).strip()
+    if not file_path:
+        return {"success": False, "error": "file_path is required"}
+
+    loop = asyncio.get_event_loop()
+    try:
+        result = await loop.run_in_executor(None, upload_asset, file_path)
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+    return result
+
+
 _HANDLERS: Dict[str, Callable[[Dict[str, Any]], Awaitable[Dict[str, Any]]]] = {
     "aria.market.quote": _call_market_quote,
     "aria.agent.team": _call_agent_team,
@@ -497,6 +522,7 @@ _HANDLERS: Dict[str, Callable[[Dict[str, Any]], Awaitable[Dict[str, Any]]]] = {
     "aria.report.chart": _call_report_chart,
     "aria.report.pdf": _call_report_pdf,
     "aria.report.canva_design": _call_canva_design,
+    "aria.report.canva_upload_asset": _call_canva_upload_asset,
     "aria.report.docx": _call_report_docx,
     "aria.report.pptx": _call_report_pptx,
     "aria.figma.read_file": _call_figma_read_file,

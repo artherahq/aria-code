@@ -183,6 +183,58 @@ def _access_token() -> str:
     return entry["access_token"]
 
 
+def upload_asset(file_path: str, *, poll_timeout: float = 60.0) -> Dict[str, Any]:
+    """Upload a local image/video file (e.g. a report chart PNG) to Canva and
+    return its asset_id, for use as an {"type": "image", "asset_id": ...}
+    value in autofill_design()'s `data`.
+
+    Blocking (uses requests) — same threading note as autofill_design.
+    """
+    import base64
+    import json
+    import requests
+
+    path = Path(file_path)
+    if not path.exists():
+        return {"success": False, "error": f"File not found: {file_path}"}
+
+    token = _access_token()
+    name_b64 = base64.b64encode(path.name.encode("utf-8")).decode("ascii")
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/octet-stream",
+        "Asset-Upload-Metadata": json.dumps({"name_base64": name_b64}),
+    }
+
+    create_resp = requests.post(
+        f"{API_BASE}/asset-uploads",
+        headers=headers,
+        data=path.read_bytes(),
+        timeout=30,
+    )
+    if create_resp.status_code not in (200, 201, 202):
+        return {"success": False, "error": f"Asset upload failed: {create_resp.status_code} {create_resp.text[:300]}"}
+    job = create_resp.json().get("job", {})
+    job_id = job.get("id", "")
+    if not job_id:
+        return {"success": False, "error": "Canva did not return an asset-upload job id"}
+
+    poll_headers = {"Authorization": f"Bearer {token}"}
+    deadline = time.time() + poll_timeout
+    while time.time() < deadline:
+        poll_resp = requests.get(f"{API_BASE}/asset-uploads/{job_id}", headers=poll_headers, timeout=15)
+        poll_resp.raise_for_status()
+        job = poll_resp.json().get("job", {})
+        status = job.get("status", "")
+        if status == "success":
+            asset = job.get("asset", {})
+            return {"success": True, "asset_id": asset.get("id", ""), "name": asset.get("name", "")}
+        if status == "failed":
+            return {"success": False, "error": job.get("error", {}).get("message", "asset upload job failed")}
+        time.sleep(2)
+    return {"success": False, "error": f"Asset upload job timed out after {poll_timeout:.0f}s (job_id={job_id})"}
+
+
 def autofill_design(template_id: str, data: Dict[str, Any], *, poll_timeout: float = 60.0) -> Dict[str, Any]:
     """Fill a Canva brand template with data and return the exported design.
 

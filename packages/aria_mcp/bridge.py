@@ -57,6 +57,14 @@ def default_exposures() -> List[MCPExposure]:
             read_only=False,
         ),
         MCPExposure(
+            "aria.report.canva_upload_asset",
+            "tool:canva_upload_asset",
+            "Upload a local image (e.g. a chart PNG from aria.report.chart) to Canva and "
+            "return its asset_id, for use in aria.report.canva_design's data field. "
+            "Requires /canva connect to have been run first.",
+            read_only=False,
+        ),
+        MCPExposure(
             "aria.report.canva_design",
             "tool:canva_autofill",
             "Fill a Canva brand template with data and export the design draft. "
