@@ -61,7 +61,11 @@ def _get_pipeline(model: str):
 
     device = _select_device()
     dtype = torch.float16 if device in ("mps", "cuda") else torch.float32
-    pipe = AutoPipelineForText2Image.from_pretrained(model, torch_dtype=dtype)
+    # variant="fp16" fetches the smaller fp16-suffixed weight files directly
+    # (roughly half the download of full fp32 checkpoints) instead of pulling
+    # fp32 weights and casting after — matters a lot on a flaky connection.
+    variant = "fp16" if dtype is torch.float16 else None
+    pipe = AutoPipelineForText2Image.from_pretrained(model, torch_dtype=dtype, variant=variant)
     pipe = pipe.to(device)
     _pipeline_cache[model] = pipe
     return pipe
@@ -76,7 +80,8 @@ def _get_img2img_pipeline(model: str):
 
     device = _select_device()
     dtype = torch.float16 if device in ("mps", "cuda") else torch.float32
-    pipe = AutoPipelineForImage2Image.from_pretrained(model, torch_dtype=dtype)
+    variant = "fp16" if dtype is torch.float16 else None
+    pipe = AutoPipelineForImage2Image.from_pretrained(model, torch_dtype=dtype, variant=variant)
     pipe = pipe.to(device)
     _img2img_cache[model] = pipe
     return pipe
