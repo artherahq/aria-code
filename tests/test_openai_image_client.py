@@ -103,6 +103,36 @@ def test_edit_image_posts_multipart_to_edits_endpoint(tmp_path):
     assert result["success"] is True
 
 
+def test_edit_image_with_mask_uploads_both_files(tmp_path):
+    src = tmp_path / "photo.jpg"
+    src.write_bytes(b"fake-jpeg")
+    mask = tmp_path / "mask.png"
+    mask.write_bytes(b"fake-mask-png")
+    resp = MagicMock(status_code=200)
+    resp.json.return_value = {"created": 1, "data": [{"b64_json": _fake_b64_png()}]}
+    captured = {}
+
+    def fake_post(url, headers=None, data=None, files=None, timeout=None):
+        captured["files"] = list(files.keys())
+        return resp
+
+    with patch.object(oic, "_require_key", return_value="sk-test"), \
+         patch("requests.post", side_effect=fake_post), \
+         patch("artifacts.create_user_artifact") as mock_artifact:
+        mock_artifact.return_value.path = tmp_path / "out.png"
+        result = oic.edit_image(str(src), "fill in the sky", mask_path=str(mask), confirmed=True)
+
+    assert "image" in captured["files"]
+    assert "mask" in captured["files"]
+    assert result["success"] is True
+
+
+def test_edit_image_mask_not_found():
+    result = oic.edit_image("/nonexistent/photo.jpg", "make it duotone", mask_path="/nonexistent/mask.png", confirmed=True)
+    assert result["success"] is False
+    assert "not found" in result["error"]
+
+
 def test_estimate_cost_known_size_quality():
     result = oic.estimate_cost(size="1024x1024", quality="high")
     assert result["estimated_cost_usd"] == 0.167

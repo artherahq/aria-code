@@ -62,6 +62,25 @@ def default_exposures() -> List[MCPExposure]:
             read_only=False,
         ),
         MCPExposure(
+            "aria.report.indicator_chart",
+            "tool:report_indicator_chart",
+            "Generate a candlestick + volume + RSI(14) + MACD(12,26,9) multi-panel chart "
+            "PNG for a symbol — for when you need the indicators plotted, not just price.",
+            read_only=False,
+        ),
+        MCPExposure(
+            "aria.report.comparison_chart",
+            "tool:report_comparison_chart",
+            "Generate a normalized (base=100) % return comparison chart PNG across 2+ symbols.",
+            read_only=False,
+        ),
+        MCPExposure(
+            "aria.report.allocation_chart",
+            "tool:report_allocation_chart",
+            "Generate a pie chart PNG of a broker account's position weights by market value.",
+            read_only=False,
+        ),
+        MCPExposure(
             "aria.report.pdf",
             "tool:report_pdf",
             "Render Markdown text to a styled PDF report.",
@@ -96,9 +115,12 @@ def default_exposures() -> List[MCPExposure]:
             "tool:openai_edit_image",
             "Transform an existing local photo per a text prompt (duotone, background "
             "simplification, texture overlay, etc.) via OpenAI's gpt-image-1 edits "
-            "endpoint. Real per-call cost, billed by OpenAI the instant this succeeds — "
-            "requires confirmed=true, and calling aria.report.estimate_image_cost first "
-            "is strongly recommended. Requires an OpenAI API key.",
+            "endpoint. Pass mask_path for inpainting — a local mask PNG where transparent "
+            "areas mark what to edit and opaque areas are left untouched — to constrain "
+            "the edit to part of the image instead of the whole thing. Real per-call cost, "
+            "billed by OpenAI the instant this succeeds — requires confirmed=true, and "
+            "calling aria.report.estimate_image_cost first is strongly recommended. "
+            "Requires an OpenAI API key.",
             read_only=False,
         ),
         MCPExposure(

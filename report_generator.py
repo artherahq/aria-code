@@ -340,6 +340,258 @@ def generate_price_chart(df, symbol: str, fundamentals: Dict) -> Optional[str]:
         return _generate_svg_line_chart(df6, symbol)
 
 
+def _rsi_series(close, n: int = 14):
+    """Wilder's smoothed RSI — standard definition (EMA of gains/losses with
+    alpha=1/n), not the simple-rolling-mean variant used elsewhere in this
+    codebase for lightweight scalar snapshots (data_analysis_tools.py) —
+    this one needs to be a stable full series for charting, not just a
+    last-value approximation."""
+    delta = close.diff()
+    gain = delta.clip(lower=0)
+    loss = (-delta.clip(upper=0))
+    avg_gain = gain.ewm(alpha=1 / n, min_periods=n, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1 / n, min_periods=n, adjust=False).mean()
+    rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
+
+
+def _macd_series(close, fast: int = 12, slow: int = 26, signal: int = 9):
+    """Return (macd_line, signal_line, histogram) — standard EMA(12)-EMA(26)
+    with a 9-period EMA signal line."""
+    ema_fast = close.ewm(span=fast, adjust=False).mean()
+    ema_slow = close.ewm(span=slow, adjust=False).mean()
+    macd_line = ema_fast - ema_slow
+    signal_line = macd_line.ewm(span=signal, adjust=False).mean()
+    histogram = macd_line - signal_line
+    return macd_line, signal_line, histogram
+
+
+def generate_indicator_chart(df, symbol: str) -> Optional[str]:
+    """Candlestick + volume + RSI(14) + MACD(12,26,9), each its own panel,
+    same dark theme as generate_price_chart. For traders who want the
+    indicators plotted, not just the raw price — generate_price_chart stays
+    minimal (price + MA20/50 only) on purpose since most report callers
+    don't need the extra panels."""
+    if df is None or df.empty:
+        return None
+
+    close_col = next((c for c in df.columns if c.lower() == "close"), None)
+    if not close_col:
+        return None
+
+    import pandas as _pd
+    try:
+        if not isinstance(df.index, _pd.DatetimeIndex):
+            df.index = _pd.to_datetime(df.index)
+    except Exception:
+        pass
+
+    df6 = df.tail(126).copy()
+
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import mplfinance as mpf
+
+        mc = mpf.make_marketcolors(
+            up="#3fb950", down="#f85149", edge="inherit",
+            wick={"up": "#3fb950", "down": "#f85149"},
+            volume={"up": "#1e4d2b", "down": "#4d1219"},
+        )
+        style = mpf.make_mpf_style(
+            marketcolors=mc,
+            facecolor="#0d1117",
+            edgecolor="#21262d",
+            figcolor="#0d1117",
+            gridcolor="#161b22",
+            gridstyle="--",
+            rc={
+                "axes.labelcolor": "#8b949e",
+                "axes.edgecolor": "#21262d",
+                "xtick.color": "#8b949e",
+                "ytick.color": "#8b949e",
+                "font.size": 9,
+            },
+        )
+
+        has_ohlcv = all(c in df6.columns for c in ("Open", "High", "Low", "Close", "Volume"))
+        plot_type = "candle" if has_ohlcv else "line"
+        close = df6["Close"]
+
+        rsi = _rsi_series(close)
+        macd_line, signal_line, hist = _macd_series(close)
+        hist_colors = ["#3fb950" if v >= 0 else "#f85149" for v in hist.fillna(0)]
+
+        # Panel numbers must be contiguous from 0 — mplfinance raises
+        # "inferred panel list is missing panels" if a number is skipped.
+        # Panel 1 is volume, but only when has_ohlcv (Volume column present);
+        # without it, RSI/MACD shift down one panel rather than leaving a
+        # gap at 1. Confirmed via a real Volume-less df: the earlier
+        # hardcoded panel=2/3 crashed with exactly that mplfinance error.
+        rsi_panel = 2 if has_ohlcv else 1
+        macd_panel = 3 if has_ohlcv else 2
+
+        # secondary_y=False is required on every one of these: mplfinance's
+        # default "auto" heuristic puts a constant series (the 30/70 RSI
+        # reference lines) on its own secondary axis when its value range is
+        # tiny relative to the panel's other lines, which silently
+        # misaligns them against the RSI line itself. Confirmed visually —
+        # without this, the dashed 30/70 lines render near the top of the
+        # panel instead of at the RSI scale's 30/70 marks.
+        addplots = [
+            mpf.make_addplot(rsi, panel=rsi_panel, color="#d29922", width=1.1, ylabel="RSI", secondary_y=False),
+            mpf.make_addplot([70] * len(df6), panel=rsi_panel, color="#484f58", width=0.7, linestyle="--", secondary_y=False),
+            mpf.make_addplot([30] * len(df6), panel=rsi_panel, color="#484f58", width=0.7, linestyle="--", secondary_y=False),
+            mpf.make_addplot(macd_line, panel=macd_panel, color="#388bfd", width=1.1, ylabel="MACD", secondary_y=False),
+            mpf.make_addplot(signal_line, panel=macd_panel, color="#d29922", width=1.0, secondary_y=False),
+            mpf.make_addplot(hist, panel=macd_panel, type="bar", color=hist_colors, width=0.7, alpha=0.6, secondary_y=False),
+        ]
+
+        kwargs: Dict[str, Any] = dict(
+            type=plot_type,
+            style=style,
+            figsize=(11, 9),
+            returnfig=True,
+            datetime_format="%m/%d",
+            xrotation=0,
+            addplot=addplots,
+        )
+        if has_ohlcv:
+            kwargs["volume"] = True
+            kwargs["volume_panel"] = 1
+            kwargs["panel_ratios"] = (3, 1, 1.2, 1.2)
+        else:
+            kwargs["panel_ratios"] = (3, 1.2, 1.2)
+
+        fig, axes = mpf.plot(df6, **kwargs)
+        axes[0].set_title(f"{symbol}  ·  Price + Volume + RSI + MACD", color="#c9d1d9", fontsize=11, pad=8)
+        return _chart_to_b64(fig)
+
+    except ImportError:
+        return None
+    except Exception as e:
+        logger.debug("[report] indicator chart: %s", e)
+        return None
+
+
+def generate_comparison_chart(price_data: Dict[str, Any], title: str = "") -> Optional[str]:
+    """Normalized (base=100) % return line chart across multiple symbols —
+    `price_data` is {symbol: df}, each df needing a Close column. Symbols
+    with too little history to be meaningfully comparable are silently
+    skipped rather than raising, since callers often pass a batch and one
+    bad symbol shouldn't kill the whole comparison."""
+    if not price_data:
+        return None
+
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ImportError:
+        return None
+
+    import pandas as _pd
+
+    palette = ["#3fb950", "#388bfd", "#d29922", "#f85149", "#8957e5", "#39c5cf", "#e3b341"]
+    fig, ax = plt.subplots(figsize=(11, 5.5), facecolor="#0d1117")
+    ax.set_facecolor("#0d1117")
+
+    plotted = 0
+    for i, (symbol, df) in enumerate(price_data.items()):
+        if df is None or getattr(df, "empty", True):
+            continue
+        close_col = next((c for c in df.columns if c.lower() == "close"), None)
+        if not close_col:
+            continue
+        close = df[close_col].dropna()
+        if len(close) < 2:
+            continue
+        try:
+            if not isinstance(close.index, _pd.DatetimeIndex):
+                close.index = _pd.to_datetime(close.index)
+        except Exception:
+            pass
+        close = close.tail(126)
+        normalized = close / close.iloc[0] * 100
+        color = palette[plotted % len(palette)]
+        ax.plot(normalized.index, normalized.values, color=color, linewidth=1.5, label=symbol)
+        plotted += 1
+
+    if plotted == 0:
+        plt.close(fig)
+        return None
+
+    ax.axhline(100, color="#484f58", linewidth=0.8, linestyle="--")
+    ax.set_title(title or "Normalized Performance Comparison (base=100)", color="#c9d1d9", fontsize=11)
+    ax.set_ylabel("Return (base=100)", color="#8b949e")
+    ax.tick_params(colors="#8b949e")
+    ax.spines[:].set_edgecolor("#21262d")
+    ax.grid(color="#161b22", linestyle="--", linewidth=0.5)
+    ax.legend(facecolor="#161b22", edgecolor="#21262d", labelcolor="#8b949e", fontsize=9, loc="upper left")
+    fig.tight_layout()
+    return _chart_to_b64(fig)
+
+
+def generate_allocation_chart(positions: List[Dict[str, Any]], title: str = "") -> Optional[str]:
+    """Pie chart of position weights by market value — `positions` is the
+    list shape brokers.trading/registry already return
+    ({symbol, quantity, market_value, ...} or similar), not a new schema.
+    Positions with no usable value are excluded rather than shown as a
+    zero-width slice."""
+    if not positions:
+        return None
+
+    rows = []
+    for p in positions:
+        symbol = str(p.get("symbol") or p.get("ticker") or "?")
+        value = p.get("market_value")
+        if value is None:
+            qty = p.get("quantity") or p.get("qty")
+            price = p.get("current_price") or p.get("price")
+            if qty is not None and price is not None:
+                try:
+                    value = float(qty) * float(price)
+                except (TypeError, ValueError):
+                    value = None
+        try:
+            value = float(value) if value is not None else None
+        except (TypeError, ValueError):
+            value = None
+        if value and value > 0:
+            rows.append((symbol, value))
+
+    if not rows:
+        return None
+
+    rows.sort(key=lambda r: r[1], reverse=True)
+    labels = [r[0] for r in rows]
+    values = [r[1] for r in rows]
+
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ImportError:
+        return None
+
+    palette = ["#3fb950", "#388bfd", "#d29922", "#f85149", "#8957e5",
+               "#39c5cf", "#e3b341", "#79c0ff", "#ff7b72", "#a5d6ff"]
+    colors = [palette[i % len(palette)] for i in range(len(labels))]
+
+    fig, ax = plt.subplots(figsize=(7, 7), facecolor="#0d1117")
+    wedges, _texts, autotexts = ax.pie(
+        values, labels=labels, colors=colors, autopct="%1.1f%%",
+        pctdistance=0.8, textprops={"color": "#c9d1d9", "fontsize": 9},
+        wedgeprops={"edgecolor": "#0d1117", "linewidth": 1.5},
+    )
+    for t in autotexts:
+        t.set_color("#0d1117")
+        t.set_fontweight("bold")
+    ax.set_title(title or "Portfolio Allocation by Market Value", color="#c9d1d9", fontsize=11, pad=12)
+    fig.tight_layout()
+    return _chart_to_b64(fig)
+
+
 def _generate_svg_line_chart(df, symbol: str) -> Optional[str]:
     """Dependency-free inline SVG fallback for environments without chart libs."""
     try:

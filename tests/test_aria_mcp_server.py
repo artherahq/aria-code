@@ -12,9 +12,12 @@ import pytest
 
 from packages.aria_mcp.server import (
     TOOLS,
+    _call_allocation_chart,
     _call_broker_confirm_order,
+    _call_comparison_chart,
     _call_edit_image,
     _call_generate_image,
+    _call_indicator_chart,
     _call_video_generate_submit,
 )
 
@@ -209,3 +212,145 @@ async def test_edit_image_calls_client_only_when_confirmed(monkeypatch):
     assert result["success"] is True
     assert called["image_path"] == "/tmp/x.jpg"
     assert called["kwargs"]["confirmed"] is True
+
+
+@pytest.mark.asyncio
+async def test_edit_image_omits_mask_path_by_default(monkeypatch):
+    import openai_image_client
+
+    called = {}
+
+    def fake_edit_image(image_path, prompt, **kwargs):
+        called["kwargs"] = kwargs
+        return {"success": True, "path": "/tmp/out.png"}
+
+    monkeypatch.setattr(openai_image_client, "edit_image", fake_edit_image)
+    await _call_edit_image({"image_path": "/tmp/x.jpg", "prompt": "make it duotone", "confirmed": True})
+    assert called["kwargs"]["mask_path"] is None
+
+
+@pytest.mark.asyncio
+async def test_edit_image_passes_through_mask_path_for_inpainting(monkeypatch):
+    import openai_image_client
+
+    called = {}
+
+    def fake_edit_image(image_path, prompt, **kwargs):
+        called["kwargs"] = kwargs
+        return {"success": True, "path": "/tmp/out.png"}
+
+    monkeypatch.setattr(openai_image_client, "edit_image", fake_edit_image)
+    await _call_edit_image({
+        "image_path": "/tmp/x.jpg", "prompt": "fill in the sky", "confirmed": True,
+        "mask_path": "/tmp/mask.png",
+    })
+    assert called["kwargs"]["mask_path"] == "/tmp/mask.png"
+
+
+# ── New chart tools: indicator/comparison/allocation ────────────────────────
+
+def _fake_ohlcv_df():
+    import numpy as np
+    import pandas as pd
+
+    idx = pd.date_range("2025-01-01", periods=60, freq="D")
+    close = 100 + np.cumsum(np.random.default_rng(1).normal(0, 1, 60))
+    return pd.DataFrame(
+        {"Open": close, "High": close + 1, "Low": close - 1, "Close": close, "Volume": 1000},
+        index=idx,
+    )
+
+
+@pytest.mark.asyncio
+async def test_indicator_chart_requires_symbol():
+    result = await _call_indicator_chart({})
+    assert result["success"] is False
+    assert "symbol" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_indicator_chart_writes_artifact_on_success(monkeypatch, tmp_path):
+    df = _fake_ohlcv_df()
+    import report_generator
+    monkeypatch.setattr(report_generator, "_fetch_report_data_sync", lambda symbol: (df, None, {}))
+
+    fake_path = tmp_path / "out.png"
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("artifacts.create_user_artifact", lambda *a, **kw: type("A", (), {"path": fake_path})())
+        result = await _call_indicator_chart({"symbol": "aapl"})
+    assert result["success"] is True
+    assert result["path"] == str(fake_path)
+    assert fake_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_indicator_chart_no_data_reports_error(monkeypatch):
+    import pandas as pd
+    import report_generator
+    monkeypatch.setattr(report_generator, "_fetch_report_data_sync", lambda symbol: (pd.DataFrame(), None, {}))
+
+    result = await _call_indicator_chart({"symbol": "AAPL"})
+    assert result["success"] is False
+
+
+@pytest.mark.asyncio
+async def test_comparison_chart_requires_at_least_two_symbols():
+    result = await _call_comparison_chart({"symbols": ["AAPL"]})
+    assert result["success"] is False
+    assert "symbols" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_comparison_chart_writes_artifact_on_success(monkeypatch, tmp_path):
+    df = _fake_ohlcv_df()
+    import report_generator
+    monkeypatch.setattr(report_generator, "_fetch_report_data_sync", lambda symbol: (df, None, {}))
+
+    fake_path = tmp_path / "out.png"
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("artifacts.create_user_artifact", lambda *a, **kw: type("A", (), {"path": fake_path})())
+        result = await _call_comparison_chart({"symbols": ["AAPL", "MSFT"]})
+    assert result["success"] is True
+    assert fake_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_comparison_chart_no_usable_data_reports_error(monkeypatch):
+    import pandas as pd
+    import report_generator
+    monkeypatch.setattr(report_generator, "_fetch_report_data_sync", lambda symbol: (pd.DataFrame(), None, {}))
+
+    result = await _call_comparison_chart({"symbols": ["AAPL", "MSFT"]})
+    assert result["success"] is False
+
+
+@pytest.mark.asyncio
+async def test_allocation_chart_writes_artifact_on_success(monkeypatch, tmp_path):
+    import packages.aria_mcp.server as server_mod
+    from brokers.base import Position
+
+    class _FakeBroker:
+        def positions(self):
+            return [Position(symbol="AAPL", market_value=15000)]
+
+    monkeypatch.setattr(server_mod, "_get_broker", lambda broker_id="": _FakeBroker())
+
+    fake_path = tmp_path / "out.png"
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("artifacts.create_user_artifact", lambda *a, **kw: type("A", (), {"path": fake_path})())
+        result = await _call_allocation_chart({})
+    assert result["success"] is True
+    assert fake_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_allocation_chart_no_positions_reports_error(monkeypatch):
+    import packages.aria_mcp.server as server_mod
+
+    class _FakeBroker:
+        def positions(self):
+            return []
+
+    monkeypatch.setattr(server_mod, "_get_broker", lambda broker_id="": _FakeBroker())
+    result = await _call_allocation_chart({})
+    assert result["success"] is False

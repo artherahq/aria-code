@@ -130,6 +130,29 @@ _INPUT_SCHEMAS: Dict[str, Dict[str, Any]] = {
         },
         "required": ["symbol"],
     },
+    "aria.report.indicator_chart": {
+        "type": "object",
+        "properties": {
+            "symbol": {"type": "string", "description": "Ticker/symbol to chart"},
+        },
+        "required": ["symbol"],
+    },
+    "aria.report.comparison_chart": {
+        "type": "object",
+        "properties": {
+            "symbols": {"type": "array", "items": {"type": "string"}, "description": "2+ tickers to compare, normalized to base=100"},
+            "title": {"type": "string", "description": "Optional chart title"},
+        },
+        "required": ["symbols"],
+    },
+    "aria.report.allocation_chart": {
+        "type": "object",
+        "properties": {
+            "broker_id": {"type": "string", "description": "Configured broker id. Omit to use the default broker."},
+            "title": {"type": "string", "description": "Optional chart title"},
+        },
+        "required": [],
+    },
     "aria.report.pdf": {
         "type": "object",
         "properties": {
@@ -161,6 +184,7 @@ _INPUT_SCHEMAS: Dict[str, Dict[str, Any]] = {
         "properties": {
             "image_path": {"type": "string", "description": "Local path to the existing photo to transform"},
             "prompt": {"type": "string", "description": "How to transform it, e.g. \"convert to duotone with warm ochre accent, simplify the busy rock background into flat negative space, add subtle scan-noise texture\""},
+            "mask_path": {"type": "string", "description": "Optional local path to a mask PNG for inpainting — transparent (alpha=0) areas mark where the edit applies; everything opaque is left untouched. Omit to edit the whole image."},
             "size": {"type": "string", "enum": ["1024x1024", "1536x1024", "1024x1536", "auto"], "description": "Default: 1024x1536"},
             "quality": {"type": "string", "enum": ["low", "medium", "high", "auto"], "description": "Default: high"},
             "confirmed": {"type": "boolean", "description": "Must be true — this spends real money the instant it succeeds"},
@@ -371,7 +395,8 @@ _INPUT_SCHEMAS: Dict[str, Dict[str, Any]] = {
 # non-read_only exposure stays blocked by default — see _build_tools().
 _WRITE_SAFE = {
     "aria.broker.preview_order", "aria.broker.confirm_order",
-    "aria.report.chart", "aria.report.pdf",
+    "aria.report.chart", "aria.report.indicator_chart", "aria.report.comparison_chart",
+    "aria.report.allocation_chart", "aria.report.pdf",
     "aria.report.canva_design", "aria.report.canva_upload_asset",
     "aria.report.docx", "aria.report.pptx",
     "aria.report.generate", "aria.backtest.run",
@@ -569,6 +594,106 @@ async def _call_report_chart(args: Dict[str, Any]) -> Dict[str, Any]:
         return {"success": False, "error": f"No price data available for {symbol}"}
 
     artifact = create_user_artifact("chart", symbol, f"{symbol}_chart", ".png")
+    artifact.path.write_bytes(base64.b64decode(b64_png))
+    return {"success": True, "path": str(artifact.path)}
+
+
+async def _call_indicator_chart(args: Dict[str, Any]) -> Dict[str, Any]:
+    import asyncio
+    import base64
+
+    from artifacts import create_user_artifact
+    from report_generator import _fetch_report_data_sync, generate_indicator_chart
+
+    symbol = str(args.get("symbol", "")).strip().upper()
+    if not symbol:
+        return {"success": False, "error": "symbol is required"}
+
+    loop = asyncio.get_event_loop()
+
+    def _run():
+        df, _clean_result, _fundamentals = _fetch_report_data_sync(symbol)
+        if df is None or df.empty:
+            return None
+        return generate_indicator_chart(df, symbol)
+
+    try:
+        b64_png = await loop.run_in_executor(None, _run)
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+    if not b64_png:
+        return {"success": False, "error": f"No price data available for {symbol}"}
+
+    artifact = create_user_artifact("chart", symbol, f"{symbol}_indicators", ".png")
+    artifact.path.write_bytes(base64.b64decode(b64_png))
+    return {"success": True, "path": str(artifact.path)}
+
+
+async def _call_comparison_chart(args: Dict[str, Any]) -> Dict[str, Any]:
+    import asyncio
+    import base64
+
+    from artifacts import create_user_artifact
+    from report_generator import _fetch_report_data_sync, generate_comparison_chart
+
+    symbols = args.get("symbols") or []
+    if not isinstance(symbols, list) or len(symbols) < 2:
+        return {"success": False, "error": "symbols must be a list of at least 2 tickers"}
+    symbols = [str(s).strip().upper() for s in symbols if str(s).strip()]
+    title = str(args.get("title") or "").strip()
+
+    loop = asyncio.get_event_loop()
+
+    def _run():
+        price_data = {}
+        for symbol in symbols:
+            try:
+                df, _clean_result, _fundamentals = _fetch_report_data_sync(symbol)
+                if df is not None and not df.empty:
+                    price_data[symbol] = df
+            except Exception as exc:
+                logger.debug("[mcp] comparison_chart: skipping %s (%s)", symbol, exc)
+        return generate_comparison_chart(price_data, title)
+
+    try:
+        b64_png = await loop.run_in_executor(None, _run)
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+    if not b64_png:
+        return {"success": False, "error": f"No usable price data for any of {symbols}"}
+
+    artifact = create_user_artifact("chart", "_".join(symbols[:4]), "comparison", ".png")
+    artifact.path.write_bytes(base64.b64decode(b64_png))
+    return {"success": True, "path": str(artifact.path)}
+
+
+async def _call_allocation_chart(args: Dict[str, Any]) -> Dict[str, Any]:
+    import asyncio
+    import base64
+
+    from artifacts import create_user_artifact
+    from report_generator import generate_allocation_chart
+
+    title = str(args.get("title") or "").strip()
+    loop = asyncio.get_event_loop()
+
+    def _asdict_position(p):
+        from dataclasses import asdict, is_dataclass
+        return asdict(p) if is_dataclass(p) else dict(p)
+
+    def _run():
+        broker = _get_broker(str(args.get("broker_id", "")))
+        positions = [_asdict_position(p) for p in broker.positions()]
+        return generate_allocation_chart(positions, title)
+
+    try:
+        b64_png = await loop.run_in_executor(None, _run)
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+    if not b64_png:
+        return {"success": False, "error": "No positions with usable market value found"}
+
+    artifact = create_user_artifact("chart", "portfolio", "allocation", ".png")
     artifact.path.write_bytes(base64.b64decode(b64_png))
     return {"success": True, "path": str(artifact.path)}
 
@@ -1012,12 +1137,15 @@ async def _call_edit_image(args: Dict[str, Any]) -> Dict[str, Any]:
     if not image_path or not prompt:
         return {"success": False, "error": "image_path and prompt are required"}
 
+    mask_path = args.get("mask_path")
+    mask_path = str(mask_path).strip() if mask_path else None
+
     loop = asyncio.get_event_loop()
     try:
         fn = partial(
             edit_image, image_path, prompt,
             size=args.get("size") or "1024x1536", quality=args.get("quality") or "high",
-            confirmed=True,
+            mask_path=mask_path, confirmed=True,
         )
         return await loop.run_in_executor(None, fn)
     except Exception as exc:
@@ -1111,6 +1239,9 @@ _HANDLERS: Dict[str, Callable[[Dict[str, Any]], Awaitable[Dict[str, Any]]]] = {
     "aria.broker.preview_order": _call_broker_preview_order,
     "aria.broker.confirm_order": _call_broker_confirm_order,
     "aria.report.chart": _call_report_chart,
+    "aria.report.indicator_chart": _call_indicator_chart,
+    "aria.report.comparison_chart": _call_comparison_chart,
+    "aria.report.allocation_chart": _call_allocation_chart,
     "aria.report.pdf": _call_report_pdf,
     "aria.report.estimate_image_cost": _call_estimate_image_cost,
     "aria.report.generate_image": _call_generate_image,
