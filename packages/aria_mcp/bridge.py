@@ -116,4 +116,25 @@ def default_exposures() -> List[MCPExposure]:
         MCPExposure("aria.video.change_speed", "tool:video_change_speed", "Speed up or slow down a local video (pitch-corrected audio).", read_only=False),
         MCPExposure("aria.video.transcribe", "tool:video_transcribe", "Transcribe a local video's speech track entirely locally (faster-whisper, no API key). Needs the optional 'video_analysis' extra installed."),
         MCPExposure("aria.video.detect_scenes", "tool:video_detect_scenes", "Detect scene-cut timestamps in a local video via frame-histogram comparison. Needs the optional 'video' extra (opencv) installed."),
+        MCPExposure(
+            "aria.video.generate_estimate",
+            "tool:video_generate_estimate",
+            "Get an illustrative cost estimate (USD) for a cloud AI video generation job on "
+            "'kling' or 'runway', before submitting. Free, no API call to the provider.",
+        ),
+        MCPExposure(
+            "aria.video.generate_submit",
+            "tool:video_generate_submit",
+            "Submit a real cloud AI text-to-video generation job on 'kling' or 'runway'. "
+            "Real per-request cost (billed by the provider the instant this succeeds) — requires "
+            "confirmed=true, and calling aria.video.generate_estimate first is strongly recommended. "
+            "Returns a task_id immediately; poll with aria.video.generate_status (generation takes minutes).",
+            read_only=False,
+        ),
+        MCPExposure(
+            "aria.video.generate_status",
+            "tool:video_generate_status",
+            "Check a submitted cloud video generation job's status; downloads the result once "
+            "succeeded. Checking status costs nothing beyond the original submission.",
+        ),
     ]

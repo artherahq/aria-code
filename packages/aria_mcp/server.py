@@ -293,14 +293,45 @@ _INPUT_SCHEMAS: Dict[str, Dict[str, Any]] = {
         },
         "required": ["input_path"],
     },
+    "aria.video.generate_estimate": {
+        "type": "object",
+        "properties": {
+            "provider": {"type": "string", "enum": ["kling", "runway"]},
+            "duration": {"type": "integer", "description": "Video length in seconds"},
+        },
+        "required": ["provider", "duration"],
+    },
+    "aria.video.generate_submit": {
+        "type": "object",
+        "properties": {
+            "provider": {"type": "string", "enum": ["kling", "runway"]},
+            "prompt": {"type": "string"},
+            "duration": {"type": "integer", "description": "Default: 5"},
+            "aspect_ratio": {"type": "string", "description": "e.g. \"16:9\" (kling) or \"1280:720\" (runway) — format is provider-specific"},
+            "confirmed": {"type": "boolean", "description": "Must be true — this spends real money the instant it succeeds"},
+        },
+        "required": ["provider", "prompt", "confirmed"],
+    },
+    "aria.video.generate_status": {
+        "type": "object",
+        "properties": {
+            "provider": {"type": "string", "enum": ["kling", "runway"]},
+            "task_id": {"type": "string"},
+        },
+        "required": ["provider", "task_id"],
+    },
 }
 
 # Exposures that are NOT read_only (they write a local file, a preview
-# record, or a Canva design draft) but are individually verified safe to
-# auto-execute with no human confirmation: none of them can move money,
-# place a live trade, or touch anything outside the local workspace/artifact
-# directories or the user's own Canva account. Every other non-read_only
-# exposure stays blocked by default — see _build_tools().
+# record, a Canva design draft, or a paid cloud generation job) but are
+# individually verified safe to reach from MCP without a human in this
+# module blocking it first. Almost all of them can't move money or place a
+# live trade — the one exception, aria.video.generate_submit, genuinely can
+# (real cloud video generation cost, billed the instant it succeeds), and is
+# safe here only because its own handler hard-refuses to call the provider
+# unless the caller passes confirmed=true — that check lives in
+# _call_video_generate_submit below, not just in this set membership. Every
+# other non-read_only exposure stays blocked by default — see _build_tools().
 _WRITE_SAFE = {
     "aria.broker.preview_order", "aria.report.chart", "aria.report.pdf",
     "aria.report.canva_design", "aria.report.canva_upload_asset",
@@ -310,6 +341,7 @@ _WRITE_SAFE = {
     "aria.report.generate_image_local", "aria.report.edit_image_local",
     "aria.video.trim", "aria.video.concat", "aria.video.overlay_text",
     "aria.video.overlay_audio", "aria.video.convert", "aria.video.change_speed",
+    "aria.video.generate_submit",
 }
 
 
@@ -712,6 +744,83 @@ async def _call_video_detect_scenes(args: Dict[str, Any]) -> Dict[str, Any]:
         return {"success": False, "error": str(exc)}
 
 
+_VIDEO_GEN_PROVIDERS = {"kling": "kling_video_client", "runway": "runway_video_client"}
+
+
+async def _call_video_generate_estimate(args: Dict[str, Any]) -> Dict[str, Any]:
+    provider = str(args.get("provider", "")).strip().lower()
+    module_name = _VIDEO_GEN_PROVIDERS.get(provider)
+    if not module_name:
+        return {"success": False, "error": f"provider must be one of {sorted(_VIDEO_GEN_PROVIDERS)}"}
+    duration = int(args.get("duration", 0) or 0)
+    if duration <= 0:
+        return {"success": False, "error": "duration must be a positive number of seconds"}
+
+    import importlib
+    client = importlib.import_module(module_name)
+    return {"success": True, **client.estimate_cost(duration)}
+
+
+async def _call_video_generate_submit(args: Dict[str, Any]) -> Dict[str, Any]:
+    # Real money is spent the instant client.submit_video() succeeds — this
+    # check is the actual safety boundary for aria.video.generate_submit
+    # being in _WRITE_SAFE, not just the allowlist membership itself.
+    if args.get("confirmed") is not True:
+        return {
+            "success": False,
+            "error": (
+                "confirmed must be true to submit a real (paid) video generation job. "
+                "Call aria.video.generate_estimate first to see the cost, then resubmit "
+                "with confirmed=true."
+            ),
+        }
+
+    provider = str(args.get("provider", "")).strip().lower()
+    module_name = _VIDEO_GEN_PROVIDERS.get(provider)
+    if not module_name:
+        return {"success": False, "error": f"provider must be one of {sorted(_VIDEO_GEN_PROVIDERS)}"}
+    prompt = str(args.get("prompt", "")).strip()
+    if not prompt:
+        return {"success": False, "error": "prompt is required"}
+
+    import asyncio
+    import importlib
+    from functools import partial
+
+    client = importlib.import_module(module_name)
+    kwargs: Dict[str, Any] = {"duration": int(args.get("duration", 5) or 5)}
+    aspect_ratio = args.get("aspect_ratio")
+    if aspect_ratio:
+        kwargs["aspect_ratio" if provider == "kling" else "ratio"] = aspect_ratio
+
+    loop = asyncio.get_event_loop()
+    fn = partial(client.submit_video, prompt, **kwargs)
+    try:
+        return await loop.run_in_executor(None, fn)
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+
+
+async def _call_video_generate_status(args: Dict[str, Any]) -> Dict[str, Any]:
+    provider = str(args.get("provider", "")).strip().lower()
+    module_name = _VIDEO_GEN_PROVIDERS.get(provider)
+    if not module_name:
+        return {"success": False, "error": f"provider must be one of {sorted(_VIDEO_GEN_PROVIDERS)}"}
+    task_id = str(args.get("task_id", "")).strip()
+    if not task_id:
+        return {"success": False, "error": "task_id is required"}
+
+    import asyncio
+    import importlib
+
+    client = importlib.import_module(module_name)
+    loop = asyncio.get_event_loop()
+    try:
+        return await loop.run_in_executor(None, client.poll_video, task_id)
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+
+
 async def _call_report_docx(args: Dict[str, Any]) -> Dict[str, Any]:
     import asyncio
 
@@ -899,6 +1008,9 @@ _HANDLERS: Dict[str, Callable[[Dict[str, Any]], Awaitable[Dict[str, Any]]]] = {
     "aria.video.change_speed": _call_video_change_speed,
     "aria.video.transcribe": _call_video_transcribe,
     "aria.video.detect_scenes": _call_video_detect_scenes,
+    "aria.video.generate_estimate": _call_video_generate_estimate,
+    "aria.video.generate_submit": _call_video_generate_submit,
+    "aria.video.generate_status": _call_video_generate_status,
     "aria.report.generate": _call_report_generate,
     "aria.backtest.run": _call_backtest_run,
 }

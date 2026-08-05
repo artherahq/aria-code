@@ -837,6 +837,7 @@ other MCP client can call into it directly:
 - `aria.report.generate_image_local` / `aria.report.edit_image_local` — the same, entirely locally via a self-hosted SDXL-Turbo (no API key, no per-call cost; needs the optional `image_gen` extra and ~4GB of weights on first use)
 - `aria.video.probe` / `aria.video.trim` / `aria.video.concat` / `aria.video.overlay_text` / `aria.video.overlay_audio` / `aria.video.convert` / `aria.video.change_speed` — deterministic local video editing via `ffmpeg` (no AI, no API key)
 - `aria.video.transcribe` / `aria.video.detect_scenes` — local AI-assisted analysis: speech transcription (`faster-whisper`, needs the optional `video_analysis` extra) and scene-cut detection (`opencv`, needs the optional `video` extra) — both produce editing *decisions*, not new pixels
+- `aria.video.generate_estimate` / `aria.video.generate_submit` / `aria.video.generate_status` — cloud AI text-to-video via Kling or Runway (`provider: "kling" | "runway"`). **Real per-request cost, billed the instant submission succeeds** — `generate_submit` hard-refuses without `confirmed: true`, and calling `generate_estimate` first is strongly recommended. Needs `/apikey set kling <access_key>:<secret_key>` or `/apikey set runway <key>`. No local/free option exists for this layer the way SDXL-Turbo covers images — see `video_editor.py`/`video_analysis.py` for the free local-only editing/analysis layers
 
 ```bash
 python3 aria_mcp_server.py          # dev, from the repo root
