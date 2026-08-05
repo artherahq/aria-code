@@ -198,6 +198,12 @@ chmod +x aria-code-macos-arm64   # or aria-code-linux-x64
 
 > The macOS build is signed + notarized only once `MACOS_CERTIFICATE_P12_BASE64` and the Apple notarization secrets are configured in repo Settings → Secrets (see `.github/workflows/build-native-binaries.yml`) — without them, CI still builds and smoke-tests successfully but produces an **unsigned** binary that macOS Gatekeeper will refuse to run. Until those secrets are added, get a signed macOS build by running `scripts/build_native_binary.sh --notarize` locally on a machine with the real Developer ID cert imported. Windows/Linux binaries need no signing step and run as-is.
 
+Each release also publishes a standalone **`aria-code-mcp-*`** binary — the MCP server (see [Expose aria-code to other MCP clients](#expose-aria-code-to-other-mcp-clients) below) with no Python install needed:
+
+```bash
+claude mcp add aria-code -- /path/to/aria-code-mcp-macos-arm64   # or -linux-x64 / -windows-x64.exe
+```
+
 ### Option 1: Bootstrap (fresh Mac / Linux — recommended)
 
 No Node.js, Python, or Xcode required. One command handles everything:
@@ -834,7 +840,8 @@ other MCP client can call into it directly:
 - `aria.report.chart` / `aria.report.pdf` / `aria.report.docx` / `aria.report.pptx` — generate a chart PNG, or render a Markdown report to PDF, an editable Word document, or a slide deck (one slide per heading) — saved to your artifacts folder
 - `aria.report.canva_design` / `aria.report.canva_upload_asset` — fill a Canva brand template with data (and optionally an uploaded image asset) and export a design draft (needs `/canva connect <client_id> <client_secret>` once — register an app at [canva.com/developers](https://www.canva.com/developers/) and have a brand template ready first; Canva has no API for creating a design from scratch, only autofilling an existing template)
 - `aria.figma.read_file` / `aria.figma.comments` — read a Figma file's page/frame structure (depth-limited summary) and its comments (needs `/apikey set figma <personal_access_token>` once). Read-only — Figma has no public API for writing/creating designs from a script, only its in-app Plugin API can do that
-- `aria.report.generate_image` / `aria.report.edit_image` — generate a new image or transform an existing local photo via OpenAI's `gpt-image-1` (needs `/apikey set openai sk-...`)
+- `aria.report.estimate_image_cost` — get an illustrative per-image cost estimate (USD) for OpenAI's `gpt-image-1` at a given size/quality, before generating. Free.
+- `aria.report.generate_image` / `aria.report.edit_image` — generate a new image or transform an existing local photo via OpenAI's `gpt-image-1` (needs `/apikey set openai sk-...`). **Real per-call cost, billed the instant it succeeds** — both hard-refuse without `confirmed: true`, and calling `aria.report.estimate_image_cost` first is strongly recommended
 - `aria.report.generate_image_local` / `aria.report.edit_image_local` — the same, entirely locally via a self-hosted SDXL-Turbo (no API key, no per-call cost; needs the optional `image_gen` extra and ~4GB of weights on first use)
 - `aria.video.probe` / `aria.video.trim` / `aria.video.concat` / `aria.video.overlay_text` / `aria.video.overlay_audio` / `aria.video.convert` / `aria.video.change_speed` — deterministic local video editing via `ffmpeg` (no AI, no API key)
 - `aria.video.transcribe` / `aria.video.detect_scenes` — local AI-assisted analysis: speech transcription (`faster-whisper`, needs the optional `video_analysis` extra) and scene-cut detection (`opencv`, needs the optional `video` extra) — both produce editing *decisions*, not new pixels

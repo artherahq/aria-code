@@ -17,6 +17,7 @@ on:
 env:
   PYTHON_VERSION: "3.13"
   BIN_NAME: aria-code-bin
+  MCP_BIN_NAME: aria-code-mcp-bin
 
 jobs:
   build-macos:
@@ -77,6 +78,10 @@ jobs:
         with:
           name: aria-code-macos-arm64
           path: dist-native/dist/${{ env.BIN_NAME }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aria-code-mcp-macos-arm64
+          path: dist-native/dist/${{ env.MCP_BIN_NAME }}
 
   build-windows:
     name: Build (Windows x64)
@@ -101,6 +106,18 @@ jobs:
         with:
           name: aria-code-windows-x64
           path: dist-native/dist/${{ env.BIN_NAME }}.exe
+      - name: Run PyInstaller for the MCP server binary (--onefile)
+        run: >
+          pyinstaller --onefile --name ${{ env.MCP_BIN_NAME }}
+          --distpath dist-native/dist --workpath dist-native/build --specpath dist-native
+          --copy-metadata aria-code
+          aria_mcp_server.py
+      - name: Smoke test (MCP server binary)
+        run: dist-native\dist\${{ env.MCP_BIN_NAME }}.exe --version
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aria-code-mcp-windows-x64
+          path: dist-native/dist/${{ env.MCP_BIN_NAME }}.exe
 
   build-linux:
     name: Build (Linux x64)
@@ -125,6 +142,18 @@ jobs:
         with:
           name: aria-code-linux-x64
           path: dist-native/dist/${{ env.BIN_NAME }}
+      - name: Run PyInstaller for the MCP server binary (--onefile)
+        run: >
+          pyinstaller --onefile --name ${{ env.MCP_BIN_NAME }}
+          --distpath dist-native/dist --workpath dist-native/build --specpath dist-native
+          --copy-metadata aria-code
+          aria_mcp_server.py
+      - name: Smoke test (MCP server binary)
+        run: dist-native/dist/${{ env.MCP_BIN_NAME }} --version
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aria-code-mcp-linux-x64
+          path: dist-native/dist/${{ env.MCP_BIN_NAME }}
 
   attach-to-release:
     name: Attach binaries to GitHub Release
@@ -143,7 +172,10 @@ jobs:
           cp artifacts/aria-code-macos-arm64/${{ env.BIN_NAME }} release/aria-code-macos-arm64
           cp artifacts/aria-code-windows-x64/${{ env.BIN_NAME }}.exe release/aria-code-windows-x64.exe
           cp artifacts/aria-code-linux-x64/${{ env.BIN_NAME }} release/aria-code-linux-x64
-          chmod +x release/aria-code-macos-arm64 release/aria-code-linux-x64
+          cp artifacts/aria-code-mcp-macos-arm64/${{ env.MCP_BIN_NAME }} release/aria-code-mcp-macos-arm64
+          cp artifacts/aria-code-mcp-windows-x64/${{ env.MCP_BIN_NAME }}.exe release/aria-code-mcp-windows-x64.exe
+          cp artifacts/aria-code-mcp-linux-x64/${{ env.MCP_BIN_NAME }} release/aria-code-mcp-linux-x64
+          chmod +x release/aria-code-macos-arm64 release/aria-code-linux-x64 release/aria-code-mcp-macos-arm64 release/aria-code-mcp-linux-x64
       - name: Upload to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

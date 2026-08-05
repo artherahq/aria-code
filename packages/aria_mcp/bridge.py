@@ -76,11 +76,19 @@ def default_exposures() -> List[MCPExposure]:
             read_only=False,
         ),
         MCPExposure(
+            "aria.report.estimate_image_cost",
+            "tool:openai_estimate_image_cost",
+            "Get an illustrative per-image cost estimate (USD) for OpenAI's gpt-image-1 "
+            "at a given size/quality, before generating. Free, no API call to OpenAI.",
+        ),
+        MCPExposure(
             "aria.report.generate_image",
             "tool:openai_generate_image",
             "Generate a new image from a text prompt (e.g. minimal-editorial-poster's "
-            "compiled prompt) via OpenAI's gpt-image-1. Requires an OpenAI API key "
-            "(/apikey set openai sk-... or OPENAI_API_KEY).",
+            "compiled prompt) via OpenAI's gpt-image-1. Real per-call cost, billed by "
+            "OpenAI the instant this succeeds — requires confirmed=true, and calling "
+            "aria.report.estimate_image_cost first is strongly recommended. Requires an "
+            "OpenAI API key (/apikey set openai sk-... or OPENAI_API_KEY).",
             read_only=False,
         ),
         MCPExposure(
@@ -88,7 +96,9 @@ def default_exposures() -> List[MCPExposure]:
             "tool:openai_edit_image",
             "Transform an existing local photo per a text prompt (duotone, background "
             "simplification, texture overlay, etc.) via OpenAI's gpt-image-1 edits "
-            "endpoint. Requires an OpenAI API key.",
+            "endpoint. Real per-call cost, billed by OpenAI the instant this succeeds — "
+            "requires confirmed=true, and calling aria.report.estimate_image_cost first "
+            "is strongly recommended. Requires an OpenAI API key.",
             read_only=False,
         ),
         MCPExposure(

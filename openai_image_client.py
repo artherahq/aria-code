@@ -29,6 +29,37 @@ from typing import Any, Dict, Optional
 API_BASE = "https://api.openai.com/v1"
 DEFAULT_MODEL = "gpt-image-1"
 
+# Per-image USD cost by (quality, size), verified against OpenAI's published
+# gpt-image-1 output-token pricing (developers.openai.com/api/docs/guides/
+# image-generation) — output tokens only; input text/image tokens add a few
+# thousandths of a cent and are ignored here as noise.
+_COST_USD: Dict[str, Dict[str, float]] = {
+    "low": {"1024x1024": 0.011, "1024x1536": 0.016, "1536x1024": 0.016},
+    "medium": {"1024x1024": 0.042, "1024x1536": 0.063, "1536x1024": 0.063},
+    "high": {"1024x1024": 0.167, "1024x1536": 0.25, "1536x1024": 0.25},
+}
+
+
+def estimate_cost(size: str = "1024x1536", quality: str = "high") -> Dict[str, Any]:
+    """Rough cost estimate — call before generate_image()/edit_image(),
+    not a live quote. "auto" quality/size can't be priced ahead of time
+    (OpenAI picks the actual value), so it's reported as unknown rather
+    than guessed."""
+    per_image = (_COST_USD.get(quality) or {}).get(size)
+    return {
+        "provider": "openai",
+        "model": DEFAULT_MODEL,
+        "size": size,
+        "quality": quality,
+        "estimated_cost_usd": per_image,
+        "note": (
+            "Illustrative estimate from OpenAI's published per-image pricing; "
+            "verify current pricing at platform.openai.com/docs/pricing."
+            if per_image is not None
+            else "'auto' size/quality is resolved by OpenAI at request time and can't be priced ahead of submission."
+        ),
+    }
+
 
 def _providers_path() -> Path:
     from apps.cli.config_paths import resolve_paths
@@ -73,13 +104,24 @@ def generate_image(
     *,
     size: str = "1024x1536",
     quality: str = "high",
+    confirmed: bool = False,
 ) -> Dict[str, Any]:
     """Generate a new image from a text prompt (e.g. minimal-editorial-poster's
-    compiled prompt) via POST /v1/images/generations.
+    compiled prompt) via POST /v1/images/generations — real per-call cost,
+    billed by OpenAI the instant this succeeds (see estimate_cost()).
 
     Blocking (uses requests) — callers on an event loop should run this in
     an executor, same as every other client in this codebase.
     """
+    if not confirmed:
+        return {
+            "success": False,
+            "error": (
+                "confirmed must be true to generate a real (paid) image. "
+                "Call estimate_cost() first to see the cost, then resubmit with confirmed=true."
+            ),
+        }
+
     import requests
 
     from artifacts import create_user_artifact
@@ -110,14 +152,25 @@ def edit_image(
     size: str = "1024x1536",
     quality: str = "high",
     mask_path: Optional[str] = None,
+    confirmed: bool = False,
 ) -> Dict[str, Any]:
     """Transform an existing local photo per `prompt` (e.g. "convert to duotone,
     simplify background to negative space, add scan-noise texture...") via
     POST /v1/images/edits — the execution path for a real user-provided photo
-    run through the minimal-editorial-poster skill.
+    run through the minimal-editorial-poster skill. Real per-call cost,
+    billed by OpenAI the instant this succeeds (see estimate_cost()).
 
     Blocking (uses requests) — same threading note as generate_image.
     """
+    if not confirmed:
+        return {
+            "success": False,
+            "error": (
+                "confirmed must be true to generate a real (paid) image edit. "
+                "Call estimate_cost() first to see the cost, then resubmit with confirmed=true."
+            ),
+        }
+
     import requests
 
     from artifacts import create_user_artifact

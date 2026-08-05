@@ -285,6 +285,93 @@ def _resolve_runtime_paths() -> dict[str, Any]:
     }
 
 
+def _provider_key_present(module_name: str, key_fn: str) -> bool:
+    """Call a client module's own key-lookup function (e.g.
+    openai_image_client._api_key) rather than re-implementing env-var/
+    providers.json lookup here — avoids doctor.py silently drifting out of
+    sync with each module's actual lookup logic."""
+    try:
+        import importlib
+        mod = importlib.import_module(module_name)
+        result = getattr(mod, key_fn)()
+        if isinstance(result, tuple):
+            return all(bool(v) for v in result)
+        return bool(result)
+    except Exception:
+        return False
+
+
+def integration_checks() -> List[DoctorCheck]:
+    """Health checks for the report/media generation integrations added
+    across the MCP-exposure work: ffmpeg (video editing), faster-whisper +
+    opencv (video analysis), self-hosted image generation, and the
+    API-key-gated cloud providers (OpenAI images, Kling/Runway video, Canva,
+    Figma). None of these are required for core aria-code usage — missing
+    ones are "warn", not "err", and each points at how to fix it."""
+    checks: List[DoctorCheck] = []
+
+    if shutil.which("ffmpeg"):
+        checks.append(_check("integration:ffmpeg", "ok", "found on PATH — local video editing (aria.video.*) available"))
+    else:
+        checks.append(_check(
+            "integration:ffmpeg", "warn", "not found on PATH",
+            "Install ffmpeg (e.g. `brew install ffmpeg`) to use aria.video.trim/concat/overlay_*/convert/change_speed.",
+        ))
+
+    if _has_module("faster_whisper"):
+        checks.append(_check("integration:faster_whisper", "ok", "available — aria.video.transcribe ready"))
+    else:
+        checks.append(_check(
+            "integration:faster_whisper", "warn", "optional 'video_analysis' extra not installed",
+            "pip install 'aria-code[video_analysis]' to use aria.video.transcribe.",
+        ))
+
+    if _has_module("cv2"):
+        checks.append(_check("integration:opencv", "ok", "available — aria.video.detect_scenes ready"))
+    else:
+        checks.append(_check(
+            "integration:opencv", "warn", "optional 'video' extra not installed",
+            "pip install 'aria-code[video]' to use aria.video.detect_scenes.",
+        ))
+
+    if _has_module("diffusers") and _has_module("torch"):
+        checks.append(_check("integration:local_image_gen", "ok", "available — aria.report.generate_image_local/edit_image_local ready (no API key needed)"))
+    else:
+        checks.append(_check(
+            "integration:local_image_gen", "warn", "optional 'image_gen' extra not installed",
+            "pip install 'aria-code[image_gen]' for free local image generation, or use aria.report.generate_image (OpenAI, needs an API key).",
+        ))
+
+    key_checks = [
+        ("integration:openai_images", "openai_image_client", "_api_key", "/apikey set openai sk-...", "aria.report.generate_image/edit_image"),
+        ("integration:kling", "kling_video_client", "_keys", "/apikey set kling <access_key>:<secret_key>", "aria.video.generate_submit (provider=kling)"),
+        ("integration:runway", "runway_video_client", "_api_key", "/apikey set runway <key>", "aria.video.generate_submit (provider=runway)"),
+        ("integration:figma", "figma_client", "_token", "/apikey set figma <personal_access_token>", "aria.figma.read_file/comments"),
+    ]
+    for name, module_name, key_fn, setup_hint, gates in key_checks:
+        if _provider_key_present(module_name, key_fn):
+            checks.append(_check(name, "ok", f"key configured — {gates} usable"))
+        else:
+            checks.append(_check(name, "warn", "no API key configured", f"{setup_hint} to use {gates}."))
+
+    try:
+        # Read stored config directly rather than calling _access_token(),
+        # which refreshes an expired token over the network — this function
+        # is a local-first, no-mutation health check, not a live probe.
+        from canva_client import _load_canva_config
+
+        connected = bool(_load_canva_config().get("access_token"))
+        checks.append(_check(
+            "integration:canva", "ok" if connected else "warn",
+            "connected — aria.report.canva_design/canva_upload_asset usable" if connected else "not connected",
+            "" if connected else "Run /canva connect <client_id> <client_secret> (needs a Canva Connect app + brand template).",
+        ))
+    except Exception as exc:
+        checks.append(_check("integration:canva", "warn", f"could not read config: {exc}", "Run /canva connect <client_id> <client_secret>."))
+
+    return checks
+
+
 def npm_runtime_checks(*, cwd: Optional[Path] = None) -> List[DoctorCheck]:
     """Return npm launcher/runtime path diagnostics."""
     checks: List[DoctorCheck] = []
@@ -509,6 +596,7 @@ def run_doctor(
         )
 
     checks.extend(npm_runtime_checks(cwd=cwd))
+    checks.extend(integration_checks())
 
     try:
         from artifacts import artifact_root, artifact_summary

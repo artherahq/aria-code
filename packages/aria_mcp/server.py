@@ -138,14 +138,23 @@ _INPUT_SCHEMAS: Dict[str, Dict[str, Any]] = {
         },
         "required": ["markdown"],
     },
+    "aria.report.estimate_image_cost": {
+        "type": "object",
+        "properties": {
+            "size": {"type": "string", "enum": ["1024x1024", "1536x1024", "1024x1536", "auto"], "description": "Default: 1024x1536"},
+            "quality": {"type": "string", "enum": ["low", "medium", "high", "auto"], "description": "Default: high"},
+        },
+        "required": [],
+    },
     "aria.report.generate_image": {
         "type": "object",
         "properties": {
             "prompt": {"type": "string", "description": "Text prompt (e.g. minimal-editorial-poster's compiled prompt)"},
             "size": {"type": "string", "enum": ["1024x1024", "1536x1024", "1024x1536", "auto"], "description": "Default: 1024x1536 (portrait poster)"},
             "quality": {"type": "string", "enum": ["low", "medium", "high", "auto"], "description": "Default: high"},
+            "confirmed": {"type": "boolean", "description": "Must be true — this spends real money the instant it succeeds"},
         },
-        "required": ["prompt"],
+        "required": ["prompt", "confirmed"],
     },
     "aria.report.edit_image": {
         "type": "object",
@@ -154,8 +163,9 @@ _INPUT_SCHEMAS: Dict[str, Dict[str, Any]] = {
             "prompt": {"type": "string", "description": "How to transform it, e.g. \"convert to duotone with warm ochre accent, simplify the busy rock background into flat negative space, add subtle scan-noise texture\""},
             "size": {"type": "string", "enum": ["1024x1024", "1536x1024", "1024x1536", "auto"], "description": "Default: 1024x1536"},
             "quality": {"type": "string", "enum": ["low", "medium", "high", "auto"], "description": "Default: high"},
+            "confirmed": {"type": "boolean", "description": "Must be true — this spends real money the instant it succeeds"},
         },
-        "required": ["image_path", "prompt"],
+        "required": ["image_path", "prompt", "confirmed"],
     },
     "aria.report.generate_image_local": {
         "type": "object",
@@ -348,15 +358,17 @@ _INPUT_SCHEMAS: Dict[str, Dict[str, Any]] = {
 # record, a Canva design draft, or a paid cloud generation job) but are
 # individually verified safe to reach from MCP without a human in this
 # module blocking it first. Almost all of them can't move money or place a
-# live trade — the exceptions are aria.video.generate_submit (real cloud
-# video generation cost, billed the instant it succeeds — safe here only
-# because its handler hard-refuses without confirmed=true, see
-# _call_video_generate_submit) and aria.broker.confirm_order (real trade
-# execution — safe here only because its handler hard-refuses unless the
-# broker was separately, explicitly opted into chat-confirm at the aria-code
-# terminal keyboard via /trade allow-chat-confirm, AND confirmed=true is
-# passed; see _call_broker_confirm_order and the module docstring). Every
-# other non-read_only exposure stays blocked by default — see _build_tools().
+# live trade — the exceptions are aria.report.generate_image / edit_image
+# (real per-call OpenAI cost, billed the instant it succeeds — safe here
+# only because their handlers hard-refuse without confirmed=true, see
+# _call_generate_image / _call_edit_image), aria.video.generate_submit (same
+# pattern for cloud video generation, see _call_video_generate_submit), and
+# aria.broker.confirm_order (real trade execution — safe here only because
+# its handler hard-refuses unless the broker was separately, explicitly
+# opted into chat-confirm at the aria-code terminal keyboard via
+# /trade allow-chat-confirm, AND confirmed=true is passed; see
+# _call_broker_confirm_order and the module docstring). Every other
+# non-read_only exposure stays blocked by default — see _build_tools().
 _WRITE_SAFE = {
     "aria.broker.preview_order", "aria.broker.confirm_order",
     "aria.report.chart", "aria.report.pdf",
@@ -939,7 +951,25 @@ async def _call_report_pptx(args: Dict[str, Any]) -> Dict[str, Any]:
     return {"success": True, "path": str(result_path)}
 
 
+async def _call_estimate_image_cost(args: Dict[str, Any]) -> Dict[str, Any]:
+    from openai_image_client import estimate_cost
+
+    return {"success": True, **estimate_cost(size=args.get("size") or "1024x1536", quality=args.get("quality") or "high")}
+
+
 async def _call_generate_image(args: Dict[str, Any]) -> Dict[str, Any]:
+    # Real money is spent the instant generate_image() calls OpenAI — this
+    # check is the actual safety boundary, not just _WRITE_SAFE membership
+    # (same pattern as _call_video_generate_submit).
+    if args.get("confirmed") is not True:
+        return {
+            "success": False,
+            "error": (
+                "confirmed must be true to generate a real (paid) image. "
+                "Call aria.report.estimate_image_cost first to see the cost, then resubmit with confirmed=true."
+            ),
+        }
+
     import asyncio
     from functools import partial
 
@@ -951,13 +981,27 @@ async def _call_generate_image(args: Dict[str, Any]) -> Dict[str, Any]:
 
     loop = asyncio.get_event_loop()
     try:
-        fn = partial(generate_image, prompt, size=args.get("size") or "1024x1536", quality=args.get("quality") or "high")
+        fn = partial(
+            generate_image, prompt,
+            size=args.get("size") or "1024x1536", quality=args.get("quality") or "high",
+            confirmed=True,
+        )
         return await loop.run_in_executor(None, fn)
     except Exception as exc:
         return {"success": False, "error": str(exc)}
 
 
 async def _call_edit_image(args: Dict[str, Any]) -> Dict[str, Any]:
+    # Same real-money gate as _call_generate_image above.
+    if args.get("confirmed") is not True:
+        return {
+            "success": False,
+            "error": (
+                "confirmed must be true to generate a real (paid) image edit. "
+                "Call aria.report.estimate_image_cost first to see the cost, then resubmit with confirmed=true."
+            ),
+        }
+
     import asyncio
     from functools import partial
 
@@ -970,7 +1014,11 @@ async def _call_edit_image(args: Dict[str, Any]) -> Dict[str, Any]:
 
     loop = asyncio.get_event_loop()
     try:
-        fn = partial(edit_image, image_path, prompt, size=args.get("size") or "1024x1536", quality=args.get("quality") or "high")
+        fn = partial(
+            edit_image, image_path, prompt,
+            size=args.get("size") or "1024x1536", quality=args.get("quality") or "high",
+            confirmed=True,
+        )
         return await loop.run_in_executor(None, fn)
     except Exception as exc:
         return {"success": False, "error": str(exc)}
@@ -1064,6 +1112,7 @@ _HANDLERS: Dict[str, Callable[[Dict[str, Any]], Awaitable[Dict[str, Any]]]] = {
     "aria.broker.confirm_order": _call_broker_confirm_order,
     "aria.report.chart": _call_report_chart,
     "aria.report.pdf": _call_report_pdf,
+    "aria.report.estimate_image_cost": _call_estimate_image_cost,
     "aria.report.generate_image": _call_generate_image,
     "aria.report.edit_image": _call_edit_image,
     "aria.report.generate_image_local": _call_generate_image_local,
@@ -1188,6 +1237,24 @@ async def _handle(req: Dict[str, Any]) -> None:
 
 def main() -> None:
     import asyncio
+
+    # --version/-V is not part of the MCP wire protocol — it exists purely
+    # so a packaged binary (PyInstaller, `aria-code-mcp --version`) can be
+    # smoke-tested the same way aria_cli.py's binary is, without having to
+    # speak JSON-RPC over stdin just to prove the executable launches.
+    # Reads the version via importlib.metadata rather than `from aria_cli
+    # import __version__` deliberately — aria_cli.py's top-level imports
+    # pull in the whole interactive-CLI stack (prompt_toolkit, bootstrap
+    # hooks, ...), which is unnecessary weight for a binary whose only job
+    # here is speaking JSON-RPC over stdio.
+    if any(arg in ("--version", "-V") for arg in sys.argv[1:]):
+        try:
+            from importlib.metadata import version as _pkg_version
+            v = _pkg_version("aria-code")
+        except Exception:
+            v = "unknown"
+        print(f"aria-code-mcp {v}")
+        return
 
     logger.info("aria-code MCP server starting (stdio transport, %d tools)", len(TOOLS))
 

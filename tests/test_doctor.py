@@ -3,7 +3,10 @@ try:
 except ModuleNotFoundError:  # Python < 3.11
     import tomli as tomllib
 
-from doctor import analyze_python_drift, format_doctor_plain, npm_runtime_checks, provider_health_checks, provider_health_summary, run_doctor
+import shutil
+
+import doctor
+from doctor import analyze_python_drift, format_doctor_plain, integration_checks, npm_runtime_checks, provider_health_checks, provider_health_summary, run_doctor
 from packages.aria_services.provider_health import summarize_provider_health
 
 
@@ -241,3 +244,99 @@ def test_context_health_snapshot_shape():
     assert snap["max_tokens"] == 2048
     assert snap["message_count"] == 1
     assert 0 < snap["fill_ratio"] < 1
+
+
+def test_integration_checks_ffmpeg_ok_when_on_path(monkeypatch):
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/ffmpeg" if name == "ffmpeg" else None)
+    checks = {c.name: c for c in integration_checks()}
+    assert checks["integration:ffmpeg"].status == "ok"
+
+
+def test_integration_checks_ffmpeg_warns_when_missing(monkeypatch):
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    checks = {c.name: c for c in integration_checks()}
+    assert checks["integration:ffmpeg"].status == "warn"
+    assert "ffmpeg" in checks["integration:ffmpeg"].suggestion.lower()
+
+
+def test_integration_checks_video_analysis_modules(monkeypatch):
+    def fake_has_module(name):
+        return name in ("faster_whisper", "cv2")
+
+    monkeypatch.setattr(doctor, "_has_module", fake_has_module)
+    checks = {c.name: c for c in integration_checks()}
+    assert checks["integration:faster_whisper"].status == "ok"
+    assert checks["integration:opencv"].status == "ok"
+    assert checks["integration:local_image_gen"].status == "warn"
+
+
+def test_integration_checks_local_image_gen_needs_both_modules(monkeypatch):
+    def fake_has_module(name):
+        return name == "diffusers"  # torch missing
+
+    monkeypatch.setattr(doctor, "_has_module", fake_has_module)
+    checks = {c.name: c for c in integration_checks()}
+    assert checks["integration:local_image_gen"].status == "warn"
+
+
+def test_integration_checks_provider_key_present_reports_ok(monkeypatch):
+    monkeypatch.setattr(doctor, "_provider_key_present", lambda module_name, key_fn: True)
+    checks = {c.name: c for c in integration_checks()}
+    assert checks["integration:openai_images"].status == "ok"
+    assert checks["integration:kling"].status == "ok"
+    assert checks["integration:runway"].status == "ok"
+    assert checks["integration:figma"].status == "ok"
+
+
+def test_integration_checks_provider_key_missing_reports_warn_with_setup_hint(monkeypatch):
+    monkeypatch.setattr(doctor, "_provider_key_present", lambda module_name, key_fn: False)
+    checks = {c.name: c for c in integration_checks()}
+    assert checks["integration:kling"].status == "warn"
+    assert "/apikey set kling" in checks["integration:kling"].suggestion
+
+
+def test_provider_key_present_handles_tuple_keys(monkeypatch):
+    import importlib
+    import types
+
+    fake_mod = types.SimpleNamespace(_keys=lambda: ("ak", "sk"))
+    monkeypatch.setattr(importlib, "import_module", lambda name: fake_mod)
+    assert doctor._provider_key_present("kling_video_client", "_keys") is True
+
+
+def test_provider_key_present_tuple_with_missing_half_is_false(monkeypatch):
+    import importlib
+    import types
+
+    fake_mod = types.SimpleNamespace(_keys=lambda: ("ak", ""))
+    monkeypatch.setattr(importlib, "import_module", lambda name: fake_mod)
+    assert doctor._provider_key_present("kling_video_client", "_keys") is False
+
+
+def test_provider_key_present_swallows_import_errors():
+    assert doctor._provider_key_present("nonexistent_module_xyz", "_api_key") is False
+
+
+def test_integration_checks_canva_connected(monkeypatch):
+    monkeypatch.setattr(doctor, "_provider_key_present", lambda module_name, key_fn: False)
+    import canva_client
+    monkeypatch.setattr(canva_client, "_load_canva_config", lambda: {"access_token": "tok"})
+    checks = {c.name: c for c in integration_checks()}
+    assert checks["integration:canva"].status == "ok"
+
+
+def test_integration_checks_canva_not_connected(monkeypatch):
+    monkeypatch.setattr(doctor, "_provider_key_present", lambda module_name, key_fn: False)
+    import canva_client
+    monkeypatch.setattr(canva_client, "_load_canva_config", lambda: {})
+    checks = {c.name: c for c in integration_checks()}
+    assert checks["integration:canva"].status == "warn"
+    assert "/canva connect" in checks["integration:canva"].suggestion
+
+
+def test_integration_checks_included_in_run_doctor(monkeypatch, tmp_path):
+    monkeypatch.setenv("ARIA_ARTIFACT_ROOT", str(tmp_path / "artifacts"))
+    report = run_doctor({}, cwd=tmp_path)
+    names = {c.name for c in report.checks}
+    assert "integration:ffmpeg" in names
+    assert "integration:openai_images" in names

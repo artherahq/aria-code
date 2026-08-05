@@ -39,6 +39,8 @@ BUILD_DIR="${BUILD_DIR:-$PROJECT_ROOT/dist-native}"
 VENV_DIR="$BUILD_DIR/.build-venv"
 BIN_NAME="aria-code-bin"
 BIN_PATH="$BUILD_DIR/dist/$BIN_NAME"
+MCP_BIN_NAME="aria-code-mcp-bin"
+MCP_BIN_PATH="$BUILD_DIR/dist/$MCP_BIN_NAME"
 ENTITLEMENTS="$BUILD_DIR/entitlements.plist"
 
 echo "── Finding a Python within pyproject.toml's requires-python bound ──"
@@ -74,24 +76,46 @@ echo "── Running PyInstaller (--onefile) ──"
   --collect-all prompt_toolkit \
   aria_cli.py
 
+echo "── Running PyInstaller for the MCP server binary (--onefile) ──"
+# Separate entry point, separate binary: the MCP server (packages/aria_mcp/
+# server.py) has to be launchable on its own (`claude mcp add aria-code --
+# /path/to/aria-code-mcp-bin`) — a Claude Code/Codex/Cursor user shouldn't
+# need a full Python environment just to register aria-code as an MCP
+# server, the same rationale that motivated bundling aria_cli.py at all.
+# --copy-metadata aria-code: confirmed empirically — without this,
+# `aria-code-mcp-bin --version` (server.py's smoke-test flag) prints
+# "unknown" instead of the real version, because importlib.metadata.version()
+# can't find the package's dist-info inside a frozen PyInstaller app unless
+# it's explicitly copied in.
+"$VENV_DIR/bin/pyinstaller" --onefile --name "$MCP_BIN_NAME" \
+  --distpath "$BUILD_DIR/dist" \
+  --workpath "$BUILD_DIR/build" \
+  --specpath "$BUILD_DIR" \
+  --copy-metadata aria-code \
+  aria_mcp_server.py
+
+# Both binaries (CLI + MCP server) go through the same sign/notarize/verify
+# pipeline below — iterate rather than duplicate the whole block per binary.
+BIN_NAMES=("$BIN_NAME" "$MCP_BIN_NAME")
+BIN_PATHS=("$BIN_PATH" "$MCP_BIN_PATH")
+
 echo "── Checking for signing identity in keychain ──"
 # CI runners (and any machine without the real Developer ID cert imported)
 # don't have $SIGN_IDENTITY available — that's expected there, not an error.
-# Skip signing/notarization gracefully (produce an unsigned binary + a clear
+# Skip signing/notarization gracefully (produce unsigned binaries + a clear
 # note) instead of hard-failing, mirroring how publish.yml skips PyPI
 # publish when PYPI_API_TOKEN isn't set rather than failing the whole run.
 if ! security find-identity -v -p codesigning 2>/dev/null | grep -qF "$SIGN_IDENTITY"; then
-  echo "── Smoke test: the unsigned binary must actually run ──"
-  "$BIN_PATH" --version
+  echo "── Smoke test: the unsigned binaries must actually run ──"
+  for p in "${BIN_PATHS[@]}"; do "$p" --version; done
   echo ""
-  echo "Signing identity '$SIGN_IDENTITY' not found in keychain — built unsigned: $BIN_PATH"
+  echo "Signing identity '$SIGN_IDENTITY' not found in keychain — built unsigned: ${BIN_PATHS[*]}"
   echo "This machine can't sign/notarize (no cert imported). Gatekeeper will reject"
-  echo "this binary on end-user machines — only distribute a signed+notarized build"
+  echo "these binaries on end-user machines — only distribute a signed+notarized build"
   echo "(run this script on a machine with the real Developer ID cert imported)."
   exit 0
 fi
 
-echo "── Signing with $SIGN_IDENTITY ──"
 # disable-library-validation is required in --onefile mode: PyInstaller
 # extracts its bundled Python.framework to a temp dir at runtime and
 # dlopen()s it, and hardened runtime otherwise refuses to load a library
@@ -113,19 +137,22 @@ cat > "$ENTITLEMENTS" <<'PLIST'
 </plist>
 PLIST
 
-codesign --force --sign "$SIGN_IDENTITY" --options runtime --timestamp \
-  --entitlements "$ENTITLEMENTS" "$BIN_PATH"
+for p in "${BIN_PATHS[@]}"; do
+  echo "── Signing $p with $SIGN_IDENTITY ──"
+  codesign --force --sign "$SIGN_IDENTITY" --options runtime --timestamp \
+    --entitlements "$ENTITLEMENTS" "$p"
 
-echo "── Verifying signature ──"
-codesign --verify --deep --strict --verbose=2 "$BIN_PATH"
+  echo "── Verifying signature ──"
+  codesign --verify --deep --strict --verbose=2 "$p"
 
-echo "── Smoke test: the signed binary must actually run ──"
-"$BIN_PATH" --version
+  echo "── Smoke test: the signed binary must actually run ──"
+  "$p" --version
+done
 
 if [[ "${1:-}" != "--notarize" ]]; then
   echo ""
-  echo "Signed (not notarized): $BIN_PATH"
-  echo "Gatekeeper will currently reject it (spctl -a -vvv -t exec \"$BIN_PATH\")."
+  echo "Signed (not notarized): ${BIN_PATHS[*]}"
+  echo "Gatekeeper will currently reject them (spctl -a -vvv -t exec <path>)."
   echo "Re-run with --notarize once Apple credentials are set (see header of this script)."
   exit 0
 fi
@@ -156,43 +183,48 @@ EOF
   exit 1
 fi
 
-echo "── Zipping for submission (notarytool cannot notarize a bare binary directly) ──"
-NOTARY_ZIP="$BUILD_DIR/${BIN_NAME}-notarize.zip"
-ditto -c -k --keepParent "$BIN_PATH" "$NOTARY_ZIP"
+for i in "${!BIN_PATHS[@]}"; do
+  p="${BIN_PATHS[$i]}"
+  n="${BIN_NAMES[$i]}"
 
-echo "── Submitting to Apple notarization (this polls and can take a few minutes) ──"
-if has_api_creds; then
-  xcrun notarytool submit "$NOTARY_ZIP" \
-    --key "$APPLE_API_KEY" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER" --wait
-else
-  xcrun notarytool submit "$NOTARY_ZIP" --keychain-profile "$NOTARY_KEYCHAIN_PROFILE" --wait
-fi
+  echo "── Zipping $n for submission (notarytool cannot notarize a bare binary directly) ──"
+  NOTARY_ZIP="$BUILD_DIR/${n}-notarize.zip"
+  ditto -c -k --keepParent "$p" "$NOTARY_ZIP"
 
-# Stapling only works on .app/.pkg/.dmg containers — there is no resource
-# fork slot on a bare Mach-O executable to attach a ticket to. A notarized
-# bare binary relies on Gatekeeper's online check instead, which happens at
-# actual process-launch time via syspolicyd — NOT via `spctl -a -t exec`.
-# Confirmed empirically: `spctl -a -t exec` on a bare (non-.app) binary
-# reliably answers "rejected (the code is valid but does not seem to be an
-# app)" or "Unnotarized Developer ID" regardless of notarization status —
-# it's simply the wrong assessment type for a raw Mach-O CLI tool, so it is
-# NOT used here. The real test is what actually happens to a user's
-# downloaded copy: quarantine it (simulating a browser/curl download) and
-# execute it directly. A rejected binary throws an unrecoverable
-# "cannot be opened because Apple cannot verify..." error at exec time;
-# an accepted one just runs.
-echo ""
-echo "── Verifying Gatekeeper acceptance (real test: execute a quarantined copy, not spctl -t exec) ──"
-GATEKEEPER_TEST_COPY="$BUILD_DIR/gatekeeper-test-copy"
-cp "$BIN_PATH" "$GATEKEEPER_TEST_COPY"
-xattr -w com.apple.quarantine "0181;$(printf '%x' "$(date +%s)");Safari;" "$GATEKEEPER_TEST_COPY"
-if ! "$GATEKEEPER_TEST_COPY" --version >/dev/null 2>&1; then
-  echo "Gatekeeper rejected the quarantined binary at launch — notarization did not take effect." >&2
+  echo "── Submitting $n to Apple notarization (this polls and can take a few minutes) ──"
+  if has_api_creds; then
+    xcrun notarytool submit "$NOTARY_ZIP" \
+      --key "$APPLE_API_KEY" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER" --wait
+  else
+    xcrun notarytool submit "$NOTARY_ZIP" --keychain-profile "$NOTARY_KEYCHAIN_PROFILE" --wait
+  fi
+
+  # Stapling only works on .app/.pkg/.dmg containers — there is no resource
+  # fork slot on a bare Mach-O executable to attach a ticket to. A notarized
+  # bare binary relies on Gatekeeper's online check instead, which happens at
+  # actual process-launch time via syspolicyd — NOT via `spctl -a -t exec`.
+  # Confirmed empirically: `spctl -a -t exec` on a bare (non-.app) binary
+  # reliably answers "rejected (the code is valid but does not seem to be an
+  # app)" or "Unnotarized Developer ID" regardless of notarization status —
+  # it's simply the wrong assessment type for a raw Mach-O CLI tool, so it is
+  # NOT used here. The real test is what actually happens to a user's
+  # downloaded copy: quarantine it (simulating a browser/curl download) and
+  # execute it directly. A rejected binary throws an unrecoverable
+  # "cannot be opened because Apple cannot verify..." error at exec time;
+  # an accepted one just runs.
+  echo ""
+  echo "── Verifying Gatekeeper acceptance for $n (real test: execute a quarantined copy, not spctl -t exec) ──"
+  GATEKEEPER_TEST_COPY="$BUILD_DIR/gatekeeper-test-copy-$n"
+  cp "$p" "$GATEKEEPER_TEST_COPY"
+  xattr -w com.apple.quarantine "0181;$(printf '%x' "$(date +%s)");Safari;" "$GATEKEEPER_TEST_COPY"
+  if ! "$GATEKEEPER_TEST_COPY" --version >/dev/null 2>&1; then
+    echo "Gatekeeper rejected the quarantined $n binary at launch — notarization did not take effect." >&2
+    rm -f "$GATEKEEPER_TEST_COPY"
+    exit 1
+  fi
   rm -f "$GATEKEEPER_TEST_COPY"
-  exit 1
-fi
-rm -f "$GATEKEEPER_TEST_COPY"
-echo "  quarantined copy launched cleanly — Gatekeeper accepts this binary."
+  echo "  quarantined copy launched cleanly — Gatekeeper accepts $n."
+done
 
 echo ""
-echo "Signed + notarized: $BIN_PATH"
+echo "Signed + notarized: ${BIN_PATHS[*]}"

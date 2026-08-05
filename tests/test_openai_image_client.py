@@ -43,7 +43,7 @@ def test_generate_image_posts_gpt_image_1_with_correct_fields(tmp_path):
          patch("requests.post", side_effect=fake_post), \
          patch("artifacts.create_user_artifact") as mock_artifact:
         mock_artifact.return_value.path = tmp_path / "out.png"
-        result = oic.generate_image("a minimal poster", size="1024x1024", quality="high")
+        result = oic.generate_image("a minimal poster", size="1024x1024", quality="high", confirmed=True)
 
     assert captured["url"].endswith("/images/generations")
     assert captured["json"]["model"] == "gpt-image-1"
@@ -55,13 +55,25 @@ def test_generate_image_surfaces_api_error():
     resp = MagicMock(status_code=401, text="Incorrect API key provided")
     with patch.object(oic, "_require_key", return_value="sk-bad"), \
          patch("requests.post", return_value=resp):
-        result = oic.generate_image("a poster")
+        result = oic.generate_image("a poster", confirmed=True)
     assert result["success"] is False
     assert "401" in result["error"]
 
 
-def test_edit_image_missing_file():
+def test_generate_image_refuses_without_confirmed():
+    result = oic.generate_image("a poster")
+    assert result["success"] is False
+    assert "confirmed" in result["error"]
+
+
+def test_edit_image_refuses_without_confirmed():
     result = oic.edit_image("/nonexistent/photo.jpg", "make it duotone")
+    assert result["success"] is False
+    assert "confirmed" in result["error"]
+
+
+def test_edit_image_missing_file():
+    result = oic.edit_image("/nonexistent/photo.jpg", "make it duotone", confirmed=True)
     assert result["success"] is False
     assert "not found" in result["error"]
 
@@ -83,9 +95,19 @@ def test_edit_image_posts_multipart_to_edits_endpoint(tmp_path):
          patch("requests.post", side_effect=fake_post), \
          patch("artifacts.create_user_artifact") as mock_artifact:
         mock_artifact.return_value.path = tmp_path / "out.png"
-        result = oic.edit_image(str(src), "convert to duotone")
+        result = oic.edit_image(str(src), "convert to duotone", confirmed=True)
 
     assert captured["url"].endswith("/images/edits")
     assert captured["data"]["model"] == "gpt-image-1"
     assert "image" in captured["files"]
     assert result["success"] is True
+
+
+def test_estimate_cost_known_size_quality():
+    result = oic.estimate_cost(size="1024x1024", quality="high")
+    assert result["estimated_cost_usd"] == 0.167
+
+
+def test_estimate_cost_unknown_combo_reports_none():
+    result = oic.estimate_cost(size="auto", quality="auto")
+    assert result["estimated_cost_usd"] is None

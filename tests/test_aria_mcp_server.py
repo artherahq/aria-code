@@ -10,7 +10,13 @@ from __future__ import annotations
 
 import pytest
 
-from packages.aria_mcp.server import TOOLS, _call_broker_confirm_order, _call_video_generate_submit
+from packages.aria_mcp.server import (
+    TOOLS,
+    _call_broker_confirm_order,
+    _call_edit_image,
+    _call_generate_image,
+    _call_video_generate_submit,
+)
 
 
 def test_no_skill_backed_exposures_reach_tools_list():
@@ -146,3 +152,60 @@ async def test_generate_submit_calls_provider_only_when_confirmed(monkeypatch):
     )
     assert result["success"] is True
     assert called["prompt"] == "a sunset"
+
+
+@pytest.mark.asyncio
+async def test_generate_image_refuses_without_confirmed():
+    result = await _call_generate_image({"prompt": "a poster"})
+    assert result["success"] is False
+    assert "confirmed" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_generate_image_refuses_with_confirmed_false():
+    result = await _call_generate_image({"prompt": "a poster", "confirmed": False})
+    assert result["success"] is False
+    assert "confirmed" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_generate_image_calls_client_only_when_confirmed(monkeypatch):
+    import openai_image_client
+
+    called = {}
+
+    def fake_generate_image(prompt, **kwargs):
+        called["prompt"] = prompt
+        called["kwargs"] = kwargs
+        return {"success": True, "path": "/tmp/out.png"}
+
+    monkeypatch.setattr(openai_image_client, "generate_image", fake_generate_image)
+    result = await _call_generate_image({"prompt": "a poster", "confirmed": True})
+    assert result["success"] is True
+    assert called["prompt"] == "a poster"
+    assert called["kwargs"]["confirmed"] is True
+
+
+@pytest.mark.asyncio
+async def test_edit_image_refuses_without_confirmed():
+    result = await _call_edit_image({"image_path": "/tmp/x.jpg", "prompt": "make it duotone"})
+    assert result["success"] is False
+    assert "confirmed" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_edit_image_calls_client_only_when_confirmed(monkeypatch):
+    import openai_image_client
+
+    called = {}
+
+    def fake_edit_image(image_path, prompt, **kwargs):
+        called["image_path"] = image_path
+        called["kwargs"] = kwargs
+        return {"success": True, "path": "/tmp/out.png"}
+
+    monkeypatch.setattr(openai_image_client, "edit_image", fake_edit_image)
+    result = await _call_edit_image({"image_path": "/tmp/x.jpg", "prompt": "make it duotone", "confirmed": True})
+    assert result["success"] is True
+    assert called["image_path"] == "/tmp/x.jpg"
+    assert called["kwargs"]["confirmed"] is True
