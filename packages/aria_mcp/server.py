@@ -16,12 +16,25 @@ Register with Claude Code::
 Scope: ``skill:``-backed exposures (report/backtest skills) are never
 registered — skills aren't a clean JSON-in/JSON-out callable today. Beyond
 that, everything is read-only EXCEPT the small, explicit ``_WRITE_SAFE``
-allowlist below (order previews, chart/PDF generation) — each entry there is
-individually justified as unable to move money or place a live trade. Order
-*execution* (``brokers.trading.execute_order_preview`` with ``confirmed=True``)
-is never imported anywhere in this module — confirming a previewed trade
-always requires a human running ``/trade confirm <preview_id>`` in the
-aria-code terminal itself, never something reachable from an MCP client.
+allowlist below (order previews, chart/PDF generation, cloud video
+generation behind its own confirm gate) — each entry there is individually
+justified as unable to move money without a further, explicit gate of its
+own.
+
+Order *execution* is the one capability with real financial stakes reachable
+from this server at all, and it has two independent gates, both of which
+must pass — this is intentional defense in depth, not redundancy to trim:
+  1. The broker itself must have chat-confirm explicitly opted in via
+     ``/trade allow-chat-confirm <broker_id>`` — typed at the aria-code
+     terminal keyboard, by a human, with the broker id retyped as
+     confirmation. This can NEVER be turned on from MCP/chat — see
+     ``brokers/config.py``'s ``set_chat_confirm_enabled`` and its callers.
+  2. Even with that broker opted in, each individual ``aria.broker.confirm_order``
+     call still requires an explicit ``confirmed: true`` argument (same
+     pattern as ``aria.video.generate_submit``'s cost gate).
+Without opt-in #1, ``aria.broker.confirm_order`` refuses unconditionally —
+default behavior for every broker is unchanged from before: only
+``/trade confirm`` at the terminal can execute a trade.
 """
 
 from __future__ import annotations
@@ -100,6 +113,15 @@ _INPUT_SCHEMAS: Dict[str, Dict[str, Any]] = {
             "price": {"type": "number", "description": "Limit price (required for limit orders)"},
         },
         "required": ["symbol", "side"],
+    },
+    "aria.broker.confirm_order": {
+        "type": "object",
+        "properties": {
+            "broker_id": {"type": "string", "description": "Configured broker id. Omit to use the default broker."},
+            "preview_id": {"type": "string", "description": "preview_id returned by aria.broker.preview_order"},
+            "confirmed": {"type": "boolean", "description": "Must be true. Also requires the broker to have chat-confirm opted in via /trade allow-chat-confirm <broker_id> at the aria-code terminal — see this tool's description."},
+        },
+        "required": ["preview_id", "confirmed"],
     },
     "aria.report.chart": {
         "type": "object",
@@ -326,14 +348,18 @@ _INPUT_SCHEMAS: Dict[str, Dict[str, Any]] = {
 # record, a Canva design draft, or a paid cloud generation job) but are
 # individually verified safe to reach from MCP without a human in this
 # module blocking it first. Almost all of them can't move money or place a
-# live trade — the one exception, aria.video.generate_submit, genuinely can
-# (real cloud video generation cost, billed the instant it succeeds), and is
-# safe here only because its own handler hard-refuses to call the provider
-# unless the caller passes confirmed=true — that check lives in
-# _call_video_generate_submit below, not just in this set membership. Every
+# live trade — the exceptions are aria.video.generate_submit (real cloud
+# video generation cost, billed the instant it succeeds — safe here only
+# because its handler hard-refuses without confirmed=true, see
+# _call_video_generate_submit) and aria.broker.confirm_order (real trade
+# execution — safe here only because its handler hard-refuses unless the
+# broker was separately, explicitly opted into chat-confirm at the aria-code
+# terminal keyboard via /trade allow-chat-confirm, AND confirmed=true is
+# passed; see _call_broker_confirm_order and the module docstring). Every
 # other non-read_only exposure stays blocked by default — see _build_tools().
 _WRITE_SAFE = {
-    "aria.broker.preview_order", "aria.report.chart", "aria.report.pdf",
+    "aria.broker.preview_order", "aria.broker.confirm_order",
+    "aria.report.chart", "aria.report.pdf",
     "aria.report.canva_design", "aria.report.canva_upload_asset",
     "aria.report.docx", "aria.report.pptx",
     "aria.report.generate", "aria.backtest.run",
@@ -424,8 +450,9 @@ async def _call_broker_list_previews(args: Dict[str, Any]) -> Dict[str, Any]:
 
 
 async def _call_broker_preview_order(args: Dict[str, Any]) -> Dict[str, Any]:
-    # This module never imports execute_order_preview — building a preview
-    # here can never result in a live order. See module docstring.
+    # Building a preview here can never by itself result in a live order —
+    # execute_order_preview is only imported by _call_broker_confirm_order,
+    # which has its own two-gate check. See module docstring.
     import asyncio
 
     from brokers.trading import OrderIntent, build_order_preview
@@ -454,6 +481,53 @@ async def _call_broker_preview_order(args: Dict[str, Any]) -> Dict[str, Any]:
     except Exception as exc:
         return {"success": False, "error": str(exc)}
     return {"success": True, **preview}
+
+
+async def _call_broker_confirm_order(args: Dict[str, Any]) -> Dict[str, Any]:
+    # The one place in this module that imports execute_order_preview. Two
+    # gates, both required, checked here (not just trusted from the caller):
+    #   1. is_chat_confirm_enabled(broker_id) — set only by a human running
+    #      /trade allow-chat-confirm <broker_id> at the aria-code terminal
+    #      keyboard and retyping the exact broker id. Off by default for
+    #      every broker. This gate cannot be flipped on from MCP/chat.
+    #   2. confirmed is True on this specific call.
+    # Both must pass before execute_order_preview(confirmed=True) is ever
+    # reached. See the module docstring for the full rationale.
+    import asyncio
+
+    from brokers.config import is_chat_confirm_enabled
+    from brokers.trading import execute_order_preview
+
+    preview_id = str(args.get("preview_id", "")).strip()
+    if not preview_id:
+        return {"success": False, "error": "preview_id is required"}
+    if args.get("confirmed") is not True:
+        return {
+            "success": False,
+            "error": "confirmed must be true to execute a real order — this places a live trade.",
+        }
+
+    broker_id = str(args.get("broker_id", "")).strip()
+    loop = asyncio.get_event_loop()
+
+    def _run():
+        broker = _get_broker(broker_id)
+        resolved_broker_id = broker_id or getattr(broker, "broker_id", "")
+        if not is_chat_confirm_enabled(resolved_broker_id):
+            return {
+                "success": False,
+                "error": (
+                    f"Chat-confirmed execution is not enabled for broker '{resolved_broker_id}'. "
+                    f"Run /trade allow-chat-confirm {resolved_broker_id} in the aria-code terminal "
+                    "yourself first — this cannot be turned on from chat/MCP."
+                ),
+            }
+        return execute_order_preview(broker, preview_id, confirmed=True, source="chat_mcp")
+
+    try:
+        return await loop.run_in_executor(None, _run)
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
 
 
 async def _call_report_chart(args: Dict[str, Any]) -> Dict[str, Any]:
@@ -987,6 +1061,7 @@ _HANDLERS: Dict[str, Callable[[Dict[str, Any]], Awaitable[Dict[str, Any]]]] = {
     "aria.broker.positions": _call_broker_positions,
     "aria.broker.list_previews": _call_broker_list_previews,
     "aria.broker.preview_order": _call_broker_preview_order,
+    "aria.broker.confirm_order": _call_broker_confirm_order,
     "aria.report.chart": _call_report_chart,
     "aria.report.pdf": _call_report_pdf,
     "aria.report.generate_image": _call_generate_image,

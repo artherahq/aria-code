@@ -40,8 +40,19 @@ def default_exposures() -> List[MCPExposure]:
         MCPExposure(
             "aria.broker.preview_order",
             "tool:broker_preview_order",
-            "Build a risk-checked order preview. Never executes a trade — "
-            "execution always requires a human to run /trade confirm in the aria-code terminal.",
+            "Build a risk-checked order preview. Never executes a trade by itself — "
+            "actual execution needs either a human running /trade confirm in the aria-code "
+            "terminal, or aria.broker.confirm_order if the user explicitly opted that broker "
+            "into chat-confirmed execution (off by default; see aria.broker.confirm_order).",
+            read_only=False,
+        ),
+        MCPExposure(
+            "aria.broker.confirm_order",
+            "tool:broker_confirm_order",
+            "Execute a previously built order preview — REAL MONEY. Refuses unless the user "
+            "already ran /trade allow-chat-confirm <broker_id> in the aria-code terminal "
+            "themselves (a real trade cannot be confirmed for the first time from chat; that "
+            "opt-in can only happen at the terminal keyboard) AND this call passes confirmed=true.",
             read_only=False,
         ),
         MCPExposure(

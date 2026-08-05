@@ -208,7 +208,19 @@ def mark_preview_status(preview_id: str, status: str, extra: Optional[Dict[str, 
     _save_previews(store)
 
 
-def execute_order_preview(broker: Any, preview_id: str, *, confirmed: bool = False) -> Dict[str, Any]:
+def execute_order_preview(
+    broker: Any,
+    preview_id: str,
+    *,
+    confirmed: bool = False,
+    source: str = "terminal",
+) -> Dict[str, Any]:
+    """`source` is audit-trail metadata only, never a trust signal — it does
+    not change what this function will or won't execute. It exists so the
+    audit log can distinguish a human typing /trade confirm at the terminal
+    keyboard ("terminal", the default) from the separate, explicitly-gated
+    chat-confirm MCP path ("chat_mcp") — see packages/aria_mcp/server.py's
+    _call_broker_confirm_order for that gate."""
     preview = load_order_preview(preview_id)
     if not preview:
         return {"success": False, "error": f"preview not found: {preview_id}"}
@@ -251,5 +263,5 @@ def execute_order_preview(broker: Any, preview_id: str, *, confirmed: bool = Fal
     mark_preview_status(preview_id, "executed" if payload["success"] else "failed", {
         "result": payload,
     })
-    _audit({"event": "trade_execute", "preview_id": preview_id, "result": payload})
+    _audit({"event": "trade_execute", "preview_id": preview_id, "result": payload, "source": source})
     return payload

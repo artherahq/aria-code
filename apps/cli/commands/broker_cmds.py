@@ -948,7 +948,8 @@ class BrokerCommandsMixin:
                 print("Usage: /paper start [cash] [currency] | account | positions | orders | reset")
 
     async def cmd_trade(self, args: str):
-        """两阶段交易: /trade mode | preview SYMBOL buy|sell QTY PRICE | confirm PREVIEW_ID | previews."""
+        """两阶段交易: /trade mode | preview SYMBOL buy|sell QTY PRICE | confirm PREVIEW_ID | previews
+        | allow-chat-confirm [broker_id] | disallow-chat-confirm [broker_id]."""
         from aria_cli import HAS_RICH, console, _print_error, _get_broker_registry
         from brokers import (
             OrderIntent, build_order_preview, execute_order_preview,
@@ -984,6 +985,47 @@ class BrokerCommandsMixin:
                 console.print(Panel(msg, title="[bold]Trade Mode[/bold]", border_style=color, box=rich_box.ROUNDED))
             else:
                 print(msg)
+            return
+
+        if sub in ("allow-chat-confirm", "disallow-chat-confirm"):
+            from brokers.config import get_broker_config, set_chat_confirm_enabled
+
+            target_id = parts[1] if len(parts) > 1 else (broker.broker_id if broker else "")
+            if not target_id:
+                _print_error("请指定券商 id", "/trade allow-chat-confirm <broker_id>")
+                return
+            cfg = get_broker_config(target_id)
+            if not cfg:
+                _print_error(f"未找到券商配置: {target_id}", "先用 /broker connect 配置好")
+                return
+
+            if sub == "disallow-chat-confirm":
+                set_chat_confirm_enabled(target_id, False)
+                msg = f"✓ 已关闭 {target_id} 的聊天内确认下单"
+                console.print(f"[green]{msg}[/green]") if HAS_RICH else print(msg)
+                return
+
+            # 这是唯一能打开这道门的地方——必须是真人坐在终端前，MCP/聊天
+            # 没有任何路径能碰到这个函数。要求打完整的 broker_id，不是
+            # 简单敲个 y，降低误触概率。
+            warn = (
+                f"这会允许通过 MCP/聊天(比如 Claude Code 连着这个项目的时候)"
+                f"对 {target_id}({cfg.get('label', target_id)}) 发出的下单确认"
+                f"真正执行下单，不再要求你本人在这个终端里手动敲 /trade confirm。\n\n"
+                f"确认开启的话，完整输入券商 id「{target_id}」（不是 y/yes）："
+            )
+            console.print(f"[bold red]⚠ 高风险操作[/bold red]\n{warn}") if HAS_RICH else print(warn)
+            try:
+                answer = console.input("> ") if HAS_RICH else input("> ")
+            except (EOFError, KeyboardInterrupt):
+                answer = ""
+            if answer.strip() != target_id:
+                msg = "未确认，聊天内确认下单保持关闭"
+                console.print(f"[yellow]{msg}[/yellow]") if HAS_RICH else print(msg)
+                return
+            set_chat_confirm_enabled(target_id, True)
+            msg = f"✓ 已为 {target_id} 开启聊天内确认下单——之后 aria.broker.confirm_order 这个 MCP 工具能真正执行这个账户的订单了"
+            console.print(f"[green]{msg}[/green]") if HAS_RICH else print(msg)
             return
 
         if sub in ("previews", "list"):

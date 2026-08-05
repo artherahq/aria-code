@@ -176,6 +176,38 @@ def set_default_broker(broker_id: str) -> bool:
     return found
 
 
+# ── 聊天内确认下单开关 ──────────────────────────────────────────────────────────
+# 默认关闭，且只能在终端里手动开启（见 apps/cli/commands/broker_cmds.py 的
+# `/trade allow-chat-confirm <broker_id>`——那条命令本身要求真人在终端里
+# 原样重新输入这个券商的 id（不是 y/yes）才会调用 set_chat_confirm_enabled）。
+# 这个开关本身永远不能通过 MCP/聊天打开，只能被查询和使用——打开这道门的
+# 动作必须发生在终端键盘前，跟 /trade confirm 那道"真正下单"的门是同一个
+# 安全等级。见 packages/aria_mcp/server.py 的 _call_broker_confirm_order。
+
+def is_chat_confirm_enabled(broker_id: str) -> bool:
+    """某个券商是否已经被用户在终端里显式开启了'聊天内确认下单'。"""
+    cfg = get_broker_config(broker_id)
+    return bool(cfg and cfg.get("chat_confirm_enabled") is True)
+
+
+def set_chat_confirm_enabled(broker_id: str, enabled: bool) -> bool:
+    """开启/关闭某个券商的'聊天内确认下单'。返回 True 表示找到并设置成功。
+
+    调用方（`/broker allow-chat-confirm`）负责在调用这个函数之前，先让
+    真人在终端里做一次明确、不容易误触的确认——这个函数本身不做任何
+    额外确认，只是纯粹的配置读写。"""
+    data = load_config()
+    found = False
+    for b in data.get("brokers", []):
+        if b.get("id") == broker_id:
+            b["chat_confirm_enabled"] = bool(enabled)
+            found = True
+            break
+    if found:
+        save_config(data)
+    return found
+
+
 # ── 配置校验 ──────────────────────────────────────────────────────────────────
 
 # 每种 type 必需的字段
