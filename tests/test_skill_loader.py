@@ -206,3 +206,73 @@ def test_build_skill_prompt_block_uses_configured_catalog(tmp_path, monkeypatch)
 
     assert "Active Skill: quant-research-skills:equity-research-report" in block
     assert "Integrity: verified" in block
+
+
+# ── CJK stop-word filtering ─────────────────────────────────────────────────
+# Chinese has no spaces, so _terms() emits every 2-4 char window. Polite
+# framing ("帮我" = "help me") therefore inflated into 帮我, 帮我设, 帮我设计,
+# 我设, 我设计 — five "matches" carrying no topical signal. Before this
+# filtering, "帮我设计一个牙科诊所的网站" ranked strategy-generation (a
+# trading-strategy skill) above ui-asset-sourcing.
+
+def test_cjk_stop_words_are_dropped_from_terms():
+    from packages.aria_skills.loader import _terms
+
+    terms = _terms("帮我设计一个牙科诊所的预约网站")
+    assert "帮我" not in terms
+    assert "一个" not in terms
+
+
+def test_cjk_stop_word_plus_one_char_windows_are_dropped():
+    from packages.aria_skills.loader import _terms
+
+    terms = _terms("帮我设计一个网站")
+    # 帮我 + one char carries no more signal than 帮我 alone
+    assert "帮我设" not in terms
+    assert "我设" not in terms
+
+
+def test_cjk_content_words_survive_filtering():
+    from packages.aria_skills.loader import _terms
+
+    terms = _terms("帮我设计一个牙科诊所的预约网站，要配图和图标")
+    for keep in ("牙科", "网站", "配图", "图标"):
+        assert keep in terms, f"content word {keep} was wrongly filtered"
+
+
+def test_latin_terms_unaffected_by_cjk_filtering():
+    from packages.aria_skills.loader import _terms
+
+    terms = _terms("design a landing page for a dental clinic")
+    assert "dental" in terms and "clinic" in terms
+    assert "the" not in terms  # existing latin stop-word behaviour intact
+
+
+def test_chinese_design_request_does_not_rank_quant_skill_above_design_skills():
+    """Regression: the whole point of the CJK stop list."""
+    from packages.aria_skills.loader import _match_score, discover_external_skills
+
+    skills = {s.name: s for s in discover_external_skills()}
+    if not {"ui-asset-sourcing", "strategy-generation"} <= set(skills):
+        import pytest
+        pytest.skip("skill catalog not installed in this environment")
+
+    msg = "帮我设计一个牙科诊所的预约网站，要配图和图标"
+    asset = _match_score(msg, skills["ui-asset-sourcing"])[0]
+    quant = _match_score(msg, skills["strategy-generation"])[0]
+    assert asset > quant, f"asset skill {asset} should outrank trading skill {quant}"
+
+
+def test_chinese_quant_request_still_routes_to_quant_skills():
+    """The stop list must not over-filter and break the catalog's core domain."""
+    from packages.aria_skills.loader import _match_score, discover_external_skills
+
+    skills = {s.name: s for s in discover_external_skills()}
+    if not {"strategy-generation", "ui-asset-sourcing"} <= set(skills):
+        import pytest
+        pytest.skip("skill catalog not installed in this environment")
+
+    msg = "帮我回测这个动量策略"
+    quant = _match_score(msg, skills["strategy-generation"])[0]
+    asset = _match_score(msg, skills["ui-asset-sourcing"])[0]
+    assert quant > asset

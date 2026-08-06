@@ -42,6 +42,19 @@ _LATIN_STOP_WORDS = {
     "into", "only", "report", "request", "skill", "that", "the", "this", "use",
     "user", "when", "with",
 }
+# CJK equivalents of the above. Without these, a Chinese request scores almost
+# entirely on function words: "帮我设计一个牙科诊所的网站" once ranked
+# `strategy-generation` (a trading-strategy skill) above `ui-asset-sourcing` on
+# the strength of 一个/帮我/设计 alone, because Chinese has no spaces and the
+# n-gram tokenizer below emits every 2-4 char window — so polite framing like
+# 帮我 also produces 帮我设, 帮我设计, 我设, 我设计, multiplying a single
+# meaningless phrase into several "matches".
+_CJK_STOP_WORDS = {
+    "一个", "一下", "一些", "个", "什么", "可以", "如何", "帮我", "帮我做", "帮我设",
+    "帮忙", "我们", "我的", "我想", "我要", "我设", "我需要", "怎么", "怎样",
+    "应该", "开始", "我", "然后", "现在", "生成", "用我", "的", "目前", "看看",
+    "给我", "请求", "需要", "麻烦", "这个", "那个", "项目", "使用", "进行",
+}
 _IGNORED_TREE_NAMES = {".DS_Store", ".pytest_cache", "__pycache__"}
 
 
@@ -332,6 +345,18 @@ def _terms(text: str) -> set[str]:
             cjk.add(chunk)
         for size in (2, 3, 4):
             cjk.update(chunk[index : index + size] for index in range(len(chunk) - size + 1))
+    cjk -= _CJK_STOP_WORDS
+    # An n-gram that merely *contains* a stop word is usually noise too:
+    # "\u5e2e\u6211\u8bbe\u8ba1" is \u5e2e\u6211 + \u8bbe\u8ba1 with no extra signal, yet it scores as its own
+    # distinct match. Drop windows that are a stop word plus at most one
+    # character, which is where that inflation comes from.
+    cjk = {
+        gram for gram in cjk
+        if not any(
+            stop in gram and len(gram) - len(stop) <= 1
+            for stop in _CJK_STOP_WORDS
+        )
+    }
     return latin | cjk
 
 
