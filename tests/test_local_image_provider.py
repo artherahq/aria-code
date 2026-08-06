@@ -107,6 +107,34 @@ def test_edit_image_local_resizes_before_calling_pipeline(tmp_path):
     assert max(passed_image.size) <= lip._MAX_IMG2IMG_DIMENSION
 
 
+def test_edit_image_local_corrects_exif_rotation_before_pipeline(tmp_path):
+    from PIL import Image
+
+    # orientation=6 ("rotate 90 CW to display correctly") on a 400x200
+    # source — without exif_transpose, the pipeline would receive a
+    # genuinely sideways 400x200 image instead of the correct 200x400.
+    img = Image.new("RGB", (400, 200), color="blue")
+    exif = img.getexif()
+    exif[274] = 6
+    src = tmp_path / "sideways.jpg"
+    img.save(src, exif=exif)
+
+    fake_pipe = MagicMock()
+    fake_result = MagicMock()
+    fake_result.images = [MagicMock()]
+    fake_pipe.return_value = fake_result
+
+    with patch.object(lip, "_get_img2img_pipeline", return_value=fake_pipe), \
+         patch("artifacts.create_user_artifact") as mock_artifact:
+        mock_artifact.return_value.path = tmp_path / "out.png"
+        lip.edit_image_local(str(src), "restyle it")
+
+    _, kwargs = fake_pipe.call_args
+    passed_image = kwargs["image"]
+    # corrected orientation: taller than wide (200x400 pre-resize)
+    assert passed_image.size[1] > passed_image.size[0]
+
+
 def test_select_device_prefers_mps_then_cuda_then_cpu():
     import sys
 

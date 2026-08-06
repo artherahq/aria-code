@@ -99,6 +99,36 @@ def _save_b64_image(b64_data: str, dest: Path) -> Path:
     return dest
 
 
+def _normalize_image_for_upload(path: Path, *, keep_alpha: bool = False) -> tuple[str, bytes]:
+    """Re-encode an arbitrary local image file into a clean single-frame PNG
+    before uploading to OpenAI's edits endpoint.
+
+    Two real problems this fixes, not just defensive coding — both
+    reproduced directly against real iPhone photos:
+      1. iPhones commonly save JPEGs as MPO (Multi-Picture Object — an
+         embedded-stereo-frame container, not a plain single-frame JPEG)
+         even with a plain .jpg extension. OpenAI's edit endpoint rejects
+         these with a 400 "Invalid image file or mode" even though the
+         extension and declared docs (png/webp/jpg) suggest it should work.
+      2. A portrait photo is commonly stored as landscape pixels plus an
+         EXIF orientation tag telling viewers to rotate on display — the
+         raw bytes, uploaded as-is, are genuinely sideways. Reproduced: a
+         raw PIL open() of a real orientation=6 photo, no exif_transpose,
+         is visibly sideways.
+    Re-saving through PIL with exif_transpose applied produces a single-
+    frame PNG immune to both, regardless of the source container/orientation.
+    """
+    import io
+
+    from PIL import Image, ImageOps
+
+    img = ImageOps.exif_transpose(Image.open(path))
+    img = img.convert("RGBA" if keep_alpha else "RGB")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return f"{path.stem}.png", buf.getvalue()
+
+
 def generate_image(
     prompt: str,
     *,
@@ -180,12 +210,18 @@ def edit_image(
         return {"success": False, "error": f"File not found: {image_path}"}
 
     key = _require_key()
-    files = {"image": (src.name, src.read_bytes())}
+    try:
+        files = {"image": _normalize_image_for_upload(src)}
+    except Exception as exc:
+        return {"success": False, "error": f"Could not read image_path: {exc}"}
     if mask_path:
         mask = Path(mask_path)
         if not mask.exists():
             return {"success": False, "error": f"Mask file not found: {mask_path}"}
-        files["mask"] = (mask.name, mask.read_bytes())
+        try:
+            files["mask"] = _normalize_image_for_upload(mask, keep_alpha=True)
+        except Exception as exc:
+            return {"success": False, "error": f"Could not read mask_path: {exc}"}
 
     resp = requests.post(
         f"{API_BASE}/images/edits",

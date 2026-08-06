@@ -79,8 +79,10 @@ def test_edit_image_missing_file():
 
 
 def test_edit_image_posts_multipart_to_edits_endpoint(tmp_path):
+    from PIL import Image
+
     src = tmp_path / "photo.jpg"
-    src.write_bytes(b"fake-jpeg")
+    Image.new("RGB", (16, 16), color="red").save(src)
     resp = MagicMock(status_code=200)
     resp.json.return_value = {"created": 1, "data": [{"b64_json": _fake_b64_png()}]}
     captured = {}
@@ -104,10 +106,12 @@ def test_edit_image_posts_multipart_to_edits_endpoint(tmp_path):
 
 
 def test_edit_image_with_mask_uploads_both_files(tmp_path):
+    from PIL import Image
+
     src = tmp_path / "photo.jpg"
-    src.write_bytes(b"fake-jpeg")
+    Image.new("RGB", (16, 16), color="red").save(src)
     mask = tmp_path / "mask.png"
-    mask.write_bytes(b"fake-mask-png")
+    Image.new("RGBA", (16, 16), color=(0, 0, 0, 0)).save(mask)
     resp = MagicMock(status_code=200)
     resp.json.return_value = {"created": 1, "data": [{"b64_json": _fake_b64_png()}]}
     captured = {}
@@ -131,6 +135,53 @@ def test_edit_image_mask_not_found():
     result = oic.edit_image("/nonexistent/photo.jpg", "make it duotone", mask_path="/nonexistent/mask.png", confirmed=True)
     assert result["success"] is False
     assert "not found" in result["error"]
+
+
+def test_normalize_image_for_upload_corrects_exif_rotation(tmp_path):
+    from PIL import Image
+
+    # A 40x20 image with EXIF orientation=6 ("rotate 90 CW to display
+    # correctly") — real-world equivalent of a portrait iPhone photo whose
+    # raw pixels are stored landscape. Without exif_transpose, the upload
+    # would be genuinely sideways (reproduced against real photos before
+    # this fix existed).
+    img = Image.new("RGB", (40, 20), color="blue")
+    exif = img.getexif()
+    exif[274] = 6
+    src = tmp_path / "sideways.jpg"
+    img.save(src, exif=exif)
+
+    filename, data = oic._normalize_image_for_upload(src)
+    assert filename.endswith(".png")
+    from io import BytesIO
+    corrected = Image.open(BytesIO(data))
+    # orientation=6 rotates a 40x20 source to 20x40 once corrected
+    assert corrected.size == (20, 40)
+
+
+def test_normalize_image_for_upload_produces_valid_single_frame_png(tmp_path):
+    from PIL import Image
+
+    src = tmp_path / "photo.jpg"
+    Image.new("RGB", (16, 16), color="green").save(src)
+
+    filename, data = oic._normalize_image_for_upload(src)
+    from io import BytesIO
+    reopened = Image.open(BytesIO(data))
+    assert reopened.format == "PNG"
+    assert reopened.mode == "RGB"
+
+
+def test_normalize_image_for_upload_keeps_alpha_for_mask(tmp_path):
+    from PIL import Image
+
+    mask = tmp_path / "mask.png"
+    Image.new("RGBA", (16, 16), color=(0, 0, 0, 0)).save(mask)
+
+    _, data = oic._normalize_image_for_upload(mask, keep_alpha=True)
+    from io import BytesIO
+    reopened = Image.open(BytesIO(data))
+    assert reopened.mode == "RGBA"
 
 
 def test_estimate_cost_known_size_quality():

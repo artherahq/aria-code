@@ -174,9 +174,16 @@ def edit_image_local(
         return {"success": False, "error": f"File not found: {image_path}"}
 
     try:
-        from PIL import Image
+        from PIL import Image, ImageOps
 
-        init_image = Image.open(src).convert("RGB")
+        # exif_transpose is required, not optional: a phone photo shot in
+        # portrait commonly stores its pixels landscape plus an EXIF
+        # orientation tag telling viewers to rotate it on display — PIL
+        # does NOT apply that automatically on open(). Skipping this fed
+        # the diffusion pipeline a sideways image; confirmed by reproducing
+        # it directly (raw PIL open of a real orientation=6 photo came out
+        # sideways, matching the sideways/garbled output this masked).
+        init_image = ImageOps.exif_transpose(Image.open(src)).convert("RGB")
         init_image = _resize_for_img2img(init_image)
         pipe = _get_img2img_pipeline(model)
         result = pipe(
