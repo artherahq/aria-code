@@ -26,8 +26,31 @@ from typing import Any, Dict, Optional
 
 DEFAULT_MODEL = os.getenv("ARIA_LOCAL_IMAGE_MODEL", "stabilityai/sdxl-turbo")
 
+# SDXL-Turbo is trained around ~1024px; a raw phone photo (commonly 12MP,
+# e.g. 4032x3024) fed straight into img2img allocates latents sized to the
+# INPUT resolution, not the model's native one — confirmed empirically on a
+# 16GB-class Mac: five real 12MP photos through edit_image_local() all threw
+# "MPS backend out of memory" before this cap existed. Downscaling to this
+# budget keeps the long edge near SDXL-Turbo's trained regime regardless of
+# source resolution.
+_MAX_IMG2IMG_DIMENSION = 1024
+
 _pipeline_cache: Dict[str, Any] = {}
 _img2img_cache: Dict[str, Any] = {}
+
+
+def _resize_for_img2img(image, max_dim: int = _MAX_IMG2IMG_DIMENSION):
+    """Downscale `image` so its longer edge is at most `max_dim`, rounding
+    both dimensions down to a multiple of 8 (required by SDXL's VAE).
+    A no-op (aside from the multiple-of-8 rounding) when already small."""
+    width, height = image.size
+    scale = min(1.0, max_dim / max(width, height))
+    new_width = max(8, int(width * scale) // 8 * 8)
+    new_height = max(8, int(height * scale) // 8 * 8)
+    if (new_width, new_height) == (width, height):
+        return image
+    from PIL import Image as _PILImage
+    return image.resize((new_width, new_height), _PILImage.LANCZOS)
 
 
 def _select_device() -> str:
@@ -154,6 +177,7 @@ def edit_image_local(
         from PIL import Image
 
         init_image = Image.open(src).convert("RGB")
+        init_image = _resize_for_img2img(init_image)
         pipe = _get_img2img_pipeline(model)
         result = pipe(
             prompt=prompt,

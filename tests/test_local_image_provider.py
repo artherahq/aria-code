@@ -55,6 +55,58 @@ def test_edit_image_local_missing_file():
     assert "not found" in result["error"]
 
 
+def test_resize_for_img2img_downscales_12mp_photo_to_budget():
+    from PIL import Image
+
+    # Real-world case that triggered an MPS OOM before this existed: a
+    # 4032x3024 phone photo fed straight into SDXL img2img.
+    img = Image.new("RGB", (4032, 3024))
+    resized = lip._resize_for_img2img(img)
+    assert max(resized.size) <= lip._MAX_IMG2IMG_DIMENSION
+    # aspect ratio preserved (within multiple-of-8 rounding)
+    assert abs(resized.size[0] / resized.size[1] - 4032 / 3024) < 0.01
+
+
+def test_resize_for_img2img_rounds_to_multiple_of_8():
+    from PIL import Image
+
+    img = Image.new("RGB", (4032, 3024))
+    resized = lip._resize_for_img2img(img)
+    assert resized.size[0] % 8 == 0
+    assert resized.size[1] % 8 == 0
+
+
+def test_resize_for_img2img_leaves_small_image_unchanged():
+    from PIL import Image
+
+    img = Image.new("RGB", (512, 384))
+    resized = lip._resize_for_img2img(img, max_dim=1024)
+    assert resized.size == (512, 384)
+
+
+def test_edit_image_local_resizes_before_calling_pipeline(tmp_path):
+    from PIL import Image
+
+    src = tmp_path / "big_photo.jpg"
+    Image.new("RGB", (4032, 3024)).save(src)
+
+    fake_pipe = MagicMock()
+    fake_result = MagicMock()
+    fake_output_image = MagicMock()
+    fake_result.images = [fake_output_image]
+    fake_pipe.return_value = fake_result
+
+    with patch.object(lip, "_get_img2img_pipeline", return_value=fake_pipe), \
+         patch("artifacts.create_user_artifact") as mock_artifact:
+        mock_artifact.return_value.path = tmp_path / "out.png"
+        result = lip.edit_image_local(str(src), "restyle it")
+
+    assert result["success"] is True
+    _, kwargs = fake_pipe.call_args
+    passed_image = kwargs["image"]
+    assert max(passed_image.size) <= lip._MAX_IMG2IMG_DIMENSION
+
+
 def test_select_device_prefers_mps_then_cuda_then_cpu():
     import sys
 
