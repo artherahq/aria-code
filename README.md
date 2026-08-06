@@ -870,6 +870,30 @@ command = "python3"
 args = ["/path/to/aria-code/aria_mcp_server.py"]
 ```
 
+#### Want deeper A-share quant tools too? Register a second server, don't wait for us to add them here
+
+This server intentionally does **not** re-expose Arthera's `quant_engine` quant
+tools (factor calculation, Bayesian-HMM regime detection, northbound-flow,
+Kelly position sizing, options pricing, pairs-trading stats, and a much
+deeper `run_backtest` than the one above — T+1 settlement, limit-up/down
+filtering, `sma_cross`/`rsi_mean_revert`/`momentum` strategies, CN_A or US
+market). That's a separate project (Arthera) with its own MCP server —
+`packages/quant_engine/mcp_server.py` — speaking the identical MCP
+2024-11-05 stdio JSON-RPC protocol, so any client here can register it
+as a second, independent server rather than this one proxying it:
+
+```bash
+claude mcp add arthera-quant -- python3 /path/to/Arthera/packages/quant_engine/mcp_server.py
+```
+
+We keep these two separate on purpose, not as a gap to close later: a few of
+`quant_engine`'s tools (`get_ai_signal`, `get_predictions`,
+`get_market_insights`) call Arthera's own internal Alibaba Cloud service and
+simply won't work without that access, so folding them into this server
+would mean shipping tools that error out for anyone without Arthera's
+private infrastructure. If you don't have access to that repo, everything
+above this section still works standalone.
+
 ---
 
 ## ⚙️ Configuration
