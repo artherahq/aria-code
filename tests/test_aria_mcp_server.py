@@ -18,6 +18,8 @@ from packages.aria_mcp.server import (
     _call_edit_image,
     _call_generate_image,
     _call_indicator_chart,
+    _call_skill_get,
+    _call_skill_list,
     _call_video_generate_submit,
 )
 
@@ -354,3 +356,205 @@ async def test_allocation_chart_no_positions_reports_error(monkeypatch):
     monkeypatch.setattr(server_mod, "_get_broker", lambda broker_id="": _FakeBroker())
     result = await _call_allocation_chart({})
     assert result["success"] is False
+
+
+# ── Skill exposure (aria.skill.list / aria.skill.get) ───────────────────────
+
+def _fake_skill(name, qualified, description="", instructions="body", integrity="verified"):
+    return type("S", (), {
+        "name": name,
+        "qualified_name": qualified,
+        "description": description,
+        "plugin_name": qualified.split(":")[0],
+        "integrity": integrity,
+        "instructions": instructions,
+    })()
+
+
+@pytest.mark.asyncio
+async def test_skill_list_returns_all_when_no_query(monkeypatch):
+    from packages.aria_skills import loader
+
+    skills = [_fake_skill("a", "cat:a"), _fake_skill("b", "cat:b")]
+    monkeypatch.setattr(loader, "discover_external_skills", lambda *a, **kw: skills)
+
+    result = await _call_skill_list({})
+    assert result["success"] is True
+    assert result["matched_by_relevance"] is False
+    assert {s["qualified_name"] for s in result["skills"]} == {"cat:a", "cat:b"}
+
+
+@pytest.mark.asyncio
+async def test_skill_list_ranks_by_query_when_matches_exist(monkeypatch):
+    from packages.aria_skills import loader
+
+    skills = [_fake_skill("a", "cat:a"), _fake_skill("b", "cat:b")]
+    monkeypatch.setattr(loader, "discover_external_skills", lambda *a, **kw: skills)
+    monkeypatch.setattr(loader, "select_external_skills", lambda q, s=None: [skills[1]])
+
+    result = await _call_skill_list({"query": "something"})
+    assert result["matched_by_relevance"] is True
+    assert [s["qualified_name"] for s in result["skills"]] == ["cat:b"]
+
+
+@pytest.mark.asyncio
+async def test_skill_list_falls_back_to_full_list_when_query_matches_nothing(monkeypatch):
+    """An off-topic query must not read as "no skills are installed"."""
+    from packages.aria_skills import loader
+
+    skills = [_fake_skill("a", "cat:a"), _fake_skill("b", "cat:b")]
+    monkeypatch.setattr(loader, "discover_external_skills", lambda *a, **kw: skills)
+    monkeypatch.setattr(loader, "select_external_skills", lambda q, s=None: [])
+
+    result = await _call_skill_list({"query": "totally unrelated"})
+    assert result["matched_by_relevance"] is False
+    assert len(result["skills"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_skill_list_omits_instructions_to_keep_listing_small(monkeypatch):
+    from packages.aria_skills import loader
+
+    monkeypatch.setattr(loader, "discover_external_skills",
+                        lambda *a, **kw: [_fake_skill("a", "cat:a", instructions="x" * 5000)])
+    result = await _call_skill_list({})
+    assert "instructions" not in result["skills"][0]
+
+
+@pytest.mark.asyncio
+async def test_skill_list_surfaces_integrity(monkeypatch):
+    from packages.aria_skills import loader
+
+    monkeypatch.setattr(loader, "discover_external_skills",
+                        lambda *a, **kw: [_fake_skill("a", "cat:a", integrity="unlocked")])
+    result = await _call_skill_list({})
+    assert result["skills"][0]["integrity"] == "unlocked"
+
+
+@pytest.mark.asyncio
+async def test_skill_get_returns_full_instructions_by_bare_name(monkeypatch):
+    from packages.aria_skills import loader
+
+    monkeypatch.setattr(loader, "discover_external_skills",
+                        lambda *a, **kw: [_fake_skill("ui-design-system", "cat:ui-design-system",
+                                                      instructions="THE WORKFLOW")])
+    result = await _call_skill_get({"name": "ui-design-system"})
+    assert result["success"] is True
+    assert result["instructions"] == "THE WORKFLOW"
+
+
+@pytest.mark.asyncio
+async def test_skill_get_accepts_qualified_name(monkeypatch):
+    from packages.aria_skills import loader
+
+    monkeypatch.setattr(loader, "discover_external_skills",
+                        lambda *a, **kw: [_fake_skill("ui-design-system", "cat:ui-design-system")])
+    result = await _call_skill_get({"name": "cat:ui-design-system"})
+    assert result["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_skill_get_requires_name():
+    result = await _call_skill_get({})
+    assert result["success"] is False
+    assert "name" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_skill_get_unknown_name_lists_available(monkeypatch):
+    from packages.aria_skills import loader
+
+    monkeypatch.setattr(loader, "discover_external_skills",
+                        lambda *a, **kw: [_fake_skill("a", "cat:a")])
+    result = await _call_skill_get({"name": "nope"})
+    assert result["success"] is False
+    assert result["available"] == ["cat:a"]
+
+
+@pytest.mark.asyncio
+async def test_skill_get_lists_bundled_reference_docs(tmp_path, monkeypatch):
+    """Several skills' instructions say "read references/X.md first" — over
+    MCP the caller can't touch this filesystem, so the names must be listed."""
+    from packages.aria_skills import loader
+
+    skill_dir = tmp_path / "my-skill"
+    (skill_dir / "references").mkdir(parents=True)
+    (skill_dir / "references" / "deep.md").write_text("DEEP", encoding="utf-8")
+    (skill_dir / "references" / "other.md").write_text("OTHER", encoding="utf-8")
+
+    skill = _fake_skill("my-skill", "cat:my-skill")
+    skill.path = skill_dir / "SKILL.md"
+    monkeypatch.setattr(loader, "discover_external_skills", lambda *a, **kw: [skill])
+
+    result = await _call_skill_get({"name": "my-skill"})
+    assert result["references"] == ["deep.md", "other.md"]
+
+
+@pytest.mark.asyncio
+async def test_skill_get_fetches_reference_content(tmp_path, monkeypatch):
+    from packages.aria_skills import loader
+
+    skill_dir = tmp_path / "my-skill"
+    (skill_dir / "references").mkdir(parents=True)
+    (skill_dir / "references" / "deep.md").write_text("DEEP CONTENT", encoding="utf-8")
+
+    skill = _fake_skill("my-skill", "cat:my-skill")
+    skill.path = skill_dir / "SKILL.md"
+    monkeypatch.setattr(loader, "discover_external_skills", lambda *a, **kw: [skill])
+
+    result = await _call_skill_get({"name": "my-skill", "reference": "deep.md"})
+    assert result["success"] is True
+    assert result["content"] == "DEEP CONTENT"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad", ["../../../etc/passwd", "../SKILL.md", "/etc/passwd", "../../secret.md"])
+async def test_skill_get_reference_blocks_path_traversal(tmp_path, monkeypatch, bad):
+    """`reference` is caller-controlled and lands in a filesystem path."""
+    from packages.aria_skills import loader
+
+    skill_dir = tmp_path / "my-skill"
+    (skill_dir / "references").mkdir(parents=True)
+    (skill_dir / "references" / "ok.md").write_text("OK", encoding="utf-8")
+    (skill_dir / "SKILL.md").write_text("SHOULD NOT BE REACHABLE", encoding="utf-8")
+    (tmp_path / "secret.md").write_text("SECRET", encoding="utf-8")
+
+    skill = _fake_skill("my-skill", "cat:my-skill")
+    skill.path = skill_dir / "SKILL.md"
+    monkeypatch.setattr(loader, "discover_external_skills", lambda *a, **kw: [skill])
+
+    result = await _call_skill_get({"name": "my-skill", "reference": bad})
+    assert result["success"] is False
+    assert "content" not in result
+
+
+@pytest.mark.asyncio
+async def test_skill_get_reference_unknown_name_lists_available(tmp_path, monkeypatch):
+    from packages.aria_skills import loader
+
+    skill_dir = tmp_path / "my-skill"
+    (skill_dir / "references").mkdir(parents=True)
+    (skill_dir / "references" / "ok.md").write_text("OK", encoding="utf-8")
+
+    skill = _fake_skill("my-skill", "cat:my-skill")
+    skill.path = skill_dir / "SKILL.md"
+    monkeypatch.setattr(loader, "discover_external_skills", lambda *a, **kw: [skill])
+
+    result = await _call_skill_get({"name": "my-skill", "reference": "nope.md"})
+    assert result["success"] is False
+    assert result["references"] == ["ok.md"]
+
+
+@pytest.mark.asyncio
+async def test_skill_get_no_references_dir_returns_empty_list(tmp_path, monkeypatch):
+    from packages.aria_skills import loader
+
+    skill_dir = tmp_path / "my-skill"
+    skill_dir.mkdir(parents=True)
+
+    skill = _fake_skill("my-skill", "cat:my-skill")
+    skill.path = skill_dir / "SKILL.md"
+    monkeypatch.setattr(loader, "discover_external_skills", lambda *a, **kw: [skill])
+
+    result = await _call_skill_get({"name": "my-skill"})
+    assert result["references"] == []

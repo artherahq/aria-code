@@ -13,8 +13,11 @@ Register with Claude Code::
 
     claude mcp add aria-code -- python3 /path/to/aria-code/aria_mcp_server.py
 
-Scope: ``skill:``-backed exposures (report/backtest skills) are never
-registered — skills aren't a clean JSON-in/JSON-out callable today. Beyond
+Scope: ``skill:``-backed exposures (report/backtest skills) are still never
+registered as *executable* tools — a skill is a prompt-time instruction
+document, not a clean JSON-in/JSON-out callable. They are instead readable
+via ``aria.skill.list``/``aria.skill.get``, which hand the SKILL.md text to
+the calling model so it can follow the workflow itself. Beyond
 that, everything is read-only EXCEPT the small, explicit ``_WRITE_SAFE``
 allowlist below (order previews, chart/PDF generation, cloud video
 generation behind its own confirm gate) — each entry there is individually
@@ -41,6 +44,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sys
 import traceback
 from pathlib import Path
@@ -87,6 +91,21 @@ _INPUT_SCHEMAS: Dict[str, Dict[str, Any]] = {
             "limit": {"type": "integer", "description": "Max artifacts to return (default 20)"},
         },
         "required": [],
+    },
+    "aria.skill.list": {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "Task description to rank skills against, e.g. \"design a landing page for a healthcare startup\". Omit to list all installed skills."},
+        },
+        "required": [],
+    },
+    "aria.skill.get": {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string", "description": "Skill name from aria.skill.list — either the bare name (\"ui-design-system\") or the qualified form (\"app-engineering-skills:ui-design-system\")"},
+            "reference": {"type": "string", "description": "Optional. Fetch one of the skill's bundled reference docs instead of its main instructions — pass a filename from the `references` list returned by a plain aria.skill.get call, e.g. \"density_and_semantics.md\"."},
+        },
+        "required": ["name"],
     },
     "aria.broker.positions": {
         "type": "object",
@@ -448,6 +467,120 @@ async def _call_artifacts_list(args: Dict[str, Any]) -> Dict[str, Any]:
 
     limit = int(args.get("limit", 20) or 20)
     return {"success": True, "artifacts": recent_artifacts_all(limit=limit)}
+
+
+def _skill_summary(skill: Any) -> Dict[str, Any]:
+    """Listing shape — deliberately excludes `instructions` so a list call
+    stays small; aria.skill.get fetches the full text for one skill."""
+    return {
+        "name": skill.name,
+        "qualified_name": skill.qualified_name,
+        "description": skill.description,
+        "plugin": skill.plugin_name,
+        # Surfaced so the caller can tell a signed catalog skill from an
+        # unverified local drop-in — these are instruction documents the
+        # model will follow, so provenance is worth showing, not hiding.
+        "integrity": skill.integrity,
+    }
+
+
+async def _call_skill_list(args: Dict[str, Any]) -> Dict[str, Any]:
+    from packages.aria_skills.loader import discover_external_skills, select_external_skills
+
+    query = str(args.get("query", "")).strip()
+    try:
+        skills = discover_external_skills()
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+
+    if query:
+        ranked = select_external_skills(query, skills)
+        # select_* returns only what clears its relevance bar, which can be
+        # empty for an off-topic query — fall back to the full list rather
+        # than answering "no skills exist", which would be misleading.
+        chosen = ranked or skills
+        matched = bool(ranked)
+    else:
+        chosen = skills
+        matched = False
+
+    return {
+        "success": True,
+        "query": query,
+        "matched_by_relevance": matched,
+        "skills": [_skill_summary(s) for s in chosen],
+    }
+
+
+def _skill_reference_names(skill: Any) -> List[str]:
+    """Reference docs bundled beside a SKILL.md. Several skills' instructions
+    say things like "read references/density_and_semantics.md first" — over
+    MCP the caller has no filesystem access to this machine, so those files
+    have to be fetchable through this tool or that instruction is a dead end."""
+    try:
+        ref_dir = Path(skill.path).parent / "references"
+        if not ref_dir.is_dir():
+            return []
+        return sorted(p.name for p in ref_dir.glob("*.md"))
+    except Exception:
+        return []
+
+
+async def _call_skill_get(args: Dict[str, Any]) -> Dict[str, Any]:
+    from packages.aria_skills.loader import discover_external_skills
+
+    name = str(args.get("name", "")).strip()
+    if not name:
+        return {"success": False, "error": "name is required"}
+
+    try:
+        skills = discover_external_skills()
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+
+    match = next(
+        (s for s in skills if name in (s.name, s.qualified_name)),
+        None,
+    )
+    if match is None:
+        return {
+            "success": False,
+            "error": f"No skill named {name!r}. Call aria.skill.list to see installed skills.",
+            "available": [s.qualified_name for s in skills],
+        }
+
+    references = _skill_reference_names(match)
+    requested = str(args.get("reference", "")).strip()
+    if requested:
+        # `reference` is caller-controlled and lands in a filesystem path, so
+        # resolve it and require the result to stay inside this skill's own
+        # references/ dir — a bare name check would still let "../../.ssh/id_rsa"
+        # or a symlink out of the sandbox through.
+        ref_dir = (Path(match.path).parent / "references").resolve()
+        target = (ref_dir / requested).resolve()
+        if not str(target).startswith(str(ref_dir) + os.sep) or not target.is_file():
+            return {
+                "success": False,
+                "error": f"No reference {requested!r} in skill {match.qualified_name!r}.",
+                "references": references,
+            }
+        try:
+            content = target.read_text(encoding="utf-8")
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
+        return {
+            "success": True,
+            **_skill_summary(match),
+            "reference": requested,
+            "content": content,
+        }
+
+    return {
+        "success": True,
+        **_skill_summary(match),
+        "instructions": match.instructions,
+        "references": references,
+    }
 
 
 def _get_broker(broker_id: str = ""):
@@ -1234,6 +1367,8 @@ _HANDLERS: Dict[str, Callable[[Dict[str, Any]], Awaitable[Dict[str, Any]]]] = {
     "aria.market.quote": _call_market_quote,
     "aria.agent.team": _call_agent_team,
     "aria.artifacts.list": _call_artifacts_list,
+    "aria.skill.list": _call_skill_list,
+    "aria.skill.get": _call_skill_get,
     "aria.broker.positions": _call_broker_positions,
     "aria.broker.list_previews": _call_broker_list_previews,
     "aria.broker.preview_order": _call_broker_preview_order,

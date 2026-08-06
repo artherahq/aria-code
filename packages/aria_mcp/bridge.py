@@ -35,6 +35,24 @@ def default_exposures() -> List[MCPExposure]:
         MCPExposure("aria.report.generate", "tool:report_generate", "Fetch data + generate a full HTML research report artifact for a symbol.", read_only=False),
         MCPExposure("aria.backtest.run", "tool:backtest_run", "Run a historical strategy simulation (buy_hold or sma_cross) against real price history.", read_only=False),
         MCPExposure("aria.artifacts.list", "infra:artifacts", "List local generated artifacts."),
+        MCPExposure(
+            "aria.skill.list",
+            "infra:skills",
+            "List the installed portable SKILL.md workflows — reusable expert playbooks "
+            "for design, research, and engineering tasks (e.g. UI design systems, "
+            "anti-generic-AI-look UI critique, trading-app patterns, equity research, "
+            "backtest validation). Pass `query` to rank by relevance to a task "
+            "description instead of listing everything.",
+        ),
+        MCPExposure(
+            "aria.skill.get",
+            "infra:skills",
+            "Fetch one skill's full instructions by name (from aria.skill.list). Returns "
+            "the SKILL.md workflow text for you to follow yourself — skills are "
+            "instruction documents, not executable tools, so nothing runs server-side. "
+            "The response lists any bundled `references` docs; when the instructions tell "
+            "you to read one, call this again with `reference` set to that filename.",
+        ),
         MCPExposure("aria.broker.positions", "tool:broker_positions", "Read account info + positions for a configured broker."),
         MCPExposure("aria.broker.list_previews", "tool:broker_list_previews", "List recent order previews, including TradingView-triggered ones."),
         MCPExposure(

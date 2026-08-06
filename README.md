@@ -832,6 +832,7 @@ aria-code can also run *as* an MCP server, so Claude Code, Codex, or any
 other MCP client can call into it directly:
 
 - `aria.market.quote` / `aria.agent.team` / `aria.artifacts.list` — live quote + technicals, multi-agent research, generated artifacts (all read-only)
+- `aria.skill.list` / `aria.skill.get` — discover and fetch the installed portable [SKILL.md](https://github.com/artherahq/aria-skills) workflows: reusable expert playbooks for UI design systems, anti-generic-AI-look design critique, trading-app patterns, equity research, backtest validation, and more. `aria.skill.list` takes an optional `query` to rank by relevance to your task; `aria.skill.get` returns the full workflow text for **you** to follow — skills are instruction documents, not executable tools, so nothing runs server-side. Each result carries an `integrity` field (`verified` for signed catalog skills, `unlocked` for local drop-ins) so you can see a skill's provenance before following it
 - `aria.report.generate` — fetch data and generate a full HTML research report artifact for a symbol
 - `aria.backtest.run` — run a historical strategy simulation (`buy_hold` or `sma_cross`) against real price history
 - `aria.broker.positions` / `aria.broker.list_previews` — read account/positions and recent order previews for a configured broker (US/CN/HK/UK — see `/broker`)
