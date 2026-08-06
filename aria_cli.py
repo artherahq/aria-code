@@ -234,6 +234,7 @@ from apps.cli.utils.market_detect import (  # noqa: F401 — re-exported
 )
 
 from apps.cli.commands.broker_cmds import BrokerCommandsMixin
+from apps.cli.commands.canvas_cmds import CanvasCommandsMixin
 from apps.cli.commands.backtest_cmds import BacktestCommandsMixin
 from apps.cli.commands.analysis_cmds import AnalysisCommandsMixin
 from apps.cli.commands.data_cmds import DataCommandsMixin
@@ -5744,7 +5745,7 @@ _rebind_mixin_globals(MarketCommandsMixin)
 _rebind_mixin_globals(PortfolioCommandsMixin)
 _rebind_mixin_globals(PdfExportCommandsMixin)
 
-class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommandsMixin, DataCommandsMixin, OpsCommandsMixin, DiagnosticCommandsMixin, DiagnosticOpsCommandsMixin, UiCommandsMixin, SessionUxCommandsMixin, AuthCommandsMixin, FileCommandsMixin, FxCommodityCommandsMixin, WorkflowCommandsMixin, BusinessWorkflowCommandsMixin, SessionCommandsMixin, WorkspaceCommandsMixin, ModelCommandsMixin, MarketCommandsMixin, PortfolioCommandsMixin, PdfExportCommandsMixin):
+class SlashCommands(BrokerCommandsMixin, CanvasCommandsMixin, BacktestCommandsMixin, AnalysisCommandsMixin, DataCommandsMixin, OpsCommandsMixin, DiagnosticCommandsMixin, DiagnosticOpsCommandsMixin, UiCommandsMixin, SessionUxCommandsMixin, AuthCommandsMixin, FileCommandsMixin, FxCommodityCommandsMixin, WorkflowCommandsMixin, BusinessWorkflowCommandsMixin, SessionCommandsMixin, WorkspaceCommandsMixin, ModelCommandsMixin, MarketCommandsMixin, PortfolioCommandsMixin, PdfExportCommandsMixin):
     """Claude Code-style slash command system."""
 
     def _cmd_rewind_unavailable(self, args: str):
@@ -5830,6 +5831,7 @@ class SlashCommands(BrokerCommandsMixin, BacktestCommandsMixin, AnalysisCommands
             "/deploy":    (self.cmd_deploy,  "Deploy strategy to live ledger: /deploy <name> AAPL:10 | $100000 AAPL:30% | rebalance AAPL:30% | close"),
             "/accuracy":  (self.cmd_accuracy, "Prediction track record vs live prices"),
             "/artifacts": (self.cmd_artifacts,"Manage generated files: /artifacts [limit|open|reveal|path|copy-path|stats|prune]"),
+            "/canvas":    (self.cmd_canvas,   "Live preview server: /canvas [stop] — reports/charts update in a browser tab in real time"),
             # ── Code & project ────────────────────────────────────────────────
             "/project":   (self.cmd_project,  "Project: /project load|tree|grep|ask|task|status"),
             "/init":      (self.cmd_init,     "Generate ARIA.md for current project: /init [--force]"),
