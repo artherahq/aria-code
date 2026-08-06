@@ -2245,6 +2245,17 @@ try:
 except Exception as _exc:
     logger.debug("Markdown-pdf tools init error: %s", _exc)
 
+# ── Register real (non-financial) image generation tools ───────────────────
+# Without this the chat loop can generate stock charts but has no tool for
+# "generate me a real photo" — see image_gen_tools.py's module docstring.
+try:
+    from image_gen_tools import register_image_tools as _reg_image
+    _n_image = _reg_image(LOCAL_TOOLS, LOCAL_TOOL_SCHEMAS)
+    if _n_image:
+        logger.info("Registered %d image generation tools", _n_image)
+except Exception as _exc:
+    logger.debug("Image tool registration error: %s", _exc)
+
 # Ollama tool schemas (for function calling) — extend so finance schemas added above are kept
 def _todo_schema():
     from apps.cli.todo_tracker import UPDATE_TODOS_SCHEMA
