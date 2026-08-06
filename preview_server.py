@@ -21,6 +21,7 @@ import asyncio
 import json
 import logging
 import mimetypes
+import os
 import time
 import webbrowser
 from dataclasses import dataclass, field
@@ -34,6 +35,63 @@ _DEFAULT_HOST = "127.0.0.1"
 _PORT_CANDIDATES = list(range(8765, 8775))
 
 _active_session: Optional["PreviewSession"] = None
+
+
+def discovery_path() -> Path:
+    """Where a running canvas advertises its URL.
+
+    The port is picked from a range at bind time, so a *separate* process
+    (notably Arthera's Electron terminal, which embeds this server's output
+    in its artifact preview panel) cannot guess it. This file is the
+    handshake: written on start, removed on stop.
+    """
+    from brokers.config import BROKERS_CONFIG_PATH  # same ~/.aria-code|.arthera home
+
+    return BROKERS_CONFIG_PATH.parent / "canvas.json"
+
+
+def _write_discovery(url: str) -> None:
+    try:
+        path = discovery_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps({"url": url, "pid": os.getpid(), "started_at": time.time()}, indent=2),
+            encoding="utf-8",
+        )
+    except Exception as exc:  # discovery is a convenience, never fatal
+        logger.warning("Could not write canvas discovery file: %s", exc)
+
+
+def _clear_discovery() -> None:
+    try:
+        discovery_path().unlink(missing_ok=True)
+    except Exception as exc:
+        logger.warning("Could not remove canvas discovery file: %s", exc)
+
+
+def read_discovery() -> Optional[Dict[str, Any]]:
+    """Read another process's advertised canvas URL, or None.
+
+    Returns None for a stale file — one whose PID is no longer alive, which
+    is what a crash or `kill -9` leaves behind. Without that check a consumer
+    would keep pointing an iframe at a dead port indefinitely.
+    """
+    try:
+        path = discovery_path()
+        if not path.exists():
+            return None
+        data = json.loads(path.read_text(encoding="utf-8"))
+        pid = data.get("pid")
+        if isinstance(pid, int):
+            try:
+                os.kill(pid, 0)  # signal 0 = liveness probe, does not kill
+            except ProcessLookupError:
+                return None
+            except PermissionError:
+                pass  # alive, owned by another user
+        return data
+    except Exception:
+        return None
 
 
 def get_active_session() -> Optional["PreviewSession"]:
@@ -238,6 +296,7 @@ async def start_session() -> "PreviewSession":
     session = PreviewSession()
     await session.start()
     _active_session = session
+    _write_discovery(session.url)
     return session
 
 
@@ -246,6 +305,7 @@ async def stop_session() -> None:
     if _active_session is not None:
         await _active_session.stop()
         _active_session = None
+    _clear_discovery()
 
 
 def open_in_browser(url: str) -> None:

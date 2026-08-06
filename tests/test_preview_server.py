@@ -189,3 +189,60 @@ def test_write_artifact_metadata_is_noop_safe_without_session(tmp_path, monkeypa
     record = create_user_artifact("reports/market", "AAPL", "AAPL_market_report", ".html")
     record.path.write_text("<html>no session</html>", encoding="utf-8")
     write_artifact_metadata(record, {"kind": "market_report", "symbol": "AAPL"})  # must not raise
+
+
+# ── Cross-process discovery ─────────────────────────────────────────────────
+# The port is chosen from a range at bind time, so a separate process (the
+# Electron terminal's preview panel) cannot guess it. These cover the handshake.
+
+async def test_discovery_file_absent_before_start(monkeypatch, tmp_path):
+    monkeypatch.setattr(preview_server, "discovery_path", lambda: tmp_path / "canvas.json")
+    assert preview_server.read_discovery() is None
+
+
+async def test_discovery_file_written_on_start(monkeypatch, tmp_path):
+    import os
+
+    monkeypatch.setattr(preview_server, "discovery_path", lambda: tmp_path / "canvas.json")
+    session = await preview_server.start_session()
+    data = preview_server.read_discovery()
+    assert data is not None
+    assert data["url"] == session.url
+    assert data["pid"] == os.getpid()
+
+
+async def test_discovery_file_removed_on_stop(monkeypatch, tmp_path):
+    monkeypatch.setattr(preview_server, "discovery_path", lambda: tmp_path / "canvas.json")
+    await preview_server.start_session()
+    assert preview_server.read_discovery() is not None
+    await preview_server.stop_session()
+    assert preview_server.read_discovery() is None
+
+
+def test_discovery_ignores_stale_file_from_dead_process(monkeypatch, tmp_path):
+    """A crash or kill -9 leaves the file behind; without the liveness probe a
+    consumer would point an iframe at a dead port forever."""
+    import json
+
+    path = tmp_path / "canvas.json"
+    monkeypatch.setattr(preview_server, "discovery_path", lambda: path)
+    path.write_text(json.dumps({"url": "http://127.0.0.1:8765/", "pid": 999999}), encoding="utf-8")
+    assert preview_server.read_discovery() is None
+
+
+def test_discovery_returns_data_for_live_process(monkeypatch, tmp_path):
+    import json
+    import os
+
+    path = tmp_path / "canvas.json"
+    monkeypatch.setattr(preview_server, "discovery_path", lambda: path)
+    path.write_text(json.dumps({"url": "http://127.0.0.1:8765/", "pid": os.getpid()}), encoding="utf-8")
+    data = preview_server.read_discovery()
+    assert data is not None and data["url"] == "http://127.0.0.1:8765/"
+
+
+def test_discovery_tolerates_corrupt_file(monkeypatch, tmp_path):
+    path = tmp_path / "canvas.json"
+    monkeypatch.setattr(preview_server, "discovery_path", lambda: path)
+    path.write_text("{not json", encoding="utf-8")
+    assert preview_server.read_discovery() is None
