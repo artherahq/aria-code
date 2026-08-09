@@ -254,6 +254,7 @@ from apps.cli.commands.session_ux_cmds import SessionUxCommandsMixin
 from apps.cli.commands.auth_cmds import AuthCommandsMixin
 from apps.cli.commands.file_cmds import FileCommandsMixin
 from apps.cli.commands.fx_commodity_cmds import FxCommodityCommandsMixin
+from apps.cli.commands.finance_service_cmds import FinanceServiceCommandsMixin
 from apps.cli.commands.workflow_cmds import WorkflowCommandsMixin
 from apps.cli.commands.business_workflow_cmds import BusinessWorkflowCommandsMixin
 from apps.cli.commands.session_cmds import SessionCommandsMixin
@@ -5745,6 +5746,7 @@ _rebind_mixin_globals(SessionUxCommandsMixin)
 _rebind_mixin_globals(AuthCommandsMixin)
 _rebind_mixin_globals(FileCommandsMixin)
 _rebind_mixin_globals(FxCommodityCommandsMixin)
+_rebind_mixin_globals(FinanceServiceCommandsMixin)
 _rebind_mixin_globals(WorkflowCommandsMixin)
 _rebind_mixin_globals(BusinessWorkflowCommandsMixin)
 _rebind_mixin_globals(SessionCommandsMixin)
@@ -5754,7 +5756,7 @@ _rebind_mixin_globals(MarketCommandsMixin)
 _rebind_mixin_globals(PortfolioCommandsMixin)
 _rebind_mixin_globals(PdfExportCommandsMixin)
 
-class SlashCommands(BrokerCommandsMixin, CanvasCommandsMixin, BacktestCommandsMixin, AnalysisCommandsMixin, ASharePredictionCommandsMixin, DataCommandsMixin, OpsCommandsMixin, DiagnosticCommandsMixin, DiagnosticOpsCommandsMixin, UiCommandsMixin, SessionUxCommandsMixin, AuthCommandsMixin, FileCommandsMixin, FxCommodityCommandsMixin, WorkflowCommandsMixin, BusinessWorkflowCommandsMixin, SessionCommandsMixin, WorkspaceCommandsMixin, ModelCommandsMixin, MarketCommandsMixin, PortfolioCommandsMixin, PdfExportCommandsMixin):
+class SlashCommands(BrokerCommandsMixin, CanvasCommandsMixin, BacktestCommandsMixin, AnalysisCommandsMixin, ASharePredictionCommandsMixin, DataCommandsMixin, OpsCommandsMixin, DiagnosticCommandsMixin, DiagnosticOpsCommandsMixin, UiCommandsMixin, SessionUxCommandsMixin, AuthCommandsMixin, FileCommandsMixin, FxCommodityCommandsMixin, FinanceServiceCommandsMixin, WorkflowCommandsMixin, BusinessWorkflowCommandsMixin, SessionCommandsMixin, WorkspaceCommandsMixin, ModelCommandsMixin, MarketCommandsMixin, PortfolioCommandsMixin, PdfExportCommandsMixin):
     """Claude Code-style slash command system."""
 
     def _cmd_rewind_unavailable(self, args: str):
@@ -5813,6 +5815,7 @@ class SlashCommands(BrokerCommandsMixin, CanvasCommandsMixin, BacktestCommandsMi
             "/providers": (self.cmd_providers,"List local LLM backends and status"),
             "/collab":   (self.cmd_collab,   "Multi-model API collaboration: /collab status|use|ask"),
             "/ashare":   (self.cmd_ashare,   "A-share prediction engine: /ashare status|latest|predict|evaluate"),
+            "/markets":  (self.cmd_markets,  "Financial market services: /markets [A股|港股|美股|crypto|forex|commodity]"),
             "/ariarc":    (self.cmd_ariarc,   "Show .ariarc project config: /ariarc [reload]"),
             "/skills":    (self.cmd_skills,   "List all available skills"),
             "/services":  (self.cmd_services, "Show service tiers and workflows"),
@@ -8920,7 +8923,10 @@ class ArtheraTerminal:
 
         # ── Wire subagent runner so spawn_task can use the same LLM ─────────
         try:
-            from runtime.subagent import register_runner as _register_subagent_runner
+            from runtime.subagent import (
+                register_runner as _register_subagent_runner,
+                restore_tasks as _restore_subagent_tasks,
+            )
             _terminal_ref = self
 
             async def _subagent_runner(prompt: str) -> str:
@@ -8934,6 +8940,7 @@ class ArtheraTerminal:
                 return result.get("response", "") if result.get("success") else ""
 
             _register_subagent_runner(_subagent_runner)
+            _restore_subagent_tasks()
         except Exception:
             pass
         self._actual_model: Optional[str] = None  # actual Ollama model in use (may differ from config)

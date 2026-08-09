@@ -10,7 +10,9 @@ from runtime.subagent import (
     tool_task_list,
     tool_task_cancel,
     register_runner,
+    restore_tasks,
 )
+from runtime.task_ledger import TaskLedger
 
 
 @pytest.fixture(autouse=True)
@@ -19,10 +21,12 @@ def clear_tasks():
     import runtime.subagent as _sa
     _TASKS.clear()
     _orig_runner = _sa._RUNNER
+    _orig_ledger = _sa._LEDGER
     _sa._RUNNER = None  # ensure no runner is registered during tests
     yield
     _TASKS.clear()
     _sa._RUNNER = _orig_runner
+    _sa._LEDGER = _orig_ledger
 
 
 class TestSpawnTask:
@@ -162,3 +166,28 @@ class TestTaskCancel:
     def test_cancel_nonexistent(self):
         result = tool_task_cancel({"task_id": "deadbeef"})
         assert result["success"] is False
+
+
+class TestTaskPersistence:
+    def test_ledger_round_trip_and_running_recovery(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("ARIA_TASK_LEDGER_PATH", str(tmp_path / "tasks.json"))
+        import runtime.subagent as subagent
+        subagent._LEDGER = TaskLedger(tmp_path / "tasks.json")
+        task = SubagentTask(task_id="recover1", prompt="inspect", status="running")
+        subagent._TASKS[task.task_id] = task
+        subagent._persist(task)
+        subagent._TASKS.clear()
+
+        assert restore_tasks() == 1
+        restored = subagent._TASKS["recover1"]
+        assert restored.status == "interrupted"
+        assert "restarted" in restored.error
+
+    def test_completed_handoff_is_exposed(self):
+        task = SubagentTask(
+            task_id="handoff1", prompt="inspect", status="done", result="ok",
+            handoff={"verification": "pytest -q passed"},
+        )
+        _TASKS[task.task_id] = task
+        result = tool_task_result({"task_id": task.task_id})
+        assert result["handoff"]["verification"] == "pytest -q passed"

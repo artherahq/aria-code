@@ -25,8 +25,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
+from .task_ledger import TaskLedger
+
 _TASKS: Dict[str, "SubagentTask"] = {}
 _RUNNER: Optional[Callable] = None  # set by aria_cli.py
+_LEDGER: Optional[TaskLedger] = None
 
 
 @dataclass
@@ -48,6 +51,7 @@ class SubagentTask:
     applied_paths: tuple[str, ...] = ()
     created_at: float = field(default_factory=time.time)
     completed_at: float = 0.0
+    handoff: dict[str, Any] = field(default_factory=dict)
     async_task: Optional[asyncio.Task] = field(default=None, repr=False, compare=False)
     worktree_spec: Optional[Any] = field(default=None, repr=False, compare=False)
 
@@ -71,7 +75,75 @@ class SubagentTask:
             "workspace": self.workspace or None,
             "branch": self.branch or None,
             "applied": self.applied,
+            "handoff": self.handoff or None,
         }
+
+    def snapshot(self) -> dict[str, Any]:
+        """Return the serializable task contract and latest outcome."""
+        return {
+            "task_id": self.task_id, "prompt": self.prompt, "context": self.context,
+            "status": self.status, "result": self.result, "error": self.error,
+            "mode": self.mode, "isolation": self.isolation, "backend": self.backend,
+            "workspace": self.workspace, "session_id": self.session_id,
+            "branch": self.branch, "diff_summary": self.diff_summary,
+            "applied": self.applied, "applied_paths": list(self.applied_paths),
+            "created_at": self.created_at, "completed_at": self.completed_at,
+            "handoff": self.handoff,
+        }
+
+
+def _ledger() -> TaskLedger:
+    global _LEDGER
+    if _LEDGER is None:
+        _LEDGER = TaskLedger()
+    return _LEDGER
+
+
+def _persist(task: SubagentTask) -> None:
+    """A ledger write must never make a live task fail."""
+    try:
+        _ledger().upsert(task.snapshot())
+    except Exception:
+        pass
+
+
+def restore_tasks() -> int:
+    """Restore prior task records after a CLI restart.
+
+    A running coroutine cannot safely be resumed, so it is retained as an
+    explicit interrupted task rather than silently disappearing.
+    """
+    restored = 0
+    for record in _ledger().restore():
+        task_id = str(record.get("task_id") or "").strip()
+        if not task_id or task_id in _TASKS:
+            continue
+        status = str(record.get("status") or "pending")
+        error = str(record.get("error") or "")
+        if status == "running":
+            status = "interrupted"
+            error = "CLI restarted before this task completed; rerun or delegate it again."
+        task = SubagentTask(
+            task_id=task_id, prompt=str(record.get("prompt") or ""),
+            context=str(record.get("context") or ""), status=status,
+            result=str(record.get("result") or ""), error=error,
+            mode=str(record.get("mode") or "read-only"),
+            isolation=str(record.get("isolation") or "shared"),
+            backend=str(record.get("backend") or "aria"),
+            workspace=str(record.get("workspace") or ""),
+            session_id=str(record.get("session_id") or ""),
+            branch=str(record.get("branch") or ""),
+            diff_summary=str(record.get("diff_summary") or ""),
+            applied=bool(record.get("applied")),
+            applied_paths=tuple(record.get("applied_paths") or ()),
+            created_at=float(record.get("created_at") or time.time()),
+            completed_at=float(record.get("completed_at") or 0.0),
+            handoff=dict(record.get("handoff") or {}),
+        )
+        _TASKS[task_id] = task
+        _persist(task)
+        restored += 1
+    return restored
 
 
 def register_runner(runner: Callable) -> None:
@@ -120,6 +192,7 @@ def tool_spawn_task(params: dict) -> dict:
         session_id=str(params.get("_session_id") or ""),
     )
     _TASKS[task_id] = task
+    _persist(task)
 
     # An external backend (claude/codex) always has a runner (the CLI itself);
     # the "aria" backend needs one registered via register_runner().
@@ -133,6 +206,8 @@ def tool_spawn_task(params: dict) -> dict:
         except Exception as exc:
             task.status = "failed"
             task.error = str(exc)
+            task.completed_at = time.time()
+            _persist(task)
     else:
         # No runner — task stays in "pending" for manual execution
         task.status = "pending"
@@ -153,6 +228,7 @@ def tool_spawn_task(params: dict) -> dict:
 
 async def _run_background(task: SubagentTask) -> None:
     task.status = "running"
+    _persist(task)
     try:
         if task.mode == "workspace-write" and task.isolation == "worktree":
             from apps.cli.config_paths import resolve_config_dir
@@ -173,8 +249,8 @@ async def _run_background(task: SubagentTask) -> None:
             f"Workspace: {task.workspace}\n"
             f"Isolation: {task.isolation}\n"
             "Keep every file and command operation inside this workspace. "
-            "Do not spawn another subagent or push changes. Return a concise result "
-            "with changed files and verification."
+            "Do not spawn another subagent or push changes. End with a structured "
+            "handoff: FINDINGS: ...; CHANGED_FILES: ...; VERIFICATION: ...; BLOCKERS: ..."
         )
         full_prompt = f"{execution_contract}\n\n{full_prompt}"
         if task.backend != "aria":
@@ -188,6 +264,7 @@ async def _run_background(task: SubagentTask) -> None:
             else:
                 result_text = await _RUNNER(full_prompt)
         task.result = result_text or ""
+        task.handoff = _extract_handoff(task.result)
         task.status = "done"
         if task.worktree_spec is not None:
             from .worktrees import WorktreeManager
@@ -199,6 +276,26 @@ async def _run_background(task: SubagentTask) -> None:
         task.status = "failed"
     finally:
         task.completed_at = time.time()
+        _persist(task)
+
+
+def _extract_handoff(result: str) -> dict[str, str]:
+    """Extract a compact handoff when the agent supplied the task contract."""
+    text = str(result or "")
+    keys = ("FINDINGS", "CHANGED_FILES", "VERIFICATION", "BLOCKERS")
+    out: dict[str, str] = {}
+    for index, key in enumerate(keys):
+        marker = f"{key}:"
+        start = text.rfind(marker)
+        if start < 0:
+            continue
+        end = len(text)
+        for later_key in keys[index + 1:]:
+            candidate = text.find(f"{later_key}:", start + len(marker))
+            if candidate >= 0:
+                end = min(end, candidate)
+        out[key.lower()] = text[start + len(marker):end].strip().strip(";")
+    return out
 
 
 def tool_task_status(params: dict) -> dict:
@@ -235,7 +332,7 @@ def tool_task_result(params: dict) -> dict:
         return {"success": False, "error": "Task is still running", "status": "running"}
     if task.status == "failed":
         return {"success": False, "error": task.error, "status": "failed"}
-    if task.status in ("pending", "cancelled"):
+    if task.status in ("pending", "cancelled", "interrupted"):
         return {"success": False, "error": f"Task status is '{task.status}'", "status": task.status}
     return {
         "success": True,
@@ -248,6 +345,7 @@ def tool_task_result(params: dict) -> dict:
         "diff_summary": task.diff_summary or None,
         "applied": task.applied,
         "applied_paths": list(task.applied_paths),
+        "handoff": task.handoff or None,
     }
 
 
@@ -282,6 +380,7 @@ def tool_task_cancel(params: dict) -> dict:
     task.completed_at = time.time()
     if task.async_task is not None and not task.async_task.done():
         task.async_task.cancel()
+    _persist(task)
     return {"success": True, "task_id": task_id, "cancelled": True}
 
 
@@ -347,6 +446,7 @@ def apply_task_worktree(task_id: str, *, cleanup: bool = True) -> dict:
             checkpoint_errors.append(str(exc))
         task.applied = True
         task.applied_paths = result.paths
+        _persist(task)
         cleanup_error = ""
         if cleanup:
             try:

@@ -36,6 +36,7 @@ DIRECT_COMMANDS: Tuple[DirectCommandSpec, ...] = (
     DirectCommandSpec("export", "cmd_export", async_method=True),
     DirectCommandSpec("tv", "cmd_tv", async_method=True),
     DirectCommandSpec("ashare", "cmd_ashare", async_method=True, aliases=("a-share",)),
+    DirectCommandSpec("markets", "cmd_markets"),
 )
 
 
@@ -65,7 +66,7 @@ VISIBLE_SLASH_COMMANDS: FrozenSet[str] = frozenset({
     # Config
     "/model", "/thinking", "/config", "/permissions", "/privacy",
     # Setup & discovery
-    "/setup", "/apikey", "/doctor", "/architecture", "/mcp", "/skills", "/tools", "/packages",
+    "/setup", "/apikey", "/doctor", "/architecture", "/mcp", "/skills", "/tools", "/packages", "/markets",
     # Auth
     "/login", "/logout", "/whoami",
     # Persistent data (direct writes)

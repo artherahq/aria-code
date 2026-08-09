@@ -66,6 +66,7 @@ from .subagent import (
     tool_task_list,
     tool_task_cancel,
     register_runner,
+    restore_tasks,
 )
 
 __all__ = [
@@ -140,4 +141,5 @@ __all__ = [
     "tool_task_list",
     "tool_task_cancel",
     "register_runner",
+    "restore_tasks",
 ]

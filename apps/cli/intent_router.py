@@ -115,6 +115,16 @@ def detect_intents(message: str) -> tuple[str, ...]:
         _add_unique(intents, "web_search")
     if _contains_any(low, ("加密货币", "比特币", "以太坊", "bitcoin", "btc", "eth", "crypto", "币安", "binance", "okx", "资金费率", "funding rate")):
         _add_unique(intents, "crypto")
+    if _contains_any(low, ("外汇", "汇率", "美元兑", "欧元兑", "eur/", "usd/", "jpy", "forex", "fx ")):
+        _add_unique(intents, "forex")
+    if _contains_any(low, ("期货", "商品", "黄金", "白银", "原油", "铜价", "天然气", "commodity", "futures")):
+        _add_unique(intents, "commodity")
+    if _contains_any(low, ("a股", "沪深", "上证", "深证", "创业板", "科创板")):
+        _add_unique(intents, "ashare")
+    if _contains_any(low, ("港股", "恒生", "h股", ".hk")):
+        _add_unique(intents, "hk_market")
+    if _contains_any(low, ("美股", "纳斯达克", "纽交所", "标普500", "道琼斯", "us stock")):
+        _add_unique(intents, "us_market")
     if _contains_any(low, ("足球", "球赛", "比分预测", "世界杯", "欧洲杯", "英超", "西甲", "football", "soccer", "world cup", "premier league")):
         _add_unique(intents, "sports")
 
@@ -130,7 +140,7 @@ def _service_names(intents: tuple[str, ...]) -> tuple[str, ...]:
     def service(name: str) -> None:
         _add_unique(services, name)
 
-    if any(i in intents for i in ("market_snapshot", "market_analysis", "chart", "dashboard", "report", "backtest", "strategy", "market_research")):
+    if any(i in intents for i in ("market_snapshot", "market_analysis", "chart", "dashboard", "report", "backtest", "strategy", "market_research", "ashare", "hk_market", "us_market", "forex", "commodity")):
         service("market_data")
     if "chart" in intents:
         service("chart_renderer")
@@ -160,6 +170,16 @@ def _service_names(intents: tuple[str, ...]) -> tuple[str, ...]:
         service("web_search")
     if "crypto" in intents:
         service("crypto_data")
+    if "forex" in intents:
+        service("forex_data")
+    if "commodity" in intents:
+        service("commodity_data")
+    if "ashare" in intents:
+        service("ashare_data")
+    if "hk_market" in intents:
+        service("hk_market_data")
+    if "us_market" in intents:
+        service("us_market_data")
     if "sports" in intents:
         service("sports_data")
     return tuple(services)
@@ -228,7 +248,8 @@ def build_intent_route(message: str) -> IntentRoute:
     market_related = not conceptual_market_question and (
         any(i in intents for i in (
             "market_snapshot", "market_analysis", "chart", "dashboard", "report",
-            "backtest", "strategy", "market_research",
+            "backtest", "strategy", "market_research", "ashare", "hk_market",
+            "us_market", "crypto", "forex", "commodity",
         ))
         or classifier_intent in {INTENT_ANALYSIS, INTENT_REALTIME, INTENT_FINANCE}
     )

@@ -32,3 +32,11 @@ def test_plain_greeting_has_no_service_intents():
     assert route.intents == ()
     assert route.services == ()
     assert route.primary in {"general", "finance"}
+
+
+def test_financial_market_intents_select_the_right_data_services():
+    assert "ashare_data" in build_intent_route("A股明日走势").services
+    assert "hk_market_data" in build_intent_route("港股恒生指数").services
+    assert "us_market_data" in build_intent_route("美股纳斯达克行情").services
+    assert "forex_data" in build_intent_route("美元兑人民币汇率").services
+    assert "commodity_data" in build_intent_route("黄金期货价格").services
