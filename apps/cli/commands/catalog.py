@@ -37,6 +37,7 @@ DIRECT_COMMANDS: Tuple[DirectCommandSpec, ...] = (
     DirectCommandSpec("tv", "cmd_tv", async_method=True),
     DirectCommandSpec("ashare", "cmd_ashare", async_method=True, aliases=("a-share",)),
     DirectCommandSpec("markets", "cmd_markets"),
+    DirectCommandSpec("orchestrate", "cmd_orchestrate"),
 )
 
 
@@ -74,7 +75,7 @@ VISIBLE_SLASH_COMMANDS: FrozenSet[str] = frozenset({
     # Broker
     "/broker", "/account", "/positions", "/orders", "/paper", "/trade",
     # Code & project
-    "/project", "/init", "/review", "/code", "/plan", "/run", "/tasks", "/delegate", "/canva", "/completions", "/lsp",
+    "/project", "/init", "/review", "/code", "/plan", "/orchestrate", "/run", "/tasks", "/delegate", "/canva", "/completions", "/lsp",
     # Research
     "/team", "/deep",
     # Quant
