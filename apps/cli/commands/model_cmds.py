@@ -664,6 +664,126 @@ class ModelCommandsMixin:
             for i, (name, desc) in enumerate(ARIA_TOOLS, 1):
                 print(f"  {i:2d}. {name:30s} {desc}")
 
+    async def cmd_collab(self, args: str):
+        """Consult ChatGPT/OpenAI and Claude/Anthropic through their APIs.
+
+        Consumer-app subscriptions deliberately are not treated as credentials.
+        This keeps external model use explicit, attributable, and opt-in.
+        """
+        from apps.cli.providers.collaboration import (
+            collaboration_readiness, consult, resolve_collaborator,
+        )
+
+        parts = args.strip().split(maxsplit=1)
+        action = parts[0].lower() if parts else "status"
+        rest = parts[1].strip() if len(parts) > 1 else ""
+        config = self.terminal.config
+
+        if action in ("status", "help"):
+            rows = collaboration_readiness(config, _get_provider_key)
+            if HAS_RICH:
+                console.print()
+                console.print("  [bold]多模型协作（API）[/bold]")
+                console.print("  [dim]ChatGPT/Claude 桌面订阅不会被读取；请配置各自 API key。[/dim]")
+                console.print()
+                for row in rows:
+                    icon = "[green]●[/green]" if row["configured"] else "[dim]○[/dim]"
+                    state = "[green]已就绪[/green]" if row["configured"] else "[dim]未配置[/dim]"
+                    console.print(
+                        f"  {icon} [bold]{row['label']:18s}[/bold]  {state}"
+                        f"  [dim]{row['model']}[/dim]"
+                    )
+                console.print()
+                console.print("  [dim]/apikey set openai <key>       配置 ChatGPT/OpenAI API[/dim]")
+                console.print("  [dim]/apikey set anthropic <key>    配置 Claude API[/dim]")
+                console.print("  [dim]/collab use chatgpt [model]    将主对话切换为 OpenAI[/dim]")
+                console.print("  [dim]/collab use claude [model]     将主对话切换为 Claude[/dim]")
+                console.print("  [dim]/collab model <名称> <模型>     设置协作咨询使用的模型[/dim]")
+                console.print("  [dim]/collab ask <问题>              并行获取两份独立意见（会消耗 API 配额）[/dim]")
+                console.print()
+            else:
+                print("Multi-model collaboration (API; desktop subscriptions are not API keys):")
+                for row in rows:
+                    state = "ready" if row["configured"] else "not configured"
+                    print(f"  {'✓' if row['configured'] else '○'} {row['label']}: {state} ({row['model']})")
+                print("  /collab use chatgpt [model] | /collab use claude [model]")
+                print("  /collab model <name> <model>")
+                print("  /collab ask <prompt>")
+            return
+
+        if action == "model":
+            tokens = rest.split(maxsplit=1)
+            target = resolve_collaborator(tokens[0] if tokens else "", config)
+            model = tokens[1].strip() if len(tokens) > 1 else ""
+            if target is None or not model:
+                msg = "Usage: /collab model chatgpt <model> | /collab model claude <model>"
+                console.print(f"[yellow]{msg}[/yellow]") if HAS_RICH else print(msg)
+                return
+            config[f"collab_{target.alias}_model"] = model
+            save_config(config)
+            msg = f"✓ {target.label} 协作模型已设为 {model}"
+            console.print(f"[green]{msg}[/green]") if HAS_RICH else print(msg)
+            return
+
+        if action == "use":
+            tokens = rest.split(maxsplit=1)
+            name = tokens[0] if tokens else ""
+            target = resolve_collaborator(name, config)
+            if target is None:
+                msg = "Usage: /collab use chatgpt [model] | /collab use claude [model]"
+                console.print(f"[yellow]{msg}[/yellow]") if HAS_RICH else print(msg)
+                return
+            if not _get_provider_key(target.provider):
+                msg = f"⚠ {target.label} API key 未配置：/apikey set {target.provider} <key>"
+                console.print(f"[yellow]{msg}[/yellow]") if HAS_RICH else print(msg)
+                return
+            model = tokens[1].strip() if len(tokens) > 1 else target.default_model
+            await self.cmd_model(f"{target.provider}/{model}")
+            return
+
+        if action == "ask":
+            if not rest:
+                msg = "Usage: /collab ask <问题>"
+                console.print(f"[yellow]{msg}[/yellow]") if HAS_RICH else print(msg)
+                return
+            targets = [
+                target for name in ("chatgpt", "claude")
+                if (target := resolve_collaborator(name, config)) is not None
+                and _get_provider_key(target.provider)
+            ]
+            if not targets:
+                msg = "没有已配置的协作模型。先运行 /collab status。"
+                console.print(f"[yellow]{msg}[/yellow]") if HAS_RICH else print(msg)
+                return
+            notice = f"正在向 {len(targets)} 个模型征询独立意见…"
+            console.print(f"[dim]{notice}[/dim]") if HAS_RICH else print(notice)
+            from providers.llm.base import Message
+            from providers.llm.registry import get_provider
+
+            results = await consult(
+                rest, targets, get_provider=get_provider, message_factory=Message,
+                timeout=float(config.get("collab_timeout", 60.0)),
+            )
+            for result in results:
+                label = str(result["label"])
+                model = str(result["model"])
+                if result["success"]:
+                    if HAS_RICH:
+                        from rich.panel import Panel
+                        console.print(Panel(
+                            str(result["response"]), title=f"{label} · {model}",
+                            border_style="cyan", padding=(0, 1),
+                        ))
+                    else:
+                        print(f"\n[{label} · {model}]\n{result['response']}")
+                else:
+                    msg = f"{label} 未完成：{result['error'] or 'empty response'}"
+                    console.print(f"[yellow]⚠ {msg}[/yellow]") if HAS_RICH else print(f"⚠ {msg}")
+            return
+
+        msg = "Usage: /collab [status|model|use|ask]"
+        console.print(f"[yellow]{msg}[/yellow]") if HAS_RICH else print(msg)
+
     async def cmd_apikey(self, args: str):
         """Manage Cloud API keys.
 

@@ -12,6 +12,16 @@ no caller changes (see tools/build_quant_engine.py, CLOSING_SOURCE.md).
 """
 
 from importlib.util import find_spec
+from pathlib import Path
+
+# ``packages`` is a namespace facade into the private Arthera platform, but
+# this public shell also bundles a small ``quant_engine`` package.  Python stops
+# namespace lookup once it finds this regular subpackage, so extend *this*
+# package path as well; otherwise ``packages.quant_engine.services`` (the
+# audited A-share prediction engine) is silently unreachable from the CLI.
+_private_quant_engine = Path(__file__).resolve().parents[3] / "Arthera" / "packages" / "quant_engine"
+if _private_quant_engine.is_dir() and str(_private_quant_engine) not in __path__:
+    __path__.append(str(_private_quant_engine))
 
 __version__ = "1.0.0"
 

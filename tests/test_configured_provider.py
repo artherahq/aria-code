@@ -2,6 +2,7 @@ import pytest
 
 from apps.cli.providers.base import ConfiguredProvider, LLMDone, LLMToken
 from providers.llm.openai_compat import chat_completions_url
+from apps.cli.providers.chat_routing import normalize_provider_name
 
 
 @pytest.mark.asyncio
@@ -100,3 +101,7 @@ def test_openai_compatible_url_joining():
     assert openai_models_url("http://localhost:1234/v1/") == (
         "http://localhost:1234/v1/models"
     )
+
+
+def test_chatgpt_alias_selects_openai_provider():
+    assert normalize_provider_name("chatgpt") == "openai"

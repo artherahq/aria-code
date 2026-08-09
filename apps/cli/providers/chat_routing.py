@@ -22,6 +22,8 @@ PROVIDER_ALIASES = {
     "llama.cpp": "llamacpp",
     "llama-cpp": "llamacpp",
     "claude": "anthropic",
+    "chatgpt": "openai",
+    "openai-chatgpt": "openai",
     "gemini": "google",
     "grok": "xai",
 }

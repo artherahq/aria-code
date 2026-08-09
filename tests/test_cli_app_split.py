@@ -67,6 +67,9 @@ class _FakeCommands:
     async def cmd_quote(self, args):
         self.calls.append(("quote", args))
 
+    async def cmd_ashare(self, args):
+        self.calls.append(("ashare", args))
+
     def cmd_doctor(self, args):
         self.calls.append(("doctor", args))
 
@@ -86,8 +89,9 @@ async def test_direct_dispatch_handles_async_and_sync_commands():
 
     assert await dispatch_direct_command(terminal, "quote", "AAPL") is True
     assert await dispatch_direct_command(terminal, "doctor", "--network") is True
+    assert await dispatch_direct_command(terminal, "ashare", "status") is True
 
-    assert terminal.commands.calls == [("quote", "AAPL"), ("doctor", "--network")]
+    assert terminal.commands.calls == [("quote", "AAPL"), ("doctor", "--network"), ("ashare", "status")]
     assert terminal.prompts == []
 
 
@@ -207,12 +211,14 @@ def test_football_intent_still_accepts_real_match_query():
 def test_cli_catalog_exposes_watchable_direct_commands_and_visible_help():
     assert DIRECT_COMMAND_MAP["watchlist"].method_name == "cmd_watch"
     assert DIRECT_COMMAND_MAP["tv"].method_name == "cmd_tv"
+    assert DIRECT_COMMAND_MAP["a-share"].method_name == "cmd_ashare"
     assert is_watchable_direct_command("quote") is True
     assert is_watchable_direct_command("backtest") is False
     assert "/packages" in VISIBLE_SLASH_COMMANDS
     assert "/positions" in VISIBLE_SLASH_COMMANDS
     assert "/upload-image" in VISIBLE_SLASH_COMMANDS
     assert "/tv" in VISIBLE_SLASH_COMMANDS
+    assert "/ashare" in VISIBLE_SLASH_COMMANDS
 
 
 @pytest.mark.asyncio

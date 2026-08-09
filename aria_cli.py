@@ -237,6 +237,14 @@ from apps.cli.commands.broker_cmds import BrokerCommandsMixin
 from apps.cli.commands.canvas_cmds import CanvasCommandsMixin
 from apps.cli.commands.backtest_cmds import BacktestCommandsMixin
 from apps.cli.commands.analysis_cmds import AnalysisCommandsMixin
+from apps.cli.commands.ashare_prediction_cmds import (
+    ASharePredictionCommandsMixin,
+    build_prediction_service,
+    fetch_live_ashare_universe,
+    load_universe_file,
+    parse_ashare_predict_args,
+    prediction_freshness,
+)
 from apps.cli.commands.data_cmds import DataCommandsMixin
 from apps.cli.commands.ops_cmds import OpsCommandsMixin
 from apps.cli.commands.diagnostic_cmds import DiagnosticCommandsMixin
@@ -5727,6 +5735,7 @@ def _rebind_mixin_globals(mixin_cls):
 _rebind_mixin_globals(BrokerCommandsMixin)
 _rebind_mixin_globals(BacktestCommandsMixin)
 _rebind_mixin_globals(AnalysisCommandsMixin)
+_rebind_mixin_globals(ASharePredictionCommandsMixin)
 _rebind_mixin_globals(DataCommandsMixin)
 _rebind_mixin_globals(OpsCommandsMixin)
 _rebind_mixin_globals(DiagnosticCommandsMixin)
@@ -5745,7 +5754,7 @@ _rebind_mixin_globals(MarketCommandsMixin)
 _rebind_mixin_globals(PortfolioCommandsMixin)
 _rebind_mixin_globals(PdfExportCommandsMixin)
 
-class SlashCommands(BrokerCommandsMixin, CanvasCommandsMixin, BacktestCommandsMixin, AnalysisCommandsMixin, DataCommandsMixin, OpsCommandsMixin, DiagnosticCommandsMixin, DiagnosticOpsCommandsMixin, UiCommandsMixin, SessionUxCommandsMixin, AuthCommandsMixin, FileCommandsMixin, FxCommodityCommandsMixin, WorkflowCommandsMixin, BusinessWorkflowCommandsMixin, SessionCommandsMixin, WorkspaceCommandsMixin, ModelCommandsMixin, MarketCommandsMixin, PortfolioCommandsMixin, PdfExportCommandsMixin):
+class SlashCommands(BrokerCommandsMixin, CanvasCommandsMixin, BacktestCommandsMixin, AnalysisCommandsMixin, ASharePredictionCommandsMixin, DataCommandsMixin, OpsCommandsMixin, DiagnosticCommandsMixin, DiagnosticOpsCommandsMixin, UiCommandsMixin, SessionUxCommandsMixin, AuthCommandsMixin, FileCommandsMixin, FxCommodityCommandsMixin, WorkflowCommandsMixin, BusinessWorkflowCommandsMixin, SessionCommandsMixin, WorkspaceCommandsMixin, ModelCommandsMixin, MarketCommandsMixin, PortfolioCommandsMixin, PdfExportCommandsMixin):
     """Claude Code-style slash command system."""
 
     def _cmd_rewind_unavailable(self, args: str):
@@ -5802,6 +5811,8 @@ class SlashCommands(BrokerCommandsMixin, CanvasCommandsMixin, BacktestCommandsMi
             "/install":   (self.cmd_install,  "Detect & install missing deps: /install [pkg|--auto|--required]"),
             "/mcp":       (self.cmd_mcp,      "MCP servers: /mcp status|tools|reload [server]"),
             "/providers": (self.cmd_providers,"List local LLM backends and status"),
+            "/collab":   (self.cmd_collab,   "Multi-model API collaboration: /collab status|use|ask"),
+            "/ashare":   (self.cmd_ashare,   "A-share prediction engine: /ashare status|latest|predict|evaluate"),
             "/ariarc":    (self.cmd_ariarc,   "Show .ariarc project config: /ariarc [reload]"),
             "/skills":    (self.cmd_skills,   "List all available skills"),
             "/services":  (self.cmd_services, "Show service tiers and workflows"),
