@@ -26,7 +26,7 @@ Usage:
     python3 apps/cli/aria_cli.py -p "AAPL PE" --json     # JSON 输出
 """
 
-__version__ = "4.2.0"
+__version__ = "4.3.0"
 
 from apps.cli.commands.core_cmds import CoreCommandsMixin
 import sys
