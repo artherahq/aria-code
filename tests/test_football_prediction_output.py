@@ -1,4 +1,4 @@
-from football_data_client import (
+from clients.football_data_client import (
     football_prediction_quality,
     format_prediction_block,
     predict_match,

@@ -6,6 +6,7 @@ on:
       - main
       - develop
       - dev
+      - "agent/**"
       - "feature/**"
       - "fix/**"
       - "refactor/**"
@@ -79,22 +80,16 @@ jobs:
   security:
     name: Security Scan
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-          cache: pip
+          # Scan the complete reachable history as well as the checked-out tree.
+          fetch-depth: 0
 
-      - name: Install detect-secrets
-        run: pip install detect-secrets
-
-      - name: Scan for secrets
-        run: |
-          detect-secrets scan --baseline .secrets.baseline || true
-          # Fail if actual secrets detected (not just baseline)
-          detect-secrets audit .secrets.baseline --report --json | \
-            python3 -c "import sys,json; d=json.load(sys.stdin); sys.exit(1 if d.get('results') else 0)" || \
-            echo "No new secrets detected"
+      - name: Scan repository and history for secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

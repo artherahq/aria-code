@@ -77,7 +77,7 @@ VISIBLE_SLASH_COMMANDS: FrozenSet[str] = frozenset({
     # Code & project
     "/project", "/init", "/review", "/code", "/plan", "/orchestrate", "/run", "/tasks", "/delegate", "/canva", "/completions", "/lsp",
     # Research
-    "/team", "/deep",
+    "/team", "/warehouse", "/deep",
     # Quant
     "/backtest", "/wf", "/tv", "/ashare",
     # UI generation

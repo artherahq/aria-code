@@ -211,7 +211,7 @@ class BacktestCommandsMixin:
             _resolved_start = None
 
         _known_strategies = {"momentum", "mom", "sma_cross", "ma_cross", "moving_average",
-                              "buy_hold", "buyhold", "hold", "ml", "ml_signal"}
+                              "buy_hold", "buyhold", "hold", "ml", "ml_signal", "agent"}
         if len(parts) == 1 and parts[0].lower() not in _known_strategies:
             strategy = "momentum"
             symbol = parts[0].upper()
@@ -226,6 +226,11 @@ class BacktestCommandsMixin:
             await self._cmd_ml_signal_backtest(parts[1:], start_date=start_date,
                                                 end_date=end_date,
                                                 capital=_initial_capital)
+            return
+
+        # ── Agent 信号回测 ──────────────────────────────────────────────────
+        if strategy.lower() == "agent":
+            await self._cmd_agent_backtest(symbol, start_date=start_date, end_date=end_date, capital=_initial_capital)
             return
 
         # Positional start/end dates only accepted if they look like YYYY-MM-DD

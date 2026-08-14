@@ -8,7 +8,7 @@ _CLI_DIR = str(pathlib.Path(__file__).parents[1])
 if _CLI_DIR not in sys.path:
     sys.path.insert(0, _CLI_DIR)
 
-from file_analysis_tools import tool_analyze_file  # noqa: E402
+from tools.file_analysis_tools import tool_analyze_file  # noqa: E402
 
 # 1x1 transparent PNG
 _PNG = base64.b64decode(

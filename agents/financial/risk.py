@@ -14,6 +14,17 @@ except ImportError:
     _HAS_NP = False
     np = None  # type: ignore[assignment]
 
+import os
+import sys
+import asyncio
+
+# 动态加载 aria_tools 中的 MCP 工具
+sys.path.append("/Users/mac/Desktop/aria-code/packages")
+try:
+    from aria_tools.financial.risk_tools import run_risk_profile
+except ImportError:
+    pass
+
 
 class RiskAgent(BaseAgent):
     name        = "risk"
@@ -25,6 +36,19 @@ class RiskAgent(BaseAgent):
         "Output: risk score 1-10 (1=very low, 10=very high) and "
         "POSITION: <percentage> (e.g. POSITION: 10%)."
     )
+
+    async def _execute_tool(self, tool_name: str, tool_args: Dict[str, Any]) -> str:
+        """拦截 risk_profile 的调用"""
+        if tool_name == "run_risk_profile":
+            if self.on_tool_start:
+                self.on_tool_start(tool_name, tool_args)
+            res = await run_risk_profile(**tool_args)
+            if self.on_tool_end:
+                self.on_tool_end(tool_name, res)
+            import json
+            return json.dumps({"result": res}, ensure_ascii=False)
+
+        return await super()._execute_tool(tool_name, tool_args)
 
     async def fetch_data(self, symbol: str) -> Dict[str, Any]:
         data = await super().fetch_data(symbol)
@@ -56,7 +80,12 @@ class RiskAgent(BaseAgent):
             "3. Liquidity adequacy\n"
             "4. Tail risk and black swan exposure\n"
             "5. Recommended position size for a diversified portfolio\n"
-            "Output format: Risk Score: X/10\nPOSITION: Y%"
+            "Output format: Risk Score: X/10\nPOSITION: Y%\n\n"
+            "## Available Tools\n"
+            "You have access to a tool named `run_risk_profile` to run stress tests.\n"
+            "If you need to evaluate tail risk or run a stress test, output exactly in this format:\n"
+            "{\"type\": \"tool_call\", \"name\": \"run_risk_profile\", \"args\": {\"symbol\": \"AAPL\"}}\n"
+            "Wait for the tool result before concluding."
         )
 
         analysis  = await self._call_llm(self._SYSTEM, prompt, max_tokens=400, quote=quote)

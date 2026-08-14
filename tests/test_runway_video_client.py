@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-import runway_video_client as rvc
+from clients import runway_video_client as rvc
 
 
 def test_require_key_missing_raises_actionable_error(monkeypatch):

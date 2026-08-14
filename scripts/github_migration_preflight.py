@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Preflight checks before moving Aria Code to the Arthera GitHub organization."""
+"""Preflight checks before publishing Aria Code to its canonical GitHub repository."""
 
 from __future__ import annotations
 
@@ -12,10 +12,10 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_ORG = os.environ.get("ARTHERA_GITHUB_ORG", "Arthera")
+EXPECTED_ORG = os.environ.get("ARTHERA_GITHUB_ORG", "artherahq")
 EXPECTED_REPO = os.environ.get("ARIA_GITHUB_REPO", "aria-code")
 BRANCH_PATTERN = re.compile(
-    r"^(main|develop|dev|feature/.+|fix/.+|refactor/.+|chore/.+|docs/.+|release/v.+|codex/.+)$"
+    r"^(main|develop|dev|agent/.+|feature/.+|fix/.+|refactor/.+|chore/.+|docs/.+|release/v.+|codex/.+)$"
 )
 
 
@@ -85,10 +85,10 @@ def main() -> int:
     target_fragment = f"github.com/{EXPECTED_ORG}/{EXPECTED_REPO}"
     has_arthera_remote = any(target_fragment.lower() in remote.lower() for remote in remotes)
     if has_arthera_remote:
-        line("ok", f"Arthera remote detected: {EXPECTED_ORG}/{EXPECTED_REPO}")
+        line("ok", f"canonical remote detected: {EXPECTED_ORG}/{EXPECTED_REPO}")
     else:
         warnings.append(
-            f"Arthera remote not configured yet; expected URL contains {target_fragment}"
+            f"canonical remote not configured yet; expected URL contains {target_fragment}"
         )
 
     upstream = git("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
@@ -124,7 +124,7 @@ def main() -> int:
     line("ok", "no tracked root .env/private key files found")
 
     ci_text = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-    for branch_name in ("main", "develop", "codex/**", "feature/**"):
+    for branch_name in ("main", "develop", "agent/**", "codex/**", "feature/**"):
         if branch_name not in ci_text:
             warnings.append(f"CI workflow does not explicitly include branch pattern: {branch_name}")
 
@@ -145,7 +145,7 @@ def main() -> int:
         line("fail", failure)
 
     if failures:
-        print("\nPreflight failed. Fix failures before pushing to the Arthera repository.")
+        print("\nPreflight failed. Fix failures before pushing to the canonical repository.")
         return 1
 
     print("\nPreflight passed with warnings." if warnings else "\nPreflight passed.")

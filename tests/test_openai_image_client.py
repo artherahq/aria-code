@@ -6,7 +6,7 @@ from __future__ import annotations
 import base64
 from unittest.mock import MagicMock, patch
 
-import openai_image_client as oic
+from clients import openai_image_client as oic
 
 
 def _fake_b64_png() -> str:

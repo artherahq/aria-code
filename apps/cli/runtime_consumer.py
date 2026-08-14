@@ -474,13 +474,32 @@ class TerminalRuntimeEventConsumer:
     def on_tool_call(self, tool: str, params: dict) -> None:
         self.set_phase(TurnPhase.TOOL)
         self._finish_thinking()
+
+        # Cursor/Windsurf 风格的实时加载动画
+        if self.has_rich and hasattr(self, 'console'):
+            hint = _tool_activity_hint(tool, params)
+            label = f"[bold cyan]调用工具[/bold cyan] [green]{tool}[/green]"
+            if hint:
+                label += f" [dim]({hint})[/dim]"
+            self.tool_spinner = self.console.status(label, spinner="dots12", spinner_style="cyan")
+            self.tool_spinner.__enter__()
+
         if self.print_tool_call is not None:
             self.print_tool_call(tool, params if isinstance(params, dict) else {})
+
         self.tool_start_times.setdefault(tool, []).append(time.time())
         safe_params = dict(params) if isinstance(params, dict) else {}
         self.tool_params.setdefault(tool, []).append(safe_params)
 
     def on_tool_result(self, tool: str, summary: Any) -> None:
+        # 关闭工具加载动画
+        if hasattr(self, 'tool_spinner') and self.tool_spinner is not None:
+            try:
+                self.tool_spinner.__exit__(None, None, None)
+            except Exception:
+                pass
+            self.tool_spinner = None
+
         starts = self.tool_start_times.get(tool) or []
         started_at = starts.pop(0) if starts else time.time()
         if not starts:

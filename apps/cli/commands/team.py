@@ -30,6 +30,7 @@ class TeamArgs:
     symbols_raw: list[str]
     agent_names: list[str] | None = None
     use_full_team: bool = False
+    use_pipeline: bool = False
 
 
 @dataclass(frozen=True)
@@ -53,6 +54,7 @@ def parse_team_args(args: str) -> TeamArgs:
     agent_names = None
     symbols_raw: list[str] = []
     use_full_team = False
+    use_pipeline = False
     idx = 0
     while idx < len(parts):
         part = parts[idx]
@@ -65,12 +67,15 @@ def parse_team_args(args: str) -> TeamArgs:
         elif part == "--full":
             use_full_team = True
             idx += 1
+        elif part == "--pipeline":
+            use_pipeline = True
+            idx += 1
         else:
             symbols_raw.append(part)
             idx += 1
     if use_full_team and not agent_names:
         agent_names = list(FULL_TEAM_AGENTS)
-    return TeamArgs(symbols_raw=symbols_raw, agent_names=agent_names, use_full_team=use_full_team)
+    return TeamArgs(symbols_raw=symbols_raw, agent_names=agent_names, use_full_team=use_full_team, use_pipeline=use_pipeline)
 
 
 def resolve_team_symbols(args: TeamArgs, config: dict[str, Any], limit: int = 3) -> list[str]:
@@ -354,6 +359,10 @@ async def run_team_analysis(
     sanitize_result: Callable[[Any, Any], list[str]] | None = None,
     lang: str = "zh",
     on_agent_done: Callable[[str, Any], None] | None = None,
+    on_token: Callable[[str], None] | None = None,
+    on_thought: Callable[[str], None] | None = None,
+    on_tool_start: Callable[[str, dict], None] | None = None,
+    on_tool_end: Callable[[str, Any], None] | None = None,
 ) -> TeamAnalysisResult:
     from agents.team import run_team
     try:
@@ -398,12 +407,16 @@ async def run_team_analysis(
                 agents=args.agent_names,
                 llm_provider=llm_provider,
                 data_router=data_router,
-                on_token=None,
+                on_token=on_token,
+                on_thought=on_thought,
+                on_tool_start=on_tool_start,
+                on_tool_end=on_tool_end,
                 on_agent_done=_agent_done_proxy if on_agent_done else None,
                 on_synthesis_start=None,
                 lang=lang,
                 market_context=build_team_market_context(data_bundle),
                 agent_data=build_team_agent_data(data_bundle),
+                use_pipeline=args.use_pipeline,
             )
     finally:
         for name, level in saved_levels.items():

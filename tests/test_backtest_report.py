@@ -1,7 +1,7 @@
 from pathlib import Path
 import json
 
-from backtest_report import BacktestConfig, generate_backtest_report, render_backtest_html, run_backtest_from_history
+from domain.backtest_report import BacktestConfig, generate_backtest_report, render_backtest_html, run_backtest_from_history
 
 
 def _sample_history(n=90):

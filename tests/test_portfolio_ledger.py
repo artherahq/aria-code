@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from portfolio_ledger import PortfolioLedger
+from domain.portfolio_ledger import PortfolioLedger
 
 
 @pytest.fixture

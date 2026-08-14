@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Generator, AsyncGenerator
 
 logger = logging.getLogger(__name__)
 
@@ -86,14 +86,21 @@ class BaseAgent(ABC):
         llm_provider=None,         # BaseLLMProvider 实例（可选，None 则用模板生成）
         data_router=None,          # DataRouter 实例（可选）
         on_token: Optional[Callable[[str], None]] = None,  # 流式 token 回调
+        on_thought: Optional[Callable[[str], None]] = None, # 思考过程回调
+        on_tool_start: Optional[Callable[[str, Dict], None]] = None, # 工具调用开始回调
+        on_tool_end: Optional[Callable[[str, Any], None]] = None, # 工具调用结束回调
         config: Optional[Dict] = None,
         lang: str = "zh",          # user language: "zh" | "en"
     ):
         self.llm      = llm_provider
         self.data     = data_router
         self.on_token = on_token
+        self.on_thought = on_thought
+        self.on_tool_start = on_tool_start
+        self.on_tool_end = on_tool_end
         self.config   = config or {}
         self.lang     = lang
+        self.memory   = []         # Short-term conversation history for multi-turn context
 
     async def fetch_data(self, symbol: str) -> Dict[str, Any]:
         """
@@ -127,14 +134,39 @@ class BaseAgent(ABC):
             )
         return ""
 
+    async def _execute_tool(self, tool_name: str, tool_args: Dict[str, Any]) -> str:
+        """
+        执行本地工具或 MCP 工具（可被子类重写扩展）。
+        实际项目中可将 aria-skills 暴露为工具。
+        """
+        if self.on_tool_start:
+            self.on_tool_start(tool_name, tool_args)
+
+        result = None
+        try:
+            # 路由到数据层或其他 MCP Client 执行
+            if self.data and hasattr(self.data, "execute_tool"):
+                result = await self.data.execute_tool(tool_name, tool_args)
+            else:
+                result = f"Error: Tool {tool_name} not implemented or data router unavailable."
+        except Exception as e:
+            result = f"Error executing {tool_name}: {e}"
+
+        if self.on_tool_end:
+            self.on_tool_end(tool_name, result)
+
+        import json
+        return json.dumps(result, ensure_ascii=False) if not isinstance(result, str) else result
+
     async def _call_llm(
         self,
         system: str,
         user: str,
         max_tokens: int = 800,
         quote: Optional[Dict[str, Any]] = None,
+        max_tool_loops: int = 5,
     ) -> str:
-        """调用 LLM 生成分析文本（无 LLM 时返回空字符串）"""
+        """调用 LLM 生成分析文本，内置 Tool Calling 的执行循环"""
         if not self.llm:
             return ""
         # Inject language rule + post-training facts + data guard into system prompt
@@ -142,27 +174,82 @@ class BaseAgent(ABC):
         _data_warn = self._data_guard(quote or {})
         system = system + self._POST_TRAINING_FACTS + _lang_rule + _data_warn
         from providers.llm.base import Message
-        messages = [
-            Message(role="system", content=system),
-            Message(role="user",   content=user),
-        ]
+
+        # 自动注入 DAG pipeline 中的 upstream context
+        if hasattr(self, "_current_data") and self._current_data:
+            upstream = self._current_data.get("upstream_context")
+            if upstream:
+                user += "\n\n## ⬆️ 团队/上游 Agent 提供的背景上下文 (Upstream Insights)\n"
+                user += "请在分析中参考以下来自其他专家 Agent 的核心观点：\n"
+                user += "\n".join(upstream)
+
+        # 融入历史记忆
+        if not self.memory:
+            messages = [
+                Message(role="system", content=system),
+                Message(role="user",   content=user),
+            ]
+        else:
+            messages = list(self.memory)
+            messages.append(Message(role="user", content=user))
+
         full_text = ""
-        try:
-            async for event in self.llm.stream(
-                messages, max_tokens=max_tokens
-            ):
-                t = event.get("type")
-                if t == "token":
-                    tok = event.get("text", "")
-                    full_text += tok
-                    if self.on_token:
-                        self.on_token(tok)
-                elif t == "error":
-                    logger.warning(f"[{self.name}] LLM 错误: {event.get('message')}")
-                    break
-        except Exception as e:
-            logger.warning(f"[{self.name}] LLM 调用失败: {e}")
+        loop_count = 0
+
+        while loop_count < max_tool_loops:
+            loop_count += 1
+            current_text = ""
+            tool_calls = []
+
+            try:
+                async for event in self.llm.stream(
+                    messages, max_tokens=max_tokens
+                ):
+                    t = event.get("type")
+                    if t == "token":
+                        tok = event.get("text", "")
+                        current_text += tok
+                        full_text += tok
+                        if self.on_token:
+                            self.on_token(tok)
+                    elif t == "thought" and self.on_thought:
+                        self.on_thought(event.get("text", ""))
+                    elif t == "tool_call":
+                        # 记录工具调用意图
+                        tool_calls.append({
+                            "name": event.get("name"),
+                            "args": event.get("args", {})
+                        })
+                    elif t == "tool_start" and self.on_tool_start:
+                        self.on_tool_start(event.get("tool_name", ""), event.get("tool_args", {}))
+                    elif t == "tool_end" and self.on_tool_end:
+                        self.on_tool_end(event.get("tool_name", ""), event.get("tool_result", None))
+                    elif t == "error":
+                        logger.warning(f"[{self.name}] LLM 错误: {event.get('message')}")
+                        break
+            except Exception as e:
+                logger.warning(f"[{self.name}] LLM 调用失败: {e}")
+                break
+
+            # 将当前 Assistant 的回复加入消息流
+            messages.append(Message(role="assistant", content=current_text))
+
+            # 如果没有工具调用，说明 LLM 完成了最终回答，跳出循环
+            if not tool_calls:
+                break
+
+            # 有工具调用，则逐一执行，并把结果喂回 LLM
+            for tc in tool_calls:
+                tool_res = await self._execute_tool(tc["name"], tc["args"])
+                # 注意：实际 provider 中 Message 结构可能需要 tool_call_id
+                # 这里假设通用 Message 能够携带 role="tool"
+                messages.append(Message(role="tool", name=tc["name"], content=tool_res))
+
+        # 更新短期记忆
+        self.memory = messages
+
         return full_text.strip()
+
 
     @abstractmethod
     async def analyze(self, symbol: str, data: Dict[str, Any]) -> AgentResult:

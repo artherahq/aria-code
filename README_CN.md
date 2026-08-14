@@ -90,6 +90,7 @@ $ aria-code
 | **83 个命令** | 从 ~150 收敛到 83 个直接动作命令；其余交给 LLM 自然语言处理 |
 | **LLM 路由修复** | 模型现在知道可以调取实时数据工具，不再说"我没有实时数据" |
 | **统一 Agent 循环** | CLI、SDK 与自托管后端现在跑**同一套**经测试的 runtime（`runtime.run_turn`）——各端的 provider 路由、云端→本地回退、工具执行完全一致 |
+| **仓储 ERP Agents** | 只读货代同步、入库异常和库存健康分析，使用独立的运营信号方案；见[数据契约](docs/warehouse-erp-agents.md) |
 | **一条命令安装** | `pip install aria-code`（PyPI）或 `npm install -g @artheras/aria-code`——已在 Python 3.10 / 3.11 / 3.12 验证可干净安装 |
 
 完整历史见 [CHANGELOG.md](CHANGELOG.md)。
@@ -764,7 +765,7 @@ Aria Code 设计为**独立工具** — 无需 Arthera 后端即可运行。所�
 
 <p align="center">
   <a href="https://arthera.finance">官网</a> ·
-  <a href="https://github.com/Cinsoul/Arthera">完整平台</a> ·
+  <a href="https://github.com/artherahq/aria-code">项目仓库</a> ·
   <a href="https://github.com/artherahq/aria-code/issues">问题反馈</a> ·
   <a href="https://github.com/artherahq/aria-code/discussions">讨论社区</a>
 </p>

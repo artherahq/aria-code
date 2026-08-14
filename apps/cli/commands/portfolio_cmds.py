@@ -986,6 +986,7 @@ class PortfolioCommandsMixin:
                /team 000333 --agents technical,risk
                /team watchlist
                /team AAPL --full          ← 7-agent 完整模式（+新闻/催化剂/行业）
+               /team AAPL --pipeline      ← 开启 DAG 串行协作模式（Context Sharing）
         """
         import sys as _sys
         team_args = parse_team_args(args)
@@ -1026,6 +1027,19 @@ class PortfolioCommandsMixin:
                 print(f"\n  ⏺ 多代理分析 {sym}  {_agent_count} 个分析师并行")
 
             try:
+                # Create a stream consumer for tool rendering and thinking animations
+                from apps.cli.runtime_consumer import TerminalRuntimeEventConsumer
+                consumer = TerminalRuntimeEventConsumer(
+                    terminal=self.terminal,
+                    console=console,
+                    has_rich=HAS_RICH,
+                    markdown_cls=None,
+                    live_cls=None,
+                    strip_latex=lambda x: x,
+                    fallback_from="local",
+                    ui_lang=_lang,
+                )
+
                 # ── 新 Agent 系统（无 Ollama 依赖）────────────────────────
                 _analysis = await run_team_analysis(
                     symbol=sym,
@@ -1034,6 +1048,10 @@ class PortfolioCommandsMixin:
                     sanitize_result=_sanitize_team_result_with_market_data,
                     lang=_lang,
                     on_agent_done=_on_agent_done,
+                    on_token=consumer.on_token,
+                    on_thought=consumer.on_thinking,
+                    on_tool_start=consumer.on_tool_call,
+                    on_tool_end=consumer.on_tool_result,
                 )
 
                 team_result = _analysis.team_result

@@ -14,6 +14,11 @@ from dataclasses import asdict, dataclass, field, is_dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
+try:
+    from packages.aria_services.cache import DistributedCacheManager
+except ImportError:
+    DistributedCacheManager = None
+
 from packages.aria_services.provider_health import (
     GLOBAL_PROVIDER_HEALTH,
     ProviderHealthRegistry,
@@ -157,8 +162,13 @@ class DataService:
         self.ttl_seconds = ttl_seconds
         self.max_quote_age_seconds = max_quote_age_seconds
         self.provider_health = provider_health or GLOBAL_PROVIDER_HEALTH
-        self._cache: Dict[Tuple[Any, ...], Tuple[float, DataServiceResult]] = {}
-
+        import os
+        redis_url = os.environ.get("REDIS_URL", None)
+        if DistributedCacheManager:
+            self._cache_manager = DistributedCacheManager(redis_url=redis_url)
+        else:
+            self._cache_manager = None
+            self._cache: Dict[Tuple[Any, ...], Tuple[float, DataServiceResult]] = {}
     def quote(self, symbol: str) -> DataServiceResult:
         return self._cached(("quote", symbol), lambda: self._quote_uncached(symbol))
 
@@ -213,13 +223,33 @@ class DataService:
         )
 
     def _cached(self, key: Tuple[Any, ...], factory: Any) -> DataServiceResult:
-        now = time.time()
-        cached = self._cache.get(key)
-        if cached and now - cached[0] <= self.ttl_seconds:
-            return cached[1]
-        result = factory()
-        self._cache[key] = (now, result)
-        return result
+        # Convert tuple key to string for Redis
+        str_key = "|".join(str(k) for k in key)
+
+        if self._cache_manager:
+            import json
+            cached = self._cache_manager.get(str_key)
+            if cached:
+                # If cached is dict (from redis json), we might need to cast it back to DataServiceResult
+                # For simplicity, if we rely on pickle or raw dict, we assume the factory returns raw or dataclass
+                # Since DataServiceResult is a dataclass, we could recreate it or just return it.
+                if isinstance(cached, dict):
+                    return DataServiceResult(**cached)
+                return cached
+
+            result = factory()
+            # To cache it in redis, convert dataclass to dict if necessary
+            val_to_cache = result.__dict__ if hasattr(result, '__dict__') else result
+            self._cache_manager.set(str_key, val_to_cache, self.ttl_seconds)
+            return result
+        else:
+            now = time.time()
+            cached = self._cache.get(key)
+            if cached and now - cached[0] <= self.ttl_seconds:
+                return cached[1]
+            result = factory()
+            self._cache[key] = (now, result)
+            return result
 
     def _quote_uncached(self, symbol: str) -> DataServiceResult:
         warnings: List[str] = []

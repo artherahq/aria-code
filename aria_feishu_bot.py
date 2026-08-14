@@ -82,6 +82,20 @@ _INLINE_RICH_TAG_RE = re.compile(r"\[/?(?:cyan|dim|bold|red|green|yellow|blue|ma
 
 _ARIA_CODE_DIR = Path(__file__).parent
 
+
+def _swarm_orchestrator_path() -> Optional[Path]:
+    """Return the explicitly configured enterprise swarm entrypoint.
+
+    The previous implementation referenced a developer's local checkout,
+    which made the public bot command fail everywhere else.  Enterprise swarm
+    orchestration is optional and may live in a separately deployed service,
+    so it must be configured instead of inferred from a workstation path.
+    """
+    raw = os.environ.get("ARIA_SWARM_ORCHESTRATOR", "").strip()
+    if not raw:
+        return None
+    return Path(raw).expanduser().resolve()
+
 # ── Feishu API endpoints ───────────────────────────────────────────────────────
 
 _FEISHU_API = "https://open.feishu.cn/open-apis"
@@ -312,6 +326,7 @@ async def _handle_command(cmd: str, message_id: str, sender_id: str, chat_id: st
             "`/football predict Arsenal vs Chelsea pl` — ⚽ 足球比赛预测\n"
             "`/football standings pl` — 联赛积分榜（pl/bl/ll/sa/cl）\n"
             "`/run <aria命令>` — 执行任意 Aria 命令，如 `/run /corr AAPL TSLA`\n"
+            "`/swarm <事件>` — 🚨 启动企业级跨部门多智能体协作\n"
             "`/alert add <symbol> <cond> <value>` — 添加价格预警\n"
             "　　条件: `price_above` `price_below` `pct_change_above` `pct_change_below`\n"
             "`/alerts` — 查看所有预警\n"
@@ -480,6 +495,15 @@ async def _handle_command(cmd: str, message_id: str, sender_id: str, chat_id: st
         await reply_card(message_id, f"⚙️ 执行: {sub_cmd[:60]}", "正在运行，请稍候…", "blue")
         asyncio.create_task(_async_run_aria(sub_cmd, message_id))
 
+    elif verb == "swarm":
+        # /swarm <事件> e.g. /swarm 俄罗斯仓库丢件
+        event = " ".join(parts[1:]).strip() if len(parts) > 1 else ""
+        if not event:
+            await reply_text(message_id, "用法: /swarm <事件>，例如 `/swarm 莫斯科01仓少件`")
+            return
+        await reply_card(message_id, f"🚨 跨部门 Swarm 调度启动", f"事件: {event[:60]}\n\n正在唤醒 物流、财务、法务 Agent，请稍候…", "red")
+        asyncio.create_task(_async_run_swarm(event, message_id))
+
     else:
         await reply_card(message_id, "❓ 未知命令",
                          f"不认识 `/{verb}`，发送 `/help` 查看全部命令", "yellow")
@@ -589,6 +613,42 @@ async def _async_report(symbol: str, message_id: str) -> None:
                          footer="Aria Code · 多智能体分析")
     except Exception as exc:
         await reply_card(message_id, f"❌ {symbol} 研报失败", str(exc)[:300], "red")
+
+
+async def _async_run_swarm(event: str, message_id: str) -> None:
+    """Background task: run the enterprise swarm orchestrator and reply."""
+    try:
+        orchestrator = _swarm_orchestrator_path()
+        if orchestrator is None:
+            raise RuntimeError(
+                "未配置企业 Swarm 编排器。请设置 ARIA_SWARM_ORCHESTRATOR 为可执行的 Python 脚本路径。"
+            )
+        if not orchestrator.is_file():
+            raise RuntimeError(f"企业 Swarm 编排器不存在：{orchestrator}")
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable, str(orchestrator), event,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
+        out = stdout.decode("utf-8").strip()
+
+        # 提取各个 Agent 的处理日志
+        lines = out.split("\n")
+        body = ""
+        for line in lines:
+            if "SUPERVISOR" in line:
+                body += f"**[主管]** {line.split('SUPERVISOR]')[-1].strip()}\n"
+            elif "Logistics Agent" in line:
+                body += f"📦 **[物流]** {line.split('Logistics Agent]')[-1].strip()}\n"
+            elif "Finance Agent" in line:
+                body += f"💰 **[财务]** {line.split('Finance Agent]')[-1].strip()}\n"
+            elif "Legal Agent" in line:
+                body += f"⚖️ **[法务]** {line.split('Legal Agent]')[-1].strip()}\n"
+
+        await reply_card(message_id, f"🎉 Swarm 处理报告", body[:2000] if body else "处理完成。", "turquoise", footer="Enterprise Supervisor Orchestration")
+    except Exception as exc:
+        await reply_card(message_id, f"❌ Swarm 调度失败", str(exc)[:300], "red")
 
 
 async def _async_run_aria(cmd: str, message_id: str) -> None:

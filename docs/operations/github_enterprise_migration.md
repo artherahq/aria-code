@@ -22,7 +22,7 @@ Recommended target:
 
 - GitHub organization: `Arthera`
 - repository: `aria-code`
-- canonical URL: `https://github.com/Arthera/aria-code`
+- canonical URL: `https://github.com/artherahq/aria-code`
 
 Use `Arthera/arthera-code` only if the product is being renamed. If the CLI
 continues to ship as `aria-code`, keep the repository name stable.
@@ -96,7 +96,7 @@ python3 scripts/github_migration_preflight.py
 Add the Arthera remote without replacing `origin`:
 
 ```bash
-git remote add arthera https://github.com/Arthera/aria-code.git
+git remote add artherahq https://github.com/artherahq/aria-code.git
 git fetch arthera
 ```
 

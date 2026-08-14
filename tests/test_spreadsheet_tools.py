@@ -7,7 +7,7 @@ import pytest
 
 openpyxl = pytest.importorskip("openpyxl")
 
-from spreadsheet_tools import (  # noqa: E402
+from tools.spreadsheet_tools import (  # noqa: E402
     MAX_SHEETS,
     register_spreadsheet_tools,
     tool_write_spreadsheet,

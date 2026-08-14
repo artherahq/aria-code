@@ -51,6 +51,7 @@ _try_import_builtin("agents.financial.debate",       "debate")
 _try_import_builtin("agents.financial.earnings",     "earnings")
 _try_import_builtin("agents.financial.sector",       "sector")
 _try_import_builtin("agents.portfolio_agent",        "portfolio")
+_try_import_builtin("agents.supervisor",             "supervisor")
 
 # ── 经营权共创平台 Agent 包 ────────────────────────────────────────────────────
 _try_import_builtin("agents.realty.asset_diagnosis",  "asset_diagnosis")
@@ -62,6 +63,11 @@ _try_import_builtin("agents.realty.energy_anomaly",   "energy_anomaly")
 _try_import_builtin("agents.realty.fulfillment_risk", "fulfillment_risk")
 _try_import_builtin("agents.realty.ops_optimize",     "ops_optimize")
 _try_import_builtin("agents.realty.exit_settlement",  "exit_settlement")
+
+# ── 海外仓 ERP Agent 包 ───────────────────────────────────────────────────────
+_try_import_builtin("agents.warehouse.logistics_sync", "warehouse_logistics_sync")
+_try_import_builtin("agents.warehouse.inbound_exceptions", "warehouse_inbound_exceptions")
+_try_import_builtin("agents.warehouse.inventory_health", "warehouse_inventory_health")
 
 
 class AgentRegistry:

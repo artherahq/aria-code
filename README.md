@@ -90,6 +90,7 @@ $ aria-code
 | **83 commands** | Consolidated from ~150 — removed all LLM-replaceable commands; natural language handles the rest |
 | **LLM routing fix** | Model now knows it can call real-time data tools instead of saying "I don't have live data" |
 | **Unified agent loop** | CLI, SDK and self-host backend now run the *same* tested runtime (`runtime.run_turn`) — consistent provider routing, cloud→local fallback and tool execution on every surface |
+| **Warehouse ERP agents** | Read-only carrier-sync, inbound-exception and inventory-health analysis with a dedicated operational signal scheme; see [data contract](docs/warehouse-erp-agents.md) |
 | **One-command install** | `pip install aria-code` (PyPI) or `npm install -g @artheras/aria-code` — verified clean on Python 3.10 / 3.11 / 3.12 |
 
 See [CHANGELOG.md](CHANGELOG.md) for the full history.
@@ -979,7 +980,7 @@ converts to Apache 2.0 four years after release.
 
 <p align="center">
   <a href="https://arthera.finance">Website</a> ·
-  <a href="https://github.com/Cinsoul/Arthera">Full Platform</a> ·
+  <a href="https://github.com/artherahq/aria-code">Project Repository</a> ·
   <a href="https://github.com/artherahq/aria-code/issues">Issues</a> ·
   <a href="https://github.com/artherahq/aria-code/discussions">Discussions</a>
 </p>

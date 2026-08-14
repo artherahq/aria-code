@@ -2,7 +2,7 @@ name: test
 
 on:
   push:
-    branches: [main, "ci/**"]
+    branches: [main, "ci/**", "agent/**"]
   pull_request:
   workflow_dispatch:
 

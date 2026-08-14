@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-import local_image_provider as lip
+from providers import local_image_provider as lip
 
 
 def test_generate_image_local_missing_deps_returns_actionable_error(monkeypatch):

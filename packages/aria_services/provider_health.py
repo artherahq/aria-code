@@ -55,6 +55,80 @@ class ProviderHealthSummary:
         return asdict(self)
 
 
+_PUBLIC_SERVICE_LABELS = {
+    "market_data": "市场数据",
+    "ai": "AI 助手",
+}
+
+
+@dataclass(frozen=True)
+class PublicServiceStatus:
+    """A safe, product-facing view of internal provider health."""
+
+    schema: str
+    service: str
+    state: str
+    label: str
+    message: str
+    can_retry: bool
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+def public_service_status(
+    service: str, snapshot: List[Dict[str, Any]] | None = None
+) -> PublicServiceStatus:
+    """Project provider health into copy that is safe to render in the product.
+
+    Provider names, endpoint details and raw failures remain internal diagnostics.
+    """
+
+    service_key = str(service or "").strip().lower() or "service"
+    label = _PUBLIC_SERVICE_LABELS.get(service_key, "服务")
+    rows = list(snapshot or [])
+
+    if not rows:
+        return PublicServiceStatus(
+            schema="aria.public_service_status.v1",
+            service=service_key,
+            state="unknown",
+            label=label,
+            message=f"{label}状态将在首次使用后更新。",
+            can_retry=False,
+        )
+
+    states = [str(row.get("status") or "unknown") for row in rows]
+    categories = [str(row.get("last_error_category") or "") for row in rows]
+    available_count = sum(state == "ok" for state in states)
+
+    if available_count == len(rows):
+        state, message, can_retry = "available", f"{label}可用。", False
+    elif available_count:
+        state, message, can_retry = (
+            "degraded",
+            f"{label}已自动切换到可用服务。",
+            True,
+        )
+    elif "auth" in categories:
+        state, message, can_retry = (
+            "unavailable",
+            f"{label}暂不可用，需要检查连接设置。",
+            False,
+        )
+    else:
+        state, message, can_retry = "unavailable", f"{label}暂不可用，请稍后重试。", True
+
+    return PublicServiceStatus(
+        schema="aria.public_service_status.v1",
+        service=service_key,
+        state=state,
+        label=label,
+        message=message,
+        can_retry=can_retry,
+    )
+
+
 def classify_provider_error(provider: str, error: Any) -> ProviderIssue:
     text = str(error or "").strip()
     low = text.lower()
@@ -70,7 +144,9 @@ def classify_provider_error(provider: str, error: Any) -> ProviderIssue:
         return ProviderIssue(provider, "no_data", "provider returned no market data", True, 15)
     if any(token in low for token in ("unauthorized", "forbidden", "api key", "401", "403")):
         return ProviderIssue(provider, "auth", "provider authentication failed", False, 0)
-    return ProviderIssue(provider, "error", text[:240], True, 30)
+    # Do not retain raw provider errors here. They can contain URLs, request
+    # headers, or tokens and this state is consumed by product diagnostics.
+    return ProviderIssue(provider, "error", "provider request failed", True, 30)
 
 
 class ProviderHealthRegistry:
@@ -114,6 +190,9 @@ class ProviderHealthRegistry:
 
     def summary(self) -> ProviderHealthSummary:
         return summarize_provider_health(self.snapshot())
+
+    def public_status(self, service: str) -> PublicServiceStatus:
+        return public_service_status(service, self.snapshot())
 
 
 GLOBAL_PROVIDER_HEALTH = ProviderHealthRegistry()

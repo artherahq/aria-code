@@ -95,3 +95,17 @@ REALTY_SCHEME = SignalScheme(
     negative_signals=frozenset({"CONCERN", "SEVERE"}),
     neutral_default="WATCH",
 )
+
+# ── 仓储 ERP：同样是运营健康度，不是交易动作 ────────────────────────────────
+# Warehouse agents assess carrier synchronisation, inbound exceptions and stock
+# health.  Keeping a named scheme prevents callers from accidentally applying
+# the financial BUY/HOLD/SELL vote to these operational signals.
+WAREHOUSE_SCHEME = SignalScheme(
+    name="warehouse",
+    scores={"GOOD": 2, "WATCH": 0, "CONCERN": -1, "SEVERE": -2},
+    upper_thresholds=[(1.0, "GOOD")],
+    lower_thresholds=[(-1.5, "SEVERE"), (-0.5, "CONCERN")],
+    positive_signals=frozenset({"GOOD"}),
+    negative_signals=frozenset({"CONCERN", "SEVERE"}),
+    neutral_default="WATCH",
+)

@@ -50,6 +50,9 @@ class AgentTeam:
         llm_provider=None,
         data_router=None,
         on_token: Optional[Callable[[str], None]] = None,
+        on_thought: Optional[Callable[[str], None]] = None,
+        on_tool_start: Optional[Callable[[str, Dict], None]] = None,
+        on_tool_end: Optional[Callable[[str, Any], None]] = None,
         on_agent_done: Optional[Callable[[str, AgentResult], None]] = None,
         on_synthesis_start: Optional[Callable[[List["AgentResult"]], None]] = None,
         timeout_per_agent: float = 60.0,
@@ -60,6 +63,9 @@ class AgentTeam:
         self.llm                = llm_provider
         self.data               = data_router
         self.on_token           = on_token
+        self.on_thought         = on_thought
+        self.on_tool_start      = on_tool_start
+        self.on_tool_end        = on_tool_end
         self.on_agent_done      = on_agent_done
         self.on_synthesis_start = on_synthesis_start
         self.timeout            = timeout_per_agent
@@ -84,8 +90,17 @@ class AgentTeam:
             llm_provider=self.llm,
             data_router=self.data,
             on_token=self.on_token,
+            on_thought=self.on_thought,
+            on_tool_start=self.on_tool_start,
+            on_tool_end=self.on_tool_end,
             lang=self.lang,
         )
+
+    @staticmethod
+    def _available_default_team() -> List[str]:
+        """Return only default agents that are registered in this installation."""
+        registry = get_registry()
+        return [name for name in DEFAULT_TEAM if registry.get(name)]
 
     def _emit_agent_done(self, name: str, result: AgentResult) -> None:
         """Notify UI adapters without allowing rendering errors to fail agents."""
@@ -152,6 +167,7 @@ class AgentTeam:
         prefetched_data: Optional[Dict[str, Any]] = None,
     ) -> AgentResult:
         try:
+            agent._current_data = prefetched_data or {}
             operation = (
                 agent.analyze(symbol, prefetched_data)
                 if prefetched_data is not None
@@ -204,8 +220,30 @@ class AgentTeam:
         agent_data: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> TeamResult:
         """并行运行所有 agent，等待全部完成后汇总。"""
-        names_to_run = agents or DEFAULT_TEAM
+        names_to_run = agents
         t0 = time.time()
+
+        if not names_to_run or names_to_run == ["auto"]:
+            supervisor = self._build_agent("supervisor")
+            if supervisor:
+                try:
+                    sup_result = await asyncio.wait_for(
+                        supervisor.analyze(symbol, market_context or {}),
+                        timeout=self.timeout
+                    )
+                    import json
+                    resolved = json.loads(sup_result.analysis)
+                    names_to_run = (
+                        resolved
+                        if isinstance(resolved, list) and resolved
+                        else self._available_default_team()
+                    )
+                    logger.info(f"[supervisor] dynamically selected agents: {names_to_run}")
+                except Exception as e:
+                    logger.warning(f"[supervisor] failed to resolve dynamic agents: {e}, falling back to default.")
+                    names_to_run = self._available_default_team()
+            else:
+                names_to_run = self._available_default_team()
 
         # 过滤掉 synthesis 和 debate（各自在并行批次后单独运行）
         regular = [n for n in names_to_run if n not in ("synthesis", "debate")]
@@ -304,6 +342,56 @@ class AgentTeam:
             elapsed_sec  = round(time.time() - t0, 1),
         )
 
+    async def run_sequential(
+        self,
+        symbol: str,
+        agents: List[str],
+        market_context: Optional[Dict[str, Any]] = None,
+        agent_data: Optional[Dict[str, Dict[str, Any]]] = None,
+    ) -> TeamResult:
+        """
+        DAG / Pipeline 顺序工作流。
+        按给定顺序依次执行 Agent，上一个 Agent 的核心结论（key_points）会自动
+        注入到下一个 Agent 的上下文中。适合需要因果推理的场景（如 Macro -> Fundamental）。
+        """
+        t0 = time.time()
+        results: List[AgentResult] = []
+        accumulated_context = dict(market_context or {})
+
+        agent_objects = [a for n in agents if (a := self._build_agent(n))]
+        if not agent_objects:
+            return TeamResult(symbol=symbol, agents_run=[], results=[], error="no_agents_available")
+
+        prefetched = agent_data or {}
+
+        for agent in agent_objects:
+            # 注入前面累积的上下文（如果有 prefetched_data 则混合进去）
+            current_data = dict(prefetched.get(agent.name, {}))
+            current_data["upstream_context"] = accumulated_context.get("upstream_insights", [])
+
+            result = await self._run_one(agent, symbol, current_data)
+            results.append(result)
+
+            # 将当前结论提取，传递给下一个 Agent
+            if result.success and result.key_points:
+                insights = accumulated_context.get("upstream_insights", [])
+                insights.extend([f"[{agent.name.upper()}]: {pt}" for pt in result.key_points])
+                accumulated_context["upstream_insights"] = insights
+
+        # 执行最终的信号表决与综合
+        final_signal, confidence = self.signal_scheme.vote(results)
+        synthesis_text = _template_synthesis(results, self.signal_scheme)
+
+        return TeamResult(
+            symbol       = symbol,
+            agents_run   = [a.name for a in agent_objects],
+            results      = list(results),
+            synthesis    = synthesis_text,
+            final_signal = final_signal,
+            confidence   = confidence,
+            elapsed_sec  = round(time.time() - t0, 1),
+        )
+
 
 # ── 独立函数（兼容旧 financial_agents.py 调用方式）──────────────────────────
 
@@ -313,6 +401,9 @@ async def run_team(
     llm_provider=None,
     data_router=None,
     on_token: Optional[Callable] = None,
+    on_thought: Optional[Callable] = None,
+    on_tool_start: Optional[Callable] = None,
+    on_tool_end: Optional[Callable] = None,
     on_agent_done: Optional[Callable] = None,
     on_synthesis_start: Optional[Callable] = None,
     lang: str = "zh",
@@ -320,6 +411,7 @@ async def run_team(
     agent_data: Optional[Dict[str, Dict[str, Any]]] = None,
     timeout_per_agent: float = 60.0,
     synthesis_timeout: float | None = None,
+    use_pipeline: bool = False,
 ) -> TeamResult:
     """
     便捷函数，替代原 financial_agents.run_team_analysis()。
@@ -333,18 +425,29 @@ async def run_team(
         llm_provider=llm_provider,
         data_router=data_router,
         on_token=on_token,
+        on_thought=on_thought,
+        on_tool_start=on_tool_start,
+        on_tool_end=on_tool_end,
         on_agent_done=on_agent_done,
         on_synthesis_start=on_synthesis_start,
         timeout_per_agent=timeout_per_agent,
         synthesis_timeout=synthesis_timeout,
         lang=lang,
     )
-    return await team.run(
-        symbol,
-        agents=agents,
-        market_context=market_context,
-        agent_data=agent_data,
-    )
+    if use_pipeline:
+        return await team.run_sequential(
+            symbol,
+            agents=agents,
+            market_context=market_context,
+            agent_data=agent_data,
+        )
+    else:
+        return await team.run(
+            symbol,
+            agents=agents,
+            market_context=market_context,
+            agent_data=agent_data,
+        )
 
 
 # ── 内部工具 ──────────────────────────────────────────────────────────────────

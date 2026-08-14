@@ -9,10 +9,12 @@ from .context import (
 )
 from .provider_health import (
     GLOBAL_PROVIDER_HEALTH,
+    PublicServiceStatus,
     ProviderHealthRegistry,
     ProviderIssue,
     ProviderState,
     classify_provider_error,
+    public_service_status,
     summarize_provider_health,
 )
 from .references import (
@@ -46,6 +48,7 @@ __all__ = [
     "DataService",
     "DataServiceResult",
     "GLOBAL_PROVIDER_HEALTH",
+    "PublicServiceStatus",
     "ProviderHealthRegistry",
     "ProviderIssue",
     "ProviderState",
@@ -63,6 +66,7 @@ __all__ = [
     "build_reference_service",
     "assess_team_report",
     "classify_provider_error",
+    "public_service_status",
     "list_service_specs",
     "list_service_usage_specs",
     "grounding_tool_names",
