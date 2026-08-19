@@ -52,6 +52,13 @@ jobs:
           pip install pytest pytest-asyncio pytest-cov pytest-timeout
 
       - name: Run tests (unit — no LLM required)
+        env:
+          # 关掉行情宇宙的联网抓取。fetch_market_universe() 会打 akshare
+          # (stock_info_a_code_name / stock_hk_spot_em)，无超时，在 CI 上会挂到
+          # pytest-timeout 的 60 秒上限——而受影响的用例测的是纯本地的自然语言
+          # 路由逻辑，答案来自静态映射表，本就不需要网络。
+          # 只影响 CI；不设这个变量时默认仍然联网，用户与线上服务行为不变。
+          ARIA_OFFLINE: "1"
         run: |
           pytest tests/ -v -k "not e2e and not provider_integration" \
             --tb=short --timeout=60

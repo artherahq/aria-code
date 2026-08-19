@@ -1,3 +1,4 @@
+import importlib.util
 from datetime import date
 
 import pytest
@@ -7,6 +8,32 @@ from apps.cli.commands.ashare_prediction_cmds import (
     load_universe_file,
     parse_ashare_predict_args,
     prediction_freshness,
+)
+
+# packages.quant_engine.services 只存在于私有的 Arthera 仓；aria-code 通过
+# packages/__init__.py 把 __path__ 指向同级的 Arthera checkout 来桥接。
+# 有 checkout 的开发机上这条链路是通的，公开仓库的 CI 和任何外部贡献者那里
+# 则必然缺失——此前这两个用例因此在 3.10/3.11/3.12 三个矩阵上全部
+# ModuleNotFoundError（该 import 自 2026-08-09 的 8ecd3bf 起就在，CI 一直红）。
+# 它们测的是"平台存在时"的行为（第一个用例的名字本身就这么写的），
+# 所以正确做法是缺失时跳过，而不是把公开仓库的测试绑死在私有仓库上。
+def _has_platform_services() -> bool:
+    # find_spec() 会先 import 父包，父包(packages.quant_engine.services)不存在时
+    # 它抛 ModuleNotFoundError 而不是返回 None——所以必须捕获，否则 collection
+    # 阶段就整个文件报错，比原来的两个 FAILED 还糟。
+    try:
+        return importlib.util.find_spec(
+            "packages.quant_engine.services.daily_ashare_prediction_service"
+        ) is not None
+    except (ImportError, ValueError):
+        return False
+
+
+_HAS_PLATFORM_SERVICES = _has_platform_services()
+
+requires_platform = pytest.mark.skipif(
+    not _HAS_PLATFORM_SERVICES,
+    reason="需要同级的 Arthera checkout 提供 packages.quant_engine.services（私有仓）",
 )
 
 
@@ -49,12 +76,14 @@ def test_prediction_freshness_marks_old_report_as_not_current():
     assert freshness["age_days"] == 66
 
 
+@requires_platform
 def test_quant_engine_facade_exposes_private_services_when_platform_is_present():
     from packages.quant_engine.services.daily_ashare_prediction_service import DailyASharePredictionService
 
     assert DailyASharePredictionService.__name__ == "DailyASharePredictionService"
 
 
+@requires_platform
 def test_prediction_service_prefers_explicit_report_directory(tmp_path):
     service = build_prediction_service({"ashare_prediction_dir": str(tmp_path)})
     assert service.storage_dir == tmp_path

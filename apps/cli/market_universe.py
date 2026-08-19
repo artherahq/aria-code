@@ -161,9 +161,27 @@ def _symbols_from_frame(frame, *, name_cols: tuple[str, ...], code_cols: tuple[s
     return out
 
 
+def is_offline() -> bool:
+    """True 时跳过一切联网抓取，只用静态符号表。
+
+    2026-08-19：fetch_market_universe() 会真的打 akshare（stock_info_a_code_name
+    与 stock_hk_spot_em），既没有超时也没有开关。CI 上这两个请求会挂住，
+    tests/test_aria_cli_core.py::test_send_message_visual_route_helper 因此撞
+    pytest-timeout 的 60 秒上限而失败——测的明明是"自然语言路由到 /chart"这种
+    纯本地逻辑，答案（Apple→AAPL）来自 market_detect.py 的静态映射，根本不需要
+    联网，网络只是扫描全量宇宙时的副作用。
+
+    默认行为不变（有网就抓）。设 ARIA_OFFLINE=1 即可让它立刻退回静态表，
+    供 CI、离线环境和确定性测试使用。
+    """
+    return os.getenv("ARIA_OFFLINE", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def fetch_market_universe() -> list[MarketSymbol]:
     """Fetch A-share and HK symbol tables when akshare is available."""
     symbols = _iter_static_symbols()
+    if is_offline():
+        return symbols
     try:
         import akshare as ak
         try:
