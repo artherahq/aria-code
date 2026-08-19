@@ -3,9 +3,16 @@ fp16-variant-selection logic; not the real diffusion pipeline (that's
 exercised manually against real hardware, not in CI)."""
 from __future__ import annotations
 
+import pytest
 from unittest.mock import MagicMock, patch
 
 from providers import local_image_provider as lip
+
+# 可选依赖 guard：这些用例调用的代码路径需要 PIL（files extra）。
+# CI 的 test workflow 只装 .[cn,dev]，其注释明确写着"没装 extra 的可选功能
+# 会优雅跳过"——但这几个用例此前没有 guard，缺依赖时直接 FAILED 而不是
+# SKIPPED，让 pytest (Python 3.12) 长期红灯。改成 importorskip 以符合该契约。
+pytest.importorskip("PIL", reason="需要 files extra（pip install 'aria-code[files]'）")
 
 
 def test_generate_image_local_missing_deps_returns_actionable_error(monkeypatch):

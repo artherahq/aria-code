@@ -8,6 +8,7 @@ call itself passes confirmed=true.
 """
 from __future__ import annotations
 
+import importlib.util
 import pytest
 
 from packages.aria_mcp.server import (
@@ -21,6 +22,16 @@ from packages.aria_mcp.server import (
     _call_skill_get,
     _call_skill_list,
     _call_video_generate_submit,
+)
+
+
+# 图表渲染需要 mplfinance/matplotlib（charts extra）。CI 的 test workflow 只装
+# .[cn,dev]，缺依赖时 report_generator 的绘图分支返回 success=False，用例断言
+# `result["success"] is True` 便 FAILED——而不是按该 workflow 声明的契约 SKIPPED。
+# 只标记真正绘图的用例；同文件其余用例不受影响。
+requires_charts = pytest.mark.skipif(
+    importlib.util.find_spec("mplfinance") is None,
+    reason="需要 charts extra（pip install 'aria-code[charts]'）",
 )
 
 
@@ -271,6 +282,7 @@ async def test_indicator_chart_requires_symbol():
 
 
 @pytest.mark.asyncio
+@requires_charts
 async def test_indicator_chart_writes_artifact_on_success(monkeypatch, tmp_path):
     df = _fake_ohlcv_df()
     import report_generator
@@ -303,6 +315,7 @@ async def test_comparison_chart_requires_at_least_two_symbols():
 
 
 @pytest.mark.asyncio
+@requires_charts
 async def test_comparison_chart_writes_artifact_on_success(monkeypatch, tmp_path):
     df = _fake_ohlcv_df()
     import report_generator
@@ -327,6 +340,7 @@ async def test_comparison_chart_no_usable_data_reports_error(monkeypatch):
 
 
 @pytest.mark.asyncio
+@requires_charts
 async def test_allocation_chart_writes_artifact_on_success(monkeypatch, tmp_path):
     import packages.aria_mcp.server as server_mod
     from brokers.base import Position
