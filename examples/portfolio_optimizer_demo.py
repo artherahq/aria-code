@@ -1,12 +1,12 @@
 import sys
 from pathlib import Path
-sys.path.append(str(Path(__file__).resolve().parent / 'packages'))
+sys.path.append(str(Path(__file__).resolve().parents[1] / 'packages'))
 
 import pandas as pd
 import numpy as np
 from quant_engine.portfolio import PortfolioOptimizer
 
-def test_portfolio():
+def demo_portfolio_optimizer():
     # 1. Create fake data for 3 stocks
     np.random.seed(42)
     dates = pd.date_range("2023-01-01", "2023-12-31", freq='B')
@@ -45,4 +45,4 @@ def test_portfolio():
     print("融合后实际仓位:  ", opt.combine_agent_signals(max_sharpe_w, agent_confidence_bull))
 
 if __name__ == "__main__":
-    test_portfolio()
+    demo_portfolio_optimizer()

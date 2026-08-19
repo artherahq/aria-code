@@ -1,13 +1,13 @@
 import sys
 from pathlib import Path
-sys.path.append(str(Path(__file__).resolve().parent / 'packages'))
+sys.path.append(str(Path(__file__).resolve().parents[1] / 'packages'))
 
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 from quant_engine.backtest import BacktestEngine
 
-def run_test():
+def demo_backtest_engine():
     # 1. Generate fake price data (1 year)
     dates = pd.date_range(start="2023-01-01", end="2023-12-31", freq='B')
     np.random.seed(42)
@@ -41,4 +41,4 @@ def run_test():
         print(f"Position {sym}: {pos.quantity} shares @ {pos.avg_price:.2f}")
 
 if __name__ == "__main__":
-    run_test()
+    demo_backtest_engine()
