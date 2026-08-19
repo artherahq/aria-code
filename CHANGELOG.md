@@ -4,6 +4,90 @@ All notable changes to Aria Code are documented here.
 
 ---
 
+## [4.4.0] — 2026-08-19
+
+### Fixed
+
+**已发布的包是坏的 — clients/ domain/ tools/ 从未随包发出去**
+- `[tool.setuptools.packages.find].include` 漏了 `clients`、`domain`、`tools`
+  三个目录。它们正是当年迁移新建、并把 26 个根模块真实实现搬进去的那三个
+  （当时补了 `providers`，这三个没补）
+- 后果不是"少装几个文件"：24 个 re-export shim 在 `py-modules` 里有声明、
+  会随包发布，但它们 `_import_module("clients.market_data_client")` 的目标
+  不在包里。实测 PyPI 上的 4.3.0：
+  `import market_data_client` → `ModuleNotFoundError: No module named 'clients'`
+- 用户实际遇到的样子：跑 `/football` 得到"football_data_client.py 未找到"——
+  函数内的 `except ImportError` 吞掉了真实原因，报了条误导性的错
+- 连带 29 个文件、15,435 行代码从未随包发布
+- CLI 核心（`aria-code --help`、回测、组合、MCP）不受影响
+
+**4 个根模块漏在 py-modules 之外**
+- `image_gen_tools` / `spreadsheet_tools` / `markdown_pdf` / `preview_server`
+  被代码 import（MCP server、portfolio_cmds、artifacts、aria_cli），但没有
+  声明，同样不在 4.3.0 的 wheel 里
+- 函数内 import 这种形态最隐蔽：import 期不报错，只有走到那条命令时才炸
+
+**新用户的状态目录被拆成两处**
+- `resolve_config_dir()` 早就做对了（`ARIA_HOME` > 已存在的 `~/.arthera` >
+  `~/.aria-code`），但只有配置文件走那一层，另外 35 个文件直接写死
+  `~/.arthera`，绕过了它
+- 全新用户的 `config.json` 落在 `~/.aria-code`，而 `tool_policy.json`、
+  `portfolio.db`、`brokers.json` 落在 `~/.arthera`——两个目录，同一个用户
+- 新增 `packages/aria_core/paths.aria_home()` 作为唯一解析入口，51 处、
+  37 个文件改为走它
+- **老用户零影响**：只要 `~/.arthera` 存在就继续用它，不移动任何文件
+
+**公开仓库里的开发者本机绝对路径**
+- 4 个 financial 工具写死了 `/Users/<name>/Desktop/...`，别人 clone 下来
+  只会得到"脚本不存在"，且路径里带着开发者用户名和一个私有仓库的存在
+
+**其它**
+- A股下单前补齐涨跌停 / T+1 / 整手前置检查（`xtquant_broker.place_order()`
+  此前一项都没有，直接对着真实柜台下单）
+- `DebateAgent` 不再把金融的 BUY/HOLD/SELL 塞进 warehouse 等其它领域的团队
+
+### Added
+
+- **warehouse 本地闭环**：没有真实 ERP 也能跑通分析并出网页仪表盘，
+  支持单个 JSON / CSV 目录 / 单张宽表三种输入
+- **四条打包与版本守卫**（`tests/test_packaging_manifest.py`、
+  `tests/test_version_consistency.py`）：顶层包 ⟺ `packages.find`、
+  shim 目标 ⟺ `packages.find`、被 import 的根模块 ⟺ `py-modules`、
+  三处版本号一致 + CHANGELOG 必须有当前版本条目。
+  这几类漂移不会被任何功能测试碰到——仓库内跑一切正常，只有装出来才炸
+
+### Changed
+
+- `aria_cli.py` 8721 → 7706 行：足球报表、券商渲染、模型目录与 Skills 目录
+  拆分到 `apps/cli/` 下的独立模块（通过既有的 `_rebind_module_function_globals`
+  桥接，mixin 的裸名调用与模块级状态解析保持不变）
+- 删除 `refactor_structure.py`（一次性迁移脚本，任务已完成）与
+  `apps/cli/commands/finance_render.py`（死 shim，真身在 `ui/render/finance.py`）
+- 根目录两个 `test_*.py` 归置到 `examples/` 并改成 demo 命名——它们带
+  `test_` 前缀却在根目录，而 `testpaths = ["tests"]`，pytest 从不收集它们
+
+---
+
+## [4.3.0] — 2026-08-14
+
+> 该版本发布时未撰写变更说明，以下为事后依据 git 历史补录（v4.2.0..v4.3.0，
+> 共 24 个 commit）。
+
+### Added
+- 视频架构三层：ffmpeg 剪辑 + 本地 AI 分析、Kling / Runway 云端生成（带成本确认闸）
+- 图像生成：OpenAI 后端与本地自托管，inpainting 蒙版
+- Canvas：实时产物预览服务 + `/canvas` 命令，并对外通告以便跨进程发现
+- MCP：`aria.skill.list` / `aria.skill.get` 暴露可移植 skills；
+  `aria.broker.confirm_order` 带门禁的聊天确认下单
+- 指标 / 对比 / 配置比例图表
+- 服务模块化与 warehouse agents；A股预测引擎接入 CLI
+- 可验证的 agent 任务编排，任务持久性与行情路由改进
+
+### Fixed
+- 6 项修复（详见 git log v4.2.0..v4.3.0）
+
+---
+
 ## [4.2.0] — 2026-08-03
 
 ### Added
