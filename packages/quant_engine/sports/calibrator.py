@@ -19,9 +19,10 @@ import json
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+from packages.aria_core.paths import aria_home
 
-_PARAMS_PATH    = Path.home() / ".arthera" / "wc_calibrated_params.json"
-_TEAM_BIAS_PATH = Path.home() / ".arthera" / "team_goal_bias.json"
+_PARAMS_PATH    = aria_home() / "wc_calibrated_params.json"
+_TEAM_BIAS_PATH = aria_home() / "team_goal_bias.json"
 
 _DEFAULT_PARAMS = {
     "a1": 1.05, "a2": 0.35,   # 攻击斜率（线性 + 二次）

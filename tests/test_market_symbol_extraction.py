@@ -7,6 +7,7 @@ import unittest
 
 from apps.cli.market_universe import MarketSymbol, resolve_market_mentions
 from apps.cli.utils.market_detect import (
+    _COMPANY_TO_TICKER,
     _extract_market_symbols,
     _is_blocked_market_symbol_candidate,
 )
@@ -40,6 +41,10 @@ class WordBoundaryTests(unittest.TestCase):
     def test_cjk_names_keep_substring_semantics(self):
         # Chinese has no word boundaries — 比特币 inside running text must hit.
         self.assertIn("BTC-USD", _resolve("请分析比特币走势"))
+
+    def test_unverified_company_is_not_mapped_to_a_fabricated_ticker(self):
+        for name in ("SpaceX", "太空探索技术", "Starlink"):
+            self.assertNotIn(name, _COMPANY_TO_TICKER)
 
 
 class ActionWordBlocklistTests(unittest.TestCase):

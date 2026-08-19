@@ -99,6 +99,14 @@ def render_finance_result(tool_name: str, result: dict, *, console=None, has_ric
                 t.add_row("日内区间", f"{_lo:,.4g} — {_hi:,.4g}")
             if vol:
                 t.add_row("成交量", f"{int(vol):,}")
+            as_of = result.get("as_of")
+            retrieved_at = result.get("retrieved_at")
+            if as_of:
+                t.add_row("数据时点", str(as_of))
+            elif retrieved_at:
+                t.add_row("获取时间", f"{retrieved_at}（源未提供成交时点）")
+            if provider:
+                t.add_row("数据来源", str(provider))
             # Technical indicators from local tool
             _rsi = result.get("rsi")
             if _rsi is not None:

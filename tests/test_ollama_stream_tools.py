@@ -15,6 +15,34 @@ def test_tool_capable_turn_never_uses_prose_response_cache():
     assert not _response_cache_eligible("你好", [{"role": "user"}], enable_tools=False)
 
 
+def test_tool_protocol_sanitizer_removes_brtc_tail_and_local_path():
+    from apps.cli.message_processing import strip_tool_call_tags
+
+    text = (
+        "行情已获取，正在计算指标。?brtc "
+        '{"name":"get_market_data","arguments":{"symbol":"AAPL",'
+        '"source":{"path":"/Users/mac/Desktop/aria-code/generated/tmp_ohlc.csv"}}}'
+    )
+
+    assert strip_tool_call_tags(text) == "行情已获取，正在计算指标。"
+
+
+def test_tool_protocol_sanitizer_removes_nested_bare_json_call():
+    from apps.cli.message_processing import strip_tool_call_tags
+
+    text = (
+        "结果如下： "
+        '{"name":"get_market_data","arguments":{"symbol":"AAPL",'
+        '"options":{"period":"1y","adjusted":true}}} '
+        "请注意风险。"
+    )
+
+    cleaned = strip_tool_call_tags(text)
+    assert "get_market_data" not in cleaned
+    assert "AAPL" not in cleaned
+    assert cleaned == "结果如下：  请注意风险。"
+
+
 def test_analysis_prompt_does_not_force_text_tool_markup():
     prompt = build_analysis_system_prompt()
 

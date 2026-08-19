@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import pathlib
 from datetime import datetime
+
+
+logger = logging.getLogger(__name__)
 
 
 class WorkflowCommandsMixin:
@@ -359,6 +363,7 @@ class WorkflowCommandsMixin:
                 f"按文件组织输出，直接给结论，不要重复贴出全部代码。\n\n"
                 f"```\n{content}\n```"
             )
+            review_source, review_name, review_is_diff = content, p.name, False
         else:
             diff_cmd = "git diff --staged" if raw.startswith("--staged") else "git diff HEAD"
             _print_phase("Reading diff")
@@ -384,5 +389,31 @@ class WorkflowCommandsMixin:
                 "按文件分组，直接给出结论。\n\n"
                 f"```diff\n{diff_text}\n```"
             )
+            review_source, review_name, review_is_diff = diff_text, "staged.diff", True
+
+        # Run a bounded, deterministic first pass. The conversational model
+        # receives it as evidence and must not pretend it accessed anything
+        # beyond the supplied file or diff.
+        try:
+            from agents.code_review import CodeReviewAgent
+
+            findings = CodeReviewAgent.review_source(
+                review_source,
+                filename=review_name,
+                is_diff=review_is_diff,
+            )
+            static_review = CodeReviewAgent.format_findings(findings)
+            if HAS_RICH:
+                console.print("[bold]Deterministic Review[/bold]")
+                console.print(static_review)
+            else:
+                print("Deterministic Review\n" + static_review)
+            prompt = (
+                "以下是只基于提交文本的确定性检查结果。保留有证据的发现，补充语义、"
+                "回归和可测试性审查；不要声称执行过测试或读取过其他文件。\n\n"
+                f"{static_review}\n\n{prompt}"
+            )
+        except Exception as exc:
+            logger.debug("Deterministic review unavailable: %s", exc)
 
         await self.terminal.send_message(prompt)

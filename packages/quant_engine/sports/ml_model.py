@@ -31,11 +31,12 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
+from packages.aria_core.paths import aria_home
 
 logger = logging.getLogger(__name__)
 
-_MODEL_PATH  = Path.home() / ".arthera" / "football_ml_model.pkl"
-_REPORT_PATH = Path.home() / ".arthera" / "football_ml_report.json"
+_MODEL_PATH  = aria_home() / "football_ml_model.pkl"
+_REPORT_PATH = aria_home() / "football_ml_report.json"
 _MIN_TRAIN   = 20
 _RETRAIN_EVERY = 10
 

@@ -25,8 +25,9 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from packages.aria_core.paths import aria_home
 
-_PORTFOLIO_DB = Path.home() / ".arthera" / "portfolio.db"
+_PORTFOLIO_DB = aria_home() / "portfolio.db"
 _DAEMON_DB    = Path.home() / ".aria"    / "daemon.db"
 
 

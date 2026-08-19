@@ -569,6 +569,61 @@ def _format_tool_summary(tool_name: str, result: dict) -> str:
     if not result.get("success"):
         return f"Error: {_g('_clean_tool_error_message')(result.get('error', 'failed'))}"
     data = result.get("data", {})
+
+    # Local finance tools return their payload at the top level, whereas some
+    # remote adapters wrap it in ``data``.  Treat both shapes consistently.
+    # Previously a successful local quote became ``{}`` here, leaving the LLM
+    # to invent a price/RSI despite the terminal having displayed real data.
+    tool_data = data if isinstance(data, dict) and data else result
+    if tool_name == "get_market_data":
+        symbol = tool_data.get("symbol", "")
+        price = tool_data.get("price", tool_data.get("latest_close"))
+        change = tool_data.get("change_pct")
+        provider = tool_data.get("provider", "unknown")
+        as_of = tool_data.get("as_of")
+        retrieved_at = tool_data.get("retrieved_at")
+        lines = [f"Market data for {symbol} (provider: {provider})"]
+        if price is not None:
+            currency = tool_data.get("currency", "")
+            lines.append(f"Price: {currency} {price}".strip())
+        if change is not None:
+            lines.append(f"Change: {change}%")
+        if as_of:
+            lines.append(f"Provider timestamp: {as_of}")
+        elif retrieved_at:
+            lines.append(f"Retrieved at: {retrieved_at} (provider did not supply trade timestamp)")
+        rsi = tool_data.get("rsi")
+        if rsi is not None:
+            try:
+                rsi_value = float(rsi)
+                rsi_label = "oversold" if rsi_value <= 30 else ("overbought" if rsi_value >= 70 else "neutral")
+                lines.append(f"RSI(14): {rsi_value:.2f} ({rsi_label})")
+            except (TypeError, ValueError):
+                lines.append("RSI(14): unavailable")
+        macd_hist = tool_data.get("macd_hist")
+        if macd_hist is not None:
+            lines.append(f"MACD histogram: {macd_hist}")
+        lines.append("Use only these values. Do not call this quote 'latest' beyond its stated timestamp.")
+        return "\n".join(lines)
+
+    if tool_name == "analyze_news":
+        news = tool_data.get("news") or []
+        provider = tool_data.get("provider", "unknown")
+        if not news:
+            return (
+                f"No relevant news returned (provider: {provider}). "
+                "Do not infer news sentiment; state that news evidence is unavailable."
+            )
+        lines = [f"News evidence (provider: {provider}, items: {len(news)}):"]
+        for item in news[:3]:
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("title") or "untitled")[:220]
+            published = str(item.get("time") or item.get("published_at") or "time unavailable")
+            publisher = str(item.get("publisher") or item.get("source") or "source unavailable")
+            lines.append(f"- {title} | {publisher} | {published}")
+        return "\n".join(lines)
+
     if tool_name == "run_command":
         exit_code = data.get("exit_code", -1)
         stdout = data.get("stdout", "").strip()

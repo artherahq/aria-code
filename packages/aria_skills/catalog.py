@@ -11,6 +11,7 @@ import subprocess
 from typing import Callable, Sequence
 
 from .loader import LoadedSkill, discover_external_skills
+from packages.aria_core.paths import aria_home
 
 
 _REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
@@ -58,7 +59,7 @@ def default_catalog_home() -> Path:
     configured = os.getenv("ARIA_SKILL_CATALOG_HOME", "")
     if configured:
         return Path(configured).expanduser().resolve()
-    return (Path.home() / ".arthera" / "skill-catalogs").resolve()
+    return (aria_home() / "skill-catalogs").resolve()
 
 
 def catalog_clone_command(

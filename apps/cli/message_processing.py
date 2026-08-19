@@ -110,10 +110,75 @@ def parse_text_tool_calls(text: str) -> list:
     return calls
 
 
+def _remove_bare_tool_payloads(text: str, local_tools: dict) -> str:
+    """Remove balanced JSON tool payloads without touching ordinary prose.
+
+    Small/local models can emit a function call after ordinary prose.  Its
+    ``arguments`` frequently contain nested objects, so a flat regex leaves
+    the payload in the terminal.  Only remove balanced JSON objects that name
+    a registered tool.
+    """
+    spans: list[tuple[int, int]] = []
+    index = 0
+    while index < len(text):
+        if text[index] != "{":
+            index += 1
+            continue
+        start = index
+        depth = 0
+        quoted = False
+        escaped = False
+        end = None
+        for cursor in range(index, len(text)):
+            char = text[cursor]
+            if quoted:
+                if escaped:
+                    escaped = False
+                elif char == "\\\\":
+                    escaped = True
+                elif char == '"':
+                    quoted = False
+                continue
+            if char == '"':
+                quoted = True
+            elif char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    end = cursor + 1
+                    break
+        if end is None:
+            index += 1
+            continue
+        try:
+            payload = json.loads(text[start:end])
+        except (json.JSONDecodeError, TypeError):
+            index = end
+            continue
+        if isinstance(payload, dict) and payload.get("name") in local_tools and "arguments" in payload:
+            spans.append((start, end))
+        index = end
+
+    for start, end in reversed(spans):
+        text = text[:start] + text[end:]
+    return text
+
+
+def sanitize_assistant_response(text: str) -> str:
+    """Remove internal tool protocol fragments from user-visible prose."""
+    if not isinstance(text, str):
+        return ""
+    # ``brtc`` is an internal delimiter occasionally hallucinated by local
+    # models. Its tail contains raw arguments/debug data, never user content.
+    return re.sub(r"(?<![A-Za-z0-9_])\??brtc\b[\s\S]*$", "", text, flags=re.IGNORECASE).strip()
+
+
 def strip_tool_call_tags(text: str) -> str:
     """Remove tool calls from display text (tags, fences, bare JSON, headers)."""
     local_tools = _local_tools()
 
+    text = sanitize_assistant_response(text)
     text = re.sub(r'<tool_call>[\s\S]*?</tool_call>', '', text, flags=re.DOTALL)
 
     def _remove_fence(m: re.Match) -> str:
@@ -127,19 +192,7 @@ def strip_tool_call_tags(text: str) -> str:
 
     text = re.sub(r'```(?:json)?\s*\n([\s\S]*?)\n\s*```', _remove_fence, text, flags=re.DOTALL)
 
-    def _remove_bare(m: re.Match) -> str:
-        try:
-            obj = json.loads(m.group(0))
-            if obj.get("name") in local_tools and "arguments" in obj:
-                return ''
-        except (json.JSONDecodeError, TypeError):
-            pass
-        return m.group(0)
-
-    text = re.sub(
-        r'\{[^{}]*"name"\s*:\s*"[^"]*"[^{}]*"arguments"\s*:\s*\{[\s\S]*?\}\s*\}',
-        _remove_bare, text,
-    )
+    text = _remove_bare_tool_payloads(text, local_tools)
     text = re.sub(r'###\s+Step\s+\d+.*\n?', '', text)
     text = re.sub(r'###\s+.*工具调用.*\n?', '', text)
     text = re.sub(r'\n{3,}', '\n\n', text)

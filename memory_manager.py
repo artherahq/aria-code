@@ -23,10 +23,11 @@ import re
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+from packages.aria_core.paths import aria_home
 
 logger = logging.getLogger(__name__)
 
-_MEMORY_DIR = Path.home() / ".arthera" / "memory"
+_MEMORY_DIR = aria_home() / "memory"
 _INDEX_FILE = _MEMORY_DIR / "MEMORY.md"
 
 _PREF_PATTERNS = [

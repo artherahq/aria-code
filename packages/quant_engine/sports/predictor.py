@@ -20,6 +20,7 @@ from .elo         import EloRatingSystem, get_elo
 from .dixon_coles import compute_match_probabilities, estimate_rho_from_results
 from .form        import analyze_form, parse_api_results
 from .h2h         import analyze_h2h, _neutral_h2h
+from packages.aria_core.paths import aria_home
 
 
 # ── 联赛场均进球（每队每场，后备默认值）──────────────────────────────────────
@@ -269,7 +270,7 @@ def _load_calibrated_rho() -> float:
     try:
         from pathlib import Path
         import json
-        p = Path.home() / ".arthera" / "wc_rho.json"
+        p = aria_home() / "wc_rho.json"
         if p.exists():
             d = json.loads(p.read_text())
             return d.get("rho", -0.10)

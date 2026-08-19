@@ -27,6 +27,7 @@ import json
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
+from packages.aria_core.paths import aria_home
 
 CHECKPOINT_SCHEMA = "aria.context_checkpoint.v1"
 DEFAULT_KEEP_PER_SESSION = 5
@@ -151,6 +152,6 @@ def default_checkpoint_root() -> Path:
     if configured:
         root = Path(configured).expanduser()
     else:
-        legacy = Path.home() / ".arthera"
+        legacy = aria_home()
         root = legacy if legacy.exists() else Path.home() / ".aria-code"
     return root / "runtime" / "context_checkpoints"

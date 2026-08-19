@@ -5,6 +5,7 @@ Extracted from aria_cli.py. Methods' __globals__ are rebound to aria_cli's names
 by _rebind_mixin_globals() called at module load time.
 """
 from __future__ import annotations
+from packages.aria_core.paths import aria_home
 
 
 class WorkspaceCommandsMixin:
@@ -55,7 +56,7 @@ class WorkspaceCommandsMixin:
         skill_count = len(builtin_skill_specs())
         mcp_exposure_count = len(default_exposures())
         server_cfg = arthera_quant_engine_server_config()
-        mcp_config_path = MCP_CONFIG_PATH if _HAS_MCP else pathlib.Path.home() / ".arthera" / "mcp_servers.json"
+        mcp_config_path = MCP_CONFIG_PATH if _HAS_MCP else aria_home() / "mcp_servers.json"
 
         if sub.startswith("export-manifest") or sub.startswith("manifest"):
             raw_parts = args.strip().split(maxsplit=1)
@@ -1110,7 +1111,7 @@ class WorkspaceCommandsMixin:
         sub = args.strip().lower()
         if sub in ("mcp", "all"):
             console.print("  [bold]Step 3.8/4 · MCP 服务器[/bold]") if HAS_RICH else print("Step 3.8: MCP Servers")
-            _mcp_cfg_path = Path.home() / ".arthera" / "mcp_servers.json"
+            _mcp_cfg_path = aria_home() / "mcp_servers.json"
             if _mcp_cfg_path.exists():
                 try:
                     import json as _j2
@@ -1307,7 +1308,7 @@ class WorkspaceCommandsMixin:
 
         elif sub == "profile":
             # Per-user ARIA.md at ~/.arthera/ARIA.md — injected into every session
-            _profile_path = pathlib.Path.home() / ".arthera" / "ARIA.md"
+            _profile_path = aria_home() / "ARIA.md"
             gparts = rest.strip().split(maxsplit=1)
             gsub   = gparts[0].lower() if gparts else "show"
             grest  = gparts[1].strip() if len(gparts) > 1 else ""

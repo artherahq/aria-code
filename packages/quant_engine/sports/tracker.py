@@ -25,10 +25,11 @@ import math
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+from packages.aria_core.paths import aria_home
 
-_PRED_PATH   = Path.home() / ".arthera" / "football_predictions.json"
-_SYNCED_PATH = Path.home() / ".arthera" / "elo_synced_matches.json"
-_AVG_PATH    = Path.home() / ".arthera" / "wc_league_avg.json"
+_PRED_PATH   = aria_home() / "football_predictions.json"
+_SYNCED_PATH = aria_home() / "elo_synced_matches.json"
+_AVG_PATH    = aria_home() / "wc_league_avg.json"
 
 _SCORE_MAX_G = 9   # 评估矩阵上限：0..8 进球
 
@@ -609,7 +610,7 @@ def fetch_wc_rho(api_get_fn, competition_code: str = "WC") -> float:
     """
     from .dixon_coles import estimate_rho_from_results
 
-    _RHO_PATH = Path.home() / ".arthera" / "wc_rho.json"
+    _RHO_PATH = aria_home() / "wc_rho.json"
     cached = _load_json(_RHO_PATH, {})
     now = time.time()
     if cached.get("ts", 0) + _CACHE_TTL > now:

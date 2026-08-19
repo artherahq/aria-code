@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Dict, Optional
 
 from ..base import BaseDataSource, FundamentalsResult, HistoryResult, QuoteResult
+from packages.aria_core.paths import aria_home
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +30,7 @@ _BASE = "https://www.alphavantage.co/query"
 def _load_key() -> str:
     key = os.getenv("ALPHA_VANTAGE_KEY", "") or os.getenv("ALPHAVANTAGE_KEY", "")
     if not key:
-        for p in [Path.home() / ".aria" / ".env", Path.home() / ".arthera" / ".env"]:
+        for p in [Path.home() / ".aria" / ".env", aria_home() / ".env"]:
             if p.exists():
                 for line in p.read_text(encoding="utf-8").splitlines():
                     if line.startswith(("ALPHA_VANTAGE_KEY=", "ALPHAVANTAGE_KEY=")):
@@ -41,7 +42,7 @@ def _load_key() -> str:
         # providers.json 中存储的键名是 "alphavantage"（无下划线）
         try:
             import json as _json
-            _p = Path.home() / ".arthera" / "providers.json"
+            _p = aria_home() / "providers.json"
             if _p.exists():
                 _raw = _json.loads(_p.read_text(encoding="utf-8"))
                 key = (

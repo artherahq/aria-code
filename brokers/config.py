@@ -75,6 +75,7 @@ import json
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from packages.aria_core.paths import aria_home
 
 
 def _resolve_aria_home() -> Path:
@@ -87,7 +88,7 @@ def _resolve_aria_home() -> Path:
     """
     if "ARIA_HOME" in os.environ:
         return Path(os.environ["ARIA_HOME"]).expanduser()
-    legacy = Path.home() / ".arthera"
+    legacy = aria_home()
     if legacy.exists():
         return legacy
     return Path.home() / ".aria-code"

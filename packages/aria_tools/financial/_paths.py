@@ -25,6 +25,7 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
+from packages.aria_core.paths import aria_home
 
 __all__ = ["find_skill_script", "missing_script_message", "ensure_arthera_sdk"]
 
@@ -44,7 +45,7 @@ def _skill_roots() -> list[Path]:
         repository = Path(__file__).resolve().parents[3]
         roots.extend([
             repository.parent / "aria-skills" / "skills",
-            Path.home() / ".arthera" / "skills",
+            aria_home() / "skills",
             Path.home() / ".aria" / "skills",
             Path.home() / ".claude" / "skills",
         ])

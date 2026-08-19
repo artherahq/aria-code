@@ -19,6 +19,7 @@ from .run_state import (
     normalize_run_status,
     require_transition,
 )
+from packages.aria_core.paths import aria_home
 
 
 _SECRET_KEYS = {
@@ -39,7 +40,7 @@ def _default_database_path() -> Path:
     if configured:
         root = Path(configured).expanduser()
     else:
-        legacy = Path.home() / ".arthera"
+        legacy = aria_home()
         root = legacy if legacy.exists() else Path.home() / ".aria-code"
     return root / "runtime" / "runs.sqlite3"
 

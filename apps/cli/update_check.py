@@ -21,9 +21,10 @@ import threading
 import time
 from pathlib import Path
 from typing import Optional
+from packages.aria_core.paths import aria_home
 
 _NPM_URL       = "https://registry.npmjs.org/aria-code/latest"
-_CACHE_FILE    = Path.home() / ".arthera" / "update_check.json"
+_CACHE_FILE    = aria_home() / "update_check.json"
 _CACHE_TTL_S   = 86_400      # 24 hours
 _FETCH_TIMEOUT = 4           # seconds — fail cleanly on slow networks
 

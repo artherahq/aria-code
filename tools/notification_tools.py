@@ -34,10 +34,11 @@ from email.mime.text import MIMEText
 from pathlib import Path
 from typing import Optional
 from urllib import request as _urllib_request
+from packages.aria_core.paths import aria_home
 
 logger = logging.getLogger(__name__)
 
-_CONFIG_PATH = Path.home() / ".arthera" / "config.json"
+_CONFIG_PATH = aria_home() / "config.json"
 
 
 def _load_config() -> dict:

@@ -4,6 +4,7 @@ Extracted from aria_cli.py. Module globals (HAS_RICH, console, etc.) are
 imported lazily inside each method body to avoid circular imports at load time.
 """
 from __future__ import annotations
+from packages.aria_core.paths import aria_home
 
 
 class BrokerCommandsMixin:
@@ -1156,7 +1157,7 @@ class BrokerCommandsMixin:
                 import pathlib as _pl, json as _json
                 from brokers.config import print_all_templates
                 path = _pl.Path(str(_BROKERS_CONFIG_PATH or
-                                    _pl.Path.home() / ".arthera" / "brokers.json"))
+                                    aria_home() / "brokers.json"))
                 path.parent.mkdir(parents=True, exist_ok=True)
 
                 # Pre-populate with full commented template if file is empty/missing

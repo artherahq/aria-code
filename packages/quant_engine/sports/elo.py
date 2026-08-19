@@ -24,6 +24,7 @@ import math
 import os
 from pathlib import Path
 from typing import Dict, Optional, Tuple
+from packages.aria_core.paths import aria_home
 
 # ── 默认初始 Elo（基于 FIFA 排名，幂律映射）──────────────────────────────────
 # 公式: elo = BASE - SCALE * (ranking ^ POWER)
@@ -96,7 +97,7 @@ class EloRatingSystem:
         # → {'home_win': 0.74, 'draw': 0.16, 'away_win': 0.10}
     """
 
-    _STORE_PATH = Path.home() / ".arthera" / "football_elo.json"
+    _STORE_PATH = aria_home() / "football_elo.json"
 
     def __init__(self, load_from_disk: bool = True):
         self._ratings: Dict[str, float] = {}

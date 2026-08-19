@@ -23,8 +23,9 @@ from apps.cli.utils.market_detect import (
     _PRIVATE_COMPANY_PROFILES,
 )
 from apps.cli.market_metadata import enrich_market_quote, market_display_label
+from packages.aria_core.paths import aria_home
 
-_PROVIDERS_FILE = Path.home() / ".arthera" / "providers.json"
+_PROVIDERS_FILE = aria_home() / "providers.json"
 
 
 def _detect_lang(text: str) -> str:

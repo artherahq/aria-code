@@ -34,6 +34,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
+from packages.aria_core.paths import aria_home
 
 logger = logging.getLogger(__name__)
 
@@ -1138,7 +1139,7 @@ def _get_data_key(service: str) -> str:
     # Fall back to providers.json
     try:
         import pathlib as _pl, json as _json
-        pf = _pl.Path.home() / ".arthera" / "providers.json"
+        pf = aria_home() / "providers.json"
         if pf.exists():
             raw = _json.loads(pf.read_text(encoding="utf-8"))
             entry = raw.get("data", {}).get(service, {})
@@ -2093,7 +2094,7 @@ LOCAL_FINANCE_TOOL_SCHEMAS = [
             "description": (
                 "Search the web for current information. "
                 "USE THIS PROACTIVELY when the user asks about: recent news, latest earnings, "
-                "new IPO stocks (e.g. SPCX/SpaceX), price targets, analyst upgrades/downgrades, "
+                "new IPO stocks or unverified tickers, price targets, analyst upgrades/downgrades, "
                 "M&A deals, regulatory decisions, macro events, or anything that may have changed "
                 "after your training cutoff. Do NOT rely on training data for current events — "
                 "always search first. Chain with web_fetch to read full articles."
@@ -2101,7 +2102,7 @@ LOCAL_FINANCE_TOOL_SCHEMAS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "query":       {"type": "string",  "description": "Search query, include ticker and topic, e.g. 'SPCX SpaceX earnings Q1 2026'"},
+                    "query":       {"type": "string",  "description": "Search query, include ticker and topic, e.g. 'AAPL earnings Q1 2026'"},
                     "max_results": {"type": "integer", "description": "Number of results (default 5, max 10)"},
                 },
                 "required": ["query"],
@@ -2152,7 +2153,7 @@ LOCAL_FINANCE_TOOL_SCHEMAS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "symbol":  {"type": "string",  "description": "US stock ticker e.g. SPCX, AAPL, TSLA"},
+                    "symbol":  {"type": "string",  "description": "US stock ticker e.g. AAPL, TSLA, NVDA"},
                     "expiry":  {"type": "string",  "description": "Expiration date YYYY-MM-DD or leave blank for nearest"},
                     "option_type": {"type": "string", "description": "call | put | both (default both)"},
                 },

@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Literal
+from packages.aria_core.paths import aria_home
 
 PolicyVerdict = Literal["allow", "deny", "ask", "default"]
 
@@ -29,7 +30,7 @@ _DEFAULT_POLICY: dict = {
 
 
 def _policy_file() -> Path:
-    return Path.home() / ".arthera" / "tool_policy.json"
+    return aria_home() / "tool_policy.json"
 
 
 def load_tool_policy() -> dict:

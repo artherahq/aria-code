@@ -5,6 +5,7 @@ Extracted from aria_cli.py. Methods' __globals__ are rebound to aria_cli's names
 by _rebind_mixin_globals() called at module load time.
 """
 from __future__ import annotations
+from packages.aria_core.paths import aria_home
 
 
 class ModelCommandsMixin:
@@ -1762,7 +1763,7 @@ class ModelCommandsMixin:
                     # /config set notify_webhook=https://qyapi.weixin.qq.com/...
                     # 写入 ~/.arthera/config.json（notification_tools 直接读取）
                     try:
-                        _ncfg_path = Path.home() / ".arthera" / "config.json"
+                        _ncfg_path = aria_home() / "config.json"
                         _ncfg = json.loads(_ncfg_path.read_text()) if _ncfg_path.exists() else {}
                         _ncfg["notify_webhook"] = val
                         _ncfg_path.write_text(json.dumps(_ncfg, indent=2, ensure_ascii=False))

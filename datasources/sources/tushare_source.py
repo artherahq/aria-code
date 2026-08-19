@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Optional
 
 from ..base import BaseDataSource, FundamentalsResult, HistoryResult, QuoteResult
+from packages.aria_core.paths import aria_home
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +25,7 @@ def _load_token() -> str:
             Path.cwd() / ".env",
             Path.cwd().parent / ".env",
             Path.home() / ".aria" / ".env",
-            Path.home() / ".arthera" / ".env",
+            aria_home() / ".env",
         ]
         for p in env_paths:
             if p.exists():

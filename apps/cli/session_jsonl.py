@@ -21,8 +21,9 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+from packages.aria_core.paths import aria_home
 
-_SESSIONS_DIR = Path.home() / ".arthera" / "sessions"
+_SESSIONS_DIR = aria_home() / "sessions"
 
 
 def _now() -> str:

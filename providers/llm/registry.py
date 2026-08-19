@@ -39,6 +39,7 @@ from packages.aria_services.provider_health import (
     ProviderHealthRegistry,
     classify_provider_error,
 )
+from packages.aria_core.paths import aria_home
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +83,7 @@ def register_provider(name: str, cls: Type[BaseLLMProvider]) -> None:
 # ── 配置加载 ──────────────────────────────────────────────────────────────────
 _CONFIG_PATHS = [
     # ~/.arthera/providers.json is the primary path used by the aria-code CLI (/apikey command)
-    Path.home() / ".arthera" / "providers.json",
+    aria_home() / "providers.json",
     # Legacy / alternative paths
     Path.home() / ".aria" / "providers.yaml",
     Path.home() / ".aria" / "providers.json",
@@ -110,7 +111,7 @@ def _load_provider_cfg_from_file(name: str) -> Dict[str, str]:
     此函数补足文件侧的配置，让两者合并后才能正确工作。
     """
     import json as _json
-    primary = Path.home() / ".arthera" / "providers.json"
+    primary = aria_home() / "providers.json"
     for p in [primary] + _CONFIG_PATHS:
         if not p.exists():
             continue

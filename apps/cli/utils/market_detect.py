@@ -610,8 +610,6 @@ _COMPANY_TO_TICKER = {
     "OpenAI": "PRIVATE:OpenAI",
     "Anthropic": "PRIVATE:Anthropic",
     "xAI": "PRIVATE:xAI",
-    "SpaceX": "SPCX", "太空探索技术": "SPCX", "太空探索": "SPCX", "星链": "SPCX",
-    "Starlink": "SPCX", "星链卫星": "SPCX",
     "ByteDance": "PRIVATE:ByteDance",
     "Stripe": "PRIVATE:Stripe",
     "Databricks": "PRIVATE:Databricks",

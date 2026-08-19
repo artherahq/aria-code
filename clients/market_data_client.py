@@ -39,6 +39,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import pandas as pd
 import requests
+from packages.aria_core.paths import aria_home
 
 logger = logging.getLogger(__name__)
 logging.getLogger("yfinance").setLevel(logging.CRITICAL)
@@ -334,7 +335,7 @@ class MarketDataClient:
         if key:
             return key
         try:
-            p = Path.home() / ".arthera" / "providers.json"
+            p = aria_home() / "providers.json"
             if p.exists():
                 raw = json.loads(p.read_text(encoding="utf-8"))
                 key = raw.get("data", {}).get("finnhub", {}).get("api_key", "")

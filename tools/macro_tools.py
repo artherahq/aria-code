@@ -21,6 +21,7 @@ import os
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from packages.aria_core.paths import aria_home
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +56,7 @@ def _get_fred_key() -> str:
     if not key:
         try:
             import json
-            p = Path.home() / ".arthera" / "providers.json"
+            p = aria_home() / "providers.json"
             if p.exists():
                 d = json.loads(p.read_text())
                 key = d.get("fred", {}).get("api_key", "") or d.get("fred_api_key", "")
@@ -325,7 +326,7 @@ def _get_finnhub_key() -> str:
     if not k:
         try:
             import json
-            p = Path.home() / ".arthera" / "providers.json"
+            p = aria_home() / "providers.json"
             if p.exists():
                 d = json.loads(p.read_text())
                 k = d.get("finnhub", {}).get("api_key", "") or d.get("finnhub_api_key", "")

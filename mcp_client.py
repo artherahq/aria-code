@@ -47,10 +47,11 @@ import traceback
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from packages.aria_mcp.circuit import ServerCircuit
+from packages.aria_core.paths import aria_home
 
 logger = logging.getLogger(__name__)
 
-MCP_CONFIG_PATH = pathlib.Path.home() / ".arthera" / "mcp_servers.json"
+MCP_CONFIG_PATH = aria_home() / "mcp_servers.json"
 
 # MCP JSON-RPC protocol version
 MCP_PROTOCOL_VERSION = "2024-11-05"

@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
 from typing import List, Optional
+from packages.aria_core.paths import aria_home
 
 # Features that are ALWAYS free (the BSL shell). Premium features are anything
 # not listed here; they require a license that grants them.
@@ -38,7 +39,7 @@ FREE_FEATURES: frozenset[str] = frozenset({
 })
 
 _LICENSE_PATHS = [
-    Path.home() / ".arthera" / "license.json",
+    aria_home() / "license.json",
     Path.home() / ".aria" / "license.json",
 ]
 

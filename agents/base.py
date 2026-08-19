@@ -67,12 +67,15 @@ class BaseAgent(ABC):
     name:        str = "base"
     description: str = "基础 Agent"
 
-    # Post-training IPO facts injected into every agent's system prompt
-    _POST_TRAINING_FACTS = (
-        "\n\n## ⚡ Critical post-training facts (override training memory)\n"
-        "- **SPCX** = SpaceX (Space Exploration Technologies Corp.) — IPO'd June 12, 2026 "
-        "on NASDAQ. It is NOT an ETF. ⛔ Never say 'SPCX is a China ETF' or 'SPCX is private'.\n"
-        "- **2026 FIFA World Cup** opened June 11, 2026 in USA/Canada/Mexico.\n"
+    # Time-sensitive claims must come from a tool result with a timestamp, not
+    # from a hard-coded prompt.  This is appended to every agent because a
+    # wrong IPO/symbol/event claim can otherwise contaminate all specialisms.
+    _TIME_SENSITIVE_FACT_POLICY = (
+        "\n\n## Time-sensitive fact policy\n"
+        "- Do not treat examples, aliases, model memory, or internal notes as current facts.\n"
+        "- Verify ticker identity, IPO/listing status, prices, corporate events, sports results, "
+        "and dates with an appropriate tool or source before stating them as facts.\n"
+        "- If a current fact cannot be verified, say that it is unverified instead of guessing.\n"
     )
 
     # Language rule injected per-call based on detected user language
@@ -169,10 +172,10 @@ class BaseAgent(ABC):
         """调用 LLM 生成分析文本，内置 Tool Calling 的执行循环"""
         if not self.llm:
             return ""
-        # Inject language rule + post-training facts + data guard into system prompt
+        # Inject language rule + time-sensitive fact policy + data guard.
         _lang_rule = self._LANG_RULES.get(self.lang, self._LANG_RULES["zh"])
         _data_warn = self._data_guard(quote or {})
-        system = system + self._POST_TRAINING_FACTS + _lang_rule + _data_warn
+        system = system + self._TIME_SENSITIVE_FACT_POLICY + _lang_rule + _data_warn
         from providers.llm.base import Message
 
         # 自动注入 DAG pipeline 中的 upstream context

@@ -15,6 +15,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
+from packages.aria_core.paths import aria_home
 
 
 @dataclass(frozen=True)
@@ -622,7 +623,7 @@ def run_doctor(
     except Exception as exc:
         checks.append(_check("artifact_root", "err", str(exc)))
 
-    config_dir = Path.home() / ".arthera"
+    config_dir = aria_home()
     config_file = config_dir / "config.json"
     if config_file.exists():
         checks.append(_check("config", "ok", str(config_file)))

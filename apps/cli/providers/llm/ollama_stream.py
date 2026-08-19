@@ -5,6 +5,7 @@ shim in aria_cli.py after import, so all bare name references resolve correctly.
 """
 from __future__ import annotations
 import asyncio
+import re
 from datetime import datetime
 
 try:
@@ -407,7 +408,7 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
         from datetime import datetime as _dt2
         _today_str = _dt2.now().strftime("%Y年%m月%d日")
         _base_prompt = (
-            f"你是 Aria，Arthera 的 AI 助手。今天是 {_today_str}，**2026 FIFA 世界杯已于 2026-06-11 正式开幕**。\n"
+            f"你是 Aria，Arthera 的 AI 助手。今天是 {_today_str}。\n"
             "你的能力覆盖：金融量化分析、足球/体育赛事分析与预测（含泊松算法）、编程、通用知识问答。\n\n"
             "## 体育量化分析规则（重要）\n"
             "用户消息中可能包含两种特殊数据块：\n\n"
@@ -672,7 +673,7 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
                             "\n---\n"
                             "## 数据说明\n"
                             "以上数据来自 football-data.org 实时 API + 泊松量化模型（Aria 本地计算）。\n"
-                            f"【比赛信息】块 = API 真实赛程数据，今天是 {datetime.now().strftime('%Y-%m-%d')}，世界杯已于 2026-06-11 开幕。\n"
+                            f"【比赛信息】块 = API 真实赛程数据，获取日期为 {datetime.now().strftime('%Y-%m-%d')}。\n"
                             "【泊松模型量化预测】块 = Aria 使用 Dixon-Coles 泊松分布对此场比赛运行的算法结果。\n\n"
                             "## 你的任务\n"
                             "1. **直接引用预测数据中的概率数字**（如「加拿大胜率 42.4%」），不要说你没有数据\n"
@@ -681,7 +682,7 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
                             "4. 分析最可能的比分区间（高频比分说明比赛预计紧张/单方碾压）\n"
                             "5. 可以给出走势判断，但不要编造射正率、最近5场客场数据、历史交锋次数等输入数据之外的具体事实\n"
                             "6. 注意区分胜平负概率和准确比分概率：热门球队胜率最高，不代表最可能的单一比分一定是该队获胜\n"
-                            "7. 不要重新声明世界杯未开始或没有数据——上方数据证明它已经开始了\n"
+                            "7. 不要否认上方已提供的赛程或模型数据；如需说明限制，具体指出缺失字段\n"
                             "8. **严禁**在回复末尾添加任何类似以下内容的免责声明：\n"
                             "   - 「以上预测基于历史...并不包含实时数据」\n"
                             "   - 「不包含实时数据或赛前最新信息」\n"
@@ -691,7 +692,7 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
                     else:
                         _injection_note = (
                             "\n---\n"
-                            "以上是从 football-data.org 获取的真实赛事数据（今天 2026-06-12，世界杯已开幕）。\n"
+                            "以上是从 football-data.org 获取的赛事数据。\n"
                             "请基于这些数据给出分析，若数据不完整可结合训练知识合理推断。\n\n"
                         )
                     _mi["content"] = _sports_ctx + _injection_note + message
@@ -945,6 +946,11 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
         full_response = ""
         tool_calls_this_round = []
         _done_reason = ""
+        # Do not show provisional finance prose before this round is known to
+        # be prose-only. Some local models append malformed function JSON after
+        # a sentence, and streaming it first makes the protocol visible.
+        _buffer_finance_prose = enable_tools and _intent in {"finance", "analysis", "realtime"}
+        _buffered_tokens: list[str] = []
 
         try:
             async with aiohttp.ClientSession() as session:
@@ -1062,10 +1068,17 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
                                 and len(_stripped_tok) <= 6   # just ``` or ```py etc
                                 and full_response.count("```") % 2 == 1   # unpaired
                             )
-                            if on_token and not _fr_lstrip.startswith("<tool_call") \
-                                       and not _looks_like_tool_json \
-                                       and not _is_orphan_fence:
-                                on_token(token)
+                            _has_internal_protocol = bool(
+                                re.search(r"(?<![A-Za-z0-9_])\??brtc\b", full_response, re.IGNORECASE)
+                            )
+                            if not _fr_lstrip.startswith("<tool_call") \
+                                    and not _looks_like_tool_json \
+                                    and not _is_orphan_fence \
+                                    and not _has_internal_protocol:
+                                if _buffer_finance_prose:
+                                    _buffered_tokens.append(token)
+                                elif on_token:
+                                    on_token(token)
         except Exception as e:
             err_msg = str(e) or type(e).__name__
             if any(x in err_msg.lower() for x in ("cannot connect", "connect call failed", "connection refused", "errno 61")):
@@ -1113,6 +1126,9 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
 
         # If no tool calls this round
         if not tool_calls_this_round:
+            full_response = _strip_tool_call_tags(full_response)
+            if _buffer_finance_prose and on_token and full_response:
+                on_token(full_response)
             clean_text = full_response.strip().lower()
 
             if _done_reason in {"length", "num_predict"} and _continuation_count < 3:

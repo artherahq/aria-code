@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import re
 from typing import Iterable, Sequence
+from packages.aria_core.paths import aria_home
 
 
 #: Basic file I/O and deliverable-export tools that stay available no matter
@@ -158,12 +159,12 @@ def default_skill_roots() -> list[Path]:
     roots.extend(Path(item).expanduser() for item in configured.split(os.pathsep) if item.strip())
     repository = Path(__file__).resolve().parents[2]
     catalog_home = Path(
-        os.getenv("ARIA_SKILL_CATALOG_HOME", Path.home() / ".arthera" / "skill-catalogs")
+        os.getenv("ARIA_SKILL_CATALOG_HOME", aria_home() / "skill-catalogs")
     ).expanduser()
     installed_catalogs = sorted(catalog_home.glob("*/*/skills")) if catalog_home.is_dir() else []
     roots.extend([
         repository.parent / "aria-skills" / "skills",
-        Path.home() / ".arthera" / "skills",
+        aria_home() / "skills",
         Path.cwd() / ".aria" / "skills",
         Path.home() / ".aria" / "skills",
         Path.home() / ".claude" / "skills",

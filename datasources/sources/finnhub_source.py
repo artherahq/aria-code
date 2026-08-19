@@ -20,10 +20,11 @@ from typing import Optional
 import pandas as pd
 
 from ..base import BaseDataSource, FundamentalsResult, HistoryResult, QuoteResult
+from packages.aria_core.paths import aria_home
 
 logger = logging.getLogger(__name__)
 
-_PROVIDERS_FILE = Path.home() / ".arthera" / "providers.json"
+_PROVIDERS_FILE = aria_home() / "providers.json"
 _BASE = "https://finnhub.io/api/v1"
 
 

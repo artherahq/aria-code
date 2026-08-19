@@ -21,13 +21,16 @@ class AriaConfigPaths:
 
 
 def resolve_config_dir() -> Path:
-    """Resolve the user config directory with stable precedence."""
-    if "ARIA_HOME" in os.environ:
-        return Path(os.environ["ARIA_HOME"]).expanduser()
-    legacy = Path.home() / ".arthera"
-    if legacy.exists():
-        return legacy
-    return Path.home() / ".aria-code"
+    """Resolve the user config directory with stable precedence.
+
+    实现已收敛到 packages/aria_core/paths.aria_home()：同一套优先级此前只有
+    配置文件走，另外 38 个文件直接写死 Path.home()/".arthera" 绕过了它，导致
+    新用户的 config 落在 ~/.aria-code 而凭证落在 ~/.arthera。这里保留函数名做
+    兼容，逻辑不再各自维护一份。
+    """
+    from packages.aria_core.paths import aria_home
+
+    return aria_home()
 
 
 def resolve_user_output_root() -> Path:

@@ -266,6 +266,32 @@ def test_tool_error_summary_hides_curl_details():
     assert "curl" not in summary.lower()
 
 
+def test_market_tool_summary_preserves_data_provenance_and_rsi_direction():
+    import aria_cli
+
+    summary = aria_cli._format_tool_summary(
+        "get_market_data",
+        {
+            "success": True,
+            "symbol": "AAPL",
+            "price": 205.5,
+            "change_pct": -0.4,
+            "currency": "USD",
+            "provider": "test_provider",
+            "as_of": "2026-08-15T09:31:00-04:00",
+            "rsi": 25.77,
+            "macd_hist": -2.6242,
+            "source": {"path": "/Users/mac/Desktop/aria-code/generated/tmp_ohlc.csv"},
+        },
+    )
+
+    assert "Price: USD 205.5" in summary
+    assert "Provider timestamp: 2026-08-15T09:31:00-04:00" in summary
+    assert "RSI(14): 25.77 (oversold)" in summary
+    assert "MACD histogram: -2.6242" in summary
+    assert "/Users/mac" not in summary
+
+
 def test_run_command_activity_summary_uses_exit_code_field():
     from ui.render.output import _one_line_tool_summary
 

@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ..base import BaseDataSource, HistoryResult, QuoteResult
+from packages.aria_core.paths import aria_home
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +60,7 @@ MACRO_ALIASES: Dict[str, str] = {
 def _load_api_key() -> str:
     key = os.getenv("FRED_API_KEY", "")
     if not key:
-        for p in [Path.home() / ".aria" / ".env", Path.home() / ".arthera" / ".env"]:
+        for p in [Path.home() / ".aria" / ".env", aria_home() / ".env"]:
             if p.exists():
                 for line in p.read_text(encoding="utf-8").splitlines():
                     if line.startswith("FRED_API_KEY="):
@@ -70,7 +71,7 @@ def _load_api_key() -> str:
     if not key:
         try:
             import json as _json
-            _p = Path.home() / ".arthera" / "providers.json"
+            _p = aria_home() / "providers.json"
             if _p.exists():
                 _raw = _json.loads(_p.read_text(encoding="utf-8"))
                 key = _raw.get("data", {}).get("fred", {}).get("api_key", "")

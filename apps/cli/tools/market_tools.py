@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 _ROOT = Path(__file__).parent.parent.parent.parent  # aria-code/
@@ -17,8 +18,20 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from apps.cli.market_metadata import enrich_market_quote
+from packages.aria_core.paths import aria_home
 
 logger = logging.getLogger(__name__)
+
+
+def _quote_time_metadata(quote: dict) -> dict[str, str]:
+    """Return provenance without calling an undated quote 'latest'."""
+    retrieved_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    for key in ("as_of", "timestamp", "quote_time", "last_trade_time", "date"):
+        value = quote.get(key)
+        if value not in (None, ""):
+            return {"as_of": str(value), "retrieved_at": retrieved_at,
+                    "time_quality": "provider_timestamp"}
+    return {"retrieved_at": retrieved_at, "time_quality": "retrieval_time_only"}
 
 # ── Optional: market data client ────────────────────────────────────────────
 try:
@@ -62,7 +75,7 @@ def _get_finnhub_key() -> str:
     val = os.getenv("FINNHUB_API_KEY", "")
     if val:
         return val
-    providers_file = Path.home() / ".arthera" / "providers.json"
+    providers_file = aria_home() / "providers.json"
     try:
         if providers_file.exists():
             raw = json.loads(providers_file.read_text(encoding="utf-8"))
@@ -189,6 +202,7 @@ def tool_get_market_data(params: dict) -> dict:
             quote.get("provider") or "market_data_client"
         ],
     }
+    result.update(_quote_time_metadata(quote))
 
     # ── 2. Technical indicators ───────────────────────────────────────────────
     ti: dict = {}

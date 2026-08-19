@@ -21,6 +21,7 @@ import os
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from packages.aria_core.paths import aria_home
 
 logger = logging.getLogger(__name__)
 
@@ -59,8 +60,8 @@ try:
 except ImportError:
     _HAS_OPENPYXL = False
 
-ALERTS_PATH = Path.home() / ".arthera" / "alerts.json"
-EXPORT_DIR  = Path.home() / ".arthera" / "exports"
+ALERTS_PATH = aria_home() / "alerts.json"
+EXPORT_DIR  = aria_home() / "exports"
 
 
 # ── Excel 导出 ────────────────────────────────────────────────────────────────

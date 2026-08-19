@@ -27,8 +27,9 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from packages.aria_core.paths import aria_home
 
-_VAULT_DIR = Path.home() / ".arthera" / "strategies"
+_VAULT_DIR = aria_home() / "strategies"
 _VAULT_DB  = _VAULT_DIR / "vault.db"
 
 # ── Database setup ────────────────────────────────────────────────────────────

@@ -467,3 +467,13 @@ def test_finnhub_guard_skips_non_us_style_symbols():
     assert not _finnhub_style_symbol("EURUSD=X")
     assert not _finnhub_style_symbol("0700.HK")
     assert not _finnhub_style_symbol("SAP.DE")
+def test_quote_time_metadata_keeps_provider_timestamp_or_marks_retrieval_time():
+    from apps.cli.tools.market_tools import _quote_time_metadata
+
+    provider_timestamp = _quote_time_metadata({"as_of": "2026-08-15T09:31:00-04:00"})
+    retrieval_only = _quote_time_metadata({})
+
+    assert provider_timestamp["as_of"] == "2026-08-15T09:31:00-04:00"
+    assert provider_timestamp["time_quality"] == "provider_timestamp"
+    assert retrieval_only["time_quality"] == "retrieval_time_only"
+    assert retrieval_only["retrieved_at"].endswith("+00:00")

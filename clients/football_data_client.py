@@ -21,6 +21,7 @@ import os
 import time
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
+from packages.aria_core.paths import aria_home
 
 try:
     import requests
@@ -79,7 +80,7 @@ def _load_football_key() -> str:
         # Check ~/.aria/.env and ~/.arthera/.env
         for env_file in [
             _pl.Path.home() / ".aria" / ".env",
-            _pl.Path.home() / ".arthera" / ".env",
+            aria_home() / ".env",
         ]:
             if env_file.exists():
                 try:
@@ -94,7 +95,7 @@ def _load_football_key() -> str:
     if not key:
         try:
             import pathlib as _pl
-            p = _pl.Path.home() / ".arthera" / "providers.json"
+            p = aria_home() / "providers.json"
             if p.exists():
                 raw = json.loads(p.read_text(encoding="utf-8"))
                 data = raw.get("data", {})
