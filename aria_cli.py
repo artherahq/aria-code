@@ -4005,7 +4005,7 @@ def _print_tool_result(tool_name: str, result: dict, elapsed: float = 0, params:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Finance rendering — implementation lives in apps/cli/commands/finance_render.py
+# Finance rendering — implementation lives in ui/render/finance.py
 # These thin wrappers supply the module-level console / HAS_RICH / _ARIA_BOT_MODE.
 # ─────────────────────────────────────────────────────────────────────────────
 

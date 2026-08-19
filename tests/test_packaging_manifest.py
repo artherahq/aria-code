@@ -54,6 +54,44 @@ def _tracked_top_level_packages() -> set[str]:
     }
 
 
+def _declared_py_modules() -> set[str]:
+    body = re.search(r"py-modules = \[(.*?)\n\]", _pyproject_text(), re.S)
+    assert body, "pyproject.toml 缺少 [tool.setuptools].py-modules"
+    return set(re.findall(r'"([^"]+)"', body.group(1)))
+
+
+def _root_modules_imported_by_shipped_code() -> set[str]:
+    """被仓库代码按顶层模块名 import 的根 .py —— 这些必须随包发布。
+
+    含函数内 import：aria_cli 就是在函数体里 `from spreadsheet_tools import …`，
+    这类调用在 import 期不报错，只有真正走到那条命令时才炸，最难发现。
+    """
+    root_modules = {
+        p.stem for p in REPO_ROOT.glob("*.py") if not p.name.startswith("test_")
+    }
+    out = subprocess.run(
+        ["git", "grep", "-hE", r"(^|[^.a-zA-Z_])(from|import) [a-z_][a-z_0-9]*", "--", "*.py"],
+        cwd=REPO_ROOT, capture_output=True, text=True,
+    ).stdout
+    imported = set(re.findall(r"(?:^|[^.\w])(?:from|import)\s+([a-z_][a-z_0-9]*)", out))
+    return root_modules & imported
+
+
+def test_root_modules_that_code_imports_are_declared_in_py_modules():
+    """py-modules 漏声明 = 该文件不进包 = 安装后 import 它必然失败。
+
+    2026-08-19：image_gen_tools 与 spreadsheet_tools 就是这么漏的——两者都有
+    re-export shim、aria_cli 也在 import，但没进 py-modules，已发布的 4.3.0
+    wheel 里根本没有这两个文件。
+    """
+    missing = sorted(_root_modules_imported_by_shipped_code() - _declared_py_modules())
+    assert not missing, (
+        "以下根模块被代码 import，但没有在 [tool.setuptools].py-modules 里声明，"
+        f"pip 安装后不会存在：{missing}\n"
+        "仓库内一切正常，只有装出来才炸。"
+    )
+
+
 def test_every_top_level_package_is_in_the_packaging_include_list():
     include_names = {p.rstrip("*") for p in _find_include_patterns()}
     missing = sorted(_tracked_top_level_packages() - include_names)
