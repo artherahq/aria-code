@@ -4,10 +4,32 @@ sports/ml_model.py — 足球 XGBoost 预测模型
 从 tracker.py 积累的已结算预测记录中学习，
 与 Dixon-Coles 规则模型进行 A/B Brier Score 对比。
 
-触发逻辑:
+触发逻辑（原始设计）:
   - 首次训练: ≥20 条已结算记录（Elo + 实际结果）
   - 自动重训: 每新增 10 条记录触发一次
   - 预测时:   优先使用 ML 模型，数据不足则 fallback → DC
+
+⚠️ 现状：本模块目前**未接入预测路径，这是有意的**。
+predictor.py 只跑 Elo+DC+Form+H2H（见其 model_tag），从不调用
+get_football_ml()。2026-08-19 复查时一度把它当成"死代码"准备删除，查了
+训练产物才发现真相——它不是忘了接线，是 A/B 输给了基线：
+
+    ~/.arthera/football_ml_report.json  (trained_at 2026-06-15)
+      n_samples      25
+      cv_brier_mean  1.0446   ← 本模型
+      dc_brier       0.3251   ← Dixon-Coles 基线
+      improvement   -0.7196   ← 负数 = 更差
+
+Brier 越低越好，ML 比基线差约 3.2 倍。25 条样本喂 9 维特征的 XGBoost，
+1.04 的 CV Brier 正是过拟合的典型表现（3 分类 Brier 上界 2.0，随机猜测
+约 0.67，本模型比随机还差）。所以**不接入是正确决定**，不是遗漏。
+
+要重新评估的前提是样本量先上来（经验上 9 维特征至少需要几百条已结算记录，
+25 条差了一个数量级）。届时重跑 train() 看 improvement 是否转正，
+再决定要不要在 predictor.py 里接上。
+
+保留本文件的理由：删掉会一并丢失"ML 在此样本量下输给 DC"这个结论，
+下一个人只会重新实现一遍再重新发现一次。
 
 特征向量 (9维):
   elo_diff, elo_home, elo_away,
