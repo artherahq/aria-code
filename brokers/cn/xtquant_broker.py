@@ -19,9 +19,33 @@ brokers/cn/xtquant_broker.py — 迅投 XTQuant 适配器
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from ..base import BrokerBase, AccountInfo, Position, Order, OrderResult
+
+
+def _lot_size_violation(side: str, quantity: float) -> Optional[str]:
+    """A股买入必须是100股整数倍；卖出允许零股清仓（不受此约束）。"""
+    if side == "buy" and quantity % 100 != 0:
+        return f"买入数量 {quantity:g} 不是100股整数倍"
+    if quantity <= 0:
+        return f"数量必须为正数，收到 {quantity:g}"
+    return None
+
+
+def _t_plus_1_violation(side: str, quantity: float, position: Optional[Position]) -> Optional[str]:
+    """A股 T+1：当日买入的份额要到下一交易日才能卖出。
+
+    可卖数量直接读 XTQuant 返回的 can_use_volume（positions() 里映射成
+    available_qty）——这是柜台自己算好的、已经扣掉当日买入未解冻部分的
+    数字，不用本地另外维护一套持仓时间戳去猜哪些是"今天买的"。
+    """
+    if side != "sell":
+        return None
+    available = position.available_qty if position else 0.0
+    if quantity > available:
+        return f"卖出 {quantity:g} 股超过可用持仓 {available:g} 股（当日买入部分尚未解冻，或持仓不足）"
+    return None
 
 
 class XTQuantBroker(BrokerBase):
@@ -144,7 +168,32 @@ class XTQuantBroker(BrokerBase):
 
     def place_order(self, symbol: str, side: str, quantity: float,
                     order_type: str = "limit", price: float = 0.0, **kwargs) -> OrderResult:
+        """下单前跑本地前置检查（整手、T+1），不通过则直接拒绝，不发往柜台。
+
+        2026-08 补：这层之前是空的——brokers/trading.py 的 RiskRuleSet 是
+        跨市场通用风控（仓位占比/现金留存/做空/碎股），不认 A股特有的整手
+        和 T+1 规则，之前完全没人挡，只能指望交易所柜台自己拒单。
+
+        故意没做的一项：涨跌停价格禁区检查。那需要额外拉实时行情
+        (xtdata.get_market_data 查 lastclose)，这里还没有稳定验证过的调用
+        路径，宁可先不做半成品的价格校验，也不要给一个看似做了、实际没
+        测过的检查——柜台本身对超出涨跌停的委托单是硬性拒单，不会被这个
+        缺口放过一笔真实成交，只是少一层"提前失败、省一次网络往返"的
+        便利，不是安全缺口。
+        """
         self._require_connected()
+
+        side = str(side or "").lower()
+        lot_error = _lot_size_violation(side, float(quantity))
+        if lot_error:
+            return OrderResult(success=False, message=f"本地前置检查未通过：{lot_error}", broker_id=self.broker_id)
+
+        if side == "sell":
+            current = next((p for p in self.positions() if p.symbol == symbol), None)
+            t1_error = _t_plus_1_violation(side, float(quantity), current)
+            if t1_error:
+                return OrderResult(success=False, message=f"本地前置检查未通过：{t1_error}", broker_id=self.broker_id)
+
         from xtquant.xttype import StockOrderType, StockPriceType
         xt_type  = 23 if side == "buy" else 24    # XTQuant buy/sell constants
         price_tp = StockPriceType.LATEST if order_type == "market" else StockPriceType.FIX
