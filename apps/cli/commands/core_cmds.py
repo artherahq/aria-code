@@ -1,3 +1,20 @@
+"""Core slash commands mixin.
+
+本文件绝大多数名字（console / HAS_RICH / MODELS …）是有意留作裸名的，由
+aria_cli 的 _rebind_mixin_globals() 把方法 __globals__ 指向它的命名空间来解析。
+
+但 pathlib 不能这么处理：它出现在 _create_scaffold() 的**参数注解**里，而注解
+在 class 语句执行时就要求值——那时候 rebind 还没发生（rebind 作用于已定义好的
+类）。所以这一个必须真的 import。
+
+2026-08-19 发现：此前没有这行，导致本模块在 Python 3.10–3.13 上 import 即
+NameError，而这正是 requires-python = "<3.14,>=3.10" 声明支持的全部范围。
+开发机 .venv 是 3.14（PEP 649 注解惰性求值）所以一直没暴露，1352 个测试也
+全绿。已发布的 4.3.0 同样中招：pip install 后运行 aria-code 直接崩溃。
+"""
+
+import pathlib
+
 
 class CoreCommandsMixin:
     def _cmd_rewind_unavailable(self, args: str):
