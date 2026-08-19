@@ -251,20 +251,38 @@ py-modules = [
 where = ["."]
 # Real top-level packages (dirs with __init__.py). packages.find only matches
 # package directories — single-file top-level modules are declared in
-# [tool.setuptools].py-modules above, NOT here. Keep this list in sync with the
-# directories that ship __init__.py (currently: agents apps brokers datasources
-# packages privacy providers runtime safety ui workspace).
+# [tool.setuptools].py-modules above, NOT here.
+#
+# 这份清单必须覆盖所有带 __init__.py 的顶层目录。2026-08-19 修复：
+# clients / domain / tools 三个目录漏在外面——它们正是 refactor_structure.py
+# 那次迁移新建的，26 个根模块的真实实现都搬了进去，但 include 清单没跟着更新
+# （providers 加了，这三个没加）。后果不是"少装几个文件"，而是**已发布的包是
+# 坏的**：24 个 re-export shim 在 py-modules 里有声明、会随包发布，可它们
+# `_import_module("clients.market_data_client")` 的目标却不在包里。实测在只含
+# 打包内容的干净环境里 `import market_data_client` 直接
+# ModuleNotFoundError: No module named 'clients'。连同直接 import
+# tools./clients./domain. 的 10 处，以及这三个目录自身的 29 个文件、15,435 行
+# 代码，全部从未随包发出去过。
+#
+# 校验方式（改动本清单后请重跑）：
+#   python -c "
+#   from setuptools.discovery import PEP420PackageFinder as F
+#   print(sorted({p.split('.')[0] for p in F.find(where='.', include=[...])}))"
+# 结果应与 `git ls-files '*/__init__.py'` 里的顶层目录集合一致。
 include = [
     "adk_apps*",
     "agents*",
     "apps*",
     "brokers*",
+    "clients*",
     "datasources*",
+    "domain*",
     "packages*",
     "privacy*",
     "providers*",
     "runtime*",
     "safety*",
+    "tools*",
     "ui*",
     "workspace*",
 ]
