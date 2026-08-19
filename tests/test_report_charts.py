@@ -9,6 +9,7 @@ there's no reason to fake them out.
 from __future__ import annotations
 
 import base64
+import importlib.util
 
 import numpy as np
 import pandas as pd
@@ -20,6 +21,16 @@ from report_generator import (
     generate_allocation_chart,
     generate_comparison_chart,
     generate_indicator_chart,
+)
+
+
+# 只有真正产出 PNG 的用例需要 mplfinance/matplotlib（charts extra）；同文件里
+# 测「空输入应返回 None」这类边界的用例不碰绘图后端，照常运行。
+# CI 的 test workflow 只装 .[cn,dev]，缺依赖时绘图函数返回 None，断言
+# `assert png is not None` 便 FAILED——而该 workflow 声明的契约是优雅跳过。
+requires_charts = pytest.mark.skipif(
+    importlib.util.find_spec("mplfinance") is None,
+    reason="需要 charts extra（pip install 'aria-code[charts]'）",
 )
 
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
@@ -69,6 +80,7 @@ def test_macd_histogram_equals_macd_minus_signal():
 
 # ── generate_indicator_chart ─────────────────────────────────────────────────
 
+@requires_charts
 def test_indicator_chart_returns_valid_png():
     df = _synthetic_ohlcv()
     b64 = generate_indicator_chart(df, "TEST")
@@ -85,6 +97,7 @@ def test_indicator_chart_none_for_missing_close_column():
     assert generate_indicator_chart(df, "TEST") is None
 
 
+@requires_charts
 def test_indicator_chart_works_without_volume_column():
     # OHLC present but no Volume (has_ohlcv=False) should still render via the
     # "line" plot_type path — matches generate_price_chart's own assumption
@@ -98,6 +111,7 @@ def test_indicator_chart_works_without_volume_column():
 
 # ── generate_comparison_chart ────────────────────────────────────────────────
 
+@requires_charts
 def test_comparison_chart_returns_valid_png_for_multiple_symbols():
     price_data = {
         "AAA": _synthetic_ohlcv(seed=1, start=100),
@@ -112,6 +126,7 @@ def test_comparison_chart_none_for_empty_input():
     assert generate_comparison_chart({}, "") is None
 
 
+@requires_charts
 def test_comparison_chart_skips_bad_symbols_but_still_renders():
     price_data = {
         "GOOD": _synthetic_ohlcv(seed=3),
@@ -131,6 +146,7 @@ def test_comparison_chart_none_when_all_symbols_unusable():
 
 # ── generate_allocation_chart ────────────────────────────────────────────────
 
+@requires_charts
 def test_allocation_chart_returns_valid_png():
     positions = [
         {"symbol": "AAPL", "market_value": 15000},
@@ -141,6 +157,7 @@ def test_allocation_chart_returns_valid_png():
     assert _is_valid_png(b64)
 
 
+@requires_charts
 def test_allocation_chart_computes_value_from_quantity_and_price():
     positions = [{"symbol": "GOOG", "quantity": 10, "current_price": 150}]
     b64 = generate_allocation_chart(positions)
@@ -157,6 +174,7 @@ def test_allocation_chart_none_when_no_usable_values():
     assert generate_allocation_chart(positions) is None
 
 
+@requires_charts
 def test_allocation_chart_excludes_zero_and_negative_positions():
     positions = [
         {"symbol": "AAPL", "market_value": 10000},
