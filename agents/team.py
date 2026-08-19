@@ -276,7 +276,13 @@ class AgentTeam:
         if explicit_debate or self.signal_scheme.needs_debate(results):
             debate_agent = self._build_agent("debate")
             if debate_agent:
-                debate_data = {"conflicting": [r.to_dict() for r in results if r.success]}
+                debate_data = {
+                    "conflicting": [r.to_dict() for r in results if r.success],
+                    # 领域词汇表要一起传：DebateAgent 默认说金融的 BUY/HOLD/SELL，
+                    # 不告诉它当前领域用什么词，它产出的信号会被 vote() 过滤掉
+                    # （不在 scores 里），等于裁判意见完全不参与最终结论。
+                    "signal_scheme": self.signal_scheme,
+                }
                 try:
                     debate_result = await asyncio.wait_for(
                         debate_agent.analyze(symbol, debate_data),
