@@ -19,7 +19,7 @@ Example::
         {
           "name": "filesystem",
           "command": "npx",
-          "args": ["-y", "@modelcontextprotocol/server-filesystem", "/home/user/projects"],
+          "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/projects"],
           "description": "Filesystem access"
         }
       ]

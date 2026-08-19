@@ -6,11 +6,15 @@ agents/financial/fundamental.py — 基本面分析 Agent
 from __future__ import annotations
 import os
 import sys
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 from ..base import BaseAgent, AgentResult
 
 # 动态加载 aria_tools 中的 MCP 工具
-sys.path.append("/Users/mac/Desktop/aria-code/packages")
+# 相对本文件定位同仓库的 packages/，不写死开发者本机路径
+_PKGS = str(Path(__file__).resolve().parents[2] / "packages")
+if _PKGS not in sys.path:
+    sys.path.append(_PKGS)
 try:
     from aria_tools.financial.factors import run_factor_research
 except ImportError:

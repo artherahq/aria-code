@@ -16,10 +16,14 @@ except ImportError:
 
 import os
 import sys
+from pathlib import Path
 import asyncio
 
 # 动态加载 aria_tools 中的 MCP 工具
-sys.path.append("/Users/mac/Desktop/aria-code/packages")
+# 相对本文件定位同仓库的 packages/，不写死开发者本机路径
+_PKGS = str(Path(__file__).resolve().parents[2] / "packages")
+if _PKGS not in sys.path:
+    sys.path.append(_PKGS)
 try:
     from aria_tools.financial.risk_tools import run_risk_profile
 except ImportError:

@@ -70,7 +70,10 @@ def update_imports(file_path: Path, module_mapping: dict):
         print(f"  [Error] updating {file_path.name}: {e}")
 
 def main():
-    base_dir = Path("/Users/mac/Desktop/aria-code")
+    # 相对本脚本定位仓库根目录；写死开发者本机路径会让别人 clone 后直接
+    # 在错误的目录上执行搬移操作。允许用 ARIA_CODE_PATH 覆盖。
+    base_dir = Path(os.getenv("ARIA_CODE_PATH", "")).expanduser() if os.getenv("ARIA_CODE_PATH") \
+        else Path(__file__).resolve().parent
 
     # 1. 创建目标文件夹
     for folder in MOVE_MAP.keys():

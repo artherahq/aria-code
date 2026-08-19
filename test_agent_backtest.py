@@ -1,5 +1,6 @@
 import sys
-sys.path.append('/Users/mac/Desktop/aria-code/packages')
+from pathlib import Path
+sys.path.append(str(Path(__file__).resolve().parent / 'packages'))
 
 import pandas as pd
 import numpy as np
