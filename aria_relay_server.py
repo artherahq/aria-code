@@ -33,6 +33,11 @@ WebSocket 注册流程:
 所需环境变量:
   FEISHU_APP_ID         飞书应用 App ID
   FEISHU_APP_SECRET     飞书应用 App Secret
+  FEISHU_ENCRYPT_KEY    飞书事件订阅的 Encrypt Key（推荐）——启用请求头签名校验
+  FEISHU_VERIFICATION_TOKEN
+                        飞书 Verification Token（次选）——校验事件体里的 token
+                        ⚠️ 二者至少配一个，否则 /feishu/event 一律拒绝。
+                        仅本地联调可设 RELAY_ALLOW_UNVERIFIED_EVENTS=1 绕过。
   RELAY_SECRET          WebSocket 注册鉴权（可选，留空则不鉴权）
   DB_PATH               SQLite 路径（默认 ./relay.db）
   MESSAGE_TIMEOUT       等待用户本机回复的超时秒数（默认 90）
@@ -42,6 +47,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -62,6 +68,10 @@ logger = logging.getLogger("aria.relay_server")
 _FEISHU_APP_ID     = os.environ.get("FEISHU_APP_ID", "")
 _FEISHU_APP_SECRET = os.environ.get("FEISHU_APP_SECRET", "")
 _RELAY_SECRET      = os.environ.get("RELAY_SECRET", "")
+_FEISHU_VERIFICATION_TOKEN = os.environ.get("FEISHU_VERIFICATION_TOKEN", "")
+_FEISHU_ENCRYPT_KEY        = os.environ.get("FEISHU_ENCRYPT_KEY", "")
+_ALLOW_UNVERIFIED_EVENTS   = os.environ.get(
+    "RELAY_ALLOW_UNVERIFIED_EVENTS", "").strip().lower() in {"1", "true", "yes", "on"}
 _DB_PATH           = os.environ.get("DB_PATH", "./relay.db")
 _MSG_TIMEOUT       = int(os.environ.get("MESSAGE_TIMEOUT", "90"))
 _FEISHU_API        = "https://open.feishu.cn/open-apis"
@@ -313,6 +323,59 @@ async def ws_endpoint(websocket: WebSocket):
 
 # ── Feishu event endpoint ─────────────────────────────────────────────────────
 
+
+# ── Feishu event authenticity ─────────────────────────────────────────────────
+#
+# 2026-08-19 修复一条完整的未授权账户劫持链。修复前 /feishu/event 对请求来源
+# 不做任何校验，配合公开的 /status，四步即可劫持任意在线用户：
+#
+#   1. GET  /status         → 拿到全部在线 client_ids（该端点当时把它们直接列出）
+#   2. POST /feishu/event   → 伪造事件，sender.open_id 填攻击者自己的，
+#                             正文填 "/bind ARIA-BIND-<受害者 client_id>"
+#   3. 服务端执行 _bind(攻击者, 受害者client_id)   → 绑定被改写
+#   4. 攻击者此后发的消息都会被转发到受害者本机执行，结果回传给攻击者
+#
+# RELAY_SECRET 只校验 WebSocket 注册那一侧，HTTP 侧完全没有防护。
+#
+# 飞书提供两种官方校验手段，这里都支持：
+#   - Verification Token：事件体里的 token 字段，与控制台配置值比对
+#   - Encrypt Key：请求头 X-Lark-Signature = sha256(timestamp+nonce+key+body)
+# 两者只要配置了任意一个就会被强制执行；都没配置时默认**拒绝**事件，
+# 除非显式设置 RELAY_ALLOW_UNVERIFIED_EVENTS=1（仅供本地联调）。
+# 默认拒绝而不是默认放行——这个端点的下游是用户本机，放行的代价太高。
+
+
+def _verify_feishu_request(headers: dict, body: bytes, payload: dict) -> tuple[bool, str]:
+    """返回 (是否可信, 拒绝原因)。"""
+    if _FEISHU_ENCRYPT_KEY:
+        timestamp = headers.get("x-lark-request-timestamp", "")
+        nonce     = headers.get("x-lark-request-nonce", "")
+        signature = headers.get("x-lark-signature", "")
+        if not signature:
+            return False, "missing X-Lark-Signature"
+        digest = hashlib.sha256(
+            (timestamp + nonce + _FEISHU_ENCRYPT_KEY).encode("utf-8") + body
+        ).hexdigest()
+        # 定长比较，避免按字节短路带来的时序侧信道
+        if not hmac.compare_digest(digest, signature):
+            return False, "signature mismatch"
+        return True, ""
+
+    if _FEISHU_VERIFICATION_TOKEN:
+        token = payload.get("token") or payload.get("header", {}).get("token", "")
+        if not hmac.compare_digest(str(token), _FEISHU_VERIFICATION_TOKEN):
+            return False, "verification token mismatch"
+        return True, ""
+
+    if _ALLOW_UNVERIFIED_EVENTS:
+        return True, ""
+
+    return False, (
+        "relay 未配置 FEISHU_ENCRYPT_KEY 或 FEISHU_VERIFICATION_TOKEN；"
+        "未验签的事件一律拒绝（本地联调可设 RELAY_ALLOW_UNVERIFIED_EVENTS=1）"
+    )
+
+
 @app.post("/feishu/event")
 async def feishu_event(request: Request):
     """Feishu Developer Console → Event Subscription → Request URL: /feishu/event"""
@@ -321,6 +384,15 @@ async def feishu_event(request: Request):
         payload = json.loads(body)
     except Exception:
         raise HTTPException(400, "Invalid JSON")
+
+    # 先验签再做任何事。URL verification challenge 也要验——飞书在发
+    # challenge 时同样带 token/签名，放它过去等于给攻击者一个免验探测点。
+    trusted, reason = _verify_feishu_request(
+        {k.lower(): v for k, v in request.headers.items()}, body, payload
+    )
+    if not trusted:
+        logger.warning("拒绝未通过校验的 /feishu/event 请求: %s", reason)
+        raise HTTPException(401, f"Unverified Feishu event: {reason}")
 
     # URL verification challenge
     if "challenge" in payload:
@@ -383,13 +455,26 @@ async def feishu_event(request: Request):
 # ── Status endpoint ───────────────────────────────────────────────────────────
 
 @app.get("/status")
-async def status():
-    return {
+async def status(request: Request):
+    """健康检查。**不再无条件列出 client_ids**——它就是 /bind 的绑定凭证，
+    公开等于把劫持所需的最后一块拼图直接送出去（见 _verify_feishu_request
+    上方记录的攻击链）。带正确 RELAY_SECRET 时才返回明细，否则只给计数。
+    """
+    body = {
         "connected_clients": len(_connections),
-        "client_ids": list(_connections.keys()),
         "total_bindings": get_db().execute("SELECT COUNT(*) FROM bindings").fetchone()[0],
         "feishu_app_configured": bool(_FEISHU_APP_ID),
+        "event_verification": (
+            "encrypt_key" if _FEISHU_ENCRYPT_KEY
+            else "verification_token" if _FEISHU_VERIFICATION_TOKEN
+            else "DISABLED (unverified events allowed)" if _ALLOW_UNVERIFIED_EVENTS
+            else "enforced (events rejected: no key configured)"
+        ),
     }
+    presented = request.headers.get("x-relay-secret", "")
+    if _RELAY_SECRET and hmac.compare_digest(presented, _RELAY_SECRET):
+        body["client_ids"] = list(_connections.keys())
+    return body
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
