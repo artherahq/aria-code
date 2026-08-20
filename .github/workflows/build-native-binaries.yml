@@ -179,4 +179,15 @@ jobs:
       - name: Upload to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ github.ref_name }}" release/* --clobber --repo "${{ github.repository }}"
+        run: |
+          # publish.yml 的 create-release 正常会先跑完（它只建一个 release，而这里
+          # 要先构建三个平台的二进制）。但两个 workflow 由同一个 tag 并行触发，
+          # 没有跨 workflow 的依赖可声明——所以这里兜一道底，免得 upload 因为
+          # release 还不存在而失败。两边都是幂等的。
+          if ! gh release view "${{ github.ref_name }}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release create "${{ github.ref_name }}" \
+              --repo "${{ github.repository }}" \
+              --title "${{ github.ref_name }}" \
+              --generate-notes
+          fi
+          gh release upload "${{ github.ref_name }}" release/* --clobber --repo "${{ github.repository }}"
