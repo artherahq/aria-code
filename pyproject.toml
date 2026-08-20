@@ -301,9 +301,12 @@ target-version = "py310"
 exclude = [
     ".git", ".venv", "venv", "__pycache__", "dist", "build",
     "npm", ".github", "aria-output",
-    # Large monolith files with intentional alignment — not reformatted
-    "aria_cli.py",
-    "dashboard_generator.py",
+    # 2026-08-20：aria_cli.py 与 dashboard_generator.py 曾整体排除在这里，理由是
+    # "手工对齐、不参与重排"。但 exclude 是全局的——它连带关掉了**查 bug 的规则**。
+    # 代价是真实的：F821（未定义名字）在 commands/ 里抓到过一次启动即崩的
+    # NameError，而同类 bug 落在 7000 行的 aria_cli.py 里，CI 永远看不见。
+    # 现在两个文件都进 lint；格式类诉求由下面的 per-file-ignores 单独豁免，
+    # 而不是靠整文件失明来换。
 ]
 
 [tool.ruff.lint]
@@ -334,6 +337,13 @@ ignore = ["E501", "F401", "E402", "F811"]
 # broker_render 里的 "AccountInfo" 是字符串前向引用，运行期根本不求值。
 "apps/cli/football_reports.py" = ["F821"]
 "apps/cli/broker_render.py" = ["F821"]
+
+# aria_cli.py 的"未使用 import"绝不能自动清理：它的 globals() 就是所有 rebound
+# mixin 方法的命名空间，94 个 ruff 眼里没用到的 import 里有 51 个是给它们准备的
+# （pathlib 一个就被 commands/ 用了 75 次）。跑一次 `ruff check --fix` 会批量重演
+# 2026-08-09 那个启动即崩的 NameError。契约由 tests/test_rebind_namespace_contract.py
+# 看守；这里显式记一笔，免得后来人以为这是可以顺手清的死代码。
+"aria_cli.py" = ["F401"]
 
 # ── Black (optional local use) ─────────────────────────────────────────────────
 [tool.black]

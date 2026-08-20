@@ -208,7 +208,7 @@ class ASharePredictionCommandsMixin:
             )
             console.print(f"[dim]{notice}[/dim]") if HAS_RICH else print(notice)
             try:
-                service = build_prediction_service(config)
+                service = build_prediction_service(self.terminal.config)
                 result = await asyncio.to_thread(
                     service.run_once, symbols=symbols, universe=parsed.universe, limit=limit,
                     period=parsed.period, strategy=parsed.strategy,

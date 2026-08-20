@@ -638,6 +638,11 @@ class WorkspaceCommandsMixin:
 
     async def cmd_project(self, args: str):
         """项目分析 (Claude Code / Codex 风格): /project load|tree|grep|ask|task|status|info <参数>"""
+        # 本方法体内三处用到 _T / _box，但导入只写在别的方法里。普通方法的
+        # __globals__ 被 _rebind_mixin_globals 换成了 aria_cli 的，本文件模块级
+        # 的名字一律看不见——所以必须在方法内自己导入，跟本文件其它方法一致。
+        from rich.table import Table as _T
+        from rich import box as _box
         try:
             from project_tools import ProjectSession, scan_project, format_grep_results
             _HAS_PT = True
@@ -1136,7 +1141,7 @@ class WorkspaceCommandsMixin:
         # ── Step 4: Messaging channels (Feishu / Telegram) ──────────────────
         if sub in ("feishu", "telegram", "notify", "all", ""):
             console.print("  [bold]Step 4/5 · 消息通知连接[/bold]") if HAS_RICH else print("Step 4: Messaging")
-            _env_path = Path.home() / ".aria" / ".env"
+            _env_path = pathlib.Path.home() / ".aria" / ".env"
             _env_vars: dict = {}
             if _env_path.exists():
                 for _line in _env_path.read_text().splitlines():
@@ -1174,11 +1179,13 @@ class WorkspaceCommandsMixin:
             if sub in ("feishu", "telegram"):
                 console.print() if HAS_RICH else print()
                 try:
-                    import importlib.util as _ilu
-                    _wiz_path = Path(__file__).parent.parent.parent.parent / "setup_wizard.py"
-                    _spec = _ilu.spec_from_file_location("_aria_setup_wizard", str(_wiz_path))
-                    _wiz = _ilu.module_from_spec(_spec)
-                    _spec.loader.exec_module(_wiz)
+                    # setup_wizard 是随包发布的顶层模块（见 pyproject py-modules），
+                    # 直接 import 即可。原先用 __file__ 往上数四层拼路径：这个方法
+                    # 的 __globals__ 被 _rebind_mixin_globals 换成了 aria_cli 的，
+                    # __file__ 因此指向仓库根的 aria_cli.py 而非本文件，四层 parent
+                    # 算出 /Users/setup_wizard.py，永远不存在——异常被下面的
+                    # except 吞掉，这条分支一直静默退化成"请手动运行"提示。
+                    import setup_wizard as _wiz
                     _e = _wiz._load_env()
                     if sub == "feishu":
                         _wiz.setup_feishu(_e)

@@ -66,7 +66,6 @@ import logging
 import time
 import shlex
 import pathlib
-import signal
 import uuid
 import threading
 from datetime import datetime
@@ -137,6 +136,10 @@ from apps.cli.runtime_consumer import (
     TurnPhase,
 )
 from packages.aria_sdk.streaming import stream_provider_result
+# broker_cmds / model_cmds / workspace_cmds 的 mixin 方法裸名调用 aria_home()。
+# 它们各自模块顶部也 import 了它，但 _rebind_mixin_globals 把方法的 __globals__
+# 整个换成本模块的，那层导入在运行期不参与解析——只有这里这一份算数。
+from packages.aria_core.paths import aria_home
 from ui.render.market import print_quote_result, print_ta_result
 from apps.cli.commands.report import (
     all_agents_failed,
@@ -236,7 +239,11 @@ from apps.cli.utils.market_detect import (  # noqa: F401 — re-exported
 
 from apps.cli.commands.broker_cmds import BrokerCommandsMixin
 from apps.cli.commands.canvas_cmds import CanvasCommandsMixin
-from apps.cli.commands.backtest_cmds import BacktestCommandsMixin
+from apps.cli.commands.backtest_cmds import (
+    BacktestCommandsMixin,
+    format_backtest_data_error,  # mixin 方法裸名调用，见下方 _rebind_mixin_globals
+    _print_sparkline,
+)
 from apps.cli.commands.analysis_cmds import AnalysisCommandsMixin
 from apps.cli.commands.ashare_prediction_cmds import (
     ASharePredictionCommandsMixin,
@@ -249,7 +256,10 @@ from apps.cli.commands.ashare_prediction_cmds import (
 from apps.cli.commands.data_cmds import DataCommandsMixin
 from apps.cli.commands.ops_cmds import OpsCommandsMixin
 from apps.cli.commands.diagnostic_cmds import DiagnosticCommandsMixin
-from apps.cli.commands.diagnostic_ops_cmds import DiagnosticOpsCommandsMixin
+from apps.cli.commands.diagnostic_ops_cmds import (
+    DiagnosticOpsCommandsMixin,
+    format_architecture_report,  # 同上
+)
 from apps.cli.commands.ui_cmds import UiCommandsMixin
 from apps.cli.commands.session_ux_cmds import SessionUxCommandsMixin
 from apps.cli.commands.auth_cmds import AuthCommandsMixin
@@ -261,6 +271,7 @@ from apps.cli.commands.workflow_cmds import WorkflowCommandsMixin
 from apps.cli.commands.business_workflow_cmds import BusinessWorkflowCommandsMixin
 from apps.cli.commands.warehouse_cmds import WarehouseCommandsMixin
 from apps.cli.commands.session_cmds import SessionCommandsMixin
+from apps.cli.session_export import build_session_export_payload  # 同上
 from apps.cli.commands.workspace_cmds import WorkspaceCommandsMixin
 from apps.cli.commands.model_cmds import ModelCommandsMixin
 from apps.cli.commands.market_cmds import (
@@ -4083,7 +4094,6 @@ class SlashCommands(
         "/logout":          ("Usage: /logout", ["/logout"]),
         "/status":          ("Usage: /status", ["/status"]),
         "/health":          ("Usage: /health", ["/health"]),
-        "/artifacts":       ("Usage: /artifacts [limit|open|reveal|path|copy-path|stats|prune]", ["/artifacts", "/artifacts open latest", "/artifacts reveal 2", "/artifacts copy-path 1", "/artifacts stats", "/artifacts prune 20"]),
     }
 
 

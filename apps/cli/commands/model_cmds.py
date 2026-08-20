@@ -1634,7 +1634,7 @@ class ModelCommandsMixin:
                 # Show notification/search config from resolved config.json
                 try:
                     import json as _j
-                    _ncfg_path = Path(snap["config_file"])
+                    _ncfg_path = pathlib.Path(snap["config_file"])
                     _ncfg = _j.loads(_ncfg_path.read_text()) if _ncfg_path.exists() else {}
                     if _wh := _ncfg.get("notify_webhook"):
                         console.print(f"  [dim]{'notify_webhook':<24s}[/dim]{_wh[:50]}{'…' if len(_wh)>50 else ''}")
@@ -1646,7 +1646,7 @@ class ModelCommandsMixin:
                 else:
                     console.print(f"  [dim]{'brave_key':<24s}[/dim][dim]未设置 — /config set brave_key=BSAAxxx[/dim]")
                 # Security check: warn if providers.json has plaintext api_key
-                _pf = Path(snap["providers_file"])
+                _pf = pathlib.Path(snap["providers_file"])
                 if _pf.exists():
                     try:
                         _pd = _j.loads(_pf.read_text())
@@ -1823,7 +1823,7 @@ class ModelCommandsMixin:
                     return
                 elif key == "brave_key":
                     # /config set brave_key=BSAAxxx  → 写入 ~/.aria/.env
-                    _env_path = Path.home() / ".aria" / ".env"
+                    _env_path = pathlib.Path.home() / ".aria" / ".env"
                     _env_path.parent.mkdir(parents=True, exist_ok=True)
                     existing = _env_path.read_text() if _env_path.exists() else ""
                     import re as _re_cfg
