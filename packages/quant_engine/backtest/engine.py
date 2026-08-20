@@ -21,7 +21,10 @@ class BacktestEngine:
             try:
                 date_str = pd.to_datetime(s['date']).strftime('%Y-%m-%d')
                 signal_dict[date_str] = s
-            except:
+            except (ValueError, TypeError, KeyError):
+                # 裸 except 会连 KeyboardInterrupt / SystemExit 一起吞掉——
+                # 循环里跑着时用户按 Ctrl+C 会被静默忽略。这里真正要容忍的
+                # 只是"某条信号的日期字段解析不了"，收窄到具体异常。
                 pass
 
         equity_curve = []

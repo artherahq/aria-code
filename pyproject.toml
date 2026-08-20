@@ -307,7 +307,19 @@ exclude = [
 ]
 
 [tool.ruff.lint]
-select = ["E9", "F821", "F823", "F811", "W191"]
+# 分两档：select 里的是**硬失败**（CI 阻塞），第二档见文件末尾的说明。
+#
+# 2026-08-19 新增 E722 与 F601 —— 它们不是风格问题，是能藏 bug 的形态：
+#   E722 裸 except  会连 KeyboardInterrupt / SystemExit 一起吞掉，
+#        循环里跑着时用户按 Ctrl+C 会被静默忽略。
+#   F601 重复字典键 后面的静默覆盖前面的。实际抓到过：market_detect 里
+#        "汇丰" 在港股表(0005.HK)和美股表(HSBC)各出现一次，后者覆盖前者，
+#        导致 "汇丰" 解析成美股 ADR 而 "汇丰控股" 解析成港股——同一家公司
+#        两个结果。
+select = ["E9", "F821", "F823", "F811", "W191", "E722", "F601"]
+
+# E501(行长) / E402(import 位置) 是本仓库有意的风格；F401 多为 re-export，
+# 删掉会破坏调用方。F811 在 select 与 ignore 同时出现是历史遗留（ignore 生效）。
 ignore = ["E501", "F401", "E402", "F811"]
 
 [tool.ruff.lint.per-file-ignores]

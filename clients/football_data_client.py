@@ -1432,7 +1432,7 @@ _CN_TEAM_MAP: Dict[str, str] = {
     # 亚洲补充
     "菲律宾": "philippines", "马来西亚": "malaysia",
     "新加坡": "singapore", "缅甸": "myanmar",
-    "黎巴嫩": "lebanon", "约旦": "jordan",
+    "黎巴嫩": "lebanon",
     "吉尔吉斯": "kyrgyzstan", "塔吉克斯坦": "tajikistan",
 }
 
