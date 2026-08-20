@@ -61,7 +61,8 @@ class XTQuantBroker(BrokerBase):
 
     def connect(self) -> bool:
         try:
-            import os, sys
+            import os
+            import sys
             with open(os.devnull, "w") as _null:
                 _old, sys.stdout = sys.stdout, _null
                 try:

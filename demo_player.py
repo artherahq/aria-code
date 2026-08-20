@@ -5,7 +5,10 @@ Plays a pre-canned interactive session that looks exactly like the real REPL.
 Run:  python3 demo_player.py
 """
 from __future__ import annotations
-import sys, time, os, shutil
+import sys
+import time
+import os
+import shutil
 
 # ── ANSI helpers ──────────────────────────────────────────────────────────────
 RESET  = "\033[0m"

@@ -1113,7 +1113,7 @@ class ModelCommandsMixin:
             console.print(f"[green]  {msg}[/green]") if HAS_RICH else print(f"  {msg}")
 
             # ── 连接测试 ──────────────────────────────────────────────────────
-            print(f"  正在测试连接…", end="", flush=True)
+            print("  正在测试连接…", end="", flush=True)
             import asyncio as _aio
             loop = _aio.get_event_loop()
             ok, result_msg = await loop.run_in_executor(None, _test_api_key, provider, raw_key)
@@ -1390,7 +1390,7 @@ class ModelCommandsMixin:
             AliyunDataClient.reset()
             if HAS_RICH:
                 console.print(f"  [green]Cloud API URL set to: {url}[/green]")
-                console.print(f"  [dim]Saved to ~/.arthera/config.json[/dim]")
+                console.print("  [dim]Saved to ~/.arthera/config.json[/dim]")
             return
 
         if sub == "data" and len(parts) >= 2:
@@ -1399,7 +1399,7 @@ class ModelCommandsMixin:
             AliyunDataClient.reset()
             if HAS_RICH:
                 console.print(f"  [green]AKShare Data URL set to: {url}[/green]")
-                console.print(f"  [dim]Saved to ~/.arthera/config.json[/dim]")
+                console.print("  [dim]Saved to ~/.arthera/config.json[/dim]")
             return
 
         if sub == "token" and len(parts) >= 2:

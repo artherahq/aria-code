@@ -1408,7 +1408,8 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
             _fpath = f"~/Documents/Aria Code/generated/{_fname}"
 
             # Validate Python syntax before writing — prepend warning comment if broken
-            import py_compile as _pyc, tempfile as _tf2
+            import py_compile as _pyc
+            import tempfile as _tf2
             try:
                 with _tf2.NamedTemporaryFile(suffix=".py", mode="w", delete=False) as _stmp:
                     _stmp.write(_code)

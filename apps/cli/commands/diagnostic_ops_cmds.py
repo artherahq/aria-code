@@ -289,7 +289,9 @@ class DiagnosticOpsCommandsMixin:
         except Exception as exc:
             console.print(f"[yellow]doctor module unavailable, using legacy checks: {exc}[/yellow]" if HAS_RICH else f"doctor module unavailable: {exc}")
 
-        import importlib as _il, subprocess as _sp, shutil as _sh
+        import importlib as _il
+        import subprocess as _sp
+        import shutil as _sh
         cfg = self.terminal.config
         ollama_url = cfg.get("ollama_url", "http://localhost:11434")
         api_url = cfg.get("api_url", "http://localhost:8000")

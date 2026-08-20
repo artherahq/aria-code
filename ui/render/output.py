@@ -269,8 +269,8 @@ def error_hint(error: str, context: str = "") -> str:
         except Exception:
             pass
         return (
-            f"Hint: Ollama model not found. Run `ollama list` to see available models.\n"
-            f"  Or pull one: ollama pull qwen2.5-coder:7b"
+            "Hint: Ollama model not found. Run `ollama list` to see available models.\n"
+            "  Or pull one: ollama pull qwen2.5-coder:7b"
         )
     # "File not found" is a path error. Tell the model firmly NOT to keep
     # guessing filenames (it otherwise loops app.py→script.py→main.py…).
@@ -372,7 +372,7 @@ def print_tool_result(
                         m = _re_diff.match(r"@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@", line)
                         if m:
                             o_ln, n_ln = int(m.group(1)), int(m.group(2))
-                            console.print(f"    [dim]…[/dim]")
+                            console.print("    [dim]…[/dim]")
                             continue
                         body = line[1:].rstrip()
                         if line.startswith("+"):

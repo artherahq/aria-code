@@ -67,7 +67,8 @@ class TradingViewTaskTests(unittest.TestCase):
 
     def test_hmac_signature_path_never_open(self):
         body = b'{"symbol": "TSLA", "action": "buy"}'
-        import hashlib, hmac as hmac_mod
+        import hashlib
+        import hmac as hmac_mod
         with mock.patch.dict("os.environ", {"ARIA_WEBHOOK_SECRET": "k"}, clear=False):
             good = hmac_mod.new(b"k", body, hashlib.sha256).hexdigest()
             ok = alert_to_task({"symbol": "TSLA", "action": "buy"}, raw_body=body, signature=f"sha256={good}")

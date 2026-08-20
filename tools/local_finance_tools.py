@@ -1138,7 +1138,8 @@ def _get_data_key(service: str) -> str:
             return val
     # Fall back to providers.json
     try:
-        import pathlib as _pl, json as _json
+        import pathlib as _pl
+        import json as _json
         pf = aria_home() / "providers.json"
         if pf.exists():
             raw = _json.loads(pf.read_text(encoding="utf-8"))
@@ -1156,7 +1157,8 @@ def _fetch_news_finnhub(symbol: str, limit: int) -> list:
     if not key:
         return []
     try:
-        import requests as _req, datetime as _dt
+        import requests as _req
+        import datetime as _dt
         end_dt   = _dt.date.today().isoformat()
         start_dt = (_dt.date.today() - _dt.timedelta(days=7)).isoformat()
         url = (f"https://finnhub.io/api/v1/company-news"
@@ -2615,7 +2617,8 @@ def _calculate_ichimoku(params: dict) -> dict:
 def _get_fear_greed_index(params: dict) -> dict:
     """加密货币恐惧贪婪指数（来源: alternative.me，无需 API Key）。"""
     try:
-        import urllib.request, json as _json
+        import urllib.request
+        import json as _json
         with urllib.request.urlopen(
             "https://api.alternative.me/fng/?limit=7&format=json", timeout=6
         ) as resp:

@@ -850,7 +850,7 @@ class MarketCommandsMixin:
         _aform = getattr(pred, "away_form", "")
 
         if pred.key_factors:
-            console.print(f"\n  [bold]实力对比[/bold]")
+            console.print("\n  [bold]实力对比[/bold]")
             for f_ in pred.key_factors:
                 console.print(f"  [#57606a]  • {f_}[/#57606a]")
 
@@ -864,7 +864,7 @@ class MarketCommandsMixin:
                     elif c == "L": out.append("[red]L[/red]")
                     else: out.append(c)
                 return "".join(out)
-            console.print(f"\n  [bold]近期表现[/bold]")
+            console.print("\n  [bold]近期表现[/bold]")
             console.print(f"  {_h_name_d}  {_form_colored(_hform)}")
             if _aform and _aform not in ("?????", ""):
                 console.print(f"  {_a_name_d}  {_form_colored(_aform)}")
@@ -878,7 +878,7 @@ class MarketCommandsMixin:
             ))
 
         console.print(f"\n  [bold green]{pred.verdict}[/bold green]")
-        console.print(f"  [#6e7781]提示：准确比分概率通常较分散，请按候选区间参考，不构成投注建议。[/#6e7781]\n")
+        console.print("  [#6e7781]提示：准确比分概率通常较分散，请按候选区间参考，不构成投注建议。[/#6e7781]\n")
 
     async def cmd_screen(self, args: str):
         """股票筛选: CN → screen_ashare; US → yfinance 大盘成分筛选."""
@@ -1137,7 +1137,7 @@ class MarketCommandsMixin:
             _has_newsapi = bool(_data_keys.get("newsapi"))
             if HAS_RICH:
                 console.print()
-                console.print(f"  [yellow]⚠ 新闻服务不可用[/yellow]")
+                console.print("  [yellow]⚠ 新闻服务不可用[/yellow]")
                 if not _has_finnhub and not _has_newsapi:
                     console.print("  [dim]配置以下任意一个数据服务 key 即可获取新闻：[/dim]")
                     console.print("  [dim]  Finnhub  (免费60次/分) → /apikey set finnhub <key>   注册: https://finnhub.io/register[/dim]")
@@ -1147,7 +1147,7 @@ class MarketCommandsMixin:
                 console.print(f"  [dim]或使用: /web {topic} latest news — 通过 Brave 搜索[/dim]")
                 console.print()
             else:
-                print(f"  News unavailable. Configure: /apikey set finnhub <key>")
+                print("  News unavailable. Configure: /apikey set finnhub <key>")
 
     async def cmd_quote(self, args: str):
         symbols = parse_symbols(args, self.terminal.config.get("watchlist", ["AAPL"]))

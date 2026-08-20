@@ -944,7 +944,7 @@ def render_finance_result(tool_name: str, result: dict, *, console=None, has_ric
                     _body += "\n\n[red]执行限制:[/red]\n" + "\n".join(f"  - {b}" for b in _blockers)
                 console.print(Panel(
                     _body,
-                    title=f"[yellow]⚠ 订单确认[/yellow]",
+                    title="[yellow]⚠ 订单确认[/yellow]",
                     border_style="yellow",
                     box=_rbox.ROUNDED,
                     padding=(0, 1),
@@ -1362,7 +1362,7 @@ def render_house_price(r: dict, *, console=None, has_rich: bool = True) -> None:
         color = "green" if fv > 0 else "red" if fv < 0 else "dim"
         return f"[{color}]{fv:+.2f}%[/{color}]"
 
-    tb = _T(title=f"[bold]🏠 房价指数对比[/bold]", box=_box.ROUNDED, show_header=True)
+    tb = _T(title="[bold]🏠 房价指数对比[/bold]", box=_box.ROUNDED, show_header=True)
     tb.add_column("指标", style="dim")
     tb.add_column(c1, justify="right")
     tb.add_column(c2, justify="right")
@@ -1382,7 +1382,7 @@ def render_reits_list(r: dict, *, console=None, has_rich: bool = True) -> None:
         console.print(f"[red]{r.get('error','获取失败')}[/red]"); return
     from rich.table import Table as _T
     from rich import box as _box
-    tb = _T(title=f"[bold]🏗 中国 REITs 实时行情[/bold]", box=_box.ROUNDED)
+    tb = _T(title="[bold]🏗 中国 REITs 实时行情[/bold]", box=_box.ROUNDED)
     tb.add_column("代码", style="cyan")
     tb.add_column("名称")
     tb.add_column("最新价", justify="right")
@@ -1422,7 +1422,7 @@ def render_rental_yield(r: dict, *, console=None, has_rich: bool = True) -> None
     lines = [
         f"[bold cyan]购入价格[/bold cyan]   {r['purchase_price_wan']:.1f} 万元",
         f"[bold cyan]月租金[/bold cyan]     {r['monthly_rent']:.0f} 元/月",
-        f"[dim]───────────────────────────────[/dim]",
+        "[dim]───────────────────────────────[/dim]",
         f"[bold]毛租金收益率[/bold]  [{assess_color}]{r['gross_yield_pct']:.2f}%[/{assess_color}]",
         f"[bold]净收益率[/bold]      {r['net_yield_pct']:.2f}%",
         f"[bold]资本化率[/bold]      {r['cap_rate_pct']:.2f}%",
@@ -1431,7 +1431,7 @@ def render_rental_yield(r: dict, *, console=None, has_rich: bool = True) -> None
     if r.get("leveraged_yield_pct") is not None:
         lines.append(f"[bold]杠杆收益率[/bold]    {r['leveraged_yield_pct']:.2f}%  [dim](含贷款)[/dim]")
     lines += [
-        f"[dim]───────────────────────────────[/dim]",
+        "[dim]───────────────────────────────[/dim]",
         f"[{assess_color}]综合评级：{r.get('assessment','')}[/{assess_color}]",
         f"[dim]{r.get('benchmark','')}[/dim]",
     ]
@@ -1594,7 +1594,7 @@ def render_portfolio_bt(r: dict, *, console=None, has_rich: bool = True) -> None
         alpha = round(ret - br, 2)
         ac = "green" if alpha > 0 else "red"
         lines += [
-            f"  [dim]─────────────────────────────────[/dim]",
+            "  [dim]─────────────────────────────────[/dim]",
             f"  [dim]基准 {bm['symbol']}[/dim]    [{bc}]{br:+.2f}%[/{bc}]",
             f"  [bold]超额收益[/bold]    [{ac}]{alpha:+.2f}%[/{ac}]",
         ]
@@ -1621,7 +1621,7 @@ def render_sql_result(r: dict, *, console=None, has_rich: bool = True) -> None:
     rows = r.get("rows", [])
     cols = r.get("columns", [])
     if not rows:
-        console.print(f"[dim]查询返回 0 行[/dim]"); return
+        console.print("[dim]查询返回 0 行[/dim]"); return
     tb = _T(title=f"[bold]🦆 DuckDB 查询结果[/bold]  [dim]({r.get('row_count',0)} 行)[/dim]",
             box=_box.ROUNDED)
     for c in cols:
@@ -1689,7 +1689,7 @@ def format_backtest_output(data: dict):
     out.append("  Backtest Results\n", style="bold")
     out.append(f"  {'Total Return':<18s}", style="dim")
     out.append(f"{total_ret*100:+.2f}%", style=_c(total_ret))
-    out.append(f"  vs B&H ", style="dim")
+    out.append("  vs B&H ", style="dim")
     out.append(f"{bh_ret*100:+.2f}%\n", style=_c(bh_ret))
     out.append(f"  {'Annualized':<18s}", style="dim")
     out.append(f"{ann_ret*100:+.2f}%\n")

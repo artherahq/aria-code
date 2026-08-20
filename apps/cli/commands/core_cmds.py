@@ -1460,7 +1460,7 @@ class CoreCommandsMixin:
             elif not reg:
                 config_path = str(MCP_CONFIG_PATH)
                 console.print(f"  [dim]No servers started. Configure: {config_path}[/dim]")
-                console.print(f"  [dim]Example: add quant_engine MCP server pointing to your mcp_server.py[/dim]")
+                console.print("  [dim]Example: add quant_engine MCP server pointing to your mcp_server.py[/dim]")
             else:
                 for s in reg.status():
                     color = "green" if s["running"] else "red"
@@ -1864,7 +1864,7 @@ class CoreCommandsMixin:
                 }
                 if HAS_RICH:
                     console.print(f"  [green]✓[/green] Pine strategy saved: [link={pine_path}]{pine_path}[/link]")
-                    console.print(f"  [dim]Use: TradingView → Pine Editor → paste script → Save → Add to chart[/dim]")
+                    console.print("  [dim]Use: TradingView → Pine Editor → paste script → Save → Add to chart[/dim]")
                 else:
                     print(f"Pine strategy saved: {pine_path}")
                     print("Use: TradingView -> Pine Editor -> paste script -> Save -> Add to chart")
@@ -2100,7 +2100,8 @@ class CoreCommandsMixin:
         Usage: /shortterm
                /shortterm 000333 601138 300750
         """
-        import subprocess, sys as _sys
+        import subprocess
+        import sys as _sys
         _base = pathlib.Path(__file__).parent.parent.parent / "research" / "shortterm"
         script = _base / "run_shortterm.py"
         if not script.exists():
@@ -2124,7 +2125,8 @@ class CoreCommandsMixin:
                /longterm --quick   (只分析 core 级标的)
                /longterm 600519 000858
         """
-        import subprocess, sys as _sys
+        import subprocess
+        import sys as _sys
         _base = pathlib.Path(__file__).parent.parent.parent / "research" / "longterm"
         script = _base / "run_longterm.py"
         if not script.exists():
@@ -2259,7 +2261,7 @@ class CoreCommandsMixin:
             if "数据不足" in _all_msgs or "新上市" in _all_msgs:
                 _reason = f"[yellow]历史数据不足[/yellow] — {symbol} 上市时间较短（< 14 个交易日），TA 指标无法计算\n  [dim]可待更多交易日积累后重试，或运行 `/analyze {symbol}` 查看基本面[/dim]"
             elif "rate" in _all_msgs or "429" in _all_msgs or "too many" in _all_msgs:
-                _reason = f"[yellow]数据源频率限制[/yellow] — 稍后重试，或用 `/apikey set finnhub <KEY>` 切换数据源"
+                _reason = "[yellow]数据源频率限制[/yellow] — 稍后重试，或用 `/apikey set finnhub <KEY>` 切换数据源"
             else:
                 _err = "; ".join(_ta_errs or _ta_warns) or "数据源暂时不可用"
                 _reason = f"[red]{_err[:120]}[/red]"
@@ -2316,7 +2318,7 @@ class CoreCommandsMixin:
             }
             if HAS_RICH:
                 console.print()
-                console.print(f"  [green]✓[/green] 技术图表已生成")
+                console.print("  [green]✓[/green] 技术图表已生成")
                 if html_path:
                     console.print(f"  [dim]HTML:[/dim] [link={html_path}]{_display_path(html_path)}[/link]")
                 if png_path:

@@ -70,11 +70,11 @@ class WorkflowCommandsMixin:
                             found.append((str(hdir), f.name, str(f)))
             if not found:
                 if HAS_RICH:
-                    console.print(f"  [dim]No hooks found.[/dim]")
-                    console.print(f"  [dim]Hook dirs:[/dim]")
+                    console.print("  [dim]No hooks found.[/dim]")
+                    console.print("  [dim]Hook dirs:[/dim]")
                     for d in hooks_dirs:
                         console.print(f"    [dim]{_display_path(d, fallback='hook dir')}[/dim]")
-                    console.print(f"  [dim]Events: prompt_submit  response_done  tool_use  compact[/dim]")
+                    console.print("  [dim]Events: prompt_submit  response_done  tool_use  compact[/dim]")
                 else:
                     print("No hooks. Dirs:", [str(d) for d in hooks_dirs])
                 return
@@ -308,7 +308,7 @@ class WorkflowCommandsMixin:
         if HAS_RICH:
             console.print(f"[dim]Retrying with temperature {MODELS[orig_model_key]['temperature']:.1f}...[/dim]")
         else:
-            print(f"Retrying (temp +0.3)...")
+            print("Retrying (temp +0.3)...")
         try:
             await self.terminal.send_message(last_user_msg)
         finally:

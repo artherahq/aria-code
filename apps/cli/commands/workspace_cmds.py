@@ -463,10 +463,10 @@ class WorkspaceCommandsMixin:
                         val = v[:5] if isinstance(v, list) else v
                         info_lines.append(f"[dim]{k}: {val}[/dim]")
                 if fc.truncated:
-                    info_lines.append(f"[yellow]⚠ 内容已截断（文件较大）[/yellow]")
+                    info_lines.append("[yellow]⚠ 内容已截断（文件较大）[/yellow]")
                 if fc.tables:
                     info_lines.append(f"[dim]包含 {len(fc.tables)} 个表格[/dim]")
-                info_lines.append(f"\n[dim]发送任何消息即可开始分析，或使用 /file analyze 1-4[/dim]")
+                info_lines.append("\n[dim]发送任何消息即可开始分析，或使用 /file analyze 1-4[/dim]")
                 console.print(_P("\n".join(info_lines),
                                  title="[bold]📄 文件已加载[/bold]",
                                  border_style="green", box=_box.ROUNDED))
@@ -510,7 +510,7 @@ class WorkspaceCommandsMixin:
                 if len(layers_to_run) > 1 and layer < layers_to_run[-1]:
                     if HAS_RICH:
                         console.print(f"\n[dim]{'═'*60}[/dim]")
-                        console.print(f"[dim]进入下一层分析...[/dim]\n")
+                        console.print("[dim]进入下一层分析...[/dim]\n")
 
         # ────────────────── /file ask ──────────────────────────────────────────
         elif sub == "ask":
@@ -701,7 +701,7 @@ class WorkspaceCommandsMixin:
                 tb.add_row("Git 分支", s["git"]["branch"])
             if s["git"].get("changed_count"):
                 tb.add_row("变更文件", str(s["git"]["changed_count"]))
-            console.print(f"\n[bold]项目已加载 ✓[/bold]")
+            console.print("\n[bold]项目已加载 ✓[/bold]")
             console.print(tb)
             console.print(f"\n[dim]关键文件: {', '.join(s['key_files'][:6])}[/dim]")
             console.print("[dim]现在可以直接对话，Aria 将根据项目上下文回答。[/dim]\n")
@@ -822,7 +822,7 @@ class WorkspaceCommandsMixin:
             tb.add_column("说明", style="dim")
             for cmd, desc in rows:
                 tb.add_row(cmd, desc)
-            console.print(f"\n[bold]/project — 项目分析命令[/bold]\n")
+            console.print("\n[bold]/project — 项目分析命令[/bold]\n")
             console.print(tb)
             console.print()
 
@@ -918,7 +918,7 @@ class WorkspaceCommandsMixin:
         force = "--force" in args
 
         if aria_md.exists() and not force:
-            msg = f"ARIA.md already exists. Use /init --force to regenerate."
+            msg = "ARIA.md already exists. Use /init --force to regenerate."
             console.print(f"[yellow]{msg}[/yellow]") if HAS_RICH else print(msg)
             return
 
@@ -1316,7 +1316,7 @@ class WorkspaceCommandsMixin:
             if gsub == "show":
                 if not _profile_path.exists():
                     if HAS_RICH:
-                        console.print(f"[dim]~/.arthera/ARIA.md 还不存在。用 /memory profile add <内容> 创建。[/dim]")
+                        console.print("[dim]~/.arthera/ARIA.md 还不存在。用 /memory profile add <内容> 创建。[/dim]")
                     else:
                         print("~/.arthera/ARIA.md not found. Use /memory profile add <text> to create.")
                     return
@@ -1325,7 +1325,7 @@ class WorkspaceCommandsMixin:
                     try:
                         from rich.markdown import Markdown as _RMd3
                         console.print()
-                        console.print(f"  [dim]~/.arthera/ARIA.md[/dim]")
+                        console.print("  [dim]~/.arthera/ARIA.md[/dim]")
                         console.print(_RMd3(content))
                     except Exception:
                         console.print(content)
@@ -1352,9 +1352,9 @@ class WorkspaceCommandsMixin:
                 # Refresh project context so change takes effect immediately
                 _PROJECT_CONTEXT = _load_project_context()
                 if HAS_RICH:
-                    console.print(f"  [dim]✓ 已写入 ~/.arthera/ARIA.md — 下次对话自动注入[/dim]")
+                    console.print("  [dim]✓ 已写入 ~/.arthera/ARIA.md — 下次对话自动注入[/dim]")
                 else:
-                    print(f"Saved to ~/.arthera/ARIA.md")
+                    print("Saved to ~/.arthera/ARIA.md")
 
             elif gsub == "clear":
                 if _profile_path.exists():

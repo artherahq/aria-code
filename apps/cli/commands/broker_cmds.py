@@ -1134,7 +1134,8 @@ class BrokerCommandsMixin:
         """未配置券商时显示可导航的操作菜单，选择后直接路由到对应功能。"""
         from aria_cli import (HAS_RICH, console, Panel, rich_box, _BROKERS_CONFIG_PATH)
         from ui.picker import arrow_select
-        import subprocess, sys as _sys
+        import subprocess
+        import sys as _sys
 
         if HAS_RICH:
             console.print(Panel(
@@ -1154,7 +1155,8 @@ class BrokerCommandsMixin:
             await self._cmd_broker_add("")
         elif idx == 1:
             try:
-                import pathlib as _pl, json as _json
+                import pathlib as _pl
+                import json as _json
                 from brokers.config import print_all_templates
                 path = _pl.Path(str(_BROKERS_CONFIG_PATH or
                                     aria_home() / "brokers.json"))

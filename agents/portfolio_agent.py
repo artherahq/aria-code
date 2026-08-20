@@ -264,7 +264,7 @@ def _format_portfolio_stats(d: Dict) -> str:
 
     high_corr = d.get("high_corr", [])
     if high_corr:
-        lines.append(f"\nHigh-Correlation Pairs (|r|>0.70):")
+        lines.append("\nHigh-Correlation Pairs (|r|>0.70):")
         for p in high_corr[:5]:
             lines.append(f"  {p['sym1']} ↔ {p['sym2']}: {p['corr']:+.2f}")
 

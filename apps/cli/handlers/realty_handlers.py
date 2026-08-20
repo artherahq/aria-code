@@ -104,8 +104,8 @@ def handle_realty_query(
     lines.append("**更多操作**")
     lines.append(f"- `/realty market {city1}` — 完整城市房价走势图")
     lines.append(f"- `/realty compare {city1} {city2}` — 城市横向对比")
-    lines.append(f"- `/realty rent` — 租金收益率计算")
-    lines.append(f"- `/realty reit` — REIT 市场数据")
+    lines.append("- `/realty rent` — 租金收益率计算")
+    lines.append("- `/realty reit` — REIT 市场数据")
 
     return {
         "success": True,

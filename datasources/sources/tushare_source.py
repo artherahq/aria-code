@@ -100,7 +100,8 @@ class TushareSource(BaseDataSource):
 
     def history(self, symbol: str, days: int = 90, interval: str = "1d") -> Optional[HistoryResult]:
         try:
-            import time as _t, pandas as pd
+            import time as _t
+            import pandas as pd
             pro     = self._get_pro()
             ts_code = self._to_ts_code(symbol)
             end     = date.today().strftime("%Y%m%d")

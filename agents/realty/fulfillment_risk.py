@@ -199,7 +199,7 @@ def _template_risk_report(risk: Dict, rules: Dict) -> str:
         f"  保证金: {risk['deposit_balance']:,.2f}/{risk['deposit_required']:,.2f}元\n"
         f"  风险事项 ({risk['risk_count']}项):\n"
         + "\n".join(f"    [{r['level']}] {r['desc']}" for r in risk["risk_items"])
-        + f"\n  处置建议: "
+        + "\n  处置建议: "
         + ("立即启动退出清算程序" if overall == "极高" else
            "发出整改通知，7日内未整改启动违约程序" if overall == "高" else
            "发出催缴通知，持续监控" if overall == "中" else "保持正常监控")

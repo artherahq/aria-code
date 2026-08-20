@@ -504,7 +504,7 @@ class BacktestCommandsMixin:
                         f"  [#57606a]volume:[/#57606a] "
                         f"avg {avg:,.0f} · last {last:,.0f} · coverage {coverage:.0%}"
                         if avg is not None and last is not None
-                        else f"  [#57606a]volume:[/#57606a] unavailable"
+                        else "  [#57606a]volume:[/#57606a] unavailable"
                     )
                 if d.get("report_path"):
                     console.print(f"  [#57606a]report:[/#57606a] {d['report_path']}")
@@ -665,7 +665,8 @@ class BacktestCommandsMixin:
             /auto-strategy momentum SPY --target sharpe=1.5
             /auto-strategy meanrev AAPL --target sharpe=1.2 --rounds 3
         """
-        import re as _re, time as _time
+        import re as _re
+        import time as _time
 
         parts = args.split()
         strategy_type = parts[0].lower() if parts else "momentum"
@@ -719,7 +720,7 @@ class BacktestCommandsMixin:
             from artifacts import user_generated_dir as _user_generated_dir
             _fpath = _user_generated_dir() / _fname
 
-            console.print(f"  [dim]生成策略代码...[/dim]") if HAS_RICH else print("  Generating strategy...")
+            console.print("  [dim]生成策略代码...[/dim]") if HAS_RICH else print("  Generating strategy...")
             await self.terminal.send_message(gen_prompt)
 
             # Extract code from last response
@@ -744,7 +745,7 @@ class BacktestCommandsMixin:
             console.print(f"  [dim]策略已保存: {_fpath.name}[/dim]") if HAS_RICH else print(f"  Saved: {_fpath.name}")
 
             # ── Step 2: Run backtest ─────────────────────────────────────────
-            console.print(f"  [dim]运行回测...[/dim]") if HAS_RICH else print("  Running backtest...")
+            console.print("  [dim]运行回测...[/dim]") if HAS_RICH else print("  Running backtest...")
             bt_result = _tool_run_command({
                 "command": f"python3 {_fpath}",
                 "timeout": 120,
@@ -963,7 +964,10 @@ class BacktestCommandsMixin:
 
     def _scaffold_with_llm(self, project_name: str, description: str, base_dir) -> None:
         """Call the configured LLM to generate a custom project structure and write files."""
-        import json, urllib.request, textwrap, pathlib
+        import json
+        import urllib.request
+        import textwrap
+        import pathlib
 
         ollama_url = self.terminal.config.get("ollama_url", "http://localhost:11434")
         model      = self.terminal.config.get("model", "qwen2.5:7b")
@@ -1801,7 +1805,7 @@ class BacktestCommandsMixin:
                 console.print(f"\n  [green]✓ 已平仓 {name}[/green]  [dim]{len(done)} 笔[/dim]")
                 for tid, s, q, px in done:
                     console.print(f"   [red]SELL[/red] {s} × {q:g} @ {px:,.2f}  [dim]#{tid}[/dim]")
-                console.print(f"  [dim]撤销: /journal delete <id>[/dim]\n")
+                console.print("  [dim]撤销: /journal delete <id>[/dim]\n")
             else:
                 for tid, s, q, px in done:
                     print(f"  SELL {s} {q} @ {px}  #{tid}")
@@ -1864,7 +1868,7 @@ class BacktestCommandsMixin:
                     except Exception as e:
                         errs.append(f"{tok} ({e})")
                 if not targets:
-                    console.print(f"  [yellow]需要目标权重：SYM:pct% …  |  equal  |  like <策略>[/yellow]"
+                    console.print("  [yellow]需要目标权重：SYM:pct% …  |  equal  |  like <策略>[/yellow]"
                                   if HAS_RICH else "need targets")
                     return
             syms = sorted(set(cur) | set(targets))
@@ -2376,7 +2380,8 @@ class BacktestCommandsMixin:
         # ML signal backtest is part of the private Arthera engine (alpha IP).
         # If a local Arthera checkout is present (dev), make it importable;
         # otherwise the import below fails and we show a Pro-feature notice.
-        import sys, os
+        import sys
+        import os
         _arthera_pkgs = os.environ.get("ARTHERA_ROOT") or os.path.expanduser("~/Desktop/Arthera")
         _arthera_pkgs = os.path.join(_arthera_pkgs, "packages")
         if os.path.isdir(_arthera_pkgs) and _arthera_pkgs not in sys.path:

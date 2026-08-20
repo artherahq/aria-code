@@ -243,8 +243,8 @@ class PortfolioCommandsMixin:
                 )
             console.print(tbl)
             console.print(
-                f"  [dim]更多命令: /journal pnl | /journal trades | "
-                f"/journal realized | /journal export[/dim]"
+                "  [dim]更多命令: /journal pnl | /journal trades | "
+                "/journal realized | /journal export[/dim]"
             )
         else:
             print(f"当前持仓 ({len(positions)} 只):")
@@ -672,7 +672,7 @@ class PortfolioCommandsMixin:
         })
         if result.get("success") and result.get("data"):
             if HAS_RICH:
-                console.print(f"\n  [bold]Portfolio Risk[/bold]\n")
+                console.print("\n  [bold]Portfolio Risk[/bold]\n")
                 console.print(f"[dim]{json.dumps(result['data'], indent=2, ensure_ascii=False)[:1000]}[/dim]")
             else:
                 print(json.dumps(result.get("data", {}), indent=2, ensure_ascii=False))

@@ -1319,7 +1319,8 @@ def export_pdf(html_path: Path) -> Optional[Path]:
     except Exception as e:
         logger.debug("[report] weasyprint failed: %s", e)
 
-    import shutil, subprocess as _sp
+    import shutil
+    import subprocess as _sp
     if shutil.which("wkhtmltopdf"):
         try:
             r = _sp.run(

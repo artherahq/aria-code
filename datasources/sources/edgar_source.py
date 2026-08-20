@@ -36,7 +36,8 @@ _TICKER_CIK_CACHE: Dict[str, str] = {}
 
 def _fetch_json(url: str, timeout: int = 15) -> Optional[Dict]:
     try:
-        import gzip, json
+        import gzip
+        import json
         req = urllib.request.Request(url, headers=_HEADERS)
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             raw = resp.read()

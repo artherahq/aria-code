@@ -752,10 +752,10 @@ def _try_prefetch_market_data(message: str, history: list = None) -> str:
                         + (f"| MA60 | {currency} {ma60:.2f} | 长期支撑/压力 |\n" if ma60 else "")
                         + (f"| BB Upper | {currency} {bbu:.2f} | 上轨阻力 |\n" if bbu else "")
                         + (f"| BB Lower | {currency} {bbl:.2f} | 下轨支撑 |\n" if bbl else "")
-                        + f"\n### 关键价位（直接引用这些数字）\n"
+                        + "\n### 关键价位（直接引用这些数字）\n"
                         + f"- **支撑位**：{', '.join(supports) if supports else '无（当前价已在主要支撑下方）'}\n"
                         + f"- **阻力位**：{', '.join(resistances) if resistances else '无（当前价已突破布林上轨）'}\n"
-                        + f"\n### 技术信号汇总\n"
+                        + "\n### 技术信号汇总\n"
                         + f"- RSI：{rsi_signal}\n"
                         + f"- MACD：{macd_label}\n"
                     )
@@ -1165,11 +1165,11 @@ def _render_private_company_analysis(profile_key: str, message: str) -> dict:
 
     lines = [
         f"## {name}",
-        f"> ⚠️  **私有公司 — 无公开交易数据**  所有数字均来自公开报道与融资文件，非官方财报。",
+        "> ⚠️  **私有公司 — 无公开交易数据**  所有数字均来自公开报道与融资文件，非官方财报。",
         "",
         "### 估值与规模",
-        f"| 指标 | 数据 |",
-        f"|------|------|",
+        "| 指标 | 数据 |",
+        "|------|------|",
         f"| 最新估值 | **${val}B**（{p.get('last_funding', 'N/A')}）|",
         f"| 收入估算 | ~${rev}B/年（YoY +{growth}%）|",
         f"| 员工数量 | ~{p.get('employees', 'N/A')}k |",
@@ -1824,7 +1824,8 @@ def _try_handle_market_snapshot_analysis(message: str, history: list = None) -> 
     _is_us_sym = bool(symbol and not symbol.isdigit() and "." not in symbol)
     if (not ti.get("success") or ti.get("rsi") is None) and _fh_key and _is_us_sym:
         try:
-            import requests as _rq2, time as _t2
+            import requests as _rq2
+            import time as _t2
             _to_ts = int(_t2.time())
             _from_ts = _to_ts - 180 * 86400   # ~6 months
             _cr = _rq2.get(
@@ -1886,7 +1887,8 @@ def _try_handle_market_snapshot_analysis(message: str, history: list = None) -> 
     # Only for non-A-share symbols; A-shares use akshare which has its own path above.
     if (not ti.get("success") or ti.get("rsi") is None) and _is_us_sym:
         try:
-            import json as _json_yv8, urllib.request as _urlreq_yv8
+            import json as _json_yv8
+            import urllib.request as _urlreq_yv8
             _yv8_url = (
                 f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
                 "?interval=1d&range=6mo"
@@ -2141,10 +2143,10 @@ def _try_handle_market_snapshot_analysis(message: str, history: list = None) -> 
         "sig_no_ta":    "TA indicators unavailable, price action above for reference" if _en else "技术指标暂缺，以上价格行动供参考",
         "ta_unavail":   (f"*TA data unavailable — retry later or run `/ta {symbol}`*") if _en
                         else f"*TA 数据暂时不可用，稍后重试或运行 `/ta {symbol}`*",
-        "ta_hint_fh":   (f"*Enable full TA*: set a free Finnhub key → `/apikey set finnhub <KEY>`"
-                         f"  ([finnhub.io](https://finnhub.io/register))") if _en else
-                        (f"*启用完整 TA*：配置免费 Finnhub key → `/apikey set finnhub <KEY>`"
-                         f"  ([注册](https://finnhub.io/register))"),
+        "ta_hint_fh":   ("*Enable full TA*: set a free Finnhub key → `/apikey set finnhub <KEY>`"
+                         "  ([finnhub.io](https://finnhub.io/register))") if _en else
+                        ("*启用完整 TA*：配置免费 Finnhub key → `/apikey set finnhub <KEY>`"
+                         "  ([注册](https://finnhub.io/register))"),
         "data_status":  "**Data status**" if _en else "**数据状态**",
         "stale_warn":   "Data may be stale, please retry later" if _en else "数据可能已过期，请稍后重试",
         "missing":      "Missing fields" if _en else "缺少字段",

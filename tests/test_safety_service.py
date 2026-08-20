@@ -85,7 +85,8 @@ class TradingRiskTests(unittest.TestCase):
         # is the only way to check import-time layering without mutating this
         # process's module state (deleting/reloading modules here orphans other
         # tests' collection-time references and corrupts their monkeypatching).
-        import subprocess, sys
+        import subprocess
+        import sys
         code = (
             "import sys; import safety; "
             "bad = [m for m in sys.modules if m.startswith('brokers') or m.startswith('privacy')]; "

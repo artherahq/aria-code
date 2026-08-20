@@ -820,7 +820,8 @@ class TodoTrackerTests(unittest.TestCase):
 
 class MultiEditTests(unittest.TestCase):
     def _tmp(self, text):
-        import tempfile, pathlib
+        import tempfile
+        import pathlib
         d = tempfile.mkdtemp()
         p = pathlib.Path(d) / "m.py"
         p.write_text(text)

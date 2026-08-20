@@ -433,12 +433,12 @@ async def _run_report(symbol: str) -> str:
 
         lines = [
             f"*{name}* `{symbol}` 快速分析",
-            f"",
+            "",
             f"💰 价格: `{price_str}` {chg_str}",
             f"📊 成交量: `{vol:,}`" if vol else "",
-            f"",
+            "",
             f"⚠️ 深度研报请在 Terminal 使用 `/report {symbol}` 命令。",
-            f"此处为轻量版摘要。",
+            "此处为轻量版摘要。",
         ]
         return "\n".join(l for l in lines if l is not None)
 
@@ -606,7 +606,7 @@ async def _run_morning_brief() -> str:
         # ── Portfolio P&L summary ─────────────────────────────────────────
         pnl = await _get_portfolio_daily_pnl()
         if pnl:
-            lines.append(f"\n*💼 持仓日内 P&L*")
+            lines.append("\n*💼 持仓日内 P&L*")
             lines.append(pnl)
 
         lines.append("\n_数据来自 yfinance，仅供参考_")

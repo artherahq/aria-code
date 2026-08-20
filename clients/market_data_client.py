@@ -1970,6 +1970,7 @@ def screen_ashare(**kwargs) -> Dict[str, Any]:
 
 
 if __name__ == "__main__":
-    import json, sys
+    import json
+    import sys
     sym = sys.argv[1] if len(sys.argv) > 1 else "NVDA"
     print(json.dumps(quote(sym), indent=2, ensure_ascii=False, default=str))

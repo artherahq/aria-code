@@ -54,24 +54,24 @@ class EnhancedGBM:
 
         n_assets = len(s0)
         dt = T / n_steps
-        
+
         # Cholesky 分解: L @ L.T = Correlation
         L = np.linalg.cholesky(corr_matrix)
-        
+
         paths = np.zeros((n_paths, n_assets, n_steps + 1))
         paths[:, :, 0] = s0
 
         for i in range(n_steps):
             # 生成独立标准正态分布 Z ~ N(0, 1)
             Z = np.random.standard_normal((n_paths, n_assets))
-            
+
             # 转化为相关增量 ε = Z @ L.T
             epsilon = Z @ L.T
-            
+
             # 伊藤漂移修正
             drift = (mu - 0.5 * sigma**2) * dt
             diffusion = sigma * np.sqrt(dt) * epsilon
-            
+
             # 更新价格: S_{t+dt} = S_t * exp(drift + diffusion)
             paths[:, :, i + 1] = paths[:, :, i] * np.exp(drift + diffusion)
 
@@ -107,7 +107,7 @@ class EnhancedGBM:
 
         dt = T / n_steps
         k = np.exp(mu_j + 0.5 * sigma_j**2) - 1
-        
+
         paths = np.zeros((n_paths, n_steps + 1))
         paths[:, 0] = s0
 
@@ -116,11 +116,11 @@ class EnhancedGBM:
             Z = np.random.standard_normal(n_paths)
             drift = (mu - 0.5 * sigma**2 - lambda_j * k) * dt
             diffusion = sigma * np.sqrt(dt) * Z
-            
+
             # 跳跃部分 (Jump)
             # 1. 产生泊松分布的跳跃次数 (通常 dt 很小，N 主要是 0 或 1)
             N = np.random.poisson(lambda_j * dt, n_paths)
-            
+
             # 2. 对每个跳跃计算幅度
             jump_factor = np.ones(n_paths)
             for path_idx in range(n_paths):
@@ -128,7 +128,7 @@ class EnhancedGBM:
                     # 总跳跃幅度 = Σ ln(J_i)
                     total_jump_log = np.random.normal(mu_j, sigma_j, N[path_idx]).sum()
                     jump_factor[path_idx] = np.exp(total_jump_log)
-            
+
             # 更新价格
             paths[:, i + 1] = paths[:, i] * np.exp(drift + diffusion) * jump_factor
 
@@ -166,7 +166,7 @@ class EnhancedGBM:
             np.random.seed(seed)
 
         dt = T / n_steps
-        
+
         s_paths = np.zeros((n_paths, n_steps + 1))
         v_paths = np.zeros((n_paths, n_steps + 1))
         s_paths[:, 0] = s0
@@ -178,15 +178,15 @@ class EnhancedGBM:
             Z2 = np.random.standard_normal(n_paths)
             W1 = Z1
             W2 = rho * Z1 + np.sqrt(1 - rho**2) * Z2
-            
+
             v_curr = v_paths[:, i]
             # 保证方差非负 (使用 Full Truncation 或 Reflection)
             v_plus = np.maximum(v_curr, 0)
-            
+
             # 更新方差 (Euler-Maruyama)
             v_paths[:, i + 1] = v_curr + kappa * (theta - v_plus) * dt + \
                                sigma_v * np.sqrt(v_plus * dt) * W2
-            
+
             # 更新价格
             s_paths[:, i + 1] = s_paths[:, i] * np.exp(
                 (mu - 0.5 * v_plus) * dt + np.sqrt(v_plus * dt) * W1

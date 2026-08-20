@@ -170,7 +170,8 @@ class WorldBankSource(BaseDataSource):
 
     def search_indicators(self, query: str, limit: int = 10) -> List[Dict]:
         """关键词搜索世界银行指标。"""
-        import json, urllib.parse
+        import json
+        import urllib.parse
         q = urllib.parse.quote(query)
         url = f"{_BASE}/indicator?format=json&per_page={limit}&mrv=1"
         try:

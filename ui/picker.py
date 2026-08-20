@@ -119,7 +119,7 @@ def arrow_select(options: list, selected: int = 0, title: str = "",
             hint = f"  \033[2m{selected + 1}/{n}\033[0m"
             buf += f"\033[2K{hint}\n"
         else:
-            buf += f"\033[2K\n"
+            buf += "\033[2K\n"
         phys_height += 1
 
         _render.last_phys_height = phys_height

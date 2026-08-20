@@ -27,11 +27,11 @@ class OrnsteinUhlenbeck:
         dt = T / n_steps
         paths = np.zeros((n_paths, n_steps + 1))
         paths[:, 0] = self.x0
-        
+
         for t in range(n_steps):
             dW = np.random.normal(0, np.sqrt(dt), n_paths)
             paths[:, t+1] = paths[:, t] + self.kappa * (self.theta - paths[:, t]) * dt + self.sigma * dW
-            
+
         return paths
 
 class CIRProcess:
@@ -52,13 +52,13 @@ class CIRProcess:
         dt = T / n_steps
         paths = np.zeros((n_paths, n_steps + 1))
         paths[:, 0] = self.x0
-        
+
         for t in range(n_steps):
             dW = np.random.normal(0, np.sqrt(dt), n_paths)
             # 使用 Full Truncation 保证数值稳定性
             x_plus = np.maximum(paths[:, t], 0)
             paths[:, t+1] = paths[:, t] + self.kappa * (self.theta - x_plus) * dt + self.sigma * np.sqrt(x_plus) * dW
-            
+
         return paths
 
 class VasicekModel(OrnsteinUhlenbeck):
@@ -81,10 +81,10 @@ class HullWhiteModel:
         t_grid = np.linspace(0, T, n_steps + 1)
         paths = np.zeros((n_paths, n_steps + 1))
         paths[:, 0] = self.r0
-        
+
         for t in range(n_steps):
             dW = np.random.normal(0, np.sqrt(dt), n_paths)
             theta_t = theta_func(t_grid[t])
             paths[:, t+1] = paths[:, t] + (theta_t - self.a * paths[:, t]) * dt + self.sigma * dW
-            
+
         return paths

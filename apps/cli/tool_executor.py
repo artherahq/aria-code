@@ -357,7 +357,7 @@ def _confirm_tool_execution_decision(tool_name: str, params: dict,
             )
         else:
             print(f"  ✗ '{tool_name}' blocked by tool policy")
-        return ApprovalDecision.deny(f"blocked by tool policy (deny list)")
+        return ApprovalDecision.deny("blocked by tool policy (deny list)")
     if _policy_verdict == "allow":
         if tool_name == "run_command":
             return ApprovalDecision.allow(policy=config_policy, user_approved=True)
@@ -397,7 +397,7 @@ def _confirm_tool_execution_decision(tool_name: str, params: dict,
             "PreToolUse", tool=tool_name, params=params, hooks=_JSON_HOOKS,
         )
         if not _allowed:
-            return ApprovalDecision.deny(f"Blocked by PreToolUse hook")
+            return ApprovalDecision.deny("Blocked by PreToolUse hook")
 
     # ── Pre-flight for run_command ────────────────────────────────────────────
     if tool_name == "run_command":

@@ -52,7 +52,7 @@ def test_pyproject_npm_and_cli_report_the_same_version():
     }
     assert len(set(versions.values())) == 1, (
         "三处版本号不一致，发布出去会是两个同名不同内容的包、"
-        f"且 --version 打印的值是错的：\n  "
+        "且 --version 打印的值是错的：\n  "
         + "\n  ".join(f"{k}: {v}" for k, v in versions.items())
     )
 

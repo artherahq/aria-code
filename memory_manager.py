@@ -142,7 +142,7 @@ class MemoryManager:
 
         lines = [
             f"# Project: {name}",
-            f"",
+            "",
             f"- **type**: {ptype}",
             f"- **languages**: {langs}",
             f"- **root**: {root}",

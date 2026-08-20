@@ -43,7 +43,8 @@ class OllamaProvider(BaseLLMProvider):
 
     async def list_models(self) -> List[str]:
         """返回已安装的模型列表"""
-        import urllib.request, json as _json
+        import urllib.request
+        import json as _json
         try:
             with urllib.request.urlopen(f"{self.base_url}/api/tags", timeout=3) as r:
                 data = _json.loads(r.read())

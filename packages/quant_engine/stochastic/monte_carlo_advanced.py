@@ -23,18 +23,18 @@ class MonteCarloEngine:
       2. 衍生品定价 (Derivative Pricing)
       3. 风险度量 (Risk Metrics: VaR, CVaR)
     """
-    
+
     @staticmethod
     def simulate_gbm(
-        s0: float, mu: float, sigma: float, T: float, 
-        n_steps: int, n_paths: int, 
+        s0: float, mu: float, sigma: float, T: float,
+        n_steps: int, n_paths: int,
         method: VarianceReduction = VarianceReduction.NONE
     ) -> np.ndarray:
         """
         GBM 路径模拟 - 带方差缩减选项
         """
         dt = T / n_steps
-        
+
         if method == VarianceReduction.ANTITHETIC:
             half_paths = n_paths // 2
             dW = np.random.normal(0, np.sqrt(dt), (half_paths, n_steps))
@@ -48,13 +48,13 @@ class MonteCarloEngine:
             dW_full = z * np.sqrt(dt)
         else:
             dW_full = np.random.normal(0, np.sqrt(dt), (n_paths, n_steps))
-            
+
         # 路径累加
         log_returns = (mu - 0.5 * sigma**2) * dt + sigma * dW_full
         cumulative_log_returns = np.cumsum(log_returns, axis=1)
         # 加入起始点
         paths = s0 * np.exp(np.hstack([np.zeros((n_paths, 1)), cumulative_log_returns]))
-        
+
         return paths
 
     @staticmethod
@@ -72,19 +72,19 @@ class MonteCarloEngine:
             z_full = np.concatenate([z, -z])
         else:
             z_full = np.random.normal(0, 1, n_paths)
-            
+
         st = s0 * np.exp((r - 0.5 * sigma**2) * T + sigma * np.sqrt(T) * z_full)
-        
+
         if option_type == "call":
             payoff = np.maximum(st - K, 0)
         else:
             payoff = np.maximum(K - st, 0)
-            
+
         price = np.exp(-r * T) * np.mean(payoff)
         std_err = np.exp(-r * T) * np.std(payoff) / np.sqrt(n_paths)
-        
+
         return {"price": float(price), "standard_error": float(std_err)}
-    
+
     @staticmethod
     def calculate_var_cvar(returns: np.ndarray, confidence: float = 0.95) -> Tuple[float, float]:
         """

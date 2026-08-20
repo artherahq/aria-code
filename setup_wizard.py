@@ -312,7 +312,7 @@ def setup_api_keys(env: dict[str, str]) -> None:
     _configured = []
     for name, env_var, hint in _LLM_PROVIDERS:
         already = bool(env.get(env_var) or __import__("os").getenv(env_var))
-        suffix = f" [已配置]" if already else ""
+        suffix = " [已配置]" if already else ""
         prompt = _wz("api_key_prompt", name=name, suffix=suffix)
         if _confirm(prompt, default=False):
             _info(f"  → {hint}")

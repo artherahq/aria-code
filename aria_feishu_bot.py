@@ -395,7 +395,7 @@ async def _handle_command(cmd: str, message_id: str, sender_id: str, chat_id: st
             valid_conds = {"price_above", "price_below", "pct_change_above", "pct_change_below"}
             if cond not in valid_conds:
                 await reply_card(message_id, "❌ 无效条件",
-                                 f"支持的条件：\n" + "\n".join(f"• `{c}`" for c in sorted(valid_conds)), "red")
+                                 "支持的条件：\n" + "\n".join(f"• `{c}`" for c in sorted(valid_conds)), "red")
                 return
             import sqlite3
             from aria_daemon import _DB_PATH
@@ -443,11 +443,11 @@ async def _handle_command(cmd: str, message_id: str, sender_id: str, chat_id: st
         sub = parts[1].lower() if len(parts) > 1 else ""
         rest = " ".join(parts[2:])
         if sub == "predict" and " vs " in rest.lower():
-            await reply_card(message_id, f"⚽ 预测中…", f"> {rest}", "blue")
+            await reply_card(message_id, "⚽ 预测中…", f"> {rest}", "blue")
             asyncio.create_task(_handle_football_predict(rest, message_id))
         elif sub == "standings":
             league = rest.strip() or "pl"
-            await reply_card(message_id, f"⚽ 获取积分榜…", f"联赛: {league.upper()}", "blue")
+            await reply_card(message_id, "⚽ 获取积分榜…", f"联赛: {league.upper()}", "blue")
             asyncio.create_task(_handle_football_standings(league, message_id))
         else:
             # Natural language after /football (e.g. "/football 预测加拿大跟波黑")
@@ -483,7 +483,7 @@ async def _handle_command(cmd: str, message_id: str, sender_id: str, chat_id: st
         flag_str = " " + " ".join(flags) if flags else ""
         cmd = f"/team {symbol}{flag_str}"
         await reply_card(message_id, f"🤖 多Agent分析 {symbol}…",
-                         f"正在启动4-agent并行分析，请稍候（约15-30s）…", "blue")
+                         "正在启动4-agent并行分析，请稍候（约15-30s）…", "blue")
         asyncio.create_task(_async_run_aria(cmd, message_id))
 
     elif verb == "run":
@@ -501,7 +501,7 @@ async def _handle_command(cmd: str, message_id: str, sender_id: str, chat_id: st
         if not event:
             await reply_text(message_id, "用法: /swarm <事件>，例如 `/swarm 莫斯科01仓少件`")
             return
-        await reply_card(message_id, f"🚨 跨部门 Swarm 调度启动", f"事件: {event[:60]}\n\n正在唤醒 物流、财务、法务 Agent，请稍候…", "red")
+        await reply_card(message_id, "🚨 跨部门 Swarm 调度启动", f"事件: {event[:60]}\n\n正在唤醒 物流、财务、法务 Agent，请稍候…", "red")
         asyncio.create_task(_async_run_swarm(event, message_id))
 
     else:
@@ -646,16 +646,16 @@ async def _async_run_swarm(event: str, message_id: str) -> None:
             elif "Legal Agent" in line:
                 body += f"⚖️ **[法务]** {line.split('Legal Agent]')[-1].strip()}\n"
 
-        await reply_card(message_id, f"🎉 Swarm 处理报告", body[:2000] if body else "处理完成。", "turquoise", footer="Enterprise Supervisor Orchestration")
+        await reply_card(message_id, "🎉 Swarm 处理报告", body[:2000] if body else "处理完成。", "turquoise", footer="Enterprise Supervisor Orchestration")
     except Exception as exc:
-        await reply_card(message_id, f"❌ Swarm 调度失败", str(exc)[:300], "red")
+        await reply_card(message_id, "❌ Swarm 调度失败", str(exc)[:300], "red")
 
 
 async def _async_run_aria(cmd: str, message_id: str) -> None:
     """Background task: run aria CLI command and reply with result."""
     result = await _query_aria_llm(cmd, timeout=120)
     color = "red" if result.startswith("❌") or result.startswith("⏱️") else "turquoise"
-    await reply_card(message_id, f"✅ Aria 执行完成", result[:2000], color,
+    await reply_card(message_id, "✅ Aria 执行完成", result[:2000], color,
                      footer=f"命令: {cmd[:80]}")
 
 
@@ -875,13 +875,15 @@ async def _analyze_file(file_bytes: bytes, filename: str) -> str:
 
     if ext == ".pdf":
         try:
-            import pdfplumber, io
+            import pdfplumber
+            import io
             with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
                 pages = [p.extract_text() or "" for p in pdf.pages[:20]]
                 text_content = "\n".join(pages)[:8000]
         except ImportError:
             try:
-                import pypdf, io
+                import pypdf
+                import io
                 reader = pypdf.PdfReader(io.BytesIO(file_bytes))
                 text_content = "\n".join(
                     p.extract_text() or "" for p in reader.pages[:20]
@@ -891,7 +893,8 @@ async def _analyze_file(file_bytes: bytes, filename: str) -> str:
 
     elif ext in (".xlsx", ".xls"):
         try:
-            import openpyxl, io
+            import openpyxl
+            import io
             wb = openpyxl.load_workbook(io.BytesIO(file_bytes), read_only=True)
             rows = []
             for sheet in wb.sheetnames[:3]:
@@ -904,7 +907,8 @@ async def _analyze_file(file_bytes: bytes, filename: str) -> str:
 
     elif ext in (".docx",):
         try:
-            import docx, io
+            import docx
+            import io
             doc = docx.Document(io.BytesIO(file_bytes))
             text_content = "\n".join(p.text for p in doc.paragraphs)[:8000]
         except Exception as exc:

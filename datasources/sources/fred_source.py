@@ -135,7 +135,8 @@ class FREDSource(BaseDataSource):
     ) -> Optional[HistoryResult]:
         try:
             import pandas as pd
-            import urllib.request, json
+            import urllib.request
+            import json
 
             series_id = self._resolve_series(symbol)
             start = (date.today() - timedelta(days=days)).strftime("%Y-%m-%d")
@@ -204,7 +205,9 @@ class FREDSource(BaseDataSource):
         if not self._api_key:
             return [{"error": "需要 FRED_API_KEY 才能搜索系列"}]
         try:
-            import urllib.request, json, urllib.parse
+            import urllib.request
+            import json
+            import urllib.parse
             q   = urllib.parse.quote(query)
             url = (f"{_FRED_API}/series/search?search_text={q}"
                    f"&limit={limit}&api_key={self._api_key}&file_type=json")

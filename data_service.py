@@ -289,7 +289,9 @@ class DataService:
         )
         if _needs_fallback:
             try:
-                import json as _jv8, urllib.request as _uv8, statistics as _sv8
+                import json as _jv8
+                import urllib.request as _uv8
+                import statistics as _sv8
                 _url = (
                     f"https://query1.finance.yahoo.com/v8/finance/chart/{_sym}"
                     "?interval=1d&range=6mo"

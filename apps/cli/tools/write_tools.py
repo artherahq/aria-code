@@ -484,7 +484,8 @@ def tool_write_file(params: dict) -> dict:
         desktop = pathlib.Path.home() / "Desktop"
         is_on_desktop = str(p).startswith(str(desktop))
 
-        import platform as _platform, subprocess as _sub
+        import platform as _platform
+        import subprocess as _sub
         _sys_name = _platform.system()
         if _sys_name == "Darwin":
             _reveal_hint = f'open -R "{p}"'
@@ -523,7 +524,7 @@ def tool_write_file(params: dict) -> dict:
         _syntax_warn = _verify_python_syntax(p, content)
         _console2, _has_rich2 = _ui()
         if _syntax_warn and _has_rich2 and _console2:
-            _console2.print(f"  [yellow]⚠ 语法检查未通过[/yellow]")
+            _console2.print("  [yellow]⚠ 语法检查未通过[/yellow]")
 
         _wdata = {
             "path":           str(p),
@@ -647,7 +648,7 @@ def tool_edit_file(params: dict) -> dict:
 
         _syntax_warn = _verify_python_syntax(p, new_content)
         if _syntax_warn and has_rich and console:
-            console.print(f"  [yellow]⚠ 语法检查未通过[/yellow]")
+            console.print("  [yellow]⚠ 语法检查未通过[/yellow]")
 
         _data = {
             "path": str(p), "replacements": 1,
@@ -767,7 +768,7 @@ def tool_multi_edit(params: dict) -> dict:
 
         _syntax_warn = _verify_python_syntax(p, working)
         if _syntax_warn and has_rich and console:
-            console.print(f"  [yellow]⚠ 语法检查未通过[/yellow]")
+            console.print("  [yellow]⚠ 语法检查未通过[/yellow]")
 
         _data = {
             "path": str(p), "edits_applied": applied_count,

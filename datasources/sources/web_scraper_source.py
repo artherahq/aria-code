@@ -192,13 +192,13 @@ def scrape_szse_financials(symbol: str) -> Optional[Dict]:
         return None
 
     url = (
-        f"https://www.szse.cn/api/report/show/nature/detail?"
-        f"id=&"
+        "https://www.szse.cn/api/report/show/nature/detail?"
+        "id=&"
     )
     # 深交所 API
     data = _fetch_json(
-        f"https://www.szse.cn/api/market/smstock/list?random=0.1&tab2PAGENUM=1"
-        f"&tab2PAGENO=1&tab2COUNT=1&tab2SORTTAB=tab2&tab2SORTKEY=",
+        "https://www.szse.cn/api/market/smstock/list?random=0.1&tab2PAGENUM=1"
+        "&tab2PAGENO=1&tab2COUNT=1&tab2SORTTAB=tab2&tab2SORTKEY=",
         extra_headers={"Referer": "https://www.szse.cn/"},
     )
     return None  # 深交所API结构复杂，返回None让上层fallback

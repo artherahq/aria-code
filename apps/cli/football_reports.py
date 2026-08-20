@@ -42,10 +42,10 @@ def _football_standings(league: str) -> None:
     if not data:
         comp = _resolve_league(league)
         console.print(
-            f"[yellow]无法获取数据。请设置 FOOTBALL_DATA_API_KEY:[/yellow]\n"
-            f"  1. 访问 football-data.org 免费注册\n"
-            f"  2. 在 ~/.aria/.env 中添加:\n"
-            f"     [cyan]FOOTBALL_DATA_API_KEY=your_key_here[/cyan]"
+            "[yellow]无法获取数据。请设置 FOOTBALL_DATA_API_KEY:[/yellow]\n"
+            "  1. 访问 football-data.org 免费注册\n"
+            "  2. 在 ~/.aria/.env 中添加:\n"
+            "     [cyan]FOOTBALL_DATA_API_KEY=your_key_here[/cyan]"
         )
         return
 
