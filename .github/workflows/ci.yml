@@ -51,6 +51,25 @@ jobs:
           pip install -r requirements.txt
           pip install pytest pytest-asyncio pytest-cov pytest-timeout
 
+      # 只把"能抓真 bug"的三类设成硬失败：name-defined / used-before-def /
+      # no-redef。其余 280 个（多为缺类型注解）留作后续逐模块收紧——一次性
+      # 开全会得到 4001 个错误，那样的门禁只会被绕过，等于没有。
+      #
+      # 这条门禁的直接由来：2026-08-19 的 `NameError: pathlib` 让 CLI 在所有
+      # 受支持的 Python 版本上启动即崩溃，CI 红了十天没人发现。mypy 对那段
+      # 代码一行就能报出来。加它的当天就又抓到 4 处 used-before-def
+      # （/backtest ml 与 /backtest agent 两条路径必然 UnboundLocalError）。
+      - name: Type check (mypy — bug-catching rules only)
+        run: |
+          pip install mypy
+          mypy --config-file mypy.ini . 2>&1 | tee /tmp/mypy.log || true
+          if grep -qE '\[(name-defined|used-before-def|no-redef)\]' /tmp/mypy.log; then
+            echo "::error::mypy 发现未定义名 / 定义前使用 / 重复定义"
+            grep -E '\[(name-defined|used-before-def|no-redef)\]' /tmp/mypy.log
+            exit 1
+          fi
+          echo "✓ 无 name-defined / used-before-def / no-redef"
+
       - name: Run tests (unit — no LLM required)
         env:
           # 关掉行情宇宙的联网抓取。fetch_market_universe() 会打 akshare

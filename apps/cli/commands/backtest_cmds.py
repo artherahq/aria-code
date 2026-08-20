@@ -221,6 +221,23 @@ class BacktestCommandsMixin:
         if _symbol_flag:
             symbol = _symbol_flag
 
+        # Positional start/end dates only accepted if they look like YYYY-MM-DD
+        #
+        # 2026-08-19 修复 UnboundLocalError：这段原本在 ML / Agent 两个分支
+        # **之后**（第 240 行），但那两个分支在第 226/233 行就把 start_date /
+        # end_date 当关键字参数传了出去。也就是说 `/backtest ml ...` 和
+        # `/backtest agent ...` 这两条路径必然抛 UnboundLocalError——只有走到
+        # 后面通用分支的调用才碰巧能工作。
+        # mypy 的 used-before-def 一次就报了出来（4 处），AST 独立复核确认：
+        # start_date 首次赋值在第 240 行，而使用出现在 226、233。
+        _date_re = _re_bt.compile(r'^\d{4}-\d{2}-\d{2}$')
+        _raw_start = parts[2] if len(parts) > 2 else None
+        _raw_end   = parts[3] if len(parts) > 3 else None
+        start_date = (_raw_start if _raw_start and _date_re.match(_raw_start) else None) \
+                     or _resolved_start or "2023-01-01"
+        end_date   = (_raw_end if _raw_end and _date_re.match(_raw_end) else None) \
+                     or today.isoformat()
+
         # ── ML 信号组合回测 ──────────────────────────────────────────────────
         if strategy.lower() in ("ml", "ml_signal"):
             await self._cmd_ml_signal_backtest(parts[1:], start_date=start_date,
@@ -232,15 +249,6 @@ class BacktestCommandsMixin:
         if strategy.lower() == "agent":
             await self._cmd_agent_backtest(symbol, start_date=start_date, end_date=end_date, capital=_initial_capital)
             return
-
-        # Positional start/end dates only accepted if they look like YYYY-MM-DD
-        _date_re = _re_bt.compile(r'^\d{4}-\d{2}-\d{2}$')
-        _raw_start = parts[2] if len(parts) > 2 else None
-        _raw_end   = parts[3] if len(parts) > 3 else None
-        start_date = (_raw_start if _raw_start and _date_re.match(_raw_start) else None) \
-                     or _resolved_start or "2023-01-01"
-        end_date   = (_raw_end if _raw_end and _date_re.match(_raw_end) else None) \
-                     or today.isoformat()
 
         label = f"Backtesting {strategy} on {symbol} ({start_date}→{end_date})"
         api_url = self.terminal.config.get("api_url", "http://localhost:8000")

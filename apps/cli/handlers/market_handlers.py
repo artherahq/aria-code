@@ -258,12 +258,13 @@ def _nearest_levels(
         for h, l, c in zip(highs, lows, closes)
         if h is not None and l is not None and c is not None
     ]
+    candidates: list[float | None]
     if len(usable) < max(5, window * 2 + 1):
         candidates = [_num_or_none(v) for v in extra_levels]
     else:
         highs = [float(h) for h, _l, _c in usable]
         lows = [float(l) for _h, l, _c in usable]
-        candidates: list[float | None] = []
+        candidates = []
         for i in range(window, len(usable) - window):
             hi_slice = highs[i - window:i + window + 1]
             lo_slice = lows[i - window:i + window + 1]
