@@ -1134,8 +1134,57 @@ class ModelCommandsMixin:
                 console.print("[dim]  向导已完成。输入 /apikey list 查看所有配置。[/dim]") if HAS_RICH else print("向导完成")
                 return
 
+    def _providers_init(self, *, force: bool = False):
+        """按本机实际环境生成 ~/.aria/providers.yaml。"""
+        from pathlib import Path as _P
+
+        try:
+            from providers.llm.autoconfig import probe_environment, render_providers_yaml
+        except Exception as exc:
+            console.print(f"[red]无法加载配置生成器: {exc}[/red]" if HAS_RICH else f"无法加载配置生成器: {exc}")
+            return
+
+        console.print("[dim]正在探测本机可用的模型来源…[/dim]" if HAS_RICH else "正在探测…")
+        findings = probe_environment()
+
+        for f in findings:
+            mark = "[green]✓[/green]" if f.available else "[dim]·[/dim]"
+            line = f"  {mark} {f.provider:<14} {f.detail}"
+            console.print(line if HAS_RICH else line.replace("[green]✓[/green]", "✓").replace("[dim]·[/dim]", "·"))
+
+        target = _P.home() / ".aria" / "providers.yaml"
+        content = render_providers_yaml(findings)
+
+        # 已有配置绝不静默覆盖——那可能是用户手写并调试了很久的东西。
+        if target.exists() and not force:
+            preview = target.with_suffix(".yaml.generated")
+            preview.parent.mkdir(parents=True, exist_ok=True)
+            preview.write_text(content, encoding="utf-8")
+            msg = (f"\n已有配置 {target} 未改动。\n"
+                   f"生成结果写到 {preview}，比对满意后自行替换，\n"
+                   f"或用 /providers init --force 直接覆盖。")
+            console.print(f"[yellow]{msg}[/yellow]" if HAS_RICH else msg)
+            return
+
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+        console.print(f"\n[green]✓[/green] 已写入 {target}" if HAS_RICH else f"\n✓ 已写入 {target}")
+
+        if not any(f.available for f in findings):
+            tip = "这台机器上还没有可用来源。最快：brew install ollama && ollama serve && ollama pull qwen2.5:7b"
+            console.print(f"[yellow]{tip}[/yellow]" if HAS_RICH else tip)
+
+
     def cmd_providers(self, args: str):
-        """Show all LLM providers: local backends + cloud API status (Open Interpreter style)."""
+        """Show all LLM providers: local backends + cloud API status (Open Interpreter style).
+
+        `/providers init` 额外生成一份按本机实际环境定制的 providers.yaml——
+        探测到什么就写什么，缺什么就把"去哪拿"写成注释放进同一个文件，
+        用户不必在文档和配置之间来回对照。
+        """
+        if args.strip().lower().startswith("init"):
+            return self._providers_init(force="--force" in args)
+
         if HAS_RICH:
             console.print()
 
