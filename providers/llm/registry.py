@@ -34,6 +34,7 @@ from .openai_compat import (
     SiliconFlowProvider, MoonshotProvider, ZhiPuProvider,
 )
 from .anthropic import AnthropicProvider
+from .custom import CustomProviderSpec, build_custom_provider, parse_custom_providers
 from packages.aria_services.provider_health import (
     GLOBAL_PROVIDER_HEALTH,
     ProviderHealthRegistry,
@@ -90,6 +91,49 @@ _CONFIG_PATHS = [
     Path(".aria.json"),
     Path(".aria.yaml"),
 ]
+
+
+_CUSTOM_SPECS_CACHE: Optional[Dict[str, "CustomProviderSpec"]] = None
+
+
+def _custom_provider_specs() -> Dict[str, "CustomProviderSpec"]:
+    """解析一次并缓存。配置在进程生命周期内不变，重复解析只会重复刷日志。"""
+    global _CUSTOM_SPECS_CACHE
+    if _CUSTOM_SPECS_CACHE is None:
+        try:
+            _CUSTOM_SPECS_CACHE = parse_custom_providers(_load_raw_user_config())
+        except Exception as exc:
+            logger.warning("解析 model_providers 失败，忽略自定义 provider: %s", exc)
+            _CUSTOM_SPECS_CACHE = {}
+    return _CUSTOM_SPECS_CACHE
+
+
+def reload_custom_providers() -> Dict[str, "CustomProviderSpec"]:
+    """清空缓存并重新解析（供 /config reload 之类的命令调用）。"""
+    global _CUSTOM_SPECS_CACHE
+    _CUSTOM_SPECS_CACHE = None
+    return _custom_provider_specs()
+
+
+def _load_raw_user_config() -> Dict:
+    """读取用户配置的**顶层**结构。
+
+    注意跟 _load_user_config() 的区别：那个函数返回的是 `llm` 子节（历史行为，
+    调用方依赖它直接拿到 default/fallback），而 model_providers 与 llm 平级，
+    必须从顶层取，否则永远读不到。
+    """
+    for path in _CONFIG_PATHS:
+        if not path.exists():
+            continue
+        try:
+            with open(path, encoding="utf-8") as fh:
+                data = yaml.safe_load(fh) if path.suffix in (".yaml", ".yml") \
+                       else __import__("json").load(fh)
+            if isinstance(data, dict):
+                return data
+        except Exception as exc:
+            logger.debug("加载配置 %s 失败: %s", path, exc)
+    return {}
 
 def _load_user_config() -> Dict:
     for p in _CONFIG_PATHS:
@@ -152,11 +196,27 @@ def get_provider(
         get_provider("anthropic/claude-3-5-haiku-latest")
     """
     name, model = _parse_provider_spec(spec)
+
+    # 用户在 model_providers 里声明的 provider 优先于内置同名项——用户显式写下
+    # 的配置应当能覆盖内置默认（比如把 openai 指向自建的兼容网关）。
+    custom = _custom_provider_specs().get(name)
+    if custom is not None:
+        if custom.env_key and not custom.api_key():
+            raise ValueError(custom.missing_key_hint())
+        provider = build_custom_provider(custom, model)
+        if api_key:
+            provider.config.api_key = api_key
+        if base_url:
+            provider.config.base_url = base_url
+        return provider
+
     cls = _PROVIDER_CLASSES.get(name)
     if not cls:
+        known = list(_PROVIDER_CLASSES) + list(_custom_provider_specs())
         raise ValueError(
-            f"未知 provider: '{name}'。"
-            f"可用: {', '.join(_PROVIDER_CLASSES)}"
+            f"未知 provider: '{name}'。可用: {', '.join(sorted(known))}\n"
+            f"如需接入未列出的服务，在 ~/.aria/providers.yaml 的 model_providers "
+            f"段声明即可（只填 base_url 与 env_key，不要写密钥值）。"
         )
     cfg = _build_cfg(name, model)
     # 调用方显式传入的参数优先级最高
@@ -179,6 +239,20 @@ def list_available_providers() -> List[Dict[str, Any]]:
             "local":     cls.local,
             "tools":     cls.supports_tools,
             "thinking":  cls.supports_thinking,
+            "source":    "builtin",
+        })
+    # 用户在 model_providers 里声明的 provider 也要出现在 /config 里——否则
+    # 用户配好了却在列表中看不到，会以为没生效。
+    for pid, spec in sorted(_custom_provider_specs().items()):
+        result.append({
+            "name":      pid,
+            "available": bool(spec.api_key()) if spec.env_key else True,
+            "local":     False,
+            "tools":     True,
+            "thinking":  False,
+            "source":    "custom",
+            "base_url":  spec.base_url,
+            "hint":      "" if (not spec.env_key or spec.api_key()) else spec.missing_key_hint(),
         })
     return result
 
