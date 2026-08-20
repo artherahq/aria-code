@@ -4,6 +4,48 @@ All notable changes to Aria Code are documented here.
 
 ---
 
+## [4.4.1] — 2026-08-20
+
+### Fixed
+
+**6 个命令在任何正常安装上都必崩 — `_rebind_mixin_globals` 的作用域契约无人看守**
+- `_rebind_mixin_globals()` 用 `FunctionType(code, globals(), …)` 重建每个 mixin
+  方法，第二个参数是 `aria_cli` 的 `__dict__`，而且是**整体替换**——mixin 文件
+  自己模块级的 import 和 def，对该文件里的方法完全不可见
+- ruff 对 `apps/cli/commands/*.py` 关掉了 F821（裸名本来就是运行期解析的），
+  而 `aria_cli.py` 整个被写进 ruff 的 `exclude`（理由是"手工对齐不重排"，
+  但 `exclude` 是全局的，连带关掉了查 bug 的规则），于是这条契约两头都没人看
+- 核对 26 个 mixin、225 个方法，查出 7 个名字、19 处引用解析不到：
+  - 硬崩溃 8 处：`/config`、`/config set`、`/setup`、`/project`、`/architecture`、
+    `/export`、`/backtest`
+  - 被 `except Exception` 吞成静默降级 11 处，其中 `/setup feishu|telegram`
+    因为 `__file__` 经 rebind 后指向 `aria_cli.py`，往上数四层算出
+    `/Users/setup_wizard.py`，这条分支一直退化成"请手动运行"提示
+- `aria_cli.py` 与 `dashboard_generator.py` 重新纳入 lint；顺带修掉一处重复的
+  `"/artifacts"` 字典键和一个从未使用的 `import signal`
+- 新增 `tests/test_rebind_namespace_contract.py` 钉住契约，按 static/classmethod
+  不被重建、普通方法被重建两条规则分别取作用域
+
+**`/review` 静默丢掉确定性首轮检查**
+- `workflow_cmds.py` 的 `cmd_review` 在函数体里
+  `from agents.code_review import CodeReviewAgent`，而该文件从未提交。干净
+  clone 和 4.4.0 的 wheel 里这行必然 ImportError，外面裹着 `except Exception`，
+  于是异常被吞掉：用户只拿到纯 LLM 审查，且不会看到任何提示
+- 补齐 `agents/code_review.py`、`packages/adk_bridge/code_review_tools.py`、
+  `adk_apps/aria_code_review/`，`CodeReviewTools` 走惰性导入以免
+  `packages.adk_bridge` 被 `agents/` 的 122 个模块和 numpy 拖重
+- `tests/test_no_uncommitted_imports.py` 补第二条守卫：原来那条只查
+  `__init__.py` 的同级相对导入，绝对导入和函数体内导入都不在覆盖范围
+
+**发版流水线从来不创建 GitHub Release**
+- `build-native-binaries.yml` 用 `gh release upload <tag>` 附二进制，要求
+  release 已存在，但没有任何一步创建它——v4.2.0 一个产物都没有，v4.3.0
+  干脆没有 release
+- `publish.yml` 增加 `create-release` job（`view || create`，幂等），
+  binaries 侧补同样的兜底以消除两个 workflow 之间的竞态
+
+---
+
 ## [4.4.0] — 2026-08-19
 
 ### Fixed
