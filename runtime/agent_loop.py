@@ -15,6 +15,7 @@ from typing import AsyncGenerator, Awaitable, Callable, Dict, FrozenSet, Iterabl
 
 from .approval import ApprovalDecision, apply_approval_decision
 from .tool_executor import ToolExecutor
+from .budget import BudgetTracker
 
 
 DEFAULT_SERIAL_TOOLS = {"write_file", "edit_file", "multi_edit", "run_command"}
@@ -234,6 +235,8 @@ class AgentTurnState:
         "thinking_tokens": 0,
     })
     tool_time_total: float = 0.0
+    # 可选的预算追踪器。默认 None —— 不传就完全保持既有行为。
+    _budget: Optional["BudgetTracker"] = None
 
     def append_response(self, text: str | None) -> None:
         if text:
@@ -249,9 +252,18 @@ class AgentTurnState:
     def add_usage(self, usage: dict | None) -> None:
         if not usage:
             return
-        self.usage["prompt_tokens"] += int(usage.get("prompt_tokens", 0) or 0)
-        self.usage["completion_tokens"] += int(usage.get("completion_tokens", 0) or 0)
-        self.usage["thinking_tokens"] += int(usage.get("thinking_tokens", 0) or 0)
+        prompt = int(usage.get("prompt_tokens", 0) or 0)
+        completion = int(usage.get("completion_tokens", 0) or 0)
+        thinking = int(usage.get("thinking_tokens", 0) or 0)
+        self.usage["prompt_tokens"] += prompt
+        self.usage["completion_tokens"] += completion
+        self.usage["thinking_tokens"] += thinking
+
+        # 预算记账挂在这里而不是循环体里：所有路径的 usage 都会经过
+        # add_usage()，挂在唯一入口上就不会漏记某条分支。thinking token 计入
+        # 输出侧——各家对它的计费都按输出档，漏掉会显著低估推理模型的花费。
+        if self._budget is not None:
+            self._budget.record(self.provider, prompt, completion + thinking)
 
     def add_tool_time(self, elapsed: float) -> None:
         self.tool_time_total += elapsed
@@ -1165,6 +1177,11 @@ class AgentOptions:
     requires_evidence: bool = False
     grounding_tools: FrozenSet[str] = field(default_factory=frozenset)
     evidence_already_grounded: bool = False
+    # 花费上限。None = 不追踪（保持既有行为，调用方不传就跟以前一模一样）。
+    # 传入一个 BudgetTracker 后，循环会在**每轮开始前**检查，超限则停止并把
+    # 原因写进 result["budget_paused"]，而不是抛异常——抛异常会让调用方拿不到
+    # 已经产出的中间结果。
+    budget: Optional["BudgetTracker"] = None
 
 
 # ── run_agent() ───────────────────────────────────────────────────────────────
@@ -1224,7 +1241,7 @@ async def run_agent(
     )
     _serial = set(opts.serial_tools)
 
-    turn_state = AgentTurnState(provider="unknown")
+    turn_state = AgentTurnState(provider="unknown", _budget=opts.budget)
     start_time = time.time()
     current_message = prompt
     if opts.requires_evidence:
@@ -1245,6 +1262,24 @@ async def run_agent(
     grounded_results = 1 if opts.evidence_already_grounded else 0
 
     for round_num in range(opts.max_rounds):
+        # ── 预算闸门 ─────────────────────────────────────────────────────────
+        # 放在发起调用**之前**：花完才发现超支，每次都会多花一轮，而这一轮
+        # 恰恰可能是塞了满上下文的那一轮。
+        if opts.budget is not None and not opts.budget.should_continue(
+            projected_usd=opts.budget.projected_next_round_usd()
+        ):
+            # 本模块不持有 logger（全靠 yield 事件对外汇报），所以暂停原因
+            # 只写进 result，由调用方决定怎么呈现——CLI 会打印，后台任务会
+            # 记进 task ledger。
+            reason = opts.budget.paused_reason or "budget exhausted"
+            result["budget_paused"] = reason
+            result["budget_paused_round"] = round_num + 1
+            result["budget_summary"] = opts.budget.summary()
+            break
+
+        if opts.budget is not None:
+            opts.budget.record_round()
+
         # ── Provider call ────────────────────────────────────────────────────
         response_text = ""
         _round_tokens = 0
