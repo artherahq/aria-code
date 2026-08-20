@@ -1,9 +1,12 @@
 # ADK research integration
 
-`adk_apps/aria_research` is the Google ADK layer for Aria Code. It is an
-optional, read-only research surface: it can request a normalized market
-snapshot and inspect data-provider health, but it cannot call broker, trade,
-filesystem, shell, scheduling, or credential tools.
+Google ADK is an optional, narrow integration for Aria Code. It cannot call
+broker, trade, filesystem, shell, scheduling, or credential tools.
+
+| Agent | Intended use | Tools |
+| --- | --- | --- |
+| `aria_research` | Timestamped market research | `get_market_snapshot`, `get_market_data_health` |
+| `aria_code_review` | Review code pasted by a user | `review_code` |
 
 ## Install and run locally
 
@@ -18,7 +21,7 @@ export GOOGLE_API_KEY='your Gemini API key'
 adk web adk_apps --port 8000
 ```
 
-Open `http://localhost:8000` and select `aria_research`. Set `ARIA_ADK_MODEL`
+Open `http://localhost:8000` and select `aria_research` or `aria_code_review`. Set `ARIA_ADK_MODEL`
 to override the default Gemini model.
 
 ## Tool contracts
@@ -49,6 +52,12 @@ packages.adk_bridge (bounded read-only tool contracts)
         v
 DataService / MarketDataClient -> provider-health telemetry
 ```
+
+`aria_code_review` has an even narrower boundary: `review_code` accepts source
+text supplied in the request, strips directory components from its display
+filename, and performs static checks only. It cannot open a path, inspect a
+repository, execute a command, or run tests. Its output includes these limits
+and is not a security certification.
 
 Arthera should remain the authoritative API and compute layer. A subsequent
 production step can replace the bridge's local `DataService` factory with an
