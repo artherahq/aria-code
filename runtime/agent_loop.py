@@ -1274,6 +1274,17 @@ async def run_agent(
             reason = opts.budget.paused_reason or "budget exhausted"
             result["budget_paused"] = reason
             result["budget_paused_round"] = round_num + 1
+            # 走既有的 hook 通道对外汇报，不新造一条：CLI 已经把 hook 接到
+            # RuntimeTrace，事件会自动进入 /trace 和跨会话的 run_store，
+            # 花费停在哪一轮、当时用量多少事后可查。
+            if hook is not None:
+                hook("budget_paused", "budget", {
+                    "round": round_num + 1,
+                    "reason": reason,
+                    "spent_usd": round(opts.budget.state.spent_usd, 6),
+                    "total_tokens": opts.budget.state.total_tokens,
+                    "per_provider": dict(opts.budget.state.per_provider),
+                }, None)
             result["budget_summary"] = opts.budget.summary()
             break
 
