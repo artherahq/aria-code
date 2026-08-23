@@ -231,6 +231,7 @@ class AriaSSEProvider:
         user_context: Optional[dict] = None,
         system_override: Optional[str] = None,
         project_context: str = "",
+        use_react_gateway: bool = False,
     ) -> None:
         self.api_url = api_url
         self.model = model
@@ -239,6 +240,7 @@ class AriaSSEProvider:
         self.user_context = user_context or {}
         self.system_override = system_override
         self.project_context = project_context
+        self.use_react_gateway = use_react_gateway
 
     async def stream(
         self,
@@ -272,6 +274,7 @@ class AriaSSEProvider:
                 on_status=on_status,
                 cancel_event=cancel_event,
                 project_context=self.project_context,
+                use_react_gateway=self.use_react_gateway,
             )
 
         async for event in _stream_callback_provider(_invoke, done_provider="aria_sse"):
@@ -360,6 +363,17 @@ class ConfiguredProvider:
         cancel_event: Optional[asyncio.Event] = None,
     ) -> AsyncGenerator[LLMEvent, None]:
         prepared = self._messages(messages)
+        
+        if self.backend in ("vertexai", "vertex-ai", "google-genai") or (self.backend in ("google", "gemini") and self.config.get("use_vertexai", True)):
+            from apps.cli.providers.vertexai_stream import VertexAIProvider
+            provider = VertexAIProvider(
+                model=self.model,
+                config=self.config,
+                system_override=self.system_override,
+            )
+            async for evt in provider.stream(prepared, tools=tools, cancel_event=cancel_event):
+                yield evt
+            return
 
         if self.backend in self.LOCAL_OPENAI_BACKENDS | self.GENERIC_OPENAI_BACKENDS:
             from local_llm_provider import LocalLLMProvider
@@ -375,6 +389,22 @@ class ConfiguredProvider:
                     os.getenv(self.GENERIC_ENV_KEYS[self.backend], "")
                     or str(file_cfg.get("api_key") or "")
                 )
+                base_url = file_cfg.get("base_url") or self.GENERIC_BASE_URLS[self.backend]
+                model_name = self.model
+
+                if not api_key and self.backend in ("google", "gemini"):
+                    import subprocess
+                    try:
+                        api_key = subprocess.check_output(["gcloud", "auth", "print-access-token"], text=True).strip()
+                        project = subprocess.check_output(["gcloud", "config", "get-value", "project"], text=True).strip()
+                        region = "us-central1"
+                        base_url = f"https://{region}-aiplatform.googleapis.com/v1beta1/projects/{project}/locations/{region}/endpoints/openapi"
+                        
+                        if not model_name.startswith("google/"):
+                            model_name = f"google/{model_name}"
+                    except Exception:
+                        pass
+
                 if not api_key:
                     yield LLMDone(
                         response="", provider=self.backend, success=False,
@@ -383,11 +413,8 @@ class ConfiguredProvider:
                     return
                 cfg.update({
                     "local_provider": "custom",
-                    "custom_endpoint": (
-                        file_cfg.get("base_url")
-                        or self.GENERIC_BASE_URLS[self.backend]
-                    ),
-                    "custom_model": self.model,
+                    "custom_endpoint": base_url,
+                    "custom_model": model_name,
                     "local_api_key": api_key,
                 })
             provider = LocalLLMProvider.from_config(cfg)
