@@ -1309,6 +1309,16 @@ try:
 except Exception as _exc:
     logger.debug("Broker tools init error: %s", _exc)
 
+try:
+    try:
+        from aria_code.tools.extended_tools import register_extended_tools as _reg_ext
+    except ImportError:
+        from tools.extended_tools import register_extended_tools as _reg_ext
+    _reg_ext(LOCAL_TOOLS)
+    logger.info("Registered extended enterprise tools (Slack, Feishu, TradingView, QuickBooks, Shopify, Snowflake)")
+except Exception as _exc:
+    logger.debug("Extended tools init error: %s", _exc)
+
 # Ollama tool schemas (for function calling) — extend so finance schemas added above are kept
 
 
