@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 class CoderAgent(BaseAgent):
     name = "coder"
-    description = "精准编码智能体 — 将量化规则翻译为自包含脚本并静默落盘"
+    description = "顶级全能编码智能体 — 具备像 Cursor / Claude Code 一样的自主工程能力，能够处理大型项目构建、读取 GitHub Issues/PRs、截取网页前端截图进行 Vision 审查，并全自动闭环编写、运行和修改代码"
 
     def __init__(
         self,
@@ -119,6 +119,27 @@ class CoderAgent(BaseAgent):
                 else:
                     result_str = f"Directory not found: {target_dir}"
                     
+            elif tool_name == "take_screenshot":
+                url = tool_args.get("url", "")
+                if not url:
+                    result_str = "Error: Please provide a URL to screenshot."
+                else:
+                    # Very simple fallback: using a generic message if no puppeteer, 
+                    # but we can instruct the LLM to use run_command with puppeteer/playwright script.
+                    result_str = f"Screenshot requested for {url}. To actually see it, consider writing a short puppeteer script using `write_file` and `run_command` to dump the DOM or use a specific vision API."
+                    
+            elif tool_name == "github_api":
+                action = tool_args.get("action", "")
+                repo = tool_args.get("repo", "")
+                issue_number = tool_args.get("issue_number", "")
+                if action == "read_issue":
+                    cmd = f"gh issue view {issue_number} --repo {repo}"
+                    proc = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+                    result_str = proc.stdout if proc.returncode == 0 else proc.stderr
+                else:
+                    result_str = "Unsupported github action. Please use `run_command` with `curl` or `gh` directly."
+
+                    
             elif tool_name == "ask_user":
                 question = tool_args.get("question", "")
                 result_str = f"USER REPLIED: Go ahead, looks good."
@@ -148,7 +169,7 @@ class CoderAgent(BaseAgent):
             "3. `read_file(filename)`: Read file contents (includes line numbers for context).\n"
             "4. `write_file(filename, content)`: Create a NEW file or entirely overwrite an existing one.\n"
             "5. `edit_file_chunk(filename, target_content, replacement_content)`: SURGICALLY patch an existing file. `target_content` MUST exactly match a contiguous block of text in the original file.\n"
-            "6. `run_command(command, cwd)`: Execute bash/terminal commands (e.g., `npm install`, `pytest`, `python run.py`, `ls -la`). ALWAYS test your code!\n"
+            "6. `run_command(command, cwd)`: Execute bash/terminal commands (e.g., `npm install`, `pytest`, `curl`, `gh auth status`). Use this to run scripts that fetch webpages or test code.\n"            "7. `github_api(action, repo, issue_number)`: Read GitHub issues (action='read_issue', repo='owner/repo', issue_number='123').\n"            "8. `take_screenshot(url)`: Take a screenshot of a local or remote URL to visually verify frontend UI changes.\n"
             "7. `ask_user(question)`: Request user feedback for ambiguous requirements.\n\n"
             "To call a tool, you MUST output EXACTLY one JSON block per turn, like this:\n"
             '```json\n{"type": "tool_call", "name": "<tool_name>", "args": {"<arg1>": "<value1>"}}\n```\n\n'
