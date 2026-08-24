@@ -109,6 +109,8 @@ class OrchestratorCommandsMixin:
             tickers = _re.findall(r'[A-Z]{2,5}', request)
             symbol = tickers[0] if tickers else ""
             
+            upstream_contexts = []
+            
             for agent_name in agents_to_run:
                 agent_cls = registry.get(agent_name)
                 if not agent_cls:
@@ -147,10 +149,20 @@ class OrchestratorCommandsMixin:
                         on_token=on_token
                     )
                     
+
                     try:
-                        data = {"company_name": symbol, "request": request}
+                        data = {"company_name": symbol, "request": request, "upstream_context": list(upstream_contexts)}
+                        
+                        # Some agents use self._current_data, so we set it here for compatibility
+                        agent._current_data = data 
+                        
                         agent_result = await agent.analyze(symbol, data)
+                        
+                        # Add this agent's analysis to upstream_contexts for the next agent!
+                        upstream_contexts.append(f"【{agent_name} 的分析结论】: {agent_result.analysis}")
+                        
                         update_display(live, f"[bold green]✨ 执行完成![/bold green]")
+
                     except Exception as e:
                         update_display(live, f"[bold red]❌ 执行失败: {e}[/bold red]")
                         continue
