@@ -43,6 +43,44 @@ def tool_analyze_logistics_data(params: Dict[str, Any]) -> Dict[str, Any]:
         except Exception as exc:
             return {"success": False, "error": f"Failed to parse file {file_path}: {exc}"}
 
+
+    if not waybills and not file_path:
+        import os
+        import sqlite3
+        db_path = os.path.expanduser("~/.aria/erp_warehouse.db")
+        if os.path.exists(db_path):
+            try:
+                conn = sqlite3.connect(db_path)
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                # Fetch realistic anomaly data (e.g., where billed_weight is > 1.2x actual_weight)
+                cursor.execute("SELECT * FROM logistics_waybills WHERE billed_weight_kg > actual_weight_kg * 1.2 LIMIT 10")
+                anomalies = [dict(row) for row in cursor.fetchall()]
+                
+                # Fetch carrier stats
+                cursor.execute("SELECT carrier, COUNT(*) as count, AVG(transit_days) as avg_days, SUM(total_cost) as total_spend FROM logistics_waybills GROUP BY carrier")
+                carrier_stats = [dict(row) for row in cursor.fetchall()]
+                
+                # Fetch totals
+                cursor.execute("SELECT COUNT(*) as total_waybills, SUM(total_cost) as total_spend FROM logistics_waybills")
+                totals = dict(cursor.fetchone())
+                
+                return {
+                    "success": True,
+                    "data": {
+                        "total_waybills": totals["total_waybills"],
+                        "total_freight_spend": totals["total_spend"],
+                        "carrier_metrics": carrier_stats,
+                        "billing_anomalies": anomalies,
+                    },
+                    "summary": f"已自动连接至真实 ERP 数据库 ({db_path})，共计 {totals['total_waybills']} 条单据。发现抛货/计费异常 {len(anomalies)} 笔典型记录，总运费支出 {totals['total_spend']:,.2f} 元。"
+                }
+            except Exception as e:
+                logger.error(f"DB query failed: {e}")
+            finally:
+                if 'conn' in locals():
+                    conn.close()
+
     if not waybills:
         # Default representative enterprise sample dataset if empty
         waybills = [
