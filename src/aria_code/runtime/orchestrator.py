@@ -37,7 +37,7 @@ async def dynamic_agent_orchestration(user_query: str, provider: Any) -> Dict[st
         # Use provider to generate
         full_response = ""
         async for chunk in provider.stream(messages=messages, tools=[]):
-            if chunk.text:
+            if hasattr(chunk, 'text') and chunk.text:
                 full_response += chunk.text
         
         # Parse JSON
