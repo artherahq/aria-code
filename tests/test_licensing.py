@@ -11,7 +11,7 @@ _CLI_DIR = str(pathlib.Path(__file__).parents[1])
 if _CLI_DIR not in sys.path:
     sys.path.insert(0, _CLI_DIR)
 
-import aria_code.licensing  # noqa: E402
+from aria_code import licensing  # noqa: E402
 
 
 @pytest.fixture(autouse=True)

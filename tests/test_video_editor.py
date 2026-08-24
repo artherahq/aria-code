@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import aria_code.video_editor
+from aria_code import video_editor
 
 
 def test_require_ffmpeg_absent(monkeypatch):

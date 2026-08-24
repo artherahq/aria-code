@@ -1,6 +1,6 @@
 from pathlib import Path
 
-import aria_code.aria_feishu_bot
+from aria_code import aria_feishu_bot
 
 
 def test_swarm_orchestrator_requires_explicit_configuration(monkeypatch):

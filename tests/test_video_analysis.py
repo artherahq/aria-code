@@ -13,7 +13,7 @@ import pytest
 cv2 = pytest.importorskip("cv2")
 np = pytest.importorskip("numpy")
 
-import aria_code.video_analysis
+from aria_code import video_analysis
 
 
 def _write_two_color_video(path: str, fps: float = 10.0, seconds_per_color: int = 1) -> None:
