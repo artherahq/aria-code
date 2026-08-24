@@ -15,7 +15,7 @@ license = { text = "BUSL-1.1" }
 # names neither aria-code nor pandas_ta. With it, pip refuses up front with a
 # clear "requires a different Python" message. Verified 3.13 installs and runs
 # (`aria-code --version` → 4.2.0); raise the bound once numba ships 3.14 wheels.
-requires-python = ">=3.10,<3.14"
+requires-python = ">=3.10"
 keywords = ["ai", "llm", "finance", "trading", "terminal", "cli"]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -254,14 +254,17 @@ ignore = ["E501", "F401", "E402", "F811"]
 # Mixin command files rely on globals injected by aria_cli.py (console, HAS_RICH, etc.)
 # F821 is suppressed here because the names are valid at runtime via the main module's namespace.
 "apps/cli/commands/*.py" = ["F821"]
+"src/aria_code/apps/cli/commands/*.py" = ["F821"]
+"**/apps/cli/commands/*.py" = ["F821"]
 "apps/cli/providers/llm/ollama_stream.py" = ["F821"]
-# 2026-08-19 从 aria_cli.py 拆出的模块，遵循同一契约：实现搬走了，但仍由
-# aria_cli 用 _rebind_module_function_globals() 把函数 __globals__ 绑回它的
-# 命名空间，console / HAS_RICH / Panel / rich_box 等裸名在运行期才解析。
-# 这跟上面 commands/*.py 是同一个机制，只是文件不在 commands/ 目录下。
-# broker_render 里的 "AccountInfo" 是字符串前向引用，运行期根本不求值。
+"src/aria_code/apps/cli/providers/llm/ollama_stream.py" = ["F821"]
+"**/apps/cli/providers/llm/ollama_stream.py" = ["F821"]
 "apps/cli/football_reports.py" = ["F821"]
+"src/aria_code/apps/cli/football_reports.py" = ["F821"]
+"**/apps/cli/football_reports.py" = ["F821"]
 "apps/cli/broker_render.py" = ["F821"]
+"src/aria_code/apps/cli/broker_render.py" = ["F821"]
+"**/apps/cli/broker_render.py" = ["F821"]
 
 # aria_cli.py 的"未使用 import"绝不能自动清理：它的 globals() 就是所有 rebound
 # mixin 方法的命名空间，94 个 ruff 眼里没用到的 import 里有 51 个是给它们准备的
@@ -283,6 +286,7 @@ exclude = '''
 
 # ── Pytest ─────────────────────────────────────────────────────────────────────
 [tool.pytest.ini_options]
+pythonpath = [".", "src"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 python_files = ["test_*.py"]

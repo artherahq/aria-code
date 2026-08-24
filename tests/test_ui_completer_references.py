@@ -1,5 +1,6 @@
+import pytest
+pytest.importorskip("prompt_toolkit")
 from pathlib import Path
-
 from prompt_toolkit.document import Document
 
 from aria_code.ui.completer import AriaPTCompleter

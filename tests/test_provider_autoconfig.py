@@ -86,7 +86,10 @@ def test_probe_is_read_only_for_cloud_providers(monkeypatch):
     """云端探测只看环境变量，不发请求——发探活请求既消耗用户额度，
     也把 key 泄给一次纯粹的探测。"""
     called = []
-    import providers.llm.autoconfig as ac
+    try:
+        import aria_code.providers.llm.autoconfig as ac
+    except ImportError:
+        import providers.llm.autoconfig as ac
     monkeypatch.setattr(ac, "_fetch_json", lambda *a, **k: called.append(a) or None)
     monkeypatch.setattr(ac, "_port_open", lambda *a, **k: False)
 

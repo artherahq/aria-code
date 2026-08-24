@@ -205,15 +205,26 @@ def build_intent_route(message: str) -> IntentRoute:
         "script", "code", "program", "implement", "edit file", "write file",
     ))
     try:
-        from intent_classifier import (
-            INTENT_ANALYSIS,
-            INTENT_CODING,
-            INTENT_FINANCE,
-            INTENT_GENERAL,
-            INTENT_REALTIME,
-            classify_intent_sync,
-            is_visual_market_artifact_request,
-        )
+        try:
+            from aria_code.intent_classifier import (
+                INTENT_ANALYSIS,
+                INTENT_CODING,
+                INTENT_FINANCE,
+                INTENT_GENERAL,
+                INTENT_REALTIME,
+                classify_intent_sync,
+                is_visual_market_artifact_request,
+            )
+        except ImportError:
+            from intent_classifier import (
+                INTENT_ANALYSIS,
+                INTENT_CODING,
+                INTENT_FINANCE,
+                INTENT_GENERAL,
+                INTENT_REALTIME,
+                classify_intent_sync,
+                is_visual_market_artifact_request,
+            )
         classifier_intent = classify_intent_sync(message)
         visual_artifact = bool(is_visual_market_artifact_request(message))
     except Exception:

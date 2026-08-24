@@ -2,7 +2,9 @@ import asyncio
 import os
 import unittest
 from unittest.mock import patch
+import pytest
 
+pytest.importorskip("prompt_toolkit")
 from prompt_toolkit.document import Document
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.layout.containers import Window

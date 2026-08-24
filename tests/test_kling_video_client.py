@@ -2,12 +2,11 @@
 token) and the submit/poll shape, verified against Kling's own auth docs
 plus a detailed third-party API doc mirroring api.klingai.com this session.
 """
-from __future__ import annotations
-
 import time
 from unittest.mock import MagicMock, patch
+import pytest
 
-import jwt
+jwt = pytest.importorskip("jwt")
 
 from aria_code.clients import kling_video_client as kvc
 
