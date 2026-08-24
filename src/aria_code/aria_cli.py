@@ -5474,7 +5474,10 @@ class ArtheraTerminal:
                 getattr(_rt_turn, "error", None) if _rt_turn is not None else None
             ) or "empty_response"
             if _rt_attempt == 0 and "empty_response" in str(_rt_probe_err) and "ARIA-4223" not in str(_rt_probe_err):
-                logger.warning("Empty model response; auto-retrying the turn once")
+                if HAS_RICH:
+                    console.print("  [dim yellow]⚠ Empty response from model; auto-retrying once...[/dim yellow]")
+                else:
+                    print("  ⚠ Empty response from model; auto-retrying once...")
                 continue
             break
 

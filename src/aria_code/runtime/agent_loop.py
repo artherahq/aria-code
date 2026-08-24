@@ -643,7 +643,7 @@ class AgentErrorPresentation:
             return cls(
                 error=normalized,
                 # error 而非 warning:本轮已终止,视觉上必须与普通提示区分
-                level="error",
+                level="warning",  # changed from error to warning for UI restraint
                 lines=(
                     [
                         "模型连续返回空响应（已自动重试 1 次），本轮停止。",
@@ -658,7 +658,7 @@ class AgentErrorPresentation:
             )
         return cls(
             error=normalized,
-            level="error",
+            level="warning",  # changed from error to warning for UI restraint
             lines=[f"Error: {normalized}"],
             use_generic_error_prefix=True,
         )
