@@ -3686,6 +3686,10 @@ class SlashCommands(
 
     def __init__(self, terminal: 'ArtheraTerminal'):
         self.terminal = terminal
+
+    @property
+    def context(self):
+        return self.terminal.context
         self.commands = {
             # ── Session ───────────────────────────────────────────────────────
             "/help":      (self.cmd_help,     "Show commands and examples"),
