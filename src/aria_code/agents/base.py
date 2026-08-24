@@ -176,7 +176,7 @@ class BaseAgent(ABC):
         _lang_rule = self._LANG_RULES.get(self.lang, self._LANG_RULES["zh"])
         _data_warn = self._data_guard(quote or {})
         system = system + self._TIME_SENSITIVE_FACT_POLICY + _lang_rule + _data_warn
-        from providers.llm.base import Message
+        from aria_code.providers.llm.base import Message
 
         # 自动注入 DAG pipeline 中的 upstream context
         if hasattr(self, "_current_data") and self._current_data:
@@ -238,8 +238,40 @@ class BaseAgent(ABC):
             messages.append(Message(role="assistant", content=current_text))
 
             # 如果没有工具调用，说明 LLM 完成了最终回答，跳出循环
+
+            # If provider didn't emit native tool_calls, fallback to ReAct JSON parsing
+            if not tool_calls:
+                import re
+                import json
+                
+                # Check for explicit JSON tool calls outputted as text
+                matches = re.finditer(r'```json\s*({"type":\s*"tool_call".*?})\s*```', current_text, re.DOTALL)
+                for match in matches:
+                    try:
+                        parsed = json.loads(match.group(1))
+                        tool_calls.append({
+                            "name": parsed.get("name"),
+                            "args": parsed.get("args", {})
+                        })
+                    except Exception as e:
+                        logger.warning(f"Failed to parse ReAct tool call: {e}")
+                
+                # Also check inline unformatted JSON
+                if not tool_calls:
+                    matches_raw = re.finditer(r'{"type":\s*"tool_call",\s*"name":\s*"([^"]+)",\s*"args":\s*({.*?})}', current_text, re.DOTALL)
+                    for match in matches_raw:
+                        try:
+                            args_dict = json.loads(match.group(2))
+                            tool_calls.append({
+                                "name": match.group(1),
+                                "args": args_dict
+                            })
+                        except:
+                            pass
+
             if not tool_calls:
                 break
+
 
             # 有工具调用，则逐一执行，并把结果喂回 LLM
             for tc in tool_calls:
