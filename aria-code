@@ -12,7 +12,8 @@ while [[ -L "$SOURCE" ]]; do
   fi
 done
 SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
-CLI_PY="$SCRIPT_DIR/aria_cli.py"
+CLI_PY="$SCRIPT_DIR/src/aria_code/aria_cli.py"
+export PYTHONPATH="$SCRIPT_DIR/src"
 VENV_DIR="${ARIA_VENV:-$SCRIPT_DIR/.venv}"
 VENV_PY="$VENV_DIR/bin/python"
 
