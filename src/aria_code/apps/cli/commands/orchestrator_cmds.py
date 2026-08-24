@@ -76,11 +76,10 @@ class OrchestratorCommandsMixin:
             return
             
         if self.context.has_rich:
-            self.context.console.print("[dim]Orchestrator 正在思考最佳智能体组合...[/dim]")
-            
-        provider = ConfiguredProvider(self.context.config, "gemini-2.5-flash")
+            provider = ConfiguredProvider(self.context.config, "gemini-2.5-flash")
         
-        result = await dynamic_agent_orchestration(request, provider)
+        with self.context.console.status("[dim]Orchestrator 正在编排智能体网络...[/dim]"): 
+            result = await dynamic_agent_orchestration(request, provider)
         agents_to_run = result.get("agents", [])
         
         if self.context.has_rich:
@@ -88,6 +87,7 @@ class OrchestratorCommandsMixin:
             from rich.live import Live
             from rich.console import Group
             from rich.text import Text
+            from rich.markdown import Markdown
             
             plan = result.get("plan", "No plan provided.")
             content = f"""[bold]路由计划:[/bold]
@@ -117,7 +117,7 @@ class OrchestratorCommandsMixin:
                     self.context.console.print(f"[red]找不到智能体: {agent_name}[/red]")
                     continue
                 
-                self.context.console.print(f"\n[bold]正在执行: {agent_name}[/bold]")
+                self.context.console.print(f"\n[bold]● {agent_name}[/bold]")
                 
                 lines = []
                 def update_display(live_context, new_line=None):
@@ -129,14 +129,14 @@ class OrchestratorCommandsMixin:
                 
                 with Live(auto_refresh=True, console=self.context.console) as live:
                     def on_thought(text):
-                        update_display(live, f"[dim]思考中:[/dim] {text.strip()}")
+                        update_display(live, f"  [dim]│ 思考:[/dim] {text.strip()}")
                         
                     def on_tool_start(name, params):
-                        update_display(live, f"[dim]调用工具:[/dim] {name} {params}")
+                        update_display(live, f"  [dim]├ 工具:[/dim] {name} {params}")
                         
                     def on_tool_end(name, result):
                         res_str = str(result)[:60] + "..." if len(str(result)) > 60 else str(result)
-                        update_display(live, f"[dim]工具返回:[/dim] {name} -> {res_str}")
+                        update_display(live, f"  [dim]└ 返回:[/dim] {name} -> {res_str}")
                         
                     def on_token(token):
                         pass
@@ -161,14 +161,14 @@ class OrchestratorCommandsMixin:
                         # Add this agent's analysis to upstream_contexts for the next agent!
                         upstream_contexts.append(f"【{agent_name} 的分析结论】: {agent_result.analysis}")
                         
-                        update_display(live, f"[dim]执行完成.[/dim]")
+                        update_display(live, f"  [dim]✓ 完成.[/dim]")
 
                     except Exception as e:
-                        update_display(live, f"[red]执行失败: {e}[/red]")
+                        update_display(live, f"  [red]✗ 失败: {e}[/red]")
                         continue
                         
                 self.context.console.print(Panel(
-                    agent_result.analysis, 
+                    Markdown(agent_result.analysis), 
                     title=f"{agent_name} 分析报告", 
                     border_style="dim"
                 ))
