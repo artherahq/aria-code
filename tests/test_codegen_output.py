@@ -29,6 +29,8 @@ async def test_cmd_code_saves_to_user_generated_dir_by_default(monkeypatch, tmp_
     monkeypatch.setenv("ARIA_USER_OUTPUT_ROOT", str(tmp_path))
     terminal = _CodeTerminal("```python\nprint('hello')\n```")
     commands = aria_cli.SlashCommands(terminal)
+    commands.context = type("AriaContextMock", (), {"console": None, "has_rich": False, "save_config": lambda: None})()
+
 
     await commands.cmd_code("build a simple strategy script")
 

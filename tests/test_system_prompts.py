@@ -20,9 +20,9 @@ def test_response_style_rule_is_bilingual_and_terminal_first():
     en = build_response_style_rule("en")
 
     assert "先给结论" in zh
-    assert "错误或缺数据" in zh
+    assert "编造数据" in zh
     assert "Lead with the answer" in en
-    assert "missing data" in en
+    assert "invent data" in en
 
 
 def test_prefetched_analysis_prompt_matches_user_language():

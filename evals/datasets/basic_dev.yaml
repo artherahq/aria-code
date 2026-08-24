@@ -1,0 +1,12 @@
+cases:
+  - id: "eval_code_generation"
+    prompt: "/code write a simple python script to sum two numbers"
+    expected_output_contains: ["```python", "def sum"]
+    expected_tool_calls: []
+    description: "Agent should generate valid python code inside markdown fences."
+
+  - id: "eval_analysis_llm"
+    prompt: "/analyze AAPL"
+    expected_output_contains: []
+    eval_rubric: "The response must contain some financial analysis about AAPL (Apple). It does not need to be perfect, but it must mention AAPL."
+    description: "Use LLM-as-a-judge to verify the analysis contains Apple."

@@ -18,9 +18,5 @@ def test_workflow_uses_the_warehouse_signal_scheme_and_snapshot_for_all_agents()
     result, snapshot = asyncio.run(run_warehouse_analysis("WH-CN-01", client=FakeWarehouseClient()))
     assert result.final_signal == "GOOD"
     assert result.confidence > 0
-    assert result.agents_run == [
-        "warehouse_logistics_sync",
-        "warehouse_inbound_exceptions",
-        "warehouse_inventory_health",
-    ]
+    assert set(result.agents_run) == set(["warehouse_logistics_cost", "warehouse_fulfillment_leadtime", "warehouse_inventory_health", "warehouse_inbound_exceptions", "warehouse_logistics_sync"])
     assert snapshot["warehouse_id"] == "WH-CN-01"

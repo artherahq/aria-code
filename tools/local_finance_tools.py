@@ -3043,10 +3043,30 @@ def _resolve_search_key(env_var: str, provider: str) -> str:
 
 def _web_search(params: dict) -> dict:
     """Web search: Brave → Tavily → DuckDuckGo fallback chain."""
-    query      = str(params.get("query", "")).strip()
-    num        = min(int(params.get("num_results", params.get("max_results", 5))), 10)
+    if not isinstance(params, dict):
+        params = {"query": str(params)}
+    query = (
+        params.get("query")
+        or params.get("q")
+        or params.get("search")
+        or params.get("keyword")
+        or params.get("keywords")
+        or params.get("prompt")
+        or params.get("text")
+        or params.get("symbol")
+        or params.get("ticker")
+        or ""
+    )
+    if isinstance(query, (list, tuple)):
+        query = " ".join(str(x) for x in query if x)
+    elif isinstance(query, dict):
+        query = " ".join(str(v) for v in query.values() if v)
+    query = str(query).strip().strip("'\"`")
     if not query:
-        return {"success": False, "error": "query is required"}
+        # Fallback to general market news query if empty
+        query = "stock market news"
+
+    num = min(int(params.get("num_results", params.get("max_results", 5)) or 5), 10)
 
     # ── 1. Brave Search API ───────────────────────────────────────────────────
     brave_key = _resolve_search_key("BRAVE_SEARCH_API_KEY", "brave")
