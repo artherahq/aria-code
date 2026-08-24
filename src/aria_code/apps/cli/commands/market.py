@@ -242,6 +242,16 @@ def route_top_level_text(user_input: str, available_commands: set[str]) -> Route
     stripped = user_input.strip()
     if not stripped or stripped.startswith("/"):
         return None
+        
+    low = stripped.lower()
+    
+    # ── Auto-Intercept SWE / Coding Intents ─────────────────
+    # If the user asks for coding tasks, instantly route to orchestrator (/route)
+    # allowing zero-friction natural language without typing /route.
+    swe_keywords = ["修 bug", "写代码", "写个", "写一个", "脚本", "bug", "代码", "报错", "前端", "后端", "测试", "项目", "github", "issue", "截图", "页面"]
+    if any(k in low for k in swe_keywords) and len(stripped) > 5:
+        if "/route" in available_commands:
+            return RoutedCommand(command="/route", args=stripped)
     low = stripped.lower()
     compact_low = low.replace(" ", "")
     low_words = {part.strip(".,，。:：;；") for part in low.split()}
