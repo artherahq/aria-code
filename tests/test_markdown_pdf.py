@@ -4,7 +4,7 @@ import pytest
 
 pytest.importorskip("markdown")
 
-from markdown_pdf import (  # noqa: E402
+from aria_code.markdown_pdf import (  # noqa: E402
     detect_lang,
     register_markdown_pdf_tools,
     render_markdown_html,

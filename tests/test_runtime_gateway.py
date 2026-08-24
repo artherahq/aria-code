@@ -6,8 +6,8 @@ are returned; provider errors surface; cancellation is reported; the final-text
 fallback works for non-streaming providers.
 """
 
-from runtime import ToolExecutor
-from runtime.gateway import TurnResult, run_turn
+from aria_code.runtime import ToolExecutor
+from aria_code.runtime.gateway import TurnResult, run_turn
 
 
 def _executor():

@@ -5,8 +5,8 @@ from rich import box
 from rich.console import Console
 
 import ui.robot as robot
-from ui.banner import render_full_banner
-from ui.robot import ROBOT_ROW_COUNT, RobotState, get_robot_row, get_status_dot, set_robot_state
+from aria_code.ui.banner import render_full_banner
+from aria_code.ui.robot import ROBOT_ROW_COUNT, RobotState, get_robot_row, get_status_dot, set_robot_state
 
 
 class RobotBannerTests(unittest.TestCase):

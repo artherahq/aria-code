@@ -1,6 +1,6 @@
 import os
 
-from apps.cli.bootstrap import default_config, disable_broken_proxy, load_aria_env
+from aria_code.apps.cli.bootstrap import default_config, disable_broken_proxy, load_aria_env
 
 
 def test_load_aria_env_does_not_override_existing(monkeypatch, tmp_path):

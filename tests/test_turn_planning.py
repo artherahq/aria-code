@@ -1,6 +1,6 @@
 import unittest
 
-from apps.cli.turn_planning import (
+from aria_code.apps.cli.turn_planning import (
     DECOMP_THRESHOLD,
     is_complex_task,
     round_budget_for,

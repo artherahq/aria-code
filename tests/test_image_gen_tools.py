@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from tools.image_gen_tools import (
+from aria_code.tools.image_gen_tools import (
     IMAGE_TOOL_SCHEMAS,
     register_image_tools,
     tool_edit_image,

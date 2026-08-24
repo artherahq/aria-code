@@ -8,7 +8,7 @@ pdf_report.py 那边的风险点是结构化的信号列（🟢/🔴等，有清
 （_agent_card 的 analysis/key_points、synthesis），模型写报告时经常会
 自己夹带 emoji，没有任何"结构化替代"可言，直接在这唯一的出口处剥掉即可。
 """
-from report_generator import _md_to_html, _strip_emoji
+from aria_code.report_generator import _md_to_html, _strip_emoji
 
 
 def test_strip_emoji_removes_common_llm_decoration():

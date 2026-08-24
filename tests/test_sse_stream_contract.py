@@ -1,4 +1,4 @@
-from apps.cli.providers.llm.sse_stream import build_chat_payload
+from aria_code.apps.cli.providers.llm.sse_stream import build_chat_payload
 
 
 def test_react_gateway_payload_uses_shared_conversation_contract():

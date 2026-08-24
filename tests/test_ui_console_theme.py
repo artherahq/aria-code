@@ -2,7 +2,7 @@ from rich.console import Console
 
 from unittest.mock import patch
 
-from ui.console import _build_rich_theme, _detect_terminal_theme, make_markdown
+from aria_code.ui.console import _build_rich_theme, _detect_terminal_theme, make_markdown
 
 
 def test_dark_markdown_theme_avoids_black_inline_code_and_blue_purple_accents():

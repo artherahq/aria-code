@@ -11,7 +11,7 @@ from __future__ import annotations
 import importlib.util
 import pytest
 
-from packages.aria_mcp.server import (
+from aria_code.packages.aria_mcp.server import (
     TOOLS,
     _call_allocation_chart,
     _call_broker_confirm_order,

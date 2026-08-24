@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 import brokers.config as config_mod
-from brokers.config import (
+from aria_code.brokers.config import (
     add_broker_config,
     is_chat_confirm_enabled,
     set_chat_confirm_enabled,

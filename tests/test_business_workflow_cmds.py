@@ -1,6 +1,6 @@
 import pytest
 
-from apps.cli.commands.business_workflow_cmds import BusinessWorkflowCommandsMixin
+from aria_code.apps.cli.commands.business_workflow_cmds import BusinessWorkflowCommandsMixin
 
 
 class _Terminal:

@@ -1,4 +1,4 @@
-from apps.cli.prompts.system_prompts import (
+from aria_code.apps.cli.prompts.system_prompts import (
     build_finance_prompt,
     build_prefetched_analysis_prompt,
     build_response_style_rule,

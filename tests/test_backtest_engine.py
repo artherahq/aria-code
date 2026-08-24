@@ -8,7 +8,7 @@ _CLI_DIR = str(pathlib.Path(__file__).parents[1])
 if _CLI_DIR not in sys.path:
     sys.path.insert(0, _CLI_DIR)
 
-from domain.backtest_engine import (  # noqa: E402
+from aria_code.domain.backtest_engine import (  # noqa: E402
     Bar,
     BacktestEngine,
     BuyHoldStrategy,

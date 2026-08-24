@@ -3,7 +3,7 @@
 import json
 import pytest
 from pathlib import Path
-from apps.cli.session_store import SessionManager
+from aria_code.apps.cli.session_store import SessionManager
 
 
 @pytest.fixture()

@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from clients import canva_client
+from aria_code.clients import canva_client
 
 
 def test_autofill_design_request_includes_required_type_field():

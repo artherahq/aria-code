@@ -18,7 +18,7 @@ import asyncio
 
 import pytest
 
-from agents.sports.football_agent import FootballAgent
+from aria_code.agents.sports.football_agent import FootballAgent
 
 
 def _run(coro):

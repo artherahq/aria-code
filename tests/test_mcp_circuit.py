@@ -8,8 +8,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from packages.aria_mcp.circuit import ServerCircuit
-from mcp_client import MCPToolRegistry
+from aria_code.packages.aria_mcp.circuit import ServerCircuit
+from aria_code.mcp_client import MCPToolRegistry
 
 
 # ── pure state machine ────────────────────────────────────────────────────────

@@ -9,7 +9,7 @@ from prompt_toolkit.layout.containers import Window
 from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.layout.processors import TransformationInput
 
-from ui.input_box import (
+from aria_code.ui.input_box import (
     INPUT_MAX_HEIGHT,
     PanelInputConfig,
     PlaceholderProcessor,

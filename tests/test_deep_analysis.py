@@ -6,18 +6,18 @@ import time
 import unittest
 from pathlib import Path
 
-from agents.base import AgentResult
-from agents.deep.calibration_loop import (
+from aria_code.agents.base import AgentResult
+from aria_code.agents.deep.calibration_loop import (
     PredictionLog, correctness, evaluate_due, evaluate_from_ledger)
-from agents.deep.deepen import deepen_agentic
-from agents.deep.themes import group_by_theme, theme_of
-from agents.deep.quant_fusion import (
+from aria_code.agents.deep.deepen import deepen_agentic
+from aria_code.agents.deep.themes import group_by_theme, theme_of
+from aria_code.agents.deep.quant_fusion import (
     gather_quant_evidence, calibrate_confidence, agreement, CalibrationStore,
 )
-from agents.deep.critic import critique, soften_signal
-from agents.deep.deepen import deepen
-from agents.deep.tiers import render_brief, render_standard, render_deep
-from agents.deep.pipeline import DeepAnalysisPipeline
+from aria_code.agents.deep.critic import critique, soften_signal
+from aria_code.agents.deep.deepen import deepen
+from aria_code.agents.deep.tiers import render_brief, render_standard, render_deep
+from aria_code.agents.deep.pipeline import DeepAnalysisPipeline
 
 
 def _r(agent, signal, conf, pts=None, err=None):

@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 from rich.console import Console
 
-from ui.render.responsive import (
+from aria_code.ui.render.responsive import (
     StackedRecord,
     render_stacked_records,
     select_structured_layout,

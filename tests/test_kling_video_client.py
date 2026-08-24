@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import jwt
 
-from clients import kling_video_client as kvc
+from aria_code.clients import kling_video_client as kvc
 
 
 def test_mint_jwt_payload_shape():

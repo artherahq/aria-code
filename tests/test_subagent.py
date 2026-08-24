@@ -1,7 +1,7 @@
 """Tests for runtime.subagent background task system."""
 
 import pytest
-from runtime.subagent import (
+from aria_code.runtime.subagent import (
     _TASKS,
     SubagentTask,
     tool_spawn_task,
@@ -12,7 +12,7 @@ from runtime.subagent import (
     register_runner,
     restore_tasks,
 )
-from runtime.task_ledger import TaskLedger
+from aria_code.runtime.task_ledger import TaskLedger
 
 
 @pytest.fixture(autouse=True)

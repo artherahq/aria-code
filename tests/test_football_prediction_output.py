@@ -1,10 +1,10 @@
-from clients.football_data_client import (
+from aria_code.clients.football_data_client import (
     football_prediction_quality,
     format_prediction_block,
     predict_match,
     team_display_name,
 )
-from apps.cli.providers.llm.ollama_stream import _recent_sports_quant_context
+from aria_code.apps.cli.providers.llm.ollama_stream import _recent_sports_quant_context
 
 
 def test_predict_match_most_likely_uses_top_scoreline_not_rounded_lambdas():

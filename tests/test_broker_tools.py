@@ -2,7 +2,7 @@
 tests/test_broker_tools.py — Tests for Broker Portfolio Tool
 """
 
-from tools.broker_tools import tool_get_broker_portfolio, register_broker_tools
+from aria_code.tools.broker_tools import tool_get_broker_portfolio, register_broker_tools
 
 
 def test_broker_portfolio_tool_ibkr():

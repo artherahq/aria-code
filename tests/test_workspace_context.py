@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from workspace_context import (
+from aria_code.workspace_context import (
     context_file_path,
     load_workspace_context,
     normalize_workspace_context,

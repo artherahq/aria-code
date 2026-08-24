@@ -3,7 +3,7 @@ import asyncio
 import httpx
 import pytest
 
-from clients.warehouse_erp_client import (
+from aria_code.clients.warehouse_erp_client import (
     WarehouseERPClient,
     WarehouseERPConfigurationError,
     WarehouseERPRequestError,

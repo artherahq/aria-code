@@ -17,8 +17,8 @@ if _CLI_DIR not in sys.path:
 
 from rich.console import Console  # noqa: E402
 
-from ui.render.finance import render_finance_result  # noqa: E402
-from ui.render.output import FINANCE_TOOL_NAMES  # noqa: E402
+from aria_code.ui.render.finance import render_finance_result  # noqa: E402
+from aria_code.ui.render.output import FINANCE_TOOL_NAMES  # noqa: E402
 
 
 def _render(tool_name, result, *, width=80):

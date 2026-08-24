@@ -1,4 +1,4 @@
-from apps.cli.finance_service_catalog import classify_finance_market, market_service_summary
+from aria_code.apps.cli.finance_service_catalog import classify_finance_market, market_service_summary
 
 
 def test_market_service_catalog_routes_each_major_market():

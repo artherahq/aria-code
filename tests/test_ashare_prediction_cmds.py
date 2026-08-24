@@ -3,7 +3,7 @@ from datetime import date
 
 import pytest
 
-from apps.cli.commands.ashare_prediction_cmds import (
+from aria_code.apps.cli.commands.ashare_prediction_cmds import (
     build_prediction_service,
     load_universe_file,
     parse_ashare_predict_args,

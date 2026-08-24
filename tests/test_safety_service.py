@@ -5,7 +5,7 @@ the three underlying domains can't drift apart from the facade."""
 
 import unittest
 
-from safety import SafetyService
+from aria_code.safety import SafetyService
 
 
 class CommandPolicyTests(unittest.TestCase):

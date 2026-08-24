@@ -5,13 +5,13 @@ tests/test_logistics_and_finance_agents.py — Tests for Logistics & Corporate F
 import asyncio
 import json
 import pytest
-from agents.registry import get_registry
-from agents.warehouse.logistics_cost import LogisticsCostOptimizerAgent
-from agents.warehouse.fulfillment_leadtime import FulfillmentLeadTimeAgent
-from agents.financial.corporate_finance import CorporateFinanceAgent
-from agents.financial.cashflow_burn import CashflowBurnRateAgent
-from tools.logistics_tools import tool_analyze_logistics_data
-from tools.enterprise_finance_tools import tool_analyze_financial_statements
+from aria_code.agents.registry import get_registry
+from aria_code.agents.warehouse.logistics_cost import LogisticsCostOptimizerAgent
+from aria_code.agents.warehouse.fulfillment_leadtime import FulfillmentLeadTimeAgent
+from aria_code.agents.financial.corporate_finance import CorporateFinanceAgent
+from aria_code.agents.financial.cashflow_burn import CashflowBurnRateAgent
+from aria_code.tools.logistics_tools import tool_analyze_logistics_data
+from aria_code.tools.enterprise_finance_tools import tool_analyze_financial_statements
 
 
 def test_enterprise_agents_registry_discovery():

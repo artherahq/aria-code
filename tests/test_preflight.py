@@ -1,4 +1,4 @@
-from apps.cli.preflight import (
+from aria_code.apps.cli.preflight import (
     build_install_plan,
     build_intent_preflight,
     format_preflight_plain,

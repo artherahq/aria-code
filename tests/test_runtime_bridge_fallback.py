@@ -5,7 +5,7 @@ These cover the cloud→Ollama fallback DECISIONS the runtime path needs to matc
 providers, no network. Async tests run under pytest-asyncio (asyncio_mode=auto).
 """
 
-from apps.cli.providers.runtime_bridge import run_with_fallback
+from aria_code.apps.cli.providers.runtime_bridge import run_with_fallback
 
 
 def _ok(text: str) -> dict:

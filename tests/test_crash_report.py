@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 
-from runtime.crash_report import recent_crashes, redact, write_crash_report
+from aria_code.runtime.crash_report import recent_crashes, redact, write_crash_report
 
 
 def test_obvious_key_shapes_are_redacted():

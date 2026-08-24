@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 
-MODULE_PATH = Path(__file__).resolve().parents[1] / "packages" / "aria_services" / "provider_health.py"
+MODULE_PATH = Path(__file__).resolve().parents[1] / "src" / "aria_code" / "packages" / "aria_services" / "provider_health.py"
 SPEC = importlib.util.spec_from_file_location("aria_provider_health", MODULE_PATH)
 assert SPEC is not None and SPEC.loader is not None
 MODULE = importlib.util.module_from_spec(SPEC)

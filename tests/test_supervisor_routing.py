@@ -1,7 +1,7 @@
 import asyncio
 import json
 
-from agents.supervisor import SupervisorAgent
+from aria_code.agents.supervisor import SupervisorAgent
 
 
 def test_supervisor_uses_only_registered_agents_when_no_llm_response(monkeypatch):

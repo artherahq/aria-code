@@ -183,91 +183,48 @@ mindmap
 
 ## 🚀 Quick Start
 
-### Option 0: Download the binary (no Python/Node install needed)
+### Option 1: npm (Claude Code style — Recommended)
 
-Every tagged release publishes standalone binaries for macOS (arm64), Windows (x64), and Linux (x64) — download from the [Releases page](https://github.com/artherahq/aria-code/releases), no Python or Node.js required:
-
-```bash
-# macOS / Linux
-chmod +x aria-code-macos-arm64   # or aria-code-linux-x64
-./aria-code-macos-arm64
-```
-```powershell
-# Windows
-.\aria-code-windows-x64.exe
-```
-
-> The macOS build is signed + notarized only once `MACOS_CERTIFICATE_P12_BASE64` and the Apple notarization secrets are configured in repo Settings → Secrets (see `.github/workflows/build-native-binaries.yml`) — without them, CI still builds and smoke-tests successfully but produces an **unsigned** binary that macOS Gatekeeper will refuse to run. Until those secrets are added, get a signed macOS build by running `scripts/build_native_binary.sh --notarize` locally on a machine with the real Developer ID cert imported. Windows/Linux binaries need no signing step and run as-is.
-
-Each release also publishes a standalone **`aria-code-mcp-*`** binary — the MCP server (see [Expose aria-code to other MCP clients](#expose-aria-code-to-other-mcp-clients) below) with no Python install needed:
-
-```bash
-claude mcp add aria-code -- /path/to/aria-code-mcp-macos-arm64   # or -linux-x64 / -windows-x64.exe
-```
-
-### Option 1: Bootstrap (fresh Mac / Linux — recommended)
-
-No Node.js, Python, or Xcode required. One command handles everything:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/artherahq/aria-code/aria-code/bootstrap.sh | bash
-```
-
-What it does automatically:
-- ✅ Installs **Xcode Command Line Tools** (macOS) — provides `git`, `make`, compiler
-- ✅ Installs **Homebrew** (macOS package manager)
-- ✅ Installs **Python 3.12** if not present
-- ✅ Clones the repo into `~/aria-code`
-- ✅ Runs `install.sh` to create venv, install all packages, and register the `aria-code` command
-
-> Already cloned the repo? Just run `bash bootstrap.sh` from inside the folder.
-
-### Option 2: npm (requires Node.js ≥ 16)
-
-If you already have [Node.js](https://nodejs.org) installed, the npm installer handles Python, Xcode CLT, and Homebrew automatically:
+If you have [Node.js](https://nodejs.org) (≥ 16) installed, get started in one command:
 
 ```bash
 npm install -g @artheras/aria-code
 aria-code
 ```
 
-What happens under the hood:
-- ✅ Detects / installs Xcode Command Line Tools (macOS)
-- ✅ Detects / installs Homebrew (macOS)
-- ✅ Detects / installs Python 3.12 if missing
-- ✅ Clones Aria Code into `~/.aria-code/`
-- ✅ Uses **uv** to create a venv and install dependencies from `pyproject.toml` (falls back to pip)
+Update anytime: `npm update -g @artheras/aria-code`
 
-Update: `npm update -g @artheras/aria-code`
+### Option 2: Bootstrap (One-liner for fresh Mac / Linux)
 
-Repair if broken: `npm explore -g @artheras/aria-code -- npm run repair`
-
-### Option 3: Git clone
-
-`install.sh` is **uv-powered** — it installs [uv](https://docs.astral.sh/uv/) if
-missing and lets uv download a managed Python automatically, so you don't need
-Python pre-installed. Dependencies come from `pyproject.toml`.
+No Node.js, Python, or Xcode required. One command automatically sets up everything:
 
 ```bash
-git clone https://github.com/artherahq/aria-code.git
-cd aria-code
-bash install.sh              # full install (recommended)
-# bash install.sh --core     # slim core only — add features later
-# bash install.sh --dev      # everything incl. brokers + dev tools
+curl -fsSL https://raw.githubusercontent.com/artherahq/aria-code/main/bootstrap.sh | bash
 ```
 
-Add to PATH (if prompted):
+### Option 3: PyPI (Python Package)
+
+Aria Code is published on PyPI — install into your Python 3.10 ~ 3.13 environment:
 
 ```bash
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc
+uv tool install "aria-code[full]"      # isolated, fast (recommended)
+# or standard pip:
+pip install "aria-code[full]"          # full version with all data sources
 ```
 
-### Option 4: Windows
+### Option 4: Git Clone & Source Install
 
-```powershell
+```bash
+# macOS / Linux
 git clone https://github.com/artherahq/aria-code.git
 cd aria-code
-.\install.ps1
+bash install.sh
+
+# Windows
+git clone https://github.com/artherahq/aria-code.git
+cd aria-code
+powershell -ExecutionPolicy Bypass -File .\install.ps1
+```
 ```
 
 ### Option 5: PyPI (pip / uv / pipx)

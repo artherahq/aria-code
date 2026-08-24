@@ -1,6 +1,6 @@
-from agents.base import BaseAgent
-from agents.code_review import CodeReviewAgent
-from packages.adk_bridge import CodeReviewTools
+from aria_code.agents.base import BaseAgent
+from aria_code.agents.code_review import CodeReviewAgent
+from aria_code.packages.adk_bridge import CodeReviewTools
 
 
 def test_time_sensitive_agent_policy_has_no_hardcoded_market_claims():

@@ -5,13 +5,13 @@ import subprocess
 
 import pytest
 
-from packages.aria_skills.catalog import (
+from aria_code.packages.aria_skills.catalog import (
     CatalogSource,
     catalog_clone_command,
     install_catalog,
     parse_catalog_source,
 )
-from packages.aria_skills.loader import skill_tree_sha256
+from aria_code.packages.aria_skills.loader import skill_tree_sha256
 
 
 @pytest.mark.parametrize(

@@ -8,7 +8,7 @@ import shutil
 import pytest
 from pathlib import Path
 
-from runtime.lsp import (
+from aria_code.runtime.lsp import (
     server_for,
     available_servers,
     _encode,

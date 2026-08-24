@@ -5,9 +5,9 @@ except ModuleNotFoundError:  # Python < 3.11
 
 import shutil
 
-import doctor
-from doctor import analyze_python_drift, format_doctor_plain, integration_checks, npm_runtime_checks, provider_health_checks, provider_health_summary, run_doctor
-from packages.aria_services.provider_health import summarize_provider_health
+import aria_code.doctor
+from aria_code.doctor import analyze_python_drift, format_doctor_plain, integration_checks, npm_runtime_checks, provider_health_checks, provider_health_summary, run_doctor
+from aria_code.packages.aria_services.provider_health import summarize_provider_health
 
 
 def test_run_doctor_reports_core_checks(monkeypatch, tmp_path):

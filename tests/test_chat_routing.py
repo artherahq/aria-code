@@ -1,6 +1,6 @@
 import unittest
 
-from apps.cli.providers.chat_routing import (
+from aria_code.apps.cli.providers.chat_routing import (
     first_round_route,
     force_backend,
     is_cloud_model,

@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from apps.channels.intake import analyze_alert_via_gateway, should_refuse_open_intake
+from aria_code.apps.channels.intake import analyze_alert_via_gateway, should_refuse_open_intake
 
 
 class TestOpenIntakePolicy:

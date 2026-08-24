@@ -1,5 +1,5 @@
-from packages.aria_services.cache import DistributedCacheManager
-from packages.aria_services.provider_health import classify_provider_error
+from aria_code.packages.aria_services.cache import DistributedCacheManager
+from aria_code.packages.aria_services.provider_health import classify_provider_error
 
 
 def test_unclassified_provider_errors_do_not_retain_sensitive_text():

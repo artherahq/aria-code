@@ -8,9 +8,9 @@ from pathlib import Path
 
 import pytest
 
-from brokers.paper_broker import PaperBroker
-from brokers.registry import BrokerRegistry
-from brokers.trading import (
+from aria_code.brokers.paper_broker import PaperBroker
+from aria_code.brokers.registry import BrokerRegistry
+from aria_code.brokers.trading import (
     OrderIntent,
     build_order_preview,
     global_dry_run,

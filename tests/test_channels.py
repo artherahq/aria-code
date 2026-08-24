@@ -7,8 +7,8 @@ will hand to the gateway."""
 import unittest
 from unittest import mock
 
-from apps.channels import CHANNEL_TASK_SCHEMA, channel_map, default_channels, enabled_channels
-from apps.channels.tradingview import alert_to_task
+from aria_code.apps.channels import CHANNEL_TASK_SCHEMA, channel_map, default_channels, enabled_channels
+from aria_code.apps.channels.tradingview import alert_to_task
 
 
 class RegistryTests(unittest.TestCase):

@@ -5,7 +5,7 @@ from datetime import datetime
 
 import pandas as pd
 
-from artifacts import (
+from aria_code.artifacts import (
     artifact_dir,
     artifact_root,
     artifact_summary_all,
@@ -23,8 +23,8 @@ from artifacts import (
     user_projects_dir,
     write_artifact_metadata,
 )
-from data_cleaner import CleanResult
-from report_generator import _build_html, _fetch_report_data_sync, generate_price_chart, generate_report
+from aria_code.data_cleaner import CleanResult
+from aria_code.report_generator import _build_html, _fetch_report_data_sync, generate_price_chart, generate_report
 
 
 def test_artifact_dir_uses_per_user_aria_code_root(monkeypatch, tmp_path: Path):

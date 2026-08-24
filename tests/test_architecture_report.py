@@ -1,7 +1,7 @@
 import unittest
 
-from apps.cli.commands.diagnostic_ops_cmds import format_architecture_report
-from packages.aria_core import architecture_status_counts, list_architecture_layers
+from aria_code.apps.cli.commands.diagnostic_ops_cmds import format_architecture_report
+from aria_code.packages.aria_core import architecture_status_counts, list_architecture_layers
 
 
 class ArchitectureReportTests(unittest.TestCase):

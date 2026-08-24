@@ -27,8 +27,8 @@ if _CLI_DIR not in sys.path:
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 from conftest import FakeSSESession, FakeSSEResp, make_sse_mock  # noqa: E402
 
-from providers.llm.base import Message, ProviderConfig
-from providers.llm.openai_compat import SiliconFlowProvider, DeepSeekProvider
+from aria_code.providers.llm.base import Message, ProviderConfig
+from aria_code.providers.llm.openai_compat import SiliconFlowProvider, DeepSeekProvider
 
 
 # ── 辅助函数 ──────────────────────────────────────────────────────────────────

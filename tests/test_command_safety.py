@@ -1,7 +1,7 @@
 import unittest
 
-from command_safety import evaluate_command_policy, normalize_command
-from plan_utils import parse_plan_steps
+from aria_code.command_safety import evaluate_command_policy, normalize_command
+from aria_code.plan_utils import parse_plan_steps
 
 
 class CommandSafetyTests(unittest.TestCase):

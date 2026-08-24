@@ -1,7 +1,7 @@
 """Tests for apps.cli.plan_mode interactive plan mode."""
 
 import pytest
-from apps.cli.plan_mode import PlanModeState, _format_params
+from aria_code.apps.cli.plan_mode import PlanModeState, _format_params
 
 
 class TestPlanModeState:

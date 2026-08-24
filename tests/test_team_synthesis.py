@@ -1,4 +1,4 @@
-from agents.financial.synthesis import _template_synthesis
+from aria_code.agents.financial.synthesis import _template_synthesis
 
 
 def test_template_synthesis_uses_real_market_context_without_no_real_data():

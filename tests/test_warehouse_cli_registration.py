@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-import aria_cli
+import aria_code.aria_cli
 
 
 def test_warehouse_command_is_available_in_the_slash_command_registry():

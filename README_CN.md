@@ -128,73 +128,61 @@ $ aria-code
 
 ## 🚀 快速开始
 
-### 方式一：Bootstrap 一键安装（新 Mac / Linux 推荐）
+### 方式一：npm 安装（推荐 — 与 Claude Code 一致）
 
-全新电脑无需任何前置条件，一条命令搞定：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/artherahq/aria-code/aria-code/bootstrap.sh | bash
-```
-
-自动完成以下步骤：
-- ✅ 安装 **Xcode 命令行工具**（macOS）— 提供 git、make、编译器
-- ✅ 安装 **Homebrew**（macOS 包管理器）
-- ✅ 安装 **Python 3.12**（如未安装）
-- ✅ 克隆仓库到 `~/aria-code`
-- ✅ 运行 `install.sh` 创建虚拟环境、安装依赖、注册 `aria-code` 命令
-
-> 已经克隆了仓库？在文件夹内直接运行 `bash bootstrap.sh` 即可。
-
-### 方式二：npm 安装（需 Node.js ≥ 16）
-
-已安装 [Node.js](https://nodejs.org) 的用户，npm 安装器会自动处理 Python、Xcode CLT 和 Homebrew：
+已安装 [Node.js](https://nodejs.org)（≥ 16）的用户，一条命令搞定：
 
 ```bash
 npm install -g @artheras/aria-code
 aria-code
 ```
 
-自动完成的步骤：
-- ✅ 检测 / 安装 Xcode 命令行工具（macOS）
-- ✅ 检测 / 安装 Homebrew（macOS）
-- ✅ 未找到 Python 时自动安装 Python 3.12
-- ✅ 克隆 Aria Code 到 `~/.aria-code/`
-- ✅ 创建 venv 并安装所有 Python 依赖
+随时更新：`npm update -g @artheras/aria-code`
 
-更新：`npm update -g @artheras/aria-code`
+### 方式二：Bootstrap 一键安装（全新 Mac / Linux 推荐）
 
-修复：`npm explore -g @artheras/aria-code -- npm run repair`
-
-### 方式三：Git Clone（已安装 Python 3.10+）
+全新电脑无需任何前置条件，一条命令自动配置环境：
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/artherahq/aria-code/main/bootstrap.sh | bash
+```
+
+### 方式三：PyPI 安装（Python 生态）
+
+支持 Python 3.10 ~ 3.13 环境：
+
+```bash
+uv tool install "aria-code[full]"      # 推荐：隔离且快速
+pip install "aria-code[full]"          # 全功能版（包含 A股/加密货币/图表等）
+```
+
+### 方式四：Git Clone 源码安装
+
+```bash
+# macOS / Linux
 git clone https://github.com/artherahq/aria-code.git
-cd Aria-Code
+cd aria-code
 bash install.sh
+
+# Windows
+git clone https://github.com/artherahq/aria-code.git
+cd aria-code
+powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-添加到 PATH（如有提示）：
+### 方式五：直接下载独立二进制（免运行环境）
+
+从 [Releases 页面](https://github.com/artherahq/aria-code/releases) 下载对应系统的单文件二进制：
 
 ```bash
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc
+# macOS / Linux
+chmod +x aria-code-macos-arm64
+xattr -d com.apple.quarantine aria-code-macos-arm64   # 如遇 Gatekeeper 拦截执行此行
+./aria-code-macos-arm64
 ```
-
-### 方式三：Windows
-
 ```powershell
-git clone https://github.com/artherahq/aria-code.git
-cd Aria-Code
-.\install.ps1
-```
-
-### 方式四：直接运行（无需安装）
-
-```bash
-git clone https://github.com/artherahq/aria-code.git
-cd Aria-Code
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-python3 aria_cli.py
+# Windows
+.\aria-code-windows-x64.exe
 ```
 
 ### 第一步：安装 Ollama（本地大模型 — 免费，完全离线）

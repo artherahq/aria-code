@@ -7,7 +7,7 @@ import base64
 import pytest
 from unittest.mock import MagicMock, patch
 
-from clients import openai_image_client as oic
+from aria_code.clients import openai_image_client as oic
 
 # 可选依赖 guard：这些用例调用的代码路径需要 PIL（files extra）。
 # CI 的 test workflow 只装 .[cn,dev]，其注释明确写着"没装 extra 的可选功能

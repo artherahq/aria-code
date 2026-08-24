@@ -25,8 +25,8 @@ _CLI_DIR = str(pathlib.Path(__file__).parents[2])
 if _CLI_DIR not in sys.path:
     sys.path.insert(0, _CLI_DIR)
 
-from providers.llm.base import Message
-from providers.llm.registry import _build_cfg, stream_cloud_fallback, _PROVIDER_CLASSES
+from aria_code.providers.llm.base import Message
+from aria_code.providers.llm.registry import _build_cfg, stream_cloud_fallback, _PROVIDER_CLASSES
 
 
 # ── 辅助 ──────────────────────────────────────────────────────────────────────

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from providers.llm.autoconfig import (
+from aria_code.providers.llm.autoconfig import (
     Finding,
     probe_environment,
     render_providers_yaml,

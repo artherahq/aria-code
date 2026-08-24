@@ -1,4 +1,4 @@
-from apps.cli.market_universe import (
+from aria_code.apps.cli.market_universe import (
     MarketSymbol,
     ambiguous_market_candidates,
     looks_like_unresolved_market_name,

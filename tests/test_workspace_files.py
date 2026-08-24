@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from workspace import WorkspaceFiles, WorkspaceSecurity
+from aria_code.workspace import WorkspaceFiles, WorkspaceSecurity
 
 
 class WorkspaceFilesTests(unittest.TestCase):

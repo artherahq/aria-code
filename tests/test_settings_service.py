@@ -8,7 +8,7 @@ import unittest
 import tempfile
 from pathlib import Path
 
-from packages.aria_services.settings import NEVER_PERSIST, SettingsService
+from aria_code.packages.aria_services.settings import NEVER_PERSIST, SettingsService
 
 
 def _svc(tmp, defaults=None, **kw):

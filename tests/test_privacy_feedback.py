@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from privacy import FeedbackRecord, FeedbackStore, PrivacySettings
+from aria_code.privacy import FeedbackRecord, FeedbackStore, PrivacySettings
 
 
 class PrivacyFeedbackTests(unittest.TestCase):

@@ -1,0 +1,51 @@
+version: '3.9'
+services:
+  relay-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.relay
+    image: aria-relay-server:latest
+    restart: unless-stopped
+    ports:
+    - 8765:8765
+    volumes:
+    - relay-data:/data
+    environment:
+    - FEISHU_APP_ID=${FEISHU_APP_ID}
+    - FEISHU_APP_SECRET=${FEISHU_APP_SECRET}
+    - RELAY_SECRET=${RELAY_SECRET:-}
+    - DB_PATH=/data/relay.db
+    - MESSAGE_TIMEOUT=90
+    - PORT=8765
+    networks:
+    - aria-net
+    healthcheck:
+      test:
+      - CMD
+      - curl
+      - -f
+      - http://localhost:8765/status
+      interval: 30s
+      timeout: 5s
+      retries: 3
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+    - 80:80
+    - 443:443
+    volumes:
+    - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    - caddy-data:/data
+    - caddy-config:/config
+    networks:
+    - aria-net
+    depends_on:
+    - relay-server
+volumes:
+  relay-data: null
+  caddy-data: null
+  caddy-config: null
+networks:
+  aria-net:
+    driver: bridge

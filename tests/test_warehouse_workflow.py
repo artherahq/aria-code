@@ -1,6 +1,6 @@
 import asyncio
 
-from agents.warehouse.workflow import run_warehouse_analysis
+from aria_code.agents.warehouse.workflow import run_warehouse_analysis
 
 
 class FakeWarehouseClient:

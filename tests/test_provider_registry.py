@@ -26,7 +26,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).parent))
 from conftest import make_providers_file
 
 import providers.llm.registry as _reg
-from providers.llm.registry import (
+from aria_code.providers.llm.registry import (
     _DEFAULT_FALLBACK_CHAIN,
     _PROVIDER_CLASSES,
     _build_cfg,

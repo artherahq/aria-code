@@ -6,7 +6,7 @@ import stat
 
 import pytest
 
-from runtime import CheckpointConflictError, CheckpointStore, RunStatus, RunStore
+from aria_code.runtime import CheckpointConflictError, CheckpointStore, RunStatus, RunStore
 
 
 @pytest.fixture

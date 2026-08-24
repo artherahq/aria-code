@@ -1,4 +1,4 @@
-from packages.aria_services.context import ContextPolicy, ContextService, build_context_service
+from aria_code.packages.aria_services.context import ContextPolicy, ContextService, build_context_service
 
 
 def test_context_service_decides_from_incoming_pressure():

@@ -2,8 +2,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from mcp_client import MCPToolRegistry, model_safe_tool_name
-from runtime.tool_executor import ToolExecutor
+from aria_code.mcp_client import MCPToolRegistry, model_safe_tool_name
+from aria_code.runtime.tool_executor import ToolExecutor
 
 
 def test_model_safe_tool_name_uses_provider_compatible_identifier():

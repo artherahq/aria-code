@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 
-from data_service import DataService
-from packages.aria_services.provider_health import ProviderHealthRegistry, classify_provider_error
+from aria_code.data_service import DataService
+from aria_code.packages.aria_services.provider_health import ProviderHealthRegistry, classify_provider_error
 
 
 class _MarketClient:

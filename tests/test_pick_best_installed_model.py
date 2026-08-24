@@ -6,7 +6,7 @@ path (a bug here silently changes which model actually answers the user).
 
 import unittest
 
-from aria_cli import _pick_best_installed_model
+from aria_code.aria_cli import _pick_best_installed_model
 
 
 class PickBestInstalledModelTests(unittest.TestCase):

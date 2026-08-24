@@ -1,8 +1,8 @@
 import asyncio
 
-from agents.registry import get_registry
-from agents.signal_scheme import WAREHOUSE_SCHEME
-from agents.warehouse import (
+from aria_code.agents.registry import get_registry
+from aria_code.agents.signal_scheme import WAREHOUSE_SCHEME
+from aria_code.agents.warehouse import (
     InboundExceptionAgent,
     InventoryHealthAgent,
     LogisticsSyncAgent,

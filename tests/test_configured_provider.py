@@ -1,8 +1,8 @@
 import pytest
 
-from apps.cli.providers.base import ConfiguredProvider, LLMDone, LLMToken
-from providers.llm.openai_compat import chat_completions_url
-from apps.cli.providers.chat_routing import normalize_provider_name
+from aria_code.apps.cli.providers.base import ConfiguredProvider, LLMDone, LLMToken
+from aria_code.providers.llm.openai_compat import chat_completions_url
+from aria_code.apps.cli.providers.chat_routing import normalize_provider_name
 
 
 @pytest.mark.asyncio

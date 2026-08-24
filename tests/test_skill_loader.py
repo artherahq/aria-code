@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from packages.aria_skills.loader import (
+from aria_code.packages.aria_skills.loader import (
     activate_external_skills,
     build_skill_prompt_block,
     discover_external_skills,

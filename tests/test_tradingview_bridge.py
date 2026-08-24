@@ -1,6 +1,6 @@
 import sqlite3
 
-from apps.cli.tradingview_bridge import (
+from aria_code.apps.cli.tradingview_bridge import (
     build_tradingview_order_preview,
     enqueue_tradingview_alert,
     export_pine_strategy,
@@ -9,7 +9,7 @@ from apps.cli.tradingview_bridge import (
     tradingview_symbol,
     tradingview_url,
 )
-from brokers.paper_broker import PaperBroker
+from aria_code.brokers.paper_broker import PaperBroker
 
 
 def _patch_trade_paths(monkeypatch, tmp_path):

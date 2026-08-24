@@ -3,7 +3,7 @@ import asyncio
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from runtime import AgentTurnState, RuntimeTrace, ToolExecutor
+from aria_code.runtime import AgentTurnState, RuntimeTrace, ToolExecutor
 
 
 def _echo_tool(params):

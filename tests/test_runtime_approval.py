@@ -1,6 +1,6 @@
 import unittest
 
-from runtime import ApprovalDecision, apply_approval_decision
+from aria_code.runtime import ApprovalDecision, apply_approval_decision
 
 
 class RuntimeApprovalTests(unittest.TestCase):

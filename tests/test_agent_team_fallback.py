@@ -2,9 +2,9 @@ import asyncio
 
 import pytest
 
-from agents.financial.technical import TechnicalAgent
-from agents.team import AgentTeam
-from agents.base import AgentResult
+from aria_code.agents.financial.technical import TechnicalAgent
+from aria_code.agents.team import AgentTeam
+from aria_code.agents.base import AgentResult
 
 
 class _SlowTechnicalAgent(TechnicalAgent):

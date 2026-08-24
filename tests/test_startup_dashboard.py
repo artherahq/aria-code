@@ -4,8 +4,8 @@ from rich import box
 from rich.console import Console
 
 import ui.robot as robot
-from ui.banner import control_status_label, render_startup_dashboard
-from ui.startup_dashboard import StartupDashboardViewModel, select_dashboard_layout
+from aria_code.ui.banner import control_status_label, render_startup_dashboard
+from aria_code.ui.startup_dashboard import StartupDashboardViewModel, select_dashboard_layout
 
 
 def _view(**overrides):

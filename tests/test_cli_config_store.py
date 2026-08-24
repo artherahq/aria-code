@@ -1,5 +1,5 @@
-from apps.cli.config_paths import resolve_paths
-from apps.cli.config_store import load_cli_config, save_cli_config
+from aria_code.apps.cli.config_paths import resolve_paths
+from aria_code.apps.cli.config_store import load_cli_config, save_cli_config
 
 
 def test_load_cli_config_merges_saved_values_and_syncs(monkeypatch, tmp_path):

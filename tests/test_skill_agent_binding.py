@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from packages.aria_skills.loader import (
+from aria_code.packages.aria_skills.loader import (
     activate_external_skills,
     default_skill_roots,
     discover_external_skills,

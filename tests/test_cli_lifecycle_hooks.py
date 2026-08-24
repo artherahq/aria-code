@@ -1,4 +1,4 @@
-from apps.cli.lifecycle_hooks import run_event_hook
+from aria_code.apps.cli.lifecycle_hooks import run_event_hook
 
 
 def test_run_event_hook_invokes_global_and_local_scripts(tmp_path):

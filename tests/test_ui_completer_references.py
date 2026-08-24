@@ -2,7 +2,7 @@ from pathlib import Path
 
 from prompt_toolkit.document import Document
 
-from ui.completer import AriaPTCompleter
+from aria_code.ui.completer import AriaPTCompleter
 
 
 def _values(completer: AriaPTCompleter, text: str) -> list[str]:

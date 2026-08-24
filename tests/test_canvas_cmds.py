@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from apps.cli.commands.canvas_cmds import CanvasCommandsMixin
+from aria_code.apps.cli.commands.canvas_cmds import CanvasCommandsMixin
 
 
 class _FakeConsole:

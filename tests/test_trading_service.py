@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from brokers.base import AccountInfo
-from brokers.paper_broker import PaperBroker
-from brokers.trading import OrderIntent, build_order_preview, execute_order_preview
+from aria_code.brokers.base import AccountInfo
+from aria_code.brokers.paper_broker import PaperBroker
+from aria_code.brokers.trading import OrderIntent, build_order_preview, execute_order_preview
 
 
 def _patch_trade_paths(monkeypatch, tmp_path: Path):

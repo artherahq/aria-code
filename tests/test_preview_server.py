@@ -10,7 +10,7 @@ import asyncio
 
 import pytest
 
-import preview_server
+import aria_code.preview_server
 
 
 @pytest.fixture(autouse=True)

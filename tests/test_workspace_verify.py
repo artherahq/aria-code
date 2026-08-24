@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from workspace import VerificationPlanner
+from aria_code.workspace import VerificationPlanner
 
 
 class VerificationPlannerTests(unittest.TestCase):

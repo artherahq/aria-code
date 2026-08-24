@@ -9,11 +9,11 @@ import sys
 import tempfile
 import pytest
 
-from agents.engineering.coder import CoderAgent
-from agents.engineering.tester import TesterAgent, TesterSelfHealingAgent
-from agents.financial.strategist import StrategistAgent
-from agents.registry import get_registry
-from runtime.self_healing import SelfHealingEngine, TracebackInfo
+from aria_code.agents.engineering.coder import CoderAgent
+from aria_code.agents.engineering.tester import TesterAgent, TesterSelfHealingAgent
+from aria_code.agents.financial.strategist import StrategistAgent
+from aria_code.agents.registry import get_registry
+from aria_code.runtime.self_healing import SelfHealingEngine, TracebackInfo
 
 
 def test_agent_registry_discovery():

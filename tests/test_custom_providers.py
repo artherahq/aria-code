@@ -17,7 +17,7 @@ import pytest
 
 yaml = pytest.importorskip("yaml", reason="需要 pyyaml")
 
-from providers.llm.custom import (  # noqa: E402
+from aria_code.providers.llm.custom import (  # noqa: E402
     build_custom_provider,
     parse_custom_providers,
 )

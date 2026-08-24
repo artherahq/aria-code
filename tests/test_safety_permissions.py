@@ -1,6 +1,6 @@
 import unittest
 
-from safety import PermissionService, evaluate_command_policy, normalize_command
+from aria_code.safety import PermissionService, evaluate_command_policy, normalize_command
 
 
 class SafetyPermissionTests(unittest.TestCase):

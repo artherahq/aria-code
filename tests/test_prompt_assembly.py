@@ -1,6 +1,6 @@
 import unittest
 
-from apps.cli.prompt_assembly import (
+from aria_code.apps.cli.prompt_assembly import (
     ANALYSIS_COMMENTARY_PROMPT_ZH,
     build_base_message,
     should_prepend_file_tool_hint,

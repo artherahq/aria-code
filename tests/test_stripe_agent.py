@@ -4,9 +4,9 @@ tests/test_stripe_agent.py — Tests for StripeRevenueAgent and tool_analyze_str
 
 import asyncio
 import pytest
-from agents.registry import get_registry
-from agents.financial.stripe_revenue import StripeRevenueAgent
-from tools.stripe_tools import tool_analyze_stripe_data
+from aria_code.agents.registry import get_registry
+from aria_code.agents.financial.stripe_revenue import StripeRevenueAgent
+from aria_code.tools.stripe_tools import tool_analyze_stripe_data
 
 
 def test_stripe_agent_registry_discovery():

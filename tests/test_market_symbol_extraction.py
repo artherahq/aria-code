@@ -5,8 +5,8 @@ injected universe, and no test path touches the network."""
 
 import unittest
 
-from apps.cli.market_universe import MarketSymbol, resolve_market_mentions
-from apps.cli.utils.market_detect import (
+from aria_code.apps.cli.market_universe import MarketSymbol, resolve_market_mentions
+from aria_code.apps.cli.utils.market_detect import (
     _COMPANY_TO_TICKER,
     _extract_market_symbols,
     _is_blocked_market_symbol_candidate,

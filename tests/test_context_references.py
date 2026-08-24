@@ -1,7 +1,7 @@
 import asyncio
 from pathlib import Path
 
-from packages.aria_services.references import (
+from aria_code.packages.aria_services.references import (
     REFERENCE_KINDS,
     ReferencePolicy,
     ReferenceService,

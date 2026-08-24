@@ -12,10 +12,10 @@ import tempfile
 # Allow importing from parent directory
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from packages.aria_core import build_session_diagnostic_bundle
-from apps.cli.session_export import build_session_export_payload
-from apps.cli.commands.market import route_top_level_text
-from aria_cli import (
+from aria_code.packages.aria_core import build_session_diagnostic_bundle
+from aria_code.apps.cli.session_export import build_session_export_payload
+from aria_code.apps.cli.commands.market import route_top_level_text
+from aria_code.aria_cli import (
     _strip_markdown_fences,
     _is_safe_path,
     _tool_read_file,
@@ -42,9 +42,9 @@ from aria_cli import (
     _is_artifact_location_followup,
     _natural_language_visual_artifact_route,
 )
-from apps.cli.utils.market_detect import _is_visual_market_artifact_request
-from change_store import ChangeConflictError, GLOBAL_CHANGE_STORE
-from runtime import AgentTurnState, RuntimeTrace
+from aria_code.apps.cli.utils.market_detect import _is_visual_market_artifact_request
+from aria_code.change_store import ChangeConflictError, GLOBAL_CHANGE_STORE
+from aria_code.runtime import AgentTurnState, RuntimeTrace
 
 
 # ============================================================================

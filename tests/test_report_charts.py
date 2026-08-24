@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from report_generator import (
+from aria_code.report_generator import (
     _macd_series,
     _rsi_series,
     generate_allocation_chart,

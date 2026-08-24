@@ -9,13 +9,13 @@ from pathlib import Path
 
 import pytest
 
-from brokers.automation import (
+from aria_code.brokers.automation import (
     AutoExecutePolicy,
     evaluate_auto_execute,
     run_auto_execute,
 )
-from brokers.paper_broker import PaperBroker
-from brokers.trading import OrderIntent, build_order_preview
+from aria_code.brokers.paper_broker import PaperBroker
+from aria_code.brokers.trading import OrderIntent, build_order_preview
 
 
 def _patch_trade_paths(monkeypatch, tmp_path: Path):

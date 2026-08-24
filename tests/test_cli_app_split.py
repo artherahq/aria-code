@@ -7,12 +7,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from apps.cli.commands.catalog import DIRECT_COMMAND_MAP, VISIBLE_SLASH_COMMANDS
-from apps.cli.commands.market_context import build_analyze_context, build_analyze_prompt
-from apps.cli.message_processing import context_compaction_decision, estimate_message_tokens
-from apps.cli.intent_router import build_intent_route
-from apps.cli.market_universe import resolve_market_symbol
-from apps.cli.commands.market import (
+from aria_code.apps.cli.commands.catalog import DIRECT_COMMAND_MAP, VISIBLE_SLASH_COMMANDS
+from aria_code.apps.cli.commands.market_context import build_analyze_context, build_analyze_prompt
+from aria_code.apps.cli.message_processing import context_compaction_decision, estimate_message_tokens
+from aria_code.apps.cli.intent_router import build_intent_route
+from aria_code.apps.cli.market_universe import resolve_market_symbol
+from aria_code.apps.cli.commands.market import (
     parse_analysis_args,
     parse_symbols,
     parse_technical_args,
@@ -20,16 +20,16 @@ from apps.cli.commands.market import (
     sanitize_chart_symbol_args,
     try_top_level_route,
 )
-from apps.cli.commands.market_cmds import _is_probable_football_query, _parse_nl_team_pair, _rss_items_from_xml
-from apps.cli.handlers.strategy_advice import handle_strategy_advice, is_strategy_advice_request
-from apps.cli.commands.market_render import compact_quote_market_cap, render_quote_plain, render_ta_plain
-from apps.cli.utils.market_detect import (
+from aria_code.apps.cli.commands.market_cmds import _is_probable_football_query, _parse_nl_team_pair, _rss_items_from_xml
+from aria_code.apps.cli.handlers.strategy_advice import handle_strategy_advice, is_strategy_advice_request
+from aria_code.apps.cli.commands.market_render import compact_quote_market_cap, render_quote_plain, render_ta_plain
+from aria_code.apps.cli.utils.market_detect import (
     _detect_broker_type,
     _extract_market_symbols,
     _is_broker_guide_intent,
     _is_broker_setup_intent,
 )
-from apps.cli.commands.report import (
+from aria_code.apps.cli.commands.report import (
     apply_report_quality_gate,
     all_agents_failed,
     build_markdown_report_prompt,
@@ -44,7 +44,7 @@ from apps.cli.commands.report import (
     save_markdown_report,
     update_report_index,
 )
-from apps.cli.commands.team import (
+from aria_code.apps.cli.commands.team import (
     build_team_agent_data,
     build_team_market_context,
     build_team_report_markdown,
@@ -56,8 +56,8 @@ from apps.cli.commands.team import (
     team_quote_snapshot,
     team_agent_names,
 )
-from apps.cli.commands.team_render import build_team_table_rows, render_team_rows_plain, team_mode_label, truncate_cell
-from apps.cli.direct import dispatch_direct_command, is_watchable_direct_command
+from aria_code.apps.cli.commands.team_render import build_team_table_rows, render_team_rows_plain, team_mode_label, truncate_cell
+from aria_code.apps.cli.direct import dispatch_direct_command, is_watchable_direct_command
 
 
 class _FakeCommands:

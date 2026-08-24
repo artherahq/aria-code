@@ -6,7 +6,7 @@ import subprocess
 
 import pytest
 
-from runtime import CheckpointStore, WorktreeError, WorktreeManager
+from aria_code.runtime import CheckpointStore, WorktreeError, WorktreeManager
 
 
 def _git(repo, *args):

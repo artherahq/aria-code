@@ -2,7 +2,7 @@ import types
 
 import pytest
 
-from apps.cli.commands.backtest_cmds import (
+from aria_code.apps.cli.commands.backtest_cmds import (
     BacktestCommandsMixin,
     _bt_result_summary,
     _bt_trade_count,

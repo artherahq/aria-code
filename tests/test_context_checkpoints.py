@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
-from packages.aria_services.context_checkpoints import (
+from aria_code.packages.aria_services.context_checkpoints import (
     CHECKPOINT_SCHEMA,
     ContextCheckpointStore,
     default_checkpoint_root,

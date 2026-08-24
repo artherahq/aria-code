@@ -1,12 +1,12 @@
-from apps.cli.providers.llm.ollama_stream import (
+from aria_code.apps.cli.providers.llm.ollama_stream import (
     _finance_tool_schema_allowed,
     _normalize_requested_tool_call,
     _response_cache_eligible,
     _routing_message_for_turn,
     _skill_tool_schema_allowed,
 )
-from packages.aria_mcp.tools import mcp_tool_to_spec
-from apps.cli.prompts.system_prompts import build_analysis_system_prompt
+from aria_code.packages.aria_mcp.tools import mcp_tool_to_spec
+from aria_code.apps.cli.prompts.system_prompts import build_analysis_system_prompt
 
 
 def test_tool_capable_turn_never_uses_prose_response_cache():

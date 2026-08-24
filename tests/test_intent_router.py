@@ -1,4 +1,4 @@
-from apps.cli.intent_router import build_intent_route, detect_intents
+from aria_code.apps.cli.intent_router import build_intent_route, detect_intents
 
 
 def test_visual_market_chart_routes_to_chart_without_code_autorun():
