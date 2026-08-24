@@ -5,6 +5,34 @@ from __future__ import annotations
 import json
 
 
+import json
+import asyncio
+import datetime
+import time
+import shlex
+from typing import Dict, Any, Optional
+
+
+import json
+import asyncio
+import datetime
+import time
+import shlex
+import sys
+import os
+from typing import Dict, Any, Optional
+
+
+import json
+import asyncio
+import datetime
+import time
+import shlex
+import sys
+import os
+from typing import Dict, Any, Optional
+
+
 class WarehouseCommandsMixin:
     """Read-only warehouse ERP analysis commands."""
 
@@ -15,7 +43,7 @@ class WarehouseCommandsMixin:
         identifiers = [part for part in parts if not part.startswith("--")]
         if len(identifiers) != 1:
             message = "用法: /warehouse <仓库编号> [--json]，例如 /warehouse WH-CN-01"
-            console.print(f"[yellow]{message}[/yellow]") if HAS_RICH else print(message)
+            self.context.console.print(f"[yellow]{message}[/yellow]") if self.context.has_rich else print(message)
             return
 
         from agents.warehouse.workflow import run_warehouse_analysis
@@ -25,7 +53,7 @@ class WarehouseCommandsMixin:
             result, snapshot = await run_warehouse_analysis(identifiers[0])
         except (WarehouseERPConfigurationError, WarehouseERPRequestError) as exc:
             message = str(exc)
-            console.print(f"[red]{message}[/red]") if HAS_RICH else print(message)
+            self.context.console.print(f"[red]{message}[/red]") if self.context.has_rich else print(message)
             return
 
         payload = {
@@ -48,4 +76,4 @@ class WarehouseCommandsMixin:
             summary = item.key_points[0] if item.key_points else item.analysis
             lines.append(f"- {item.agent}: {item.signal} — {summary}")
         output = "\n".join(lines)
-        console.print(output) if HAS_RICH else print(output)
+        self.context.console.print(output) if self.context.has_rich else print(output)

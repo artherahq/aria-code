@@ -1,6 +1,6 @@
 """Core slash commands mixin.
 
-本文件绝大多数名字（console / HAS_RICH / MODELS …）是有意留作裸名的，由
+本文件绝大多数名字（self.context.console / self.context.has_rich / MODELS …）是有意留作裸名的，由
 aria_cli 的 _rebind_mixin_globals() 把方法 __globals__ 指向它的命名空间来解析。
 
 但 pathlib 不能这么处理：它出现在 _create_scaffold() 的**参数注解**里，而注解
@@ -16,13 +16,33 @@ NameError，而这正是 requires-python = "<3.14,>=3.10" 声明支持的全部�
 import pathlib
 
 
+import json
+import asyncio
+import datetime
+import time
+import shlex
+import sys
+import os
+from typing import Dict, Any, Optional
+
+
+import json
+import asyncio
+import datetime
+import time
+import shlex
+import sys
+import os
+from typing import Dict, Any, Optional
+
+
 class CoreCommandsMixin:
     def _cmd_rewind_unavailable(self, args: str):
         # cmd_rewind lands with the checkpoint store (runtime/checkpoints.py,
         # still a separate, uncommitted change) — degrade instead of crashing
         # SlashCommands construction when it isn't present yet.
         msg = "/rewind is not available in this build yet."
-        console.print(f"[dim]{msg}[/dim]" if HAS_RICH else msg)
+        self.context.console.print(f"[dim]{msg}[/dim]" if self.context.has_rich else msg)
     def is_command(self, text: str) -> bool:
         if not text.startswith("/"):
             return False
@@ -50,17 +70,17 @@ class CoreCommandsMixin:
                 if asyncio.iscoroutine(result):
                     await result
             except KeyboardInterrupt:
-                if HAS_RICH:
-                    console.print("\n[dim]已取消[/dim]")
+                if self.context.has_rich:
+                    self.context.console.print("\n[dim]已取消[/dim]")
                 else:
                     print("\n已取消")
             except Exception as _cmd_err:
                 import traceback as _tb
                 _tb_str = _tb.format_exc()
-                if HAS_RICH:
+                if self.context.has_rich:
                     from rich.panel import Panel as _P
                     from rich import box as _rbox
-                    console.print(_P(
+                    self.context.console.print(_P(
                         f"[red]{type(_cmd_err).__name__}: {_cmd_err}[/red]\n"
                         f"[dim]{_tb_str.strip()[-800:]}[/dim]",
                         title=f"[red]{cmd_name} 崩溃[/red]",
@@ -75,10 +95,10 @@ class CoreCommandsMixin:
             # Fuzzy match: suggest closest command
             all_cmds = list(self.commands.keys()) + list(self.skill_map.keys())
             suggestions = _fuzzy_match(cmd_name, all_cmds, max_results=3)
-            if HAS_RICH:
-                console.print(f"[red]Unknown command: {cmd_name}[/red]")
+            if self.context.has_rich:
+                self.context.console.print(f"[red]Unknown command: {cmd_name}[/red]")
                 if suggestions:
-                    console.print(f"  [dim]Did you mean: {', '.join(suggestions)}?[/dim]")
+                    self.context.console.print(f"  [dim]Did you mean: {', '.join(suggestions)}?[/dim]")
             else:
                 print(f"Unknown command: {cmd_name}")
                 if suggestions:
@@ -90,41 +110,41 @@ class CoreCommandsMixin:
             cmd_key = target if target.startswith("/") else f"/{target}"
             if cmd_key in self.commands:
                 _, desc = self.commands[cmd_key]
-                if HAS_RICH:
-                    console.print()
-                    console.print(f"  [bold #C08050]{cmd_key}[/bold #C08050]  [dim]{desc}[/dim]")
+                if self.context.has_rich:
+                    self.context.console.print()
+                    self.context.console.print(f"  [bold #C08050]{cmd_key}[/bold #C08050]  [dim]{desc}[/dim]")
                     h = self._COMMAND_HELP.get(cmd_key)
                     if h:
-                        console.print(f"  {h[0]}")
-                        console.print()
-                        console.print("  [dim]Examples:[/dim]")
+                        self.context.console.print(f"  {h[0]}")
+                        self.context.console.print()
+                        self.context.console.print("  [dim]Examples:[/dim]")
                         for ex in h[1]:
-                            console.print(f"    [bold]{ex}[/bold]")
-                    console.print()
+                            self.context.console.print(f"    [bold]{ex}[/bold]")
+                    self.context.console.print()
                 else:
                     print(f"\n  {cmd_key}  {desc}")
                 return
             # Check skills
             for s in SKILLS:
                 if s["command"] == cmd_key:
-                    if HAS_RICH:
-                        console.print()
-                        console.print(f"  [bold #C08050]{s['command']}[/bold #C08050]  [dim]{s['description']}[/dim]")
-                        console.print(f"  [dim]Category:[/dim] {s['category']}")
-                        console.print()
+                    if self.context.has_rich:
+                        self.context.console.print()
+                        self.context.console.print(f"  [bold #C08050]{s['command']}[/bold #C08050]  [dim]{s['description']}[/dim]")
+                        self.context.console.print(f"  [dim]Category:[/dim] {s['category']}")
+                        self.context.console.print()
                     else:
                         print(f"\n  {s['command']}  {s['description']}")
                     return
-            console.print(f"[dim]No help for: {target}. Try /help[/dim]" if HAS_RICH else f"No help for: {target}")
+            self.context.console.print(f"[dim]No help for: {target}. Try /help[/dim]" if self.context.has_rich else f"No help for: {target}")
             return
 
         # Full help listing
-        if HAS_RICH:
-            console.print()
+        if self.context.has_rich:
+            self.context.console.print()
 
             # ── Natural language first ──────────────────────────────────────
-            console.print("[bold]Just type what you want[/bold]  [dim]— no command needed[/dim]")
-            console.print()
+            self.context.console.print("[bold]Just type what you want[/bold]  [dim]— no command needed[/dim]")
+            self.context.console.print()
             nl_examples = [
                 ("宁德时代今天怎么样?",        "How's CATL today?"),
                 ("帮我画AAPL的K线图",          "Draw a candlestick chart for AAPL"),
@@ -134,8 +154,8 @@ class CoreCommandsMixin:
                 ("给我写一个动量回测策略",       "Write a momentum backtest strategy"),
             ]
             for zh, en in nl_examples:
-                console.print(f"  [#C08050]{zh}[/#C08050]  [dim]{en}[/dim]")
-            console.print()
+                self.context.console.print(f"  [#C08050]{zh}[/#C08050]  [dim]{en}[/dim]")
+            self.context.console.print()
 
             # ── Context references ─────────────────────────────────────────
             _ref_is_zh = str(self.terminal.config.get("ui_lang", "en")).lower().startswith("zh")
@@ -145,8 +165,8 @@ class CoreCommandsMixin:
                 if _ref_is_zh else
                 "@ attaches read-only context; it never runs an action"
             )
-            console.print(f"[bold]{_ref_title}[/bold]  [dim]({_ref_subtitle})[/dim]")
-            console.print()
+            self.context.console.print(f"[bold]{_ref_title}[/bold]  [dim]({_ref_subtitle})[/dim]")
+            self.context.console.print()
             for example, description_en, description_zh in (
                 ("@file:src/model.py", "file pointer → read_file", "文件引用 → read_file"),
                 ("@folder:apps/cli", "folder pointer → list_files", "目录引用 → list_files"),
@@ -158,14 +178,14 @@ class CoreCommandsMixin:
                 ("@report:daily", "generated report", "生成报告"),
             ):
                 description = description_zh if _ref_is_zh else description_en
-                console.print(f"  [#C08050]{example:27s}[/#C08050] [dim]{description}[/dim]")
+                self.context.console.print(f"  [#C08050]{example:27s}[/#C08050] [dim]{description}[/dim]")
             _combine = "组合使用" if _ref_is_zh else "Combine them"
-            console.print(f"  [dim]{_combine}: /risk @portfolio:core · /review @folder:apps/cli[/dim]")
-            console.print()
+            self.context.console.print(f"  [dim]{_combine}: /risk @portfolio:core · /review @folder:apps/cli[/dim]")
+            self.context.console.print()
 
             # ── Slash commands — grouped ────────────────────────────────────
-            console.print("[bold]Slash commands[/bold]  [dim](for direct actions and mode switches)[/dim]")
-            console.print()
+            self.context.console.print("[bold]Slash commands[/bold]  [dim](for direct actions and mode switches)[/dim]")
+            self.context.console.print()
             groups = [
                 ("Session", ["/help","/clear","/compact","/cost","/status","/health",
                              "/regen","/undo","/rewind","/copy","/recap","/btw",
@@ -187,27 +207,27 @@ class CoreCommandsMixin:
                 visible = [n for n in cmd_names if n in self.commands]
                 if not visible:
                     continue
-                console.print(f"  [dim]{group_name}[/dim]")
+                self.context.console.print(f"  [dim]{group_name}[/dim]")
                 for name in visible:
                     _, desc = self.commands[name]
-                    console.print(f"    [bold #C08050]{name:18s}[/bold #C08050][dim]{desc}[/dim]")
-                console.print()
+                    self.context.console.print(f"    [bold #C08050]{name:18s}[/bold #C08050][dim]{desc}[/dim]")
+                self.context.console.print()
 
             # ── Skills ─────────────────────────────────────────────────────
-            console.print("[bold]Skills[/bold]  [dim](type the command or just describe what you want)[/dim]")
-            console.print()
+            self.context.console.print("[bold]Skills[/bold]  [dim](type the command or just describe what you want)[/dim]")
+            self.context.console.print()
             categories: dict = {}
             for s in SKILLS:
                 categories.setdefault(s["category"], []).append(s)
             for cat, skills in categories.items():
-                console.print(f"  [dim]{cat}[/dim]")
+                self.context.console.print(f"  [dim]{cat}[/dim]")
                 for s in skills:
-                    console.print(f"    [bold #C08050]{s['command']:20s}[/bold #C08050][dim]{s['description']}[/dim]")
-            console.print()
+                    self.context.console.print(f"    [bold #C08050]{s['command']:20s}[/bold #C08050][dim]{s['description']}[/dim]")
+            self.context.console.print()
 
             # ── Keys ───────────────────────────────────────────────────────
-            console.print("[dim]ESC cancel  ·  Ctrl+D exit  ·  ↑↓ history  ·  Tab autocomplete  ·  \"\"\" multiline[/dim]")
-            console.print()
+            self.context.console.print("[dim]ESC cancel  ·  Ctrl+D exit  ·  ↑↓ history  ·  Tab autocomplete  ·  \"\"\" multiline[/dim]")
+            self.context.console.print()
 
         else:
             print("\nJust type what you want — or use a slash command:\n")
@@ -268,7 +288,7 @@ class CoreCommandsMixin:
             target = str((selected or {}).get("path") or "").strip()
             if not target:
                 msg = f"未找到产物 {selector!r}。先运行 /artifacts 查看可用编号。"
-                console.print(f"[yellow]{msg}[/yellow]") if HAS_RICH else print(msg)
+                self.context.console.print(f"[yellow]{msg}[/yellow]") if self.context.has_rich else print(msg)
                 return
 
             ok = True
@@ -290,14 +310,14 @@ class CoreCommandsMixin:
                     "kind": str((selected or {}).get("kind") or "artifact"),
                     "path": target,
                 }
-                if HAS_RICH:
-                    console.print(f"[green]✓[/green] {msg}")
+                if self.context.has_rich:
+                    self.context.console.print(f"[green]✓[/green] {msg}")
                 else:
                     print(msg)
             else:
                 msg = f"操作失败：{error or target}"
-                if HAS_RICH:
-                    console.print(f"[red]✗[/red] {msg}")
+                if self.context.has_rich:
+                    self.context.console.print(f"[red]✗[/red] {msg}")
                 else:
                     print(msg)
             return
@@ -308,14 +328,14 @@ class CoreCommandsMixin:
             total = int(summary.get("total") or 0)
             total_size = int(summary.get("total_size_bytes") or 0)
             by_kind = summary.get("by_kind") or {}
-            if HAS_RICH:
-                console.print("[bold]Artifact inventory[/bold]")
+            if self.context.has_rich:
+                self.context.console.print("[bold]Artifact inventory[/bold]")
                 for r in roots:
-                    console.print(f"  [dim]root[/dim]: {_display_path(r, fallback=r.name)}")
-                console.print(f"  total: [bold]{total}[/bold]  size: [bold]{total_size:,} bytes[/bold]")
+                    self.context.console.print(f"  [dim]root[/dim]: {_display_path(r, fallback=r.name)}")
+                self.context.console.print(f"  total: [bold]{total}[/bold]  size: [bold]{total_size:,} bytes[/bold]")
                 if by_kind:
                     for kind, count in by_kind.items():
-                        console.print(f"  [dim]{kind}[/dim]: {count}")
+                        self.context.console.print(f"  [dim]{kind}[/dim]: {count}")
             else:
                 print("Artifact inventory")
                 print(f"  total: {total}")
@@ -329,16 +349,16 @@ class CoreCommandsMixin:
             removed = int(result.get("removed") or 0)
             scanned = int(result.get("scanned") or 0)
             action = "Would remove" if dry_run else "Removed"
-            if HAS_RICH:
-                console.print("[bold]Artifact prune[/bold]")
+            if self.context.has_rich:
+                self.context.console.print("[bold]Artifact prune[/bold]")
                 for r in result.get("roots") or []:
-                    console.print(f"  [dim]root[/dim]: {_display_path(r, fallback=pathlib.Path(str(r)).name)}")
-                console.print(f"  keep: [bold]{result.get('keep', keep)}[/bold]  scanned: [bold]{scanned}[/bold]  removed: [bold]{removed}[/bold]")
+                    self.context.console.print(f"  [dim]root[/dim]: {_display_path(r, fallback=pathlib.Path(str(r)).name)}")
+                self.context.console.print(f"  keep: [bold]{result.get('keep', keep)}[/bold]  scanned: [bold]{scanned}[/bold]  removed: [bold]{removed}[/bold]")
                 if removed:
                     for entry in result.get("deleted") or []:
                         name = pathlib.Path(str(entry.get("path") or entry.get("metadata_path") or "")).name
                         root_name = pathlib.Path(str(entry.get("root") or "")).name
-                        console.print(f"  [dim]{action}[/dim] {name} [dim]({root_name})[/dim]")
+                        self.context.console.print(f"  [dim]{action}[/dim] {name} [dim]({root_name})[/dim]")
             else:
                 print("Artifact prune")
                 print(f"  keep: {result.get('keep', keep)}")
@@ -353,12 +373,12 @@ class CoreCommandsMixin:
         items = recent_artifacts_all(limit=limit)
         if not items:
             msg = "No artifacts found"
-            console.print(f"[dim]{msg}[/dim]") if HAS_RICH else print(msg)
+            self.context.console.print(f"[dim]{msg}[/dim]") if self.context.has_rich else print(msg)
             return
 
         title = "生成的产物" if str(self.terminal.config.get("ui_lang", "en")).lower().startswith("zh") else "Generated artifacts"
-        if HAS_RICH:
-            console.print(f"[bold]{title}[/bold]")
+        if self.context.has_rich:
+            self.context.console.print(f"[bold]{title}[/bold]")
         else:
             print(title)
         for index, item in enumerate(items, start=1):
@@ -371,14 +391,14 @@ class CoreCommandsMixin:
             _topic = str(item.get("topic") or "").strip()
             _headline = f"#{index}  {_icon} {_kind}" + (f" · {_topic}" if _topic else "")
             _detail = f"    {_name}" + (f"  ·  {_root_name}" if _root_name else "")
-            if HAS_RICH:
-                console.print(f"[bold]{_headline}[/bold]")
-                console.print(f"[dim]{_detail}[/dim]")
+            if self.context.has_rich:
+                self.context.console.print(f"[bold]{_headline}[/bold]")
+                self.context.console.print(f"[dim]{_detail}[/dim]")
             else:
                 print(_headline)
                 print(_detail)
         hint = "操作：/artifacts open 1 · reveal 1 · copy-path 1"
-        console.print(f"[dim]{hint}[/dim]") if HAS_RICH else print(hint)
+        self.context.console.print(f"[dim]{hint}[/dim]") if self.context.has_rich else print(hint)
     async def _run_in_executor(self, fn, *args):
         import asyncio
         loop = asyncio.get_event_loop()
@@ -389,14 +409,14 @@ class CoreCommandsMixin:
 
         if sub in ("mode", "enter", "on", "start"):
             _PLAN_MODE.enter()
-            if HAS_RICH:
-                console.print()
-                console.print(
+            if self.context.has_rich:
+                self.context.console.print()
+                self.context.console.print(
                     "  [bold cyan]◆ 计划模式已激活[/bold cyan]  "
                     "[dim]每个工具调用前都会显示确认提示[/dim]"
                 )
-                console.print("  [dim]/plan exit  — 退出计划模式[/dim]")
-                console.print()
+                self.context.console.print("  [dim]/plan exit  — 退出计划模式[/dim]")
+                self.context.console.print()
             else:
                 print("  Plan mode ON — every tool call will ask for approval.")
             return
@@ -404,8 +424,8 @@ class CoreCommandsMixin:
         if sub in ("exit", "off", "stop", "quit"):
             summary = _PLAN_MODE.summary()
             _PLAN_MODE.exit()
-            if HAS_RICH:
-                console.print(
+            if self.context.has_rich:
+                self.context.console.print(
                     f"  [dim]◆ 计划模式已退出  "
                     f"(共 {summary['total']} 步 · "
                     f"[green]{summary['approved']} 执行[/green] · "
@@ -424,7 +444,7 @@ class CoreCommandsMixin:
                 )
             else:
                 msg = "计划模式: [dim]未激活[/dim]  (/plan mode 开启)"
-            console.print(f"  {msg}") if HAS_RICH else print(f"  {msg.replace('[bold cyan]', '').replace('[/bold cyan]', '').replace('[dim]', '').replace('[/dim]', '')}")
+            self.context.console.print(f"  {msg}") if self.context.has_rich else print(f"  {msg.replace('[bold cyan]', '').replace('[/bold cyan]', '').replace('[dim]', '').replace('[/dim]', '')}")
             return
 
         return OpsCommandsMixin.cmd_plan(self, args)
@@ -434,7 +454,7 @@ class CoreCommandsMixin:
             from runtime.subagent import _TASKS, tool_task_cancel
         except ImportError:
             msg = "Subagent module not available."
-            console.print(f"[red]{msg}[/red]") if HAS_RICH else print(msg)
+            self.context.console.print(f"[red]{msg}[/red]") if self.context.has_rich else print(msg)
             return
 
         parts = args.strip().split()
@@ -444,35 +464,35 @@ class CoreCommandsMixin:
             result = tool_task_cancel({"task_id": parts[1]})
             if result.get("success"):
                 msg = f"✓ Task {parts[1]} cancelled"
-                console.print(f"[green]{msg}[/green]") if HAS_RICH else print(msg)
+                self.context.console.print(f"[green]{msg}[/green]") if self.context.has_rich else print(msg)
             else:
-                console.print(f"[red]{result.get('error', 'Error')}[/red]") if HAS_RICH else print(result.get("error"))
+                self.context.console.print(f"[red]{result.get('error', 'Error')}[/red]") if self.context.has_rich else print(result.get("error"))
             return
 
         # Default: list all tasks
         tasks = list(_TASKS.values())
         if not tasks:
             msg = "没有活跃的后台任务。使用 spawn_task 工具创建任务。"
-            console.print(f"  [dim]{msg}[/dim]") if HAS_RICH else print(msg)
+            self.context.console.print(f"  [dim]{msg}[/dim]") if self.context.has_rich else print(msg)
             return
 
-        if HAS_RICH:
-            console.print()
-            console.print("  [bold]后台任务[/bold]")
-            console.print()
+        if self.context.has_rich:
+            self.context.console.print()
+            self.context.console.print("  [bold]后台任务[/bold]")
+            self.context.console.print()
             status_colors = {"pending": "yellow", "running": "cyan", "done": "green",
                              "failed": "red", "cancelled": "dim"}
             for t in tasks:
                 col = status_colors.get(t.status, "white")
                 preview = t.prompt[:60] + ("…" if len(t.prompt) > 60 else "")
-                console.print(
+                self.context.console.print(
                     f"  [{col}]●[/{col}] [bold]{t.task_id}[/bold]  "
                     f"[{col}]{t.status:10s}[/{col}]  "
                     f"[dim]{t.age_str():>5s}[/dim]  {preview}"
                 )
-            console.print()
-            console.print("  [dim]/tasks cancel <id>  — 取消任务[/dim]")
-            console.print()
+            self.context.console.print()
+            self.context.console.print("  [dim]/tasks cancel <id>  — 取消任务[/dim]")
+            self.context.console.print()
         else:
             print(f"\n  Background Tasks ({len(tasks)}):")
             for t in tasks:
@@ -484,13 +504,13 @@ class CoreCommandsMixin:
             from runtime.subagent import tool_spawn_task
         except ImportError:
             msg = "Subagent module not available."
-            console.print(f"[red]{msg}[/red]") if HAS_RICH else print(msg)
+            self.context.console.print(f"[red]{msg}[/red]") if self.context.has_rich else print(msg)
             return
 
         parts = args.strip().split(maxsplit=1)
         if len(parts) < 2 or parts[0].lower() not in {"claude", "codex"}:
             msg = 'Usage: /delegate claude|codex "<prompt>"'
-            console.print(f"[yellow]{msg}[/yellow]") if HAS_RICH else print(msg)
+            self.context.console.print(f"[yellow]{msg}[/yellow]") if self.context.has_rich else print(msg)
             return
 
         backend, prompt = parts[0].lower(), parts[1].strip().strip('"')
@@ -501,11 +521,11 @@ class CoreCommandsMixin:
             "isolation": "auto",
         })
         if not result.get("success"):
-            console.print(f"[red]{result.get('error', 'Error')}[/red]") if HAS_RICH else print(result.get("error"))
+            self.context.console.print(f"[red]{result.get('error', 'Error')}[/red]") if self.context.has_rich else print(result.get("error"))
             return
         task_id = result["task_id"]
         msg = f"✓ Delegated to {backend}: task {task_id}. Check with /tasks or task_status('{task_id}')."
-        console.print(f"[green]{msg}[/green]") if HAS_RICH else print(msg)
+        self.context.console.print(f"[green]{msg}[/green]") if self.context.has_rich else print(msg)
     def cmd_canva(self, args: str):
         """Manage the Canva Connect integration used for report design drafts."""
         parts = args.strip().split(maxsplit=2)
@@ -514,34 +534,34 @@ class CoreCommandsMixin:
         if sub == "connect":
             if len(parts) < 3:
                 msg = "Usage: /canva connect <client_id> <client_secret>  (register an app first at https://www.canva.com/developers/)"
-                console.print(f"[yellow]{msg}[/yellow]") if HAS_RICH else print(msg)
+                self.context.console.print(f"[yellow]{msg}[/yellow]") if self.context.has_rich else print(msg)
                 return
             client_id, client_secret = parts[1], parts[2]
             from canva_client import connect as _canva_connect
             msg = "打开浏览器完成 Canva 授权…"
-            console.print(f"[cyan]{msg}[/cyan]") if HAS_RICH else print(msg)
+            self.context.console.print(f"[cyan]{msg}[/cyan]") if self.context.has_rich else print(msg)
             result = _canva_connect(client_id, client_secret)
             if result.get("success"):
                 msg = "✓ Canva 已连接"
-                console.print(f"[green]{msg}[/green]") if HAS_RICH else print(msg)
+                self.context.console.print(f"[green]{msg}[/green]") if self.context.has_rich else print(msg)
             else:
-                console.print(f"[red]{result.get('error')}[/red]") if HAS_RICH else print(result.get("error"))
+                self.context.console.print(f"[red]{result.get('error')}[/red]") if self.context.has_rich else print(result.get("error"))
             return
 
         if sub == "status":
             from canva_client import _load_canva_config
             entry = _load_canva_config()
             msg = "✓ Canva 已连接" if entry.get("access_token") else "未连接 Canva。运行 /canva connect <client_id> <client_secret>"
-            console.print(msg) if HAS_RICH else print(msg)
+            self.context.console.print(msg) if self.context.has_rich else print(msg)
             return
 
         msg = "Usage: /canva connect <client_id> <client_secret> | /canva status"
-        console.print(f"[yellow]{msg}[/yellow]") if HAS_RICH else print(msg)
+        self.context.console.print(f"[yellow]{msg}[/yellow]") if self.context.has_rich else print(msg)
     def _confirm_high_risk_command(self, command: str, risk: str, policy: str) -> bool:
         """Double-confirm high-risk commands even if policy allows them."""
         msg = f"High-risk command under policy '{policy}' (risk={risk}): {command}\nRun it? [y/N]: "
         try:
-            answer = console.input(msg) if HAS_RICH else input(msg)
+            answer = self.context.console.input(msg) if self.context.has_rich else input(msg)
         except (EOFError, KeyboardInterrupt):
             return False
         return answer.strip().lower() in {"y", "yes"}
@@ -564,12 +584,12 @@ class CoreCommandsMixin:
         conv = self.terminal.conversation
         if len(conv) <= 4:
             if not silent:
-                console.print("[dim]Context small enough — no compaction needed[/dim]" if HAS_RICH
+                self.context.console.print("[dim]Context small enough — no compaction needed[/dim]" if self.context.has_rich
                               else "Context small enough")
             return
 
-        if not silent and HAS_RICH:
-            console.print("[dim]Summarising conversation...[/dim]")
+        if not silent and self.context.has_rich:
+            self.context.console.print("[dim]Summarising conversation...[/dim]")
 
         from packages.aria_services.context import build_context_service
 
@@ -603,7 +623,7 @@ class CoreCommandsMixin:
                 compacted = []
             self.terminal.conversation = compacted if compacted and len(compacted) < len(conv) else conv[-8:]
             if not silent:
-                console.print("[dim]Compacted (summary failed, used local fallback)[/dim]" if HAS_RICH
+                self.context.console.print("[dim]Compacted (summary failed, used local fallback)[/dim]" if self.context.has_rich
                               else "Compacted (summary fallback)")
             return
 
@@ -612,8 +632,8 @@ class CoreCommandsMixin:
         new_count = len(self.terminal.conversation)
         old_count = len(conv)
         if not silent:
-            if HAS_RICH:
-                console.print(
+            if self.context.has_rich:
+                self.context.console.print(
                     f"  [dim]✓ Compacted {old_count} → {new_count} messages "
                     f"(summary preserved context)[/dim]"
                 )
@@ -629,7 +649,7 @@ class CoreCommandsMixin:
             _done, _total = _c.get("done", 0), sum(_c.values())
             _line = (f"架构契约: {_done}/{_total} 层完成 · {len(architecture_gaps())} 层待办"
                      f"  (/architecture 看详情, --gaps 只看待办)")
-            console.print(f"\n  [dim]{_line}[/dim]") if HAS_RICH else print(f"\n  {_line}")
+            self.context.console.print(f"\n  [dim]{_line}[/dim]") if self.context.has_rich else print(f"\n  {_line}")
         except Exception:
             pass
         return _r
@@ -656,12 +676,12 @@ class CoreCommandsMixin:
         plan = VerificationPlanner(pathlib.Path.cwd()).infer(paths)
         if not plan.commands:
             msg = "No verification command inferred."
-            console.print(f"[dim]{msg}[/dim]" if HAS_RICH else msg)
+            self.context.console.print(f"[dim]{msg}[/dim]" if self.context.has_rich else msg)
             return
-        if HAS_RICH:
-            console.print(f"[dim]Verification plan: {plan.reason}[/dim]")
+        if self.context.has_rich:
+            self.context.console.print(f"[dim]Verification plan: {plan.reason}[/dim]")
             for idx, command in enumerate(plan.commands, 1):
-                console.print(f"  [bold]{idx}.[/bold] {command}")
+                self.context.console.print(f"  [bold]{idx}.[/bold] {command}")
         else:
             print(f"Verification plan: {plan.reason}")
             for idx, command in enumerate(plan.commands, 1):
@@ -678,20 +698,20 @@ class CoreCommandsMixin:
                 "timeout": 300,
             })
             if not result.get("success"):
-                console.print(f"[red]Verification failed: {command}[/red]" if HAS_RICH else f"Verification failed: {command}")
-                console.print(f"[red]{result.get('error', '')}[/red]" if HAS_RICH else result.get("error", ""))
+                self.context.console.print(f"[red]Verification failed: {command}[/red]" if self.context.has_rich else f"Verification failed: {command}")
+                self.context.console.print(f"[red]{result.get('error', '')}[/red]" if self.context.has_rich else result.get("error", ""))
                 return
             data = result.get("data", {})
             if data.get("stdout"):
-                console.print(Syntax(data["stdout"], "text", theme=_SYNTAX_THEME) if HAS_RICH else data["stdout"])
+                self.context.console.print(Syntax(data["stdout"], "text", theme=_SYNTAX_THEME) if self.context.has_rich else data["stdout"])
             if data.get("stderr"):
-                console.print(f"[yellow]{data['stderr']}[/yellow]" if HAS_RICH else data["stderr"])
+                self.context.console.print(f"[yellow]{data['stderr']}[/yellow]" if self.context.has_rich else data["stderr"])
         msg = "Verification passed."
-        console.print(f"[green]{msg}[/green]" if HAS_RICH else msg)
+        self.context.console.print(f"[green]{msg}[/green]" if self.context.has_rich else msg)
     def cmd_run(self, args: str):
         """Run a command: /run <command>"""
         if not args.strip():
-            console.print("[dim]Usage: /run [--dry-run] <command>[/dim]" if HAS_RICH
+            self.context.console.print("[dim]Usage: /run [--dry-run] <command>[/dim]" if self.context.has_rich
                           else "Usage: /run [--dry-run] <command>")
             return
         text = args.strip()
@@ -700,7 +720,7 @@ class CoreCommandsMixin:
             dry_run = True
             text = text[len("--dry-run "):].strip()
         if not text:
-            console.print("[dim]Usage: /run [--dry-run] <command>[/dim]" if HAS_RICH
+            self.context.console.print("[dim]Usage: /run [--dry-run] <command>[/dim]" if self.context.has_rich
                           else "Usage: /run [--dry-run] <command>")
             return
 
@@ -714,7 +734,7 @@ class CoreCommandsMixin:
         if not dry_run and decision.allowed and decision.risk == "high":
             if not self._confirm_high_risk_command(decision.normalized_command, decision.risk, decision.policy):
                 msg = "Cancelled by user."
-                console.print(f"[dim]{msg}[/dim]" if HAS_RICH else msg)
+                self.context.console.print(f"[dim]{msg}[/dim]" if self.context.has_rich else msg)
                 return
         result = _tool_run_command({
             "command": text,
@@ -733,20 +753,20 @@ class CoreCommandsMixin:
                     f"network={data.get('network', False)} "
                     f"command={data.get('command', '')}"
                 )
-                console.print(f"[dim]{msg}[/dim]" if HAS_RICH else msg)
+                self.context.console.print(f"[dim]{msg}[/dim]" if self.context.has_rich else msg)
                 return
             if data["stdout"]:
-                if HAS_RICH:
-                    console.print(Syntax(data["stdout"], "text", theme=_SYNTAX_THEME))
+                if self.context.has_rich:
+                    self.context.console.print(Syntax(data["stdout"], "text", theme=_SYNTAX_THEME))
                 else:
                     print(data["stdout"])
             if data["stderr"]:
-                if HAS_RICH:
-                    console.print(f"[red]{data['stderr']}[/red]")
+                if self.context.has_rich:
+                    self.context.console.print(f"[red]{data['stderr']}[/red]")
                 else:
                     print(data["stderr"], file=sys.stderr)
         else:
-            console.print(f"[red]{result['error']}[/red]" if HAS_RICH else result["error"])
+            self.context.console.print(f"[red]{result['error']}[/red]" if self.context.has_rich else result["error"])
     def cmd_apply(self, args: str):
         """Extract code from last AI response and save to file."""
         filename = args.strip()
@@ -756,27 +776,27 @@ class CoreCommandsMixin:
                 last_response = msg["content"]
                 break
         if not last_response:
-            console.print("[dim]No AI response to extract from[/dim]" if HAS_RICH
+            self.context.console.print("[dim]No AI response to extract from[/dim]" if self.context.has_rich
                           else "No response")
             return
 
         code = _extract_code_block(last_response)
         if not code:
-            console.print("[dim]No code block found in last response[/dim]" if HAS_RICH
+            self.context.console.print("[dim]No code block found in last response[/dim]" if self.context.has_rich
                           else "No code block found")
             return
 
         if not filename:
             # Show code preview and ask for filename
             preview = code[:500] + ("..." if len(code) > 500 else "")
-            if HAS_RICH:
-                console.print(f"\n[dim]Found code block ({len(code.splitlines())} lines):[/dim]")
-                console.print(Syntax(preview, "python", theme=_SYNTAX_THEME))
+            if self.context.has_rich:
+                self.context.console.print(f"\n[dim]Found code block ({len(code.splitlines())} lines):[/dim]")
+                self.context.console.print(Syntax(preview, "python", theme=_SYNTAX_THEME))
             else:
                 print(f"\nFound code ({len(code.splitlines())} lines):")
                 print(preview)
             try:
-                filename = (console.input("\n[bold]>[/bold] Save to: ") if HAS_RICH
+                filename = (self.context.console.input("\n[bold]>[/bold] Save to: ") if self.context.has_rich
                             else input("\nSave to: ")).strip()
             except (EOFError, KeyboardInterrupt):
                 return
@@ -785,16 +805,16 @@ class CoreCommandsMixin:
 
         result = _tool_write_file({"path": filename, "content": code})
         if not result["success"]:
-            console.print(f"[red]{result['error']}[/red]" if HAS_RICH else result["error"])
+            self.context.console.print(f"[red]{result['error']}[/red]" if self.context.has_rich else result["error"])
     async def cmd_code(self, args: str):
         """Generate code and optionally save to file. Usage: /code <description> [--save file.py]"""
         if not args.strip():
-            if HAS_RICH:
-                console.print("[dim]Usage: /code <description> [--save file.py][/dim]")
-                console.print("[dim]Examples:[/dim]")
-                console.print("[dim]  /code momentum strategy for AAPL[/dim]")
-                console.print("[dim]  /code portfolio optimizer --save optimizer.py[/dim]")
-                console.print("[dim]  /code backtest report generator --save report.py[/dim]")
+            if self.context.has_rich:
+                self.context.console.print("[dim]Usage: /code <description> [--save file.py][/dim]")
+                self.context.console.print("[dim]Examples:[/dim]")
+                self.context.console.print("[dim]  /code momentum strategy for AAPL[/dim]")
+                self.context.console.print("[dim]  /code portfolio optimizer --save optimizer.py[/dim]")
+                self.context.console.print("[dim]  /code backtest report generator --save report.py[/dim]")
             else:
                 print("Usage: /code <description> [--save file.py]")
             return
@@ -827,8 +847,8 @@ class CoreCommandsMixin:
             "Return the code wrapped in ```python``` fences."
         )
 
-        if HAS_RICH:
-            console.print(f"[bold]Generating code:[/bold] [bold]{description}[/bold]")
+        if self.context.has_rich:
+            self.context.console.print(f"[bold]Generating code:[/bold] [bold]{description}[/bold]")
         else:
             print(f"Generating: {description}")
 
@@ -861,14 +881,14 @@ class CoreCommandsMixin:
                 _save_path.parent.mkdir(parents=True, exist_ok=True)
                 _save_path.write_text(code, encoding="utf-8")
                 _save_label = _display_path(str(_save_path))
-                if HAS_RICH:
-                    console.print(f"\n[green]Code saved to {_save_label}[/green] "
+                if self.context.has_rich:
+                    self.context.console.print(f"\n[green]Code saved to {_save_label}[/green] "
                                   f"[dim]({len(code.splitlines())} lines)[/dim]")
                 else:
                     print(f"\nSaved: {_save_label} ({len(code.splitlines())} lines)")
             else:
-                if HAS_RICH:
-                    console.print("[dim]No code block found in response to save[/dim]")
+                if self.context.has_rich:
+                    self.context.console.print("[dim]No code block found in response to save[/dim]")
                 else:
                     print("No code block found to save")
     async def cmd_feedback(self, args: str):
@@ -888,7 +908,7 @@ class CoreCommandsMixin:
         }
         rating = aliases.get(vote)
         if rating is None or (rating == "note" and not comment):
-            console.print("[dim]Usage: /feedback good|bad [comment] | /feedback note <comment>[/dim]" if HAS_RICH
+            self.context.console.print("[dim]Usage: /feedback good|bad [comment] | /feedback note <comment>[/dim]" if self.context.has_rich
                           else "Usage: /feedback good|bad [comment] | /feedback note <comment>")
             return
 
@@ -901,7 +921,7 @@ class CoreCommandsMixin:
                 msg_idx = i
                 break
         if not last_msg:
-            console.print("[dim]No AI response to rate[/dim]" if HAS_RICH else "No response to rate")
+            self.context.console.print("[dim]No AI response to rate[/dim]" if self.context.has_rich else "No response to rate")
             return
 
         settings = PrivacySettings.from_config(self.terminal.config)
@@ -921,7 +941,7 @@ class CoreCommandsMixin:
             feedback_path = store.append(record)
         except Exception as exc:
             msg = f"Could not save feedback locally: {exc}"
-            console.print(f"[red]{msg}[/red]" if HAS_RICH else msg)
+            self.context.console.print(f"[red]{msg}[/red]" if self.context.has_rich else msg)
             return
 
         # Optional remote upload only after explicit opt-in. Posts to the
@@ -960,10 +980,10 @@ class CoreCommandsMixin:
             sync_note = "" if api_success else " [dim](saved locally; upload failed)[/dim]"
         else:
             sync_note = " [dim](saved locally; sharing off)[/dim]"
-        if HAS_RICH:
+        if self.context.has_rich:
             comment_note = f" — {comment}" if comment else ""
-            console.print(f"[green]Feedback {icon}[/green]{comment_note}{sync_note}")
-            console.print(f"[dim]Saved: {_display_path(feedback_path)}[/dim]")
+            self.context.console.print(f"[green]Feedback {icon}[/green]{comment_note}{sync_note}")
+            self.context.console.print(f"[dim]Saved: {_display_path(feedback_path)}[/dim]")
         else:
             print(f"Feedback {icon}" + (f" — {comment}" if comment else "") +
                   (" (uploaded)" if api_success else " (saved locally)"))
@@ -977,7 +997,7 @@ class CoreCommandsMixin:
 
         def _save_settings(new_settings: PrivacySettings):
             new_settings.apply_to_config(self.terminal.config)
-            save_config(self.terminal.config)
+            self.context.save_config(self.terminal.config)
 
         if sub in {"status", "show"}:
             shared_state = "ON — feedback may be shared with Arthera" if (
@@ -993,11 +1013,11 @@ class CoreCommandsMixin:
                 "  default: local-only; no upload unless you run /privacy opt-in",
                 "  full policy: /privacy policy  (or see PRIVACY.md)",
             ]
-            if HAS_RICH:
-                console.print()
-                console.print("[bold]Privacy[/bold]")
+            if self.context.has_rich:
+                self.context.console.print()
+                self.context.console.print("[bold]Privacy[/bold]")
                 for line in lines[1:]:
-                    console.print(f"[dim]{line}[/dim]")
+                    self.context.console.print(f"[dim]{line}[/dim]")
             else:
                 print("\n".join(lines))
             return
@@ -1012,24 +1032,24 @@ class CoreCommandsMixin:
                 f"  full policy: {local if local.exists() else url}",
                 "  manage: /privacy opt-in | opt-out | export [path] | delete",
             ]
-            if HAS_RICH:
-                console.print()
-                console.print("[bold]Privacy policy[/bold]")
+            if self.context.has_rich:
+                self.context.console.print()
+                self.context.console.print("[bold]Privacy policy[/bold]")
                 for line in lines:
-                    console.print(f"[dim]{line}[/dim]")
+                    self.context.console.print(f"[dim]{line}[/dim]")
             else:
                 print("\n".join(lines))
             return
 
         if sub in {"opt-in", "on", "enable"}:
             _save_settings(PrivacySettings(data_sharing=True, feedback_upload=True))
-            if HAS_RICH:
-                console.print("[green]Data sharing enabled.[/green]")
-                console.print("[dim]  You consent to share /feedback records (rating, the related[/dim]")
-                console.print("[dim]  model message, optional comment, model id, session id, time)[/dim]")
-                console.print("[dim]  with Arthera to improve the product. Local copies are kept.[/dim]")
-                console.print("[dim]  Credentials & financial data are never shared. Details: /privacy policy[/dim]")
-                console.print("[dim]  Withdraw any time: /privacy opt-out[/dim]")
+            if self.context.has_rich:
+                self.context.console.print("[green]Data sharing enabled.[/green]")
+                self.context.console.print("[dim]  You consent to share /feedback records (rating, the related[/dim]")
+                self.context.console.print("[dim]  model message, optional comment, model id, session id, time)[/dim]")
+                self.context.console.print("[dim]  with Arthera to improve the product. Local copies are kept.[/dim]")
+                self.context.console.print("[dim]  Credentials & financial data are never shared. Details: /privacy policy[/dim]")
+                self.context.console.print("[dim]  Withdraw any time: /privacy opt-out[/dim]")
             else:
                 print("Data sharing enabled. You consent to share /feedback records "
                       "(rating + related message) with Arthera. Credentials & financial "
@@ -1039,7 +1059,7 @@ class CoreCommandsMixin:
         if sub in {"opt-out", "off", "disable"}:
             _save_settings(PrivacySettings(data_sharing=False, feedback_upload=False))
             msg = "Data sharing disabled. Feedback stays local only."
-            console.print(f"[green]{msg}[/green]" if HAS_RICH else msg)
+            self.context.console.print(f"[green]{msg}[/green]" if self.context.has_rich else msg)
             return
 
         if sub == "export":
@@ -1048,20 +1068,20 @@ class CoreCommandsMixin:
                 path = store.export_jsonl(dest)
             except Exception as exc:
                 msg = f"Export failed: {exc}"
-                console.print(f"[red]{msg}[/red]" if HAS_RICH else msg)
+                self.context.console.print(f"[red]{msg}[/red]" if self.context.has_rich else msg)
                 return
             msg = f"Exported feedback to {_display_path(path)}"
-            console.print(f"[green]{msg}[/green]" if HAS_RICH else msg)
+            self.context.console.print(f"[green]{msg}[/green]" if self.context.has_rich else msg)
             return
 
         if sub in {"delete", "clear"}:
             count = store.delete_all()
             msg = f"Deleted {count} local feedback record(s)."
-            console.print(f"[green]{msg}[/green]" if HAS_RICH else msg)
+            self.context.console.print(f"[green]{msg}[/green]" if self.context.has_rich else msg)
             return
 
         msg = "Usage: /privacy [status|policy|opt-in|opt-out|export [path]|delete]"
-        console.print(f"[dim]{msg}[/dim]" if HAS_RICH else msg)
+        self.context.console.print(f"[dim]{msg}[/dim]" if self.context.has_rich else msg)
     async def _run_tool_cmd(self, tool_name: str, params: dict, label: str = ""):
         """Generic helper: run tool with spinner and formatted output.
 
@@ -1075,8 +1095,8 @@ class CoreCommandsMixin:
         # ── 1. Try LOCAL_TOOLS first (run in executor to avoid blocking) ──
         if tool_name in LOCAL_TOOLS:
             handler, _ = LOCAL_TOOLS[tool_name]
-            if HAS_RICH:
-                with console.status(f"[dim]{display}...[/dim]", spinner="dots"):
+            if self.context.has_rich:
+                with self.context.console.status(f"[dim]{display}...[/dim]", spinner="dots"):
                     result = await asyncio.get_event_loop().run_in_executor(
                         None, handler, params
                     )
@@ -1096,8 +1116,8 @@ class CoreCommandsMixin:
                                "add a handler in aria_tools.py.",
                 }
             else:
-                if HAS_RICH:
-                    with console.status(f"[dim]Running {display}...[/dim]", spinner="dots"):
+                if self.context.has_rich:
+                    with self.context.console.status(f"[dim]Running {display}...[/dim]", spinner="dots"):
                         result = await execute_aria_tool(self.terminal.api_url, tool_name, params)
                 else:
                     print(f"Running {display}...")
@@ -1105,7 +1125,7 @@ class CoreCommandsMixin:
 
         if result.get("success"):
             data = result.get("data", {})
-            if isinstance(data, dict) and HAS_RICH:
+            if isinstance(data, dict) and self.context.has_rich:
                 out = Text()
                 for k, v in data.items():
                     if k in ("chart_prices", "raw", "metadata"):
@@ -1119,9 +1139,9 @@ class CoreCommandsMixin:
                     else:
                         out.append(f"  {label_str:<20s}", style="dim")
                         out.append(f"{val_str}\n")
-                console.print(out)
+                self.context.console.print(out)
             else:
-                console.print(f"  [dim]{json.dumps(data, ensure_ascii=False)[:500]}[/dim]" if HAS_RICH
+                self.context.console.print(f"  [dim]{json.dumps(data, ensure_ascii=False)[:500]}[/dim]" if self.context.has_rich
                               else json.dumps(data, ensure_ascii=False)[:500])
         else:
             _print_error(f"Failed: {result.get('error', 'No data')}")
@@ -1175,13 +1195,13 @@ class CoreCommandsMixin:
                 sign = "+" if chg >= 0 else ""
                 color = "green" if chg >= 0 else "red"
                 prov  = result.get("provider", "")
-                if HAS_RICH and px:
-                    console.print(f"  [bold]{label:<12}[/bold]  {px}  [{color}]{sign}{chg:.2f}%[/{color}]  [dim]{prov}[/dim]")
+                if self.context.has_rich and px:
+                    self.context.console.print(f"  [bold]{label:<12}[/bold]  {px}  [{color}]{sign}{chg:.2f}%[/{color}]  [dim]{prov}[/dim]")
             return True
         else:
             err = (result or {}).get("error") or "数据暂不可用"
-            if HAS_RICH:
-                console.print(f"  [yellow]⚠ {label}: {err}[/yellow]")
+            if self.context.has_rich:
+                self.context.console.print(f"  [yellow]⚠ {label}: {err}[/yellow]")
             else:
                 print(f"  ⚠ {label}: {err}")
             return False
@@ -1198,37 +1218,37 @@ class CoreCommandsMixin:
         result = await execute_aria_tool(self.terminal.api_url, "get_risk_metrics", {"symbol": target})
         if result.get("success"):
             data = result.get("data", {})
-            if HAS_RICH:
-                console.print()
+            if self.context.has_rich:
+                self.context.console.print()
                 for k, v in (data.items() if isinstance(data, dict) else {}.items()):
                     val_str = f"{v:.4f}" if isinstance(v, float) else str(v)
                     color = "green" if isinstance(v, float) and v >= 0 else ("red" if isinstance(v, float) and v < 0 else "")
-                    console.print(f"  [dim]{k.replace('_',' ').title():<24s}[/dim] [{color}]{val_str}[/{color}]" if color
+                    self.context.console.print(f"  [dim]{k.replace('_',' ').title():<24s}[/dim] [{color}]{val_str}[/{color}]" if color
                                   else f"  [dim]{k.replace('_',' ').title():<24s}[/dim] {val_str}")
-                console.print()
+                self.context.console.print()
         elif "get_risk_metrics" in LOCAL_TOOLS:
             # Local fallback
             local_fn = LOCAL_TOOLS["get_risk_metrics"][0]
             local_result = await asyncio.get_event_loop().run_in_executor(None, local_fn, {"symbol": target})
             if local_result.get("success"):
                 data = local_result.get("data", {})
-                if HAS_RICH:
-                    console.print()
-                    console.print(f"  [bold]{target} Risk Metrics[/bold]  [dim](local calculation)[/dim]")
-                    console.print()
+                if self.context.has_rich:
+                    self.context.console.print()
+                    self.context.console.print(f"  [bold]{target} Risk Metrics[/bold]  [dim](local calculation)[/dim]")
+                    self.context.console.print()
                     for k, v in (data.items() if isinstance(data, dict) else {}.items()):
                         val_str = f"{v:.4f}" if isinstance(v, float) else str(v)
-                        console.print(f"  [dim]{k.replace('_',' ').title():<24s}[/dim] {val_str}")
-                    console.print()
+                        self.context.console.print(f"  [dim]{k.replace('_',' ').title():<24s}[/dim] {val_str}")
+                    self.context.console.print()
                 else:
                     print(f"  {target} Risk Metrics (local):")
                     for k, v in (data.items() if isinstance(data, dict) else {}.items()):
                         print(f"  {k}: {v}")
             else:
-                console.print(f"[dim]Risk metrics unavailable for {target}: {local_result.get('error','')}[/dim]") if HAS_RICH else print(f"Risk unavailable: {local_result.get('error','')}")
+                self.context.console.print(f"[dim]Risk metrics unavailable for {target}: {local_result.get('error','')}[/dim]") if self.context.has_rich else print(f"Risk unavailable: {local_result.get('error','')}")
         else:
             msg = f"⚠ 风险指标服务暂不可用 ({result.get('error','')[:60]})"
-            console.print(f"[yellow]{msg}[/yellow]") if HAS_RICH else print(msg)
+            self.context.console.print(f"[yellow]{msg}[/yellow]") if self.context.has_rich else print(msg)
     async def cmd_market(self, args: str):
         """Market overview: /market [indices|sectors]"""
         sub = args.strip().lower()
@@ -1245,25 +1265,25 @@ class CoreCommandsMixin:
                     mdc = _get_mdc()
                     idx_result = mdc.indices()
                     if idx_result.get("success") and idx_result.get("indices"):
-                        if HAS_RICH:
-                            console.print()
-                            console.print("  [bold]Global Indices[/bold]  [dim](local data)[/dim]")
-                            console.print()
+                        if self.context.has_rich:
+                            self.context.console.print()
+                            self.context.console.print("  [bold]Global Indices[/bold]  [dim](local data)[/dim]")
+                            self.context.console.print()
                         for name, d in idx_result["indices"].items():
                             price = d.get("price", "N/A")
                             chg   = d.get("change_pct", 0)
                             sign  = "+" if chg >= 0 else ""
                             color = "green" if chg >= 0 else "red"
-                            if HAS_RICH:
-                                console.print(f"  [dim]{name:<20s}[/dim]  {price:>10}  [{color}]{sign}{chg:.2f}%[/{color}]")
+                            if self.context.has_rich:
+                                self.context.console.print(f"  [dim]{name:<20s}[/dim]  {price:>10}  [{color}]{sign}{chg:.2f}%[/{color}]")
                             else:
                                 print(f"  {name:<20s}  {price:>10}  {sign}{chg:.2f}%")
                     else:
-                        console.print("[dim]市场数据暂不可用。请检查网络连接。[/dim]") if HAS_RICH else print("Market data unavailable.")
+                        self.context.console.print("[dim]市场数据暂不可用。请检查网络连接。[/dim]") if self.context.has_rich else print("Market data unavailable.")
                 except Exception as _e:
-                    console.print(f"[dim]本地数据获取失败: {_e}[/dim]") if HAS_RICH else print(f"Local data error: {_e}")
+                    self.context.console.print(f"[dim]本地数据获取失败: {_e}[/dim]") if self.context.has_rich else print(f"Local data error: {_e}")
             else:
-                console.print("[dim]后端不可用，本地数据模块未加载。使用 /indices 命令查看实时行情。[/dim]") if HAS_RICH else print("Backend unavailable. Try /indices.")
+                self.context.console.print("[dim]后端不可用，本地数据模块未加载。使用 /indices 命令查看实时行情。[/dim]") if self.context.has_rich else print("Backend unavailable. Try /indices.")
     async def cmd_optimize(self, args: str):
         """Optimize portfolio: /optimize [symbols...]"""
         symbols = args.upper().split() if args else self.terminal.config.get("watchlist", ["AAPL", "MSFT", "GOOGL"])
@@ -1297,8 +1317,8 @@ class CoreCommandsMixin:
         """/execution <SYMBOL> <buy|sell> <qty> [algo=compare] [price=0] — 执行算法对比"""
         parts = args.strip().split()
         if len(parts) < 3:
-            if HAS_RICH:
-                console.print("[dim]Usage: /execution AAPL buy 100000 [algo=compare] [price=180][/dim]")
+            if self.context.has_rich:
+                self.context.console.print("[dim]Usage: /execution AAPL buy 100000 [algo=compare] [price=180][/dim]")
             return
 
         symbol    = parts[0].upper()
@@ -1306,7 +1326,7 @@ class CoreCommandsMixin:
         try:
             total_qty = float(parts[2].replace(",", ""))
         except ValueError:
-            if HAS_RICH: console.print("[red]qty 必须是数字[/red]")
+            if self.context.has_rich: self.context.console.print("[red]qty 必须是数字[/red]")
             return
 
         algo  = "compare"
@@ -1345,8 +1365,8 @@ class CoreCommandsMixin:
         """/stat-arb <SYMBOL_A> <SYMBOL_B> [period=2y] — 配对协整检验 + 当前 z-score"""
         parts = args.strip().split()
         if len(parts) < 2:
-            if HAS_RICH:
-                console.print("[dim]Usage: /stat-arb GLD SLV [period=2y][/dim]")
+            if self.context.has_rich:
+                self.context.console.print("[dim]Usage: /stat-arb GLD SLV [period=2y][/dim]")
             return
 
         sym_a  = parts[0].upper()
@@ -1375,7 +1395,7 @@ class CoreCommandsMixin:
         """Web search: /web <query>"""
         query = args.strip()
         if not query:
-            console.print("[dim]Usage: /web <search query>[/dim]" if HAS_RICH else "Usage: /web <query>")
+            self.context.console.print("[dim]Usage: /web <search query>[/dim]" if self.context.has_rich else "Usage: /web <query>")
             return
         await self._run_tool_cmd("web_search", {"query": query}, f"searching: {query[:30]}")
     def cmd_local(self, args: str):
@@ -1388,18 +1408,18 @@ class CoreCommandsMixin:
             cfg["local_mode"] = False
         else:
             cfg["local_mode"] = not cfg.get("local_mode", False)
-        save_config(cfg)
+        self.context.save_config(cfg)
         state = "ON" if cfg["local_mode"] else "OFF"
         model = cfg.get("model", "qwen2.5:7b")
-        if HAS_RICH:
+        if self.context.has_rich:
             color = "green" if cfg["local_mode"] else "yellow"
-            console.print(f"  [{color}]Local mode {state}[/{color}]  model=[bold]{model}[/bold]  ollama={cfg.get('ollama_url','http://localhost:11434')}")
+            self.context.console.print(f"  [{color}]Local mode {state}[/{color}]  model=[bold]{model}[/bold]  ollama={cfg.get('ollama_url','http://localhost:11434')}")
         else:
             print(f"  Local mode {state}  model={model}")
     async def cmd_mcp(self, args: str):
         """Manage MCP servers: /mcp status | /mcp tools | /mcp reload [server]"""
         if not _HAS_MCP:
-            console.print("  [dim]mcp_client.py not available[/dim]" if HAS_RICH else "MCP not available")
+            self.context.console.print("  [dim]mcp_client.py not available[/dim]" if self.context.has_rich else "MCP not available")
             return
         sub = args.strip().lower()
         reg = self.terminal._mcp_registry
@@ -1410,13 +1430,13 @@ class CoreCommandsMixin:
             # without tearing down every other server.
             _name = args.strip().split()[1]
             if not reg:
-                console.print("  [dim]No MCP servers running[/dim]" if HAS_RICH else "No MCP servers")
+                self.context.console.print("  [dim]No MCP servers running[/dim]" if self.context.has_rich else "No MCP servers")
                 return
             ok = await reg.reload_server(_name)
             msg = (f"MCP server {_name!r} reloaded" if ok
                    else f"MCP server {_name!r} not found or failed to restart")
-            if HAS_RICH:
-                console.print(f"  [{'green' if ok else 'red'}]{msg}[/{'green' if ok else 'red'}]")
+            if self.context.has_rich:
+                self.context.console.print(f"  [{'green' if ok else 'red'}]{msg}[/{'green' if ok else 'red'}]")
             else:
                 print(f"  {msg}")
             return
@@ -1426,50 +1446,50 @@ class CoreCommandsMixin:
                 await reg.stop_all()
             self.terminal._mcp_started = False
             self.terminal._mcp_registry = None
-            if HAS_RICH:
-                console.print("  [dim]Restarting MCP servers…[/dim]")
+            if self.context.has_rich:
+                self.context.console.print("  [dim]Restarting MCP servers…[/dim]")
             from mcp_client import MCPToolRegistry
             self.terminal._mcp_registry = MCPToolRegistry()
             results = await self.terminal._mcp_registry.start_all()
             n = self.terminal._mcp_registry.register_into(LOCAL_TOOLS, LOCAL_TOOL_SCHEMAS, overwrite=True)
-            if HAS_RICH:
-                console.print(f"  [green]MCP reloaded: {n} tools from {len(results)} servers[/green]")
+            if self.context.has_rich:
+                self.context.console.print(f"  [green]MCP reloaded: {n} tools from {len(results)} servers[/green]")
             return
 
         if sub == "tools":
             if not reg:
-                console.print("  [dim]No MCP servers running[/dim]" if HAS_RICH else "No MCP servers")
+                self.context.console.print("  [dim]No MCP servers running[/dim]" if self.context.has_rich else "No MCP servers")
                 return
             tools = reg.all_tools()
-            if HAS_RICH:
-                console.print(f"\n  [bold]MCP Tools[/bold] ({len(tools)} total)\n")
+            if self.context.has_rich:
+                self.context.console.print(f"\n  [bold]MCP Tools[/bold] ({len(tools)} total)\n")
                 for t in tools:
-                    console.print(f"    [bold]{t['qualified_name']:40s}[/bold][dim]{t.get('description','')[:60]}[/dim]")
-                console.print()
+                    self.context.console.print(f"    [bold]{t['qualified_name']:40s}[/bold][dim]{t.get('description','')[:60]}[/dim]")
+                self.context.console.print()
             else:
                 for t in tools:
                     print(f"  {t['qualified_name']:40s} {t.get('description','')[:60]}")
             return
 
         # Default: status
-        if HAS_RICH:
-            console.print()
-            console.print("  [bold]MCP Servers[/bold]")
+        if self.context.has_rich:
+            self.context.console.print()
+            self.context.console.print("  [bold]MCP Servers[/bold]")
             if not _HAS_MCP:
-                console.print("  [dim]Not available (mcp_client.py missing)[/dim]")
+                self.context.console.print("  [dim]Not available (mcp_client.py missing)[/dim]")
             elif not reg:
                 config_path = str(MCP_CONFIG_PATH)
-                console.print(f"  [dim]No servers started. Configure: {config_path}[/dim]")
-                console.print("  [dim]Example: add quant_engine MCP server pointing to your mcp_server.py[/dim]")
+                self.context.console.print(f"  [dim]No servers started. Configure: {config_path}[/dim]")
+                self.context.console.print("  [dim]Example: add quant_engine MCP server pointing to your mcp_server.py[/dim]")
             else:
                 for s in reg.status():
                     color = "green" if s["running"] else "red"
                     icon  = "●" if s["running"] else "○"
-                    console.print(
+                    self.context.console.print(
                         f"  [{color}]{icon}[/{color}] [bold]{s['name']:20s}[/bold]"
                         f" [dim]{s['tool_count']} tools  {s['description'][:50]}[/dim]"
                     )
-            console.print()
+            self.context.console.print()
         else:
             if not reg:
                 print(f"  No MCP servers. Configure {CONFIG_DIR}/mcp_servers.json")
@@ -1483,43 +1503,43 @@ class CoreCommandsMixin:
             current_license(refresh=True)   # re-read in case a key was just installed
             st = license_status()
         except Exception as e:
-            console.print(f"  [yellow]license 模块不可用: {e}[/yellow]" if HAS_RICH else f"license unavailable: {e}")
+            self.context.console.print(f"  [yellow]license 模块不可用: {e}[/yellow]" if self.context.has_rich else f"license unavailable: {e}")
             return
         tier = st.get("tier", "free")
         valid = st.get("valid", True)
-        if HAS_RICH:
+        if self.context.has_rich:
             color = "green" if (tier != "free" and valid) else "dim"
-            console.print(f"  授权等级: [{color}]{tier}[/{color}]  有效: {valid}"
+            self.context.console.print(f"  授权等级: [{color}]{tier}[/{color}]  有效: {valid}"
                           + (f"  到期: {st['exp']}" if st.get("exp") else ""))
             if st.get("reason"):
-                console.print(f"  [yellow]{st['reason']}[/yellow]")
+                self.context.console.print(f"  [yellow]{st['reason']}[/yellow]")
             feats = st.get("features") or []
-            console.print(f"  已解锁: {', '.join(feats) if feats else '仅免费功能'}")
-            console.print(f"  签名校验模式: {'开启' if st.get('signed_mode') else '关闭(开发/自托管)'}")
-            console.print("  [dim]免费版含全部核心功能;专业功能配置 ARIA_LICENSE_KEY 或 ~/.arthera/license.json 解锁。[/dim]")
+            self.context.console.print(f"  已解锁: {', '.join(feats) if feats else '仅免费功能'}")
+            self.context.console.print(f"  签名校验模式: {'开启' if st.get('signed_mode') else '关闭(开发/自托管)'}")
+            self.context.console.print("  [dim]免费版含全部核心功能;专业功能配置 ARIA_LICENSE_KEY 或 ~/.arthera/license.json 解锁。[/dim]")
         else:
             print(f"license tier={tier} valid={valid} features={st.get('features')}")
     def cmd_ariarc(self, args: str):
         """Show or reload .ariarc project configuration."""
         if not _HAS_ARIARC:
-            console.print("  [dim]ariarc.py not available[/dim]" if HAS_RICH else "ariarc not available")
+            self.context.console.print("  [dim]ariarc.py not available[/dim]" if self.context.has_rich else "ariarc not available")
             return
         if "reload" in args.lower():
             arc = reload_ariarc()
             self.terminal.ariarc = arc
-            if HAS_RICH:
+            if self.context.has_rich:
                 if arc.found:
-                    console.print(f"  [green]ariarc reloaded: {arc.source_path}[/green]")
+                    self.context.console.print(f"  [green]ariarc reloaded: {arc.source_path}[/green]")
                 else:
-                    console.print("  [yellow]No .ariarc found in current directory tree[/yellow]")
+                    self.context.console.print("  [yellow]No .ariarc found in current directory tree[/yellow]")
             return
 
         arc = self.terminal.ariarc or get_ariarc()
-        if HAS_RICH:
-            console.print()
+        if self.context.has_rich:
+            self.context.console.print()
             if not arc.found:
-                console.print("  [dim]No .ariarc found (create .ariarc in your project root)[/dim]")
-                console.print()
+                self.context.console.print("  [dim]No .ariarc found (create .ariarc in your project root)[/dim]")
+                self.context.console.print()
                 _example = """{
   "project": "My Quant Strategy",
   "description": "A-share momentum + mean-reversion strategy",
@@ -1532,21 +1552,21 @@ class CoreCommandsMixin:
     "/morning-cn": "生成A股早盘简报，重点关注 {default_symbols}"
   }
 }"""
-                console.print(f"  [dim]Example .ariarc:[/dim]\n{_example}")
+                self.context.console.print(f"  [dim]Example .ariarc:[/dim]\n{_example}")
             else:
                 d = arc.to_dict()
-                console.print(f"  [bold]Project:[/bold] {arc.project or '(unnamed)'}")
-                console.print(f"  [bold]Source:[/bold]  [dim]{d['source_path']}[/dim]")
-                console.print(f"  [bold]Market:[/bold]  {arc.market}")
+                self.context.console.print(f"  [bold]Project:[/bold] {arc.project or '(unnamed)'}")
+                self.context.console.print(f"  [bold]Source:[/bold]  [dim]{d['source_path']}[/dim]")
+                self.context.console.print(f"  [bold]Market:[/bold]  {arc.market}")
                 if arc.default_symbols:
-                    console.print(f"  [bold]Symbols:[/bold] {', '.join(arc.default_symbols)}")
+                    self.context.console.print(f"  [bold]Symbols:[/bold] {', '.join(arc.default_symbols)}")
                 if arc.commands:
-                    console.print(f"  [bold]Commands:[/bold] {', '.join(arc.commands.keys())}")
+                    self.context.console.print(f"  [bold]Commands:[/bold] {', '.join(arc.commands.keys())}")
                 if arc.tools_blacklist:
-                    console.print(f"  [bold]Blocked tools:[/bold] {', '.join(arc.tools_blacklist)}")
+                    self.context.console.print(f"  [bold]Blocked tools:[/bold] {', '.join(arc.tools_blacklist)}")
                 if arc.auto_context:
-                    console.print(f"  [bold]Auto context:[/bold] {', '.join(arc.auto_context)}")
-            console.print()
+                    self.context.console.print(f"  [bold]Auto context:[/bold] {', '.join(arc.auto_context)}")
+            self.context.console.print()
         else:
             if arc.found:
                 import json as _j
@@ -1615,10 +1635,10 @@ class CoreCommandsMixin:
                                  f"market insights {len(symbols)} stocks")
     def cmd_recommend(self, args: str):
         """Recommend best local models for financial analysis."""
-        if HAS_RICH:
-            console.print()
-            console.print("  [bold]Recommended Local Models for Finance[/bold]")
-            console.print()
+        if self.context.has_rich:
+            self.context.console.print()
+            self.context.console.print("  [bold]Recommended Local Models for Finance[/bold]")
+            self.context.console.print()
             try:
                 available = detect_ollama_models(
                     self.terminal.config.get("ollama_url", "http://localhost:11434")
@@ -1628,15 +1648,15 @@ class CoreCommandsMixin:
                     installed = any(a.startswith(model_id.split(":")[0]) for a in available)
                     icon  = "[green]●[/green]" if installed else "[dim]○[/dim]"
                     vram  = rec.get("vram_gb", "?")
-                    console.print(
+                    self.context.console.print(
                         f"  {icon} [bold]{model_id:30s}[/bold] "
                         f"[dim]VRAM≈{vram}GB  {rec['reason'][:60]}[/dim]"
                     )
                     if not installed:
-                        console.print(f"    [dim]Install: {rec['install']}[/dim]")
-                console.print()
+                        self.context.console.print(f"    [dim]Install: {rec['install']}[/dim]")
+                self.context.console.print()
             except Exception:
-                console.print("  [dim]Could not check installed models[/dim]")
+                self.context.console.print("  [dim]Could not check installed models[/dim]")
         else:
             for rec in RECOMMENDED_FINANCE_MODELS:
                 print(f"  {rec['model']:30s} {rec['reason']}")
@@ -1645,7 +1665,7 @@ class CoreCommandsMixin:
         """Portfolio weight optimisation."""
         symbols = [s.strip().upper() for s in args.split() if s.strip()]
         if not symbols:
-            console.print("  [dim]Usage: /optimize-port AAPL MSFT GOOGL [method=max_sharpe][/dim]" if HAS_RICH
+            self.context.console.print("  [dim]Usage: /optimize-port AAPL MSFT GOOGL [method=max_sharpe][/dim]" if self.context.has_rich
                           else "Usage: /optimize-port AAPL MSFT [method=max_sharpe]")
             return
         # Check if last token is method=X
@@ -1665,13 +1685,13 @@ class CoreCommandsMixin:
     async def _run_local_tool(self, tool_name: str, params: dict, label: str = ""):
         """Run a LOCAL_TOOLS entry, display result with Rich formatting."""
         if tool_name not in LOCAL_TOOLS:
-            if HAS_RICH:
-                console.print(f"  [dim]Tool {tool_name!r} not available[/dim]")
+            if self.context.has_rich:
+                self.context.console.print(f"  [dim]Tool {tool_name!r} not available[/dim]")
             return
         handler, _ = LOCAL_TOOLS[tool_name]
         label_text = label or tool_name
-        if HAS_RICH:
-            with console.status(f"[dim]{label_text}…[/dim]", spinner="dots"):
+        if self.context.has_rich:
+            with self.context.console.status(f"[dim]{label_text}…[/dim]", spinner="dots"):
                 result = handler(params)
         else:
             print(f"  {label_text}…")
@@ -1679,8 +1699,8 @@ class CoreCommandsMixin:
 
         if not result.get("success", True):
             err = _clean_tool_error_message(result.get("error", "unknown error"))
-            if HAS_RICH:
-                console.print(f"  [red]✗[/red] {err}")
+            if self.context.has_rich:
+                self.context.console.print(f"  [red]✗[/red] {err}")
             else:
                 print(f"  ✗ {err}")
             return
@@ -1697,11 +1717,11 @@ class CoreCommandsMixin:
         """
         desc = args.strip()
         if not desc:
-            if HAS_RICH:
-                console.print("[dim]Usage: /ui <描述>[/dim]")
-                console.print("[dim]  /ui 今日A股热力图[/dim]")
-                console.print("[dim]  /ui 持仓组合报告[/dim]")
-                console.print("[dim]  /ui 市场晨报看板[/dim]")
+            if self.context.has_rich:
+                self.context.console.print("[dim]Usage: /ui <描述>[/dim]")
+                self.context.console.print("[dim]  /ui 今日A股热力图[/dim]")
+                self.context.console.print("[dim]  /ui 持仓组合报告[/dim]")
+                self.context.console.print("[dim]  /ui 市场晨报看板[/dim]")
             else:
                 print("Usage: /ui <description>")
             return
@@ -1739,8 +1759,8 @@ class CoreCommandsMixin:
             "- Accent color: dark=#F5A623, light=#B8520A\n"
         )
 
-        if HAS_RICH:
-            console.print(f"[bold]UI Generation:[/bold] {desc}")
+        if self.context.has_rich:
+            self.context.console.print(f"[bold]UI Generation:[/bold] {desc}")
         else:
             print(f"Generating UI: {desc}")
 
@@ -1754,8 +1774,8 @@ class CoreCommandsMixin:
         try:
             from dashboard_generator import generate_and_open
         except ImportError:
-            if HAS_RICH:
-                console.print("[red]dashboard_generator.py 未找到，请检查安装[/red]")
+            if self.context.has_rich:
+                self.context.console.print("[red]dashboard_generator.py 未找到，请检查安装[/red]")
             else:
                 print("dashboard_generator.py 未找到")
             return
@@ -1763,23 +1783,23 @@ class CoreCommandsMixin:
         parts = args.strip().split()
         mode = parts[0].lower() if parts and parts[0].lower() in {"brief", "market", "portfolio", "full"} else "brief"
         watchlist = self.terminal.config.get("watchlist", [])
-        if HAS_RICH:
-            console.print(f"[dim]正在抓取数据并生成 Dashboard（{mode}）…[/dim]")
+        if self.context.has_rich:
+            self.context.console.print(f"[dim]正在抓取数据并生成 Dashboard（{mode}）…[/dim]")
         else:
             print(f"正在生成 Dashboard（{mode}）…")
 
         try:
             out = generate_and_open(watchlist=watchlist, config=self.terminal.config, mode=mode)
-            if HAS_RICH:
-                console.print(
+            if self.context.has_rich:
+                self.context.console.print(
                     f"  [green]✓[/green] Dashboard 已生成并在浏览器打开\n"
                     f"  [dim]路径: [bold]{out}[/bold][/dim]"
                 )
             else:
                 print(f"Dashboard saved: {out}")
         except Exception as exc:
-            if HAS_RICH:
-                console.print(f"[red]生成失败: {exc}[/red]")
+            if self.context.has_rich:
+                self.context.console.print(f"[red]生成失败: {exc}[/red]")
             else:
                 print(f"生成失败: {exc}")
     async def cmd_tv(self, args: str):
@@ -1833,10 +1853,10 @@ class CoreCommandsMixin:
             _print_error(f"TradingView URL 生成失败: {exc}")
             return
 
-        if HAS_RICH:
-            console.print(f"\n  [bold]TradingView[/bold]  {_chart_display_label(raw_symbol, symbol)}")
-            console.print(f"  [dim]symbol:[/dim] {symbol}  [dim]tv:[/dim] {tv_symbol}")
-            console.print(f"  [link={url}]{url}[/link]")
+        if self.context.has_rich:
+            self.context.console.print(f"\n  [bold]TradingView[/bold]  {_chart_display_label(raw_symbol, symbol)}")
+            self.context.console.print(f"  [dim]symbol:[/dim] {symbol}  [dim]tv:[/dim] {tv_symbol}")
+            self.context.console.print(f"  [link={url}]{url}[/link]")
         else:
             print(f"TradingView {symbol} -> {tv_symbol}")
             print(url)
@@ -1862,17 +1882,17 @@ class CoreCommandsMixin:
                     "path": str(pine_path),
                     "command": f"/tv {symbol} --pine",
                 }
-                if HAS_RICH:
-                    console.print(f"  [green]✓[/green] Pine strategy saved: [link={pine_path}]{pine_path}[/link]")
-                    console.print("  [dim]Use: TradingView → Pine Editor → paste script → Save → Add to chart[/dim]")
+                if self.context.has_rich:
+                    self.context.console.print(f"  [green]✓[/green] Pine strategy saved: [link={pine_path}]{pine_path}[/link]")
+                    self.context.console.print("  [dim]Use: TradingView → Pine Editor → paste script → Save → Add to chart[/dim]")
                 else:
                     print(f"Pine strategy saved: {pine_path}")
                     print("Use: TradingView -> Pine Editor -> paste script -> Save -> Add to chart")
                 if txt_copy:
                     companion = _write_text_companion(str(pine_path))
                     if companion:
-                        if HAS_RICH:
-                            console.print(f"  [green]✓[/green] Text copy saved: [link={companion}]{companion}[/link]")
+                        if self.context.has_rich:
+                            self.context.console.print(f"  [green]✓[/green] Text copy saved: [link={companion}]{companion}[/link]")
                         else:
                             print(f"Text copy saved: {companion}")
                 if copy_pine:
@@ -1880,14 +1900,14 @@ class CoreCommandsMixin:
                         copied, copy_err = _copy_text_to_clipboard(pine_path.read_text(encoding="utf-8"))
                     except Exception as exc:
                         copied, copy_err = False, str(exc)
-                    if HAS_RICH:
-                        console.print("  [green]✓[/green] Pine script copied to clipboard" if copied else f"  [yellow]copy failed:[/yellow] {copy_err}")
+                    if self.context.has_rich:
+                        self.context.console.print("  [green]✓[/green] Pine script copied to clipboard" if copied else f"  [yellow]copy failed:[/yellow] {copy_err}")
                     else:
                         print("Pine script copied to clipboard" if copied else f"copy failed: {copy_err}")
                 if reveal_file:
                     revealed, reveal_err = _reveal_path_in_finder(str(pine_path))
-                    if HAS_RICH:
-                        console.print("  [green]✓[/green] Revealed in Finder" if revealed else f"  [yellow]reveal failed:[/yellow] {reveal_err}")
+                    if self.context.has_rich:
+                        self.context.console.print("  [green]✓[/green] Revealed in Finder" if revealed else f"  [yellow]reveal failed:[/yellow] {reveal_err}")
                     else:
                         print("Revealed in Finder" if revealed else f"reveal failed: {reveal_err}")
             except Exception as exc:
@@ -1896,8 +1916,8 @@ class CoreCommandsMixin:
 
         if open_browser and url:
             opened, open_err = _open_path_or_url(url)
-            if HAS_RICH:
-                console.print("  [green]✓[/green] opened in browser" if opened else f"  [yellow]open failed:[/yellow] {open_err}")
+            if self.context.has_rich:
+                self.context.console.print("  [green]✓[/green] opened in browser" if opened else f"  [yellow]open failed:[/yellow] {open_err}")
             else:
                 print("opened in browser" if opened else f"open failed: {open_err}")
 
@@ -1909,8 +1929,8 @@ class CoreCommandsMixin:
                     tv_symbol=tv_symbol,
                     mode=tv_analysis_mode,
                 )
-                if HAS_RICH:
-                    console.print(make_markdown(_strip_latex(readout)))
+                if self.context.has_rich:
+                    self.context.console.print(make_markdown(_strip_latex(readout)))
                 else:
                     print(readout)
                 self.terminal._last_response = readout
@@ -1919,8 +1939,8 @@ class CoreCommandsMixin:
                     f"TradingView 已打开，但当前无法生成 {symbol} 的指标分析："
                     f"{snapshot.get('error') or '行情数据不可用'}"
                 )
-                if HAS_RICH:
-                    console.print(f"  [yellow]{msg}[/yellow]")
+                if self.context.has_rich:
+                    self.context.console.print(f"  [yellow]{msg}[/yellow]")
                 else:
                     print(msg)
     async def cmd_chart(self, args: str):
@@ -1960,9 +1980,9 @@ class CoreCommandsMixin:
 
         msg = f"chart {_chart_display_label(raw_symbol, symbol)} · {period}"
         chart_start = time.perf_counter()
-        if HAS_RICH:
-            console.print(f"\n  [bold]⏺[/bold] {msg}")
-            with console.status("[dim]fetching OHLCV and calculating indicators…[/dim]", spinner="dots"):
+        if self.context.has_rich:
+            self.context.console.print(f"\n  [bold]⏺[/bold] {msg}")
+            with self.context.console.status("[dim]fetching OHLCV and calculating indicators…[/dim]", spinner="dots"):
                 result = await asyncio.get_event_loop().run_in_executor(
                     None, lambda: _generate_chart_sync(symbol, period=period)
                 )
@@ -1998,10 +2018,10 @@ class CoreCommandsMixin:
                     "resistance": res3,
                 },
             }
-            if HAS_RICH:
-                console.print(f"  [green]✓[/green] chart generated  [dim]({elapsed_ms}ms)[/dim]")
-                console.print(f"    saved: [link={path}]{path_label}[/link]")
-                console.print(
+            if self.context.has_rich:
+                self.context.console.print(f"  [green]✓[/green] chart generated  [dim]({elapsed_ms}ms)[/dim]")
+                self.context.console.print(f"    saved: [link={path}]{path_label}[/link]")
+                self.context.console.print(
                     f"    [dim]{display_label}  "
                     f"趋势: {result.get('trend','—')}  "
                     f"RSI: {f'{rsi_val:.1f}' if rsi_val else '—'}  "
@@ -2010,11 +2030,11 @@ class CoreCommandsMixin:
                     f"数据: {provider}[/dim]"
                 )
                 if issues:
-                    console.print(f"  [yellow]⚠ 自审发现 {len(issues)} 个问题:[/yellow]")
+                    self.context.console.print(f"  [yellow]⚠ 自审发现 {len(issues)} 个问题:[/yellow]")
                     for iss in issues:
-                        console.print(f"    [yellow]· {iss}[/yellow]")
+                        self.context.console.print(f"    [yellow]· {iss}[/yellow]")
                 else:
-                    console.print("  [green dim]✓ 自审通过（数据质量正常）[/green dim]")
+                    self.context.console.print("  [green dim]✓ 自审通过（数据质量正常）[/green dim]")
             else:
                 print(f"  OK chart generated ({elapsed_ms}ms): {path_label}")
                 print(f"  {display_label}  趋势: {result.get('trend','—')}  RSI: {f'{rsi_val:.1f}' if rsi_val else '—'}  数据: {provider}")
@@ -2033,8 +2053,8 @@ class CoreCommandsMixin:
     async def _cmd_chart_multi(self, symbols: list[tuple[str, str]], period: str):
         """Generate a normalized comparison chart plus individual K-line charts."""
         labels = [_chart_display_label(raw, resolved) for raw, resolved in symbols]
-        if HAS_RICH:
-            console.print(f"\n  [bold]⏺[/bold] compare {' · '.join(labels)} · {period}")
+        if self.context.has_rich:
+            self.context.console.print(f"\n  [bold]⏺[/bold] compare {' · '.join(labels)} · {period}")
         else:
             print(f"  > compare {' '.join(labels)} · {period}")
 
@@ -2061,12 +2081,12 @@ class CoreCommandsMixin:
                 "metrics": result.get("metrics") or [],
                 "children": [],
             }
-            if HAS_RICH:
-                console.print(f"  [green]✓[/green] comparison chart generated  [dim]({elapsed_ms}ms)[/dim]")
-                console.print(f"    saved: [link={path}]{path_label}[/link]")
+            if self.context.has_rich:
+                self.context.console.print(f"  [green]✓[/green] comparison chart generated  [dim]({elapsed_ms}ms)[/dim]")
+                self.context.console.print(f"    saved: [link={path}]{path_label}[/link]")
                 rows = result.get("metrics") or []
                 for row in rows[:6]:
-                    console.print(
+                    self.context.console.print(
                         f"    [dim]{row.get('symbol')}: "
                         f"收益 {row.get('total_return_pct', 0):+.2f}%  "
                         f"波动 {row.get('volatility_pct', 0):.2f}%  "
@@ -2111,8 +2131,8 @@ class CoreCommandsMixin:
         cmd   = [_sys.executable, str(script)]
         if codes:
             cmd += ["--code"] + codes
-        if HAS_RICH:
-            console.print("\n  📊 运行短线分析...\n")
+        if self.context.has_rich:
+            self.context.console.print("\n  📊 运行短线分析...\n")
         else:
             print("\n  📊 运行短线分析...\n")
         result = subprocess.run(cmd, text=True, capture_output=False)
@@ -2139,8 +2159,8 @@ class CoreCommandsMixin:
             parts.remove("--quick")
         if parts:
             cmd += ["--code"] + parts
-        if HAS_RICH:
-            console.print("\n  📈 运行长线分析...\n")
+        if self.context.has_rich:
+            self.context.console.print("\n  📈 运行长线分析...\n")
         else:
             print("\n  📈 运行长线分析...\n")
         result = subprocess.run(cmd, text=True, capture_output=False)
@@ -2149,11 +2169,11 @@ class CoreCommandsMixin:
     async def cmd_indices(self, args: str):
         """全球主要指数实时行情."""
         if not _HAS_MDC:
-            console.print("  [dim]market_data_client 未加载[/dim]" if HAS_RICH else "market_data_client not loaded")
+            self.context.console.print("  [dim]market_data_client 未加载[/dim]" if self.context.has_rich else "market_data_client not loaded")
             return
         mdc = _get_mdc()
-        if HAS_RICH:
-            with console.status("[dim]获取全球指数...[/dim]", spinner="dots"):
+        if self.context.has_rich:
+            with self.context.console.status("[dim]获取全球指数...[/dim]", spinner="dots"):
                 r = mdc.indices()
         else:
             print("  获取全球指数...")
@@ -2161,24 +2181,24 @@ class CoreCommandsMixin:
 
         if not r.get("success"):
             err = _clean_tool_error_message(r.get("error", "failed"))
-            console.print(f"  [red]{err}[/red]" if HAS_RICH else err)
+            self.context.console.print(f"  [red]{err}[/red]" if self.context.has_rich else err)
             return
 
-        if HAS_RICH:
-            console.print()
-            console.print("  [bold]全球指数行情[/bold]  "
+        if self.context.has_rich:
+            self.context.console.print()
+            self.context.console.print("  [bold]全球指数行情[/bold]  "
                           f"[dim]{datetime.now().strftime('%H:%M:%S')}[/dim]")
-            console.print()
+            self.context.console.print()
             for name, d in r["indices"].items():
                 chg = d.get("change_pct", 0)
                 color = "green" if chg >= 0 else "red"
                 sign  = "+" if chg >= 0 else ""
-                console.print(
+                self.context.console.print(
                     f"  [bold]{name:<14s}[/bold]"
                     f"  {str(d.get('price','')):<12}"
                     f"  [{color}]{sign}{chg:.2f}%[/{color}]"
                 )
-            console.print()
+            self.context.console.print()
         else:
             for name, d in r["indices"].items():
                 chg = d.get("change_pct", 0)
@@ -2187,7 +2207,7 @@ class CoreCommandsMixin:
     async def cmd_hot(self, args: str):
         """热门/活跃股票榜单.  Usage: /hot [cn|us] [top=20]"""
         if not _HAS_MDC:
-            console.print("  [dim]market_data_client 未加载[/dim]" if HAS_RICH else "market_data_client not loaded")
+            self.context.console.print("  [dim]market_data_client 未加载[/dim]" if self.context.has_rich else "market_data_client not loaded")
             return
         parts  = args.strip().lower().split()
         market = "us" if "us" in parts else "cn"
@@ -2198,22 +2218,22 @@ class CoreCommandsMixin:
                 except ValueError: pass
 
         mdc = _get_mdc()
-        if HAS_RICH:
-            with console.status(f"[dim]获取{market.upper()}热门股...[/dim]", spinner="dots"):
+        if self.context.has_rich:
+            with self.context.console.status(f"[dim]获取{market.upper()}热门股...[/dim]", spinner="dots"):
                 r = mdc.hot_stocks(market=market, top_n=top_n)
         else:
             r = mdc.hot_stocks(market=market, top_n=top_n)
 
         if not r.get("success"):
-            console.print(f"  [red]{r.get('error','failed')}[/red]" if HAS_RICH else r.get('error'))
+            self.context.console.print(f"  [red]{r.get('error','failed')}[/red]" if self.context.has_rich else r.get('error'))
             return
 
         stocks = r.get("stocks", [])
-        if HAS_RICH:
-            console.print()
-            console.print(f"  [bold]{market.upper()} 热门股 Top {len(stocks)}[/bold]  "
+        if self.context.has_rich:
+            self.context.console.print()
+            self.context.console.print(f"  [bold]{market.upper()} 热门股 Top {len(stocks)}[/bold]  "
                           f"[dim]provider: {r.get('provider','')}[/dim]")
-            console.print()
+            self.context.console.print()
             for i, s in enumerate(stocks, 1):
                 sym  = s.get("code") or s.get("symbol","")
                 name = s.get("name", sym)
@@ -2221,12 +2241,12 @@ class CoreCommandsMixin:
                 chg  = s.get("change_pct", 0)
                 color = "green" if chg >= 0 else "red"
                 sign  = "+" if chg >= 0 else ""
-                console.print(
+                self.context.console.print(
                     f"  [dim]{i:2d}.[/dim] [bold]{name:<8s}[/bold] "
                     f"[dim]{sym:<8s}[/dim] {str(p):<8} "
                     f"[{color}]{sign}{chg:.2f}%[/{color}]"
                 )
-            console.print()
+            self.context.console.print()
         else:
             for s in stocks:
                 sym = s.get("code") or s.get("symbol","")
@@ -2238,8 +2258,8 @@ class CoreCommandsMixin:
         days = parsed.days
 
         service_result = None
-        if HAS_RICH:
-            with console.status(f"[dim]计算 {symbol} 技术指标...[/dim]", spinner="dots"):
+        if self.context.has_rich:
+            with self.context.console.status(f"[dim]计算 {symbol} 技术指标...[/dim]", spinner="dots"):
                 from packages.aria_services.data import DataService
                 service_result = DataService().technical_indicators(symbol, days=days)
         else:
@@ -2267,18 +2287,18 @@ class CoreCommandsMixin:
                 _reason = f"[red]{_err[:120]}[/red]"
                 if _missing:
                     _reason += f"  [dim]missing: {_missing}[/dim]"
-            if HAS_RICH:
+            if self.context.has_rich:
                 if _price_line:
-                    console.print(f"\n{_price_line}")
-                console.print(f"  {_reason}\n")
+                    self.context.console.print(f"\n{_price_line}")
+                self.context.console.print(f"  {_reason}\n")
             else:
                 import re as _re
                 print(f"\n  {_re.sub(r'[[/].*?]', '', _price_line + _reason)}\n")
             return
 
         print_ta_result(
-            console=console,
-            has_rich=HAS_RICH,
+            console=self.context.console,
+            has_rich=self.context.has_rich,
             symbol=symbol,
             days=days,
             service_result=service_result,
@@ -2293,8 +2313,8 @@ class CoreCommandsMixin:
             "command": f"/chart {symbol} {period}",
         }
         chart_result = None
-        if HAS_RICH:
-            with console.status(f"[dim]生成 {symbol} 技术图表 HTML/PNG...[/dim]", spinner="dots"):
+        if self.context.has_rich:
+            with self.context.console.status(f"[dim]生成 {symbol} 技术图表 HTML/PNG...[/dim]", spinner="dots"):
                 chart_result = await asyncio.get_event_loop().run_in_executor(
                     None, lambda: _generate_chart_sync(symbol, period=period)
                 )
@@ -2316,15 +2336,15 @@ class CoreCommandsMixin:
                 "png_path": png_path,
                 "command": f"/chart {symbol} {period}",
             }
-            if HAS_RICH:
-                console.print()
-                console.print("  [green]✓[/green] 技术图表已生成")
+            if self.context.has_rich:
+                self.context.console.print()
+                self.context.console.print("  [green]✓[/green] 技术图表已生成")
                 if html_path:
-                    console.print(f"  [dim]HTML:[/dim] [link={html_path}]{_display_path(html_path)}[/link]")
+                    self.context.console.print(f"  [dim]HTML:[/dim] [link={html_path}]{_display_path(html_path)}[/link]")
                 if png_path:
-                    console.print(f"  [dim]PNG :[/dim] [link={png_path}]{_display_path(png_path)}[/link]")
+                    self.context.console.print(f"  [dim]PNG :[/dim] [link={png_path}]{_display_path(png_path)}[/link]")
                 elif png_error:
-                    console.print(f"  [yellow]PNG 跳过:[/yellow] {png_error[:90]}")
+                    self.context.console.print(f"  [yellow]PNG 跳过:[/yellow] {png_error[:90]}")
             else:
                 print("\n  技术图表已生成")
                 if html_path:
@@ -2335,8 +2355,8 @@ class CoreCommandsMixin:
                     print(f"  PNG 跳过: {png_error[:90]}")
         elif chart_result:
             err = chart_result.get("error") or "图表生成失败"
-            if HAS_RICH:
-                console.print(f"  [yellow]图表生成跳过:[/yellow] {err[:120]}")
+            if self.context.has_rich:
+                self.context.console.print(f"  [yellow]图表生成跳过:[/yellow] {err[:120]}")
             else:
                 print(f"  图表生成跳过: {err[:120]}")
     def _extract_last_code(self) -> str:
@@ -2383,15 +2403,15 @@ class CoreCommandsMixin:
         """
         parts = args.strip().split()
         if not parts:
-            console.print("  [dim]Usage: /edgar SYMBOL [filings|facts|insider][/dim]" if HAS_RICH
+            self.context.console.print("  [dim]Usage: /edgar SYMBOL [filings|facts|insider][/dim]" if self.context.has_rich
                          else "Usage: /edgar SYMBOL [filings|facts|insider]")
             return
 
         symbol = parts[0].upper()
         sub    = parts[1].lower() if len(parts) > 1 else "filings"
 
-        if HAS_RICH:
-            with console.status(f"[dim]查询 EDGAR {symbol}...[/dim]", spinner="dots"):
+        if self.context.has_rich:
+            with self.context.console.status(f"[dim]查询 EDGAR {symbol}...[/dim]", spinner="dots"):
                 result = await asyncio.get_event_loop().run_in_executor(
                     None, lambda: _fetch_edgar_data(symbol, sub)
                 )
@@ -2404,7 +2424,7 @@ class CoreCommandsMixin:
             _print_error(f"未找到 {symbol} 的 EDGAR 数据")
             return
 
-        if HAS_RICH:
+        if self.context.has_rich:
             from rich.table import Table
             from rich import box as rich_box
             if sub == "filings":
@@ -2415,16 +2435,16 @@ class CoreCommandsMixin:
                 table.add_column("链接", style="dim")
                 for f in result[:10]:
                     table.add_row(f.get("form",""), f.get("date",""), f.get("url","")[:60])
-                console.print(table)
+                self.context.console.print(table)
             elif sub == "facts":
-                console.print(f"  [bold]{symbol}[/bold] 财务摘要:")
+                self.context.console.print(f"  [bold]{symbol}[/bold] 财务摘要:")
                 for metric, entries in result.get("metrics", {}).items():
                     if entries:
                         latest = entries[0]
-                        console.print(f"  [dim]{metric}[/dim]  {latest.get('val',0):,.0f}  ({latest.get('end','')})")
+                        self.context.console.print(f"  [dim]{metric}[/dim]  {latest.get('val',0):,.0f}  ({latest.get('end','')})")
             elif sub == "insider":
-                console.print(f"  [bold]{symbol}[/bold] 近期内幕交易 ({len(result)} 条):")
+                self.context.console.print(f"  [bold]{symbol}[/bold] 近期内幕交易 ({len(result)} 条):")
                 for f in result[:10]:
-                    console.print(f"  [dim]{f.get('date','')}[/dim]  Form 4")
+                    self.context.console.print(f"  [dim]{f.get('date','')}[/dim]  Form 4")
         else:
             print(f"  {symbol} EDGAR 数据: {len(result) if isinstance(result, list) else 'OK'}")

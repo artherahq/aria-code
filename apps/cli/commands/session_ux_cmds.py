@@ -5,22 +5,59 @@ from __future__ import annotations
 import os
 
 
+import json
+import asyncio
+import datetime
+import time
+import shlex
+from typing import Dict, Any, Optional
+
+def get_model_cfg(*args, **kwargs):
+    from aria_cli import get_model_cfg as fn
+    return fn(*args, **kwargs)
+def OllamaProvider(*args, **kwargs):
+    from aria_cli import OllamaProvider as fn
+    return fn(*args, **kwargs)
+def stream_provider_result(*args, **kwargs):
+    from aria_cli import stream_provider_result as fn
+    return fn(*args, **kwargs)
+
+import json
+import asyncio
+import datetime
+import time
+import shlex
+import sys
+import os
+from typing import Dict, Any, Optional
+
+
+import json
+import asyncio
+import datetime
+import time
+import shlex
+import sys
+import os
+from typing import Dict, Any, Optional
+
+
 class SessionUxCommandsMixin:
     """Mixin: session UX and conversation management commands."""
 
     def cmd_clear(self, args: str):
         self.terminal.conversation = []
         os.system("clear" if os.name == "posix" else "cls")
-        console.print("[dim]Conversation cleared[/dim]" if HAS_RICH else "Cleared")
+        self.context.console.print("[dim]Conversation cleared[/dim]" if self.context.has_rich else "Cleared")
 
     def cmd_btw(self, args: str):
         q = args.strip()
         if not q:
-            console.print("[dim]/btw <question>  — quick question without polluting history[/dim]" if HAS_RICH else "/btw <question>")
+            self.context.console.print("[dim]/btw <question>  — quick question without polluting history[/dim]" if self.context.has_rich else "/btw <question>")
             return
         conv = self.terminal.conversation
         if not conv:
-            console.print("[dim](no conversation context yet)[/dim]" if HAS_RICH else "(no context)")
+            self.context.console.print("[dim](no conversation context yet)[/dim]" if self.context.has_rich else "(no context)")
             return
         _ctx_slice = conv[-6:] if len(conv) >= 6 else conv
         _ctx = "\n".join(
@@ -31,10 +68,10 @@ class SessionUxCommandsMixin:
             f"[Side question — answer briefly, do not reference this note]\n"
             f"Context from conversation:\n{_ctx}\n\nQuestion: {q}"
         )
-        if HAS_RICH:
+        if self.context.has_rich:
             from rich.panel import Panel as _Panel
             from rich import box as _rbox
-            console.print(_Panel(f"[dim]{q}[/dim]", title="[dim]/btw[/dim]", box=_rbox.ROUNDED, border_style="dim"))
+            self.context.console.print(_Panel(f"[dim]{q}[/dim]", title="[dim]/btw[/dim]", box=_rbox.ROUNDED, border_style="dim"))
         import asyncio as _aio
 
         async def _ask_btw():
@@ -59,17 +96,17 @@ class SessionUxCommandsMixin:
             answer = loop.run_until_complete(_ask_btw()) if not loop.is_running() else "(run /btw from interactive prompt)"
         except Exception:
             answer = "(could not get answer)"
-        if HAS_RICH:
+        if self.context.has_rich:
             from rich.panel import Panel as _Panel
             from rich import box as _rbox
-            console.print(_Panel(answer.strip(), title="[dim]↩ btw[/dim]", box=_rbox.ROUNDED, border_style="dim #C08050"))
+            self.context.console.print(_Panel(answer.strip(), title="[dim]↩ btw[/dim]", box=_rbox.ROUNDED, border_style="dim #C08050"))
         else:
             print(f"\n  [btw] {answer.strip()}\n")
 
     def cmd_recap(self, args: str):
         conv = self.terminal.conversation
         if not conv:
-            console.print("[dim]No conversation yet[/dim]" if HAS_RICH else "No conversation")
+            self.context.console.print("[dim]No conversation yet[/dim]" if self.context.has_rich else "No conversation")
             return
         turns = len([m for m in conv if m.get("role") == "user"])
         topics: list[str] = []
@@ -78,13 +115,13 @@ class SessionUxCommandsMixin:
                 snippet = str(m.get("content", ""))[:60].strip()
                 if snippet:
                     topics.append(snippet)
-        if HAS_RICH:
+        if self.context.has_rich:
             from rich.panel import Panel as _Panel
             from rich import box as _rbox
             body = f"[dim]{turns} 轮对话[/dim]\n"
             for i, t in enumerate(topics[-6:], 1):
                 body += f"  [dim]{i}.[/dim] {t}…\n"
-            console.print(_Panel(body.rstrip(), title="[bold]会话摘要[/bold]", box=_rbox.ROUNDED, border_style="dim"))
+            self.context.console.print(_Panel(body.rstrip(), title="[bold]会话摘要[/bold]", box=_rbox.ROUNDED, border_style="dim"))
         else:
             print(f"Session: {turns} turns")
             for i, t in enumerate(topics[-6:], 1):
@@ -92,15 +129,15 @@ class SessionUxCommandsMixin:
 
     def cmd_history(self, args: str):
         if not self.terminal.conversation:
-            console.print("[dim]No conversation history[/dim]" if HAS_RICH else "No history")
+            self.context.console.print("[dim]No conversation history[/dim]" if self.context.has_rich else "No history")
             return
         for msg in self.terminal.conversation[-10:]:
             role = msg["role"]
             content = msg["content"][:120]
-            if HAS_RICH:
+            if self.context.has_rich:
                 prefix = "You" if role == "user" else "Aria"
                 style = "bold" if role == "user" else "bold"
-                console.print(f"[{style}]{prefix}:[/{style}] [dim]{content}[/dim]")
+                self.context.console.print(f"[{style}]{prefix}:[/{style}] [dim]{content}[/dim]")
             else:
                 print(f"{'You' if role == 'user' else 'Aria'}: {content}")
 
@@ -139,10 +176,10 @@ class SessionUxCommandsMixin:
                 kept = self.terminal.conversation[-6:]
                 self._record_context_checkpoint("hard")
                 self.terminal.conversation = kept
-                console.print(f"[dim]Hard-compacted to last {len(kept)} messages[/dim]" if HAS_RICH
+                self.context.console.print(f"[dim]Hard-compacted to last {len(kept)} messages[/dim]" if self.context.has_rich
                               else f"Hard-compacted to {len(kept)} messages")
             else:
-                console.print("[dim]Context small enough, no compaction needed[/dim]" if HAS_RICH
+                self.context.console.print("[dim]Context small enough, no compaction needed[/dim]" if self.context.has_rich
                               else "No compaction needed")
             return
         import asyncio as _asyncio
@@ -162,18 +199,18 @@ class SessionUxCommandsMixin:
                     if len(compacted) < len(self.terminal.conversation)
                     else self.terminal.conversation[-8:]
                 )
-                console.print("[dim]Compacted (fallback)[/dim]")
+                self.context.console.print("[dim]Compacted (fallback)[/dim]")
 
     async def _smart_compact_async(self, silent: bool = False):
         conv = self.terminal.conversation
         if len(conv) <= 4:
             if not silent:
-                console.print("[dim]Context small enough — no compaction needed[/dim]" if HAS_RICH
+                self.context.console.print("[dim]Context small enough — no compaction needed[/dim]" if self.context.has_rich
                               else "Context small enough")
             return
 
-        if not silent and HAS_RICH:
-            console.print("[dim]Summarising conversation...[/dim]")
+        if not silent and self.context.has_rich:
+            self.context.console.print("[dim]Summarising conversation...[/dim]")
 
         try:
             max_ctx = int(get_model_cfg(self.terminal.config.get("model", "qwen2.5:7b")).get("num_ctx", 16384) or 16384)
@@ -208,7 +245,7 @@ class SessionUxCommandsMixin:
             self._record_context_checkpoint("fallback")
             self.terminal.conversation = compacted if compacted and len(compacted) < len(conv) else conv[-8:]
             if not silent:
-                console.print("[dim]Compacted (summary failed, used local fallback)[/dim]" if HAS_RICH
+                self.context.console.print("[dim]Compacted (summary failed, used local fallback)[/dim]" if self.context.has_rich
                               else "Compacted (summary fallback)")
             return
 
@@ -225,8 +262,8 @@ class SessionUxCommandsMixin:
         new_count = len(self.terminal.conversation)
         old_count = len(conv)
         if not silent:
-            if HAS_RICH:
-                console.print(
+            if self.context.has_rich:
+                self.context.console.print(
                     f"  [dim]✓ Compacted {old_count} → {new_count} messages "
                     f"(summary preserved context)[/dim]"
                 )
@@ -244,8 +281,8 @@ class SessionUxCommandsMixin:
         }
         self.terminal._forks.append(snapshot)
         idx = len(self.terminal._forks) - 1
-        if HAS_RICH:
-            console.print(
+        if self.context.has_rich:
+            self.context.console.print(
                 f"  [dim]↳ Forked as [bold]{name}[/bold] "
                 f"(fork #{idx}, {len(snapshot['conv'])} messages). "
                 f"Restore with /load-fork {idx}[/dim]"
@@ -256,33 +293,33 @@ class SessionUxCommandsMixin:
     def cmd_load_fork(self, args: str):
         forks = self.terminal._forks
         if not forks:
-            console.print("[dim]No forks yet — use /fork to create one[/dim]" if HAS_RICH else "No forks")
+            self.context.console.print("[dim]No forks yet — use /fork to create one[/dim]" if self.context.has_rich else "No forks")
             return
         try:
             idx = int(args.strip())
         except (ValueError, IndexError):
-            if HAS_RICH:
+            if self.context.has_rich:
                 for i, f in enumerate(forks):
-                    console.print(f"  [dim]#{i}[/dim]  {f['name']}  [dim]{f['ts']}  {len(f['conv'])} msgs[/dim]")
+                    self.context.console.print(f"  [dim]#{i}[/dim]  {f['name']}  [dim]{f['ts']}  {len(f['conv'])} msgs[/dim]")
             else:
                 for i, f in enumerate(forks):
                     print(f"  #{i}  {f['name']}  {f['ts']}")
             return
         if idx < 0 or idx >= len(forks):
-            console.print(f"[dim]Fork #{idx} not found[/dim]" if HAS_RICH else "Invalid index")
+            self.context.console.print(f"[dim]Fork #{idx} not found[/dim]" if self.context.has_rich else "Invalid index")
             return
         snap = forks[idx]
         self.terminal.conversation = [dict(m) for m in snap["conv"]]
-        console.print(
+        self.context.console.print(
             f"  [dim]✓ Restored fork [bold]{snap['name']}[/bold] "
             f"({len(snap['conv'])} messages)[/dim]"
-            if HAS_RICH else f"Restored fork '{snap['name']}'"
+            if self.context.has_rich else f"Restored fork '{snap['name']}'"
         )
 
     def cmd_copy(self, args: str):
         text = self.terminal._last_response
         if not text:
-            console.print("[dim]No response to copy yet[/dim]" if HAS_RICH else "Nothing to copy")
+            self.context.console.print("[dim]No response to copy yet[/dim]" if self.context.has_rich else "Nothing to copy")
             return
         copied = False
         try:
@@ -308,13 +345,13 @@ class SessionUxCommandsMixin:
         if copied:
             self.terminal._record_feedback("copy", text)
             preview = text[:60].replace("\n", " ")
-            console.print(
+            self.context.console.print(
                 f"  [dim]✓ Copied to clipboard: \"{preview}{'…' if len(text) > 60 else ''}\"[/dim]"
-                if HAS_RICH else f"Copied: \"{preview}\""
+                if self.context.has_rich else f"Copied: \"{preview}\""
             )
         else:
-            console.print(
+            self.context.console.print(
                 "[yellow]Could not reach clipboard (pbcopy/xclip not found). "
                 "Here is the response:[/yellow]\n" + text
-                if HAS_RICH else "Clipboard unavailable. Response:\n" + text
+                if self.context.has_rich else "Clipboard unavailable. Response:\n" + text
             )

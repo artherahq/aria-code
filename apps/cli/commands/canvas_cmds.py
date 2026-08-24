@@ -1,10 +1,30 @@
 """CanvasCommandsMixin — /canvas command (live artifact preview server).
 
 Extracted following the same convention as broker_cmds.py/backtest_cmds.py:
-module globals (HAS_RICH, console, etc.) are imported lazily inside each
+module globals (self.context.has_rich, self.context.console, etc.) are imported lazily inside each
 method body to avoid circular imports at load time.
 """
 from __future__ import annotations
+
+
+import json
+import asyncio
+import datetime
+import time
+import shlex
+import sys
+import os
+from typing import Dict, Any, Optional
+
+
+import json
+import asyncio
+import datetime
+import time
+import shlex
+import sys
+import os
+from typing import Dict, Any, Optional
 
 
 class CanvasCommandsMixin:
@@ -17,7 +37,7 @@ class CanvasCommandsMixin:
 
     async def cmd_canvas(self, args: str):
         """实时预览面板: /canvas [stop] —— 启动/停止本地预览服务器，报告和图表生成后会自动在浏览器里实时更新。"""
-        from aria_cli import HAS_RICH, console, _print_error
+        from aria_cli import   _print_error
 
         sub = args.strip().lower()
         import preview_server
@@ -26,17 +46,17 @@ class CanvasCommandsMixin:
             session = preview_server.get_active_session()
             if session is None:
                 msg = "预览服务器未在运行"
-                console.print(f"[yellow]{msg}[/yellow]") if HAS_RICH else print(msg)
+                self.context.console.print(f"[yellow]{msg}[/yellow]") if self.context.has_rich else print(msg)
                 return
             await preview_server.stop_session()
             msg = "✓ 已停止预览服务器"
-            console.print(f"[green]{msg}[/green]") if HAS_RICH else print(msg)
+            self.context.console.print(f"[green]{msg}[/green]") if self.context.has_rich else print(msg)
             return
 
         existing = preview_server.get_active_session()
         if existing is not None and existing.url:
             msg = f"预览服务器已在运行: {existing.url}"
-            console.print(f"[cyan]{msg}[/cyan]") if HAS_RICH else print(msg)
+            self.context.console.print(f"[cyan]{msg}[/cyan]") if self.context.has_rich else print(msg)
             return
 
         try:
@@ -51,4 +71,4 @@ class CanvasCommandsMixin:
             f"之后生成的报告/图表会自动在这个浏览器标签里实时更新，无需手动刷新。\n"
             f"/canvas stop 可以随时关闭。"
         )
-        console.print(f"[green]{msg}[/green]") if HAS_RICH else print(msg)
+        self.context.console.print(f"[green]{msg}[/green]") if self.context.has_rich else print(msg)

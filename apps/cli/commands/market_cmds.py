@@ -245,6 +245,106 @@ def _parse_nl_team_pair(text: str) -> Optional[Tuple[str, str]]:
     return None
 
 
+import json
+import asyncio
+import datetime
+import time
+import shlex
+from typing import Dict, Any, Optional
+
+def print_quote_result(*args, **kwargs):
+    from aria_cli import print_quote_result as fn
+    return fn(*args, **kwargs)
+def _football_fixtures(*args, **kwargs):
+    from aria_cli import _football_fixtures as fn
+    return fn(*args, **kwargs)
+def execute_aria_tool(*args, **kwargs):
+    from aria_cli import execute_aria_tool as fn
+    return fn(*args, **kwargs)
+def _is_ashare_symbol(*args, **kwargs):
+    from aria_cli import _is_ashare_symbol as fn
+    return fn(*args, **kwargs)
+def _prompt_str(*args, **kwargs):
+    from aria_cli import _prompt_str as fn
+    return fn(*args, **kwargs)
+def _render_reits_list(*args, **kwargs):
+    from aria_cli import _render_reits_list as fn
+    return fn(*args, **kwargs)
+def _render_multi_city(*args, **kwargs):
+    from aria_cli import _render_multi_city as fn
+    return fn(*args, **kwargs)
+def _football_team(*args, **kwargs):
+    from aria_cli import _football_team as fn
+    return fn(*args, **kwargs)
+def _get_LOCAL_TOOLS():
+    from aria_cli import LOCAL_TOOLS as val
+    return val
+def logger(*args, **kwargs):
+    from aria_cli import logger as fn
+    return fn(*args, **kwargs)
+def _render_property_val(*args, **kwargs):
+    from aria_cli import _render_property_val as fn
+    return fn(*args, **kwargs)
+def _get_mdc(*args, **kwargs):
+    from aria_cli import _get_mdc as fn
+    return fn(*args, **kwargs)
+def _load_data_keys(*args, **kwargs):
+    from aria_cli import _load_data_keys as fn
+    return fn(*args, **kwargs)
+def _render_asset_score(*args, **kwargs):
+    from aria_cli import _render_asset_score as fn
+    return fn(*args, **kwargs)
+def _print_error(*args, **kwargs):
+    from aria_cli import _print_error as fn
+    return fn(*args, **kwargs)
+def _render_rental_yield(*args, **kwargs):
+    from aria_cli import _render_rental_yield as fn
+    return fn(*args, **kwargs)
+def _football_h2h(*args, **kwargs):
+    from aria_cli import _football_h2h as fn
+    return fn(*args, **kwargs)
+def _football_standings(*args, **kwargs):
+    from aria_cli import _football_standings as fn
+    return fn(*args, **kwargs)
+def _render_house_price(*args, **kwargs):
+    from aria_cli import _render_house_price as fn
+    return fn(*args, **kwargs)
+def format_quote_output(*args, **kwargs):
+    from aria_cli import format_quote_output as fn
+    return fn(*args, **kwargs)
+def _prompt_float(*args, **kwargs):
+    from aria_cli import _prompt_float as fn
+    return fn(*args, **kwargs)
+def _ashare_code_to_name(*args, **kwargs):
+    from aria_cli import _ashare_code_to_name as fn
+    return fn(*args, **kwargs)
+def _get__HAS_MDC():
+    from aria_cli import _HAS_MDC as val
+    return val
+def parse_symbols(*args, **kwargs):
+    from aria_cli import parse_symbols as fn
+    return fn(*args, **kwargs)
+
+import json
+import asyncio
+import datetime
+import time
+import shlex
+import sys
+import os
+from typing import Dict, Any, Optional
+
+
+import json
+import asyncio
+import datetime
+import time
+import shlex
+import sys
+import os
+from typing import Dict, Any, Optional
+
+
 class MarketCommandsMixin:
     """Mixin: Market commands: quote, realty, football, screen, news, screen_cn, limitup, north."""
 
@@ -271,16 +371,16 @@ class MarketCommandsMixin:
                 get_us_housing_data,
             )
         except ImportError as e:
-            if HAS_RICH:
-                console.print(f"[red]realty_data_tools 未加载: {e}[/red]")
+            if self.context.has_rich:
+                self.context.console.print(f"[red]realty_data_tools 未加载: {e}[/red]")
             return
 
         if sub == "market":
             city1 = parts[1] if len(parts) > 1 else "北京"
             city2 = parts[2] if len(parts) > 2 else ("上海" if city1 != "上海" else "北京")
             import functools as _functools
-            if HAS_RICH:
-                with console.status(f"[dim]获取 {city1}/{city2} 房价指数...[/dim]", spinner="dots"):
+            if self.context.has_rich:
+                with self.context.console.status(f"[dim]获取 {city1}/{city2} 房价指数...[/dim]", spinner="dots"):
                     r = await loop.run_in_executor(
                         None, _functools.partial(get_house_price_index, city1, city2)
                     )
@@ -288,15 +388,15 @@ class MarketCommandsMixin:
                 r = get_house_price_index(city1, city2)
             _render_house_price(r)
             # Also show investment data
-            if HAS_RICH:
-                with console.status("[dim]获取房地产投资数据...[/dim]", spinner="dots"):
+            if self.context.has_rich:
+                with self.context.console.status("[dim]获取房地产投资数据...[/dim]", spinner="dots"):
                     ri = await loop.run_in_executor(None, get_re_investment)
             else:
                 ri = get_re_investment()
             if ri.get("success") and ri.get("latest"):
                 lt = ri["latest"]
-                if HAS_RICH:
-                    console.print(f"\n  [dim]房地产开发投资[/dim]  {lt.get('日期','')}  "
+                if self.context.has_rich:
+                    self.context.console.print(f"\n  [dim]房地产开发投资[/dim]  {lt.get('日期','')}  "
                                   f"最新值 [bold]{lt.get('最新值','')}[/bold]  "
                                   f"涨跌 {lt.get('涨跌幅','')}  "
                                   f"近1年 {lt.get('近1年涨跌幅','')}")
@@ -304,27 +404,27 @@ class MarketCommandsMixin:
         elif sub == "reit":
             code = parts[1] if len(parts) > 1 else None
             if code:
-                if HAS_RICH:
-                    with console.status(f"[dim]分析 {code} REIT...[/dim]", spinner="dots"):
+                if self.context.has_rich:
+                    with self.context.console.status(f"[dim]分析 {code} REIT...[/dim]", spinner="dots"):
                         r = await loop.run_in_executor(None, get_reit_analysis, code)
                 else:
                     r = get_reit_analysis(code)
                 if r.get("success"):
-                    if HAS_RICH:
-                        console.print(f"\n  [bold cyan]{r.get('code','')}[/bold cyan] "
+                    if self.context.has_rich:
+                        self.context.console.print(f"\n  [bold cyan]{r.get('code','')}[/bold cyan] "
                                       f"[dim]{r.get('name','')}[/dim]")
-                        console.print(f"  现价 [bold]{r.get('price','')}[/bold]  "
+                        self.context.console.print(f"  现价 [bold]{r.get('price','')}[/bold]  "
                                       f"涨跌 {r.get('chg_pct','')}%")
                         if r.get("return_1y") is not None:
                             rc = "green" if r["return_1y"] > 0 else "red"
-                            console.print(f"  近1年收益: [{rc}]{r['return_1y']:+.2f}%[/{rc}]")
+                            self.context.console.print(f"  近1年收益: [{rc}]{r['return_1y']:+.2f}%[/{rc}]")
                         if r.get("volatility_annual"):
-                            console.print(f"  年化波动率: {r['volatility_annual']:.2f}%")
+                            self.context.console.print(f"  年化波动率: {r['volatility_annual']:.2f}%")
                 else:
-                    console.print(f"[red]{r.get('error','分析失败')}[/red]") if HAS_RICH else None
+                    self.context.console.print(f"[red]{r.get('error','分析失败')}[/red]") if self.context.has_rich else None
             else:
-                if HAS_RICH:
-                    with console.status("[dim]获取 REIT 列表...[/dim]", spinner="dots"):
+                if self.context.has_rich:
+                    with self.context.console.status("[dim]获取 REIT 列表...[/dim]", spinner="dots"):
                         r = await loop.run_in_executor(None, get_reits_list)
                 else:
                     r = get_reits_list()
@@ -332,16 +432,16 @@ class MarketCommandsMixin:
 
         elif sub == "compare":
             cities = parts[1:] if len(parts) > 1 else None
-            if HAS_RICH:
-                with console.status("[dim]对比多城市房价...[/dim]", spinner="dots"):
+            if self.context.has_rich:
+                with self.context.console.status("[dim]对比多城市房价...[/dim]", spinner="dots"):
                     r = await loop.run_in_executor(None, get_multi_city_comparison, cities)
             else:
                 r = get_multi_city_comparison(cities)
             _render_multi_city(r)
 
         elif sub in ("rent", "rental"):
-            if HAS_RICH:
-                console.print("[bold]💰 租金收益率计算器[/bold]  [dim](输入 0 跳过可选项)[/dim]")
+            if self.context.has_rich:
+                self.context.console.print("[bold]💰 租金收益率计算器[/bold]  [dim](输入 0 跳过可选项)[/dim]")
             price_wan  = _prompt_float("购入价格(万元): ", 200.0)
             monthly_rent = _prompt_float("月租金(元): ", 5000.0)
             annual_costs = _prompt_float("年维护成本(元)[可选]: ", 0.0)
@@ -352,8 +452,8 @@ class MarketCommandsMixin:
             _render_rental_yield(r)
 
         elif sub in ("valuation", "val"):
-            if HAS_RICH:
-                console.print("[bold]🏢 物业估值计算器[/bold]")
+            if self.context.has_rich:
+                self.context.console.print("[bold]🏢 物业估值计算器[/bold]")
             area = _prompt_float("建筑面积(㎡): ", 100.0)
             monthly_rent = _prompt_float("月租金(元): ", 5000.0)
             tier = _prompt_str("区位层级 (tier1/tier2/tier3): ", "tier2")
@@ -362,8 +462,8 @@ class MarketCommandsMixin:
             _render_property_val(r)
 
         elif sub == "score":
-            if HAS_RICH:
-                console.print("[bold]📍 资产区位评分[/bold]")
+            if self.context.has_rich:
+                self.context.console.print("[bold]📍 资产区位评分[/bold]")
             city  = _prompt_str("城市: ", "上海")
             area  = _prompt_float("建筑面积(㎡): ", 100.0)
             floor_n = int(_prompt_float("楼层: ", 1.0))
@@ -377,15 +477,15 @@ class MarketCommandsMixin:
             _render_asset_score(r)
 
         elif sub == "us":
-            if HAS_RICH:
-                with console.status("[dim]获取美国住房数据...[/dim]", spinner="dots"):
+            if self.context.has_rich:
+                with self.context.console.status("[dim]获取美国住房数据...[/dim]", spinner="dots"):
                     r = await loop.run_in_executor(None, get_us_housing_data)
             else:
                 r = get_us_housing_data()
             if not r.get("success"):
-                if HAS_RICH: console.print(f"[red]{r.get('error')}[/red]")
+                if self.context.has_rich: self.context.console.print(f"[red]{r.get('error')}[/red]")
                 return
-            if HAS_RICH:
+            if self.context.has_rich:
                 from rich.table import Table as _T
                 from rich import box as _box
                 tb = _T(title="[bold]🏠 美国住房市场数据[/bold]", box=_box.ROUNDED)
@@ -394,17 +494,17 @@ class MarketCommandsMixin:
                     lt = val.get("latest", {})
                     v = lt.get("value")
                     tb.add_row(val.get("label", key), str(v) if v else "—", str(lt.get("date",""))[:7])
-                console.print(tb)
+                self.context.console.print(tb)
                 for line in r.get("assessment", []):
-                    console.print(f"  [dim]▸ {line}[/dim]")
+                    self.context.console.print(f"  [dim]▸ {line}[/dim]")
 
         else:
-            if HAS_RICH:
-                console.print("[dim]用法: /realty [market|reit|compare|rent|valuation|score|us][/dim]")
-                console.print("[dim]示例: /realty market 北京 上海[/dim]")
-                console.print("[dim]      /realty reit 508603[/dim]")
-                console.print("[dim]      /realty rent  (交互式租金计算)[/dim]")
-                console.print("[dim]      /realty compare 北京 上海 成都 杭州[/dim]")
+            if self.context.has_rich:
+                self.context.console.print("[dim]用法: /realty [market|reit|compare|rent|valuation|score|us][/dim]")
+                self.context.console.print("[dim]示例: /realty market 北京 上海[/dim]")
+                self.context.console.print("[dim]      /realty reit 508603[/dim]")
+                self.context.console.print("[dim]      /realty rent  (交互式租金计算)[/dim]")
+                self.context.console.print("[dim]      /realty compare 北京 上海 成都 杭州[/dim]")
 
     async def cmd_football(self, args: str):
         """
@@ -430,7 +530,7 @@ class MarketCommandsMixin:
 
         parts = args.strip().split()
         if not parts:
-            console.print(Panel(
+            self.context.console.print(Panel(
                 "[bold]足球分析命令[/bold]\n\n"
                 "  [cyan]/football standings pl[/cyan]              英超积分榜\n"
                 "  [cyan]/football fixtures cl 14[/cyan]            欧冠未来14天赛程\n"
@@ -479,7 +579,7 @@ class MarketCommandsMixin:
                     away   = rest
                 await self._football_predict(home, away, league)
             else:
-                console.print("[red]用法: /football predict <主队> vs <客队> [联赛/wc][/red]")
+                self.context.console.print("[red]用法: /football predict <主队> vs <客队> [联赛/wc][/red]")
 
         # ── team ──────────────────────────────────────────────────────────────
         elif sub in ("team", "球队"):
@@ -511,7 +611,7 @@ class MarketCommandsMixin:
                     t2     = rest
                 await self._run_in_executor(_football_h2h, t1, t2, league)
             else:
-                console.print("[red]用法: /football h2h <队1> vs <队2> [联赛][/red]")
+                self.context.console.print("[red]用法: /football h2h <队1> vs <队2> [联赛][/red]")
 
         else:
             # NL intent: /football 预测加拿大跟波黑... or /football 分析...
@@ -547,20 +647,20 @@ class MarketCommandsMixin:
                 if _sports_ctx:
                     _has_quant = "量化预测" in _sports_ctx
                     _title = "⚽ 赛事预测" if _has_quant else "⚽ 赛事数据"
-                    console.print(Panel(
+                    self.context.console.print(Panel(
                         _sports_ctx,
                         title=f"[bold]{_title}[/bold]",
                         border_style="cyan" if _has_quant else "blue",
                     ))
                 else:
-                    console.print(
+                    self.context.console.print(
                         "[yellow]⚽ 未能解析队名。[/yellow]\n"
                         "支持格式：\n"
                         "  [cyan]/football predict 葡萄牙 vs 刚果 wc[/cyan]\n"
                         "  [cyan]/football 葡萄牙和刚果比赛[/cyan]  （自动识别）"
                     )
             else:
-                console.print(f"[red]未知子命令: {sub}[/red]  使用 /football 查看帮助")
+                self.context.console.print(f"[red]未知子命令: {sub}[/red]  使用 /football 查看帮助")
 
     async def _football_predict(self, home: str, away: str, league: str):
         """Run football match prediction with LLM analysis."""
@@ -569,7 +669,7 @@ class MarketCommandsMixin:
         from rich import box as rich_box
         import types
 
-        console.print(f"[#57606a]⚽ 分析 {home} vs {away} ({league.upper()})…[/#57606a]")
+        self.context.console.print(f"[#57606a]⚽ 分析 {home} vs {away} ({league.upper()})…[/#57606a]")
 
         # WC / national team prediction path
         _wc_leagues = {"wc", "worldcup", "世界杯", "world_cup", "ca", "ec", "afc"}
@@ -660,7 +760,7 @@ class MarketCommandsMixin:
                     away_name_cn      = _a_cn,
                 )
             except Exception as exc:
-                console.print(f"[red]WC 预测失败: {exc}[/red]")
+                self.context.console.print(f"[red]WC 预测失败: {exc}[/red]")
                 return
         else:
             try:
@@ -698,7 +798,7 @@ class MarketCommandsMixin:
                         pass
 
             except Exception as exc:
-                console.print(f"[red]预测失败: {exc}[/red]")
+                self.context.console.print(f"[red]预测失败: {exc}[/red]")
                 return
 
         # ── 确定性分析文字：基于 Poisson 数字生成，不调用 LLM ────────────────
@@ -780,9 +880,9 @@ class MarketCommandsMixin:
         )
 
         title = f"⚽ {_home_display} vs {_away_display}  [{league.upper()}]"
-        console.print(Panel(prob_table, title=f"[bold #3fb950]{title}[/bold #3fb950]", border_style="#3fb950"))
+        self.context.console.print(Panel(prob_table, title=f"[bold #3fb950]{title}[/bold #3fb950]", border_style="#3fb950"))
 
-        console.print(f"  [#57606a]预期进球: {_home_display} {pred.lambda_home:.2f} / {_away_display} {pred.lambda_away:.2f}"
+        self.context.console.print(f"  [#57606a]预期进球: {_home_display} {pred.lambda_home:.2f} / {_away_display} {pred.lambda_away:.2f}"
                       f"  │  双方均进球: {pred.btts:.0%}[/#57606a]")
 
         # Top scorelines — show up to 8, colour-coded by outcome
@@ -811,7 +911,7 @@ class MarketCommandsMixin:
                     _label = "[yellow]平局[/yellow]"
                     _sc_fmt = f"[yellow]{_sc}[/yellow]"
                 score_table.add_row(_sc_fmt, f"{_pr}%", _label)
-            console.print(score_table)
+            self.context.console.print(score_table)
 
         # Half-time / second-half breakdown
         if getattr(pred, "ht_lambda_home", 0) > 0:
@@ -822,26 +922,26 @@ class MarketCommandsMixin:
             _ht_best_p = pred.ht_top_scorelines[0]["prob"] if pred.ht_top_scorelines else 0
             _st_best_lh = getattr(pred, "st_lambda_home", 0)
             _st_best_la = getattr(pred, "st_lambda_away", 0)
-            console.print()
-            console.print(
+            self.context.console.print()
+            self.context.console.print(
                 f"  [bold]上半场[/bold]  预期进球 {_h_lbl} [cyan]{pred.ht_lambda_home:.2f}[/cyan] / "
                 f"{_a_lbl} [cyan]{pred.ht_lambda_away:.2f}[/cyan]"
                 f"  │  最可能: [bold]{_ht_best}[/bold] ({_ht_best_p}%)"
             )
-            console.print(
+            self.context.console.print(
                 f"  [#57606a]上半场胜/平/负: {pred.ht_home_win:.0%} / {pred.ht_draw:.0%} / {pred.ht_away_win:.0%}[/#57606a]"
             )
             _ht_scores_str = "  ".join(
                 f"[cyan]{s['score']}[/cyan] {s['prob']}%" for s in pred.ht_top_scorelines[:4]
             )
             if _ht_scores_str:
-                console.print(f"  [#57606a]比分分布: {_ht_scores_str}[/#57606a]")
-            console.print(
+                self.context.console.print(f"  [#57606a]比分分布: {_ht_scores_str}[/#57606a]")
+            self.context.console.print(
                 f"  [bold]下半场[/bold]  预期进球 {_h_lbl} [green]{_st_best_lh:.2f}[/green] / "
                 f"{_a_lbl} [green]{_st_best_la:.2f}[/green]"
                 f"  [#57606a](全场 − 上半场)[/#57606a]"
             )
-            console.print()
+            self.context.console.print()
 
         # ── 实力对比 & 近期表现 ───────────────────────────────────────────────
         _h_name_d = _home_display
@@ -850,9 +950,9 @@ class MarketCommandsMixin:
         _aform = getattr(pred, "away_form", "")
 
         if pred.key_factors:
-            console.print("\n  [bold]实力对比[/bold]")
+            self.context.console.print("\n  [bold]实力对比[/bold]")
             for f_ in pred.key_factors:
-                console.print(f"  [#57606a]  • {f_}[/#57606a]")
+                self.context.console.print(f"  [#57606a]  • {f_}[/#57606a]")
 
         # Form strings (W/D/L) from live API — only show when available
         if _hform and _hform not in ("?????", ""):
@@ -864,21 +964,21 @@ class MarketCommandsMixin:
                     elif c == "L": out.append("[red]L[/red]")
                     else: out.append(c)
                 return "".join(out)
-            console.print("\n  [bold]近期表现[/bold]")
-            console.print(f"  {_h_name_d}  {_form_colored(_hform)}")
+            self.context.console.print("\n  [bold]近期表现[/bold]")
+            self.context.console.print(f"  {_h_name_d}  {_form_colored(_hform)}")
             if _aform and _aform not in ("?????", ""):
-                console.print(f"  {_a_name_d}  {_form_colored(_aform)}")
+                self.context.console.print(f"  {_a_name_d}  {_form_colored(_aform)}")
 
         if pred.analysis:
-            console.print(Panel(
+            self.context.console.print(Panel(
                 pred.analysis,
                 title="[bold]量化分析[/bold]",
                 border_style="#8c959f",
                 padding=(0, 2),
             ))
 
-        console.print(f"\n  [bold green]{pred.verdict}[/bold green]")
-        console.print("  [#6e7781]提示：准确比分概率通常较分散，请按候选区间参考，不构成投注建议。[/#6e7781]\n")
+        self.context.console.print(f"\n  [bold green]{pred.verdict}[/bold green]")
+        self.context.console.print("  [#6e7781]提示：准确比分概率通常较分散，请按候选区间参考，不构成投注建议。[/#6e7781]\n")
 
     async def cmd_screen(self, args: str):
         """股票筛选: CN → screen_ashare; US → yfinance 大盘成分筛选."""
@@ -895,7 +995,7 @@ class MarketCommandsMixin:
                 if "=" in tok:
                     k, v = tok.split("=", 1)
                     params[k.strip()] = v.strip()
-            if "screen_ashare" in LOCAL_TOOLS:
+            if "screen_ashare" in _get_LOCAL_TOOLS():
                 await self._run_local_tool("screen_ashare", params, "A股选股筛选")
             else:
                 await self.terminal.send_message(f"帮我筛选A股股票，条件：{criteria or '市值>50亿，非ST，流动性好'}")
@@ -945,9 +1045,9 @@ class MarketCommandsMixin:
                 logger.debug("screen US fetch error: %s", _e)
                 return []
 
-        if HAS_RICH:
+        if self.context.has_rich:
             _status_msg = f"[dim]筛选 {len(_US_POOL)} 只美股 ({criteria or 'top market cap'})…[/dim]"
-            with console.status(_status_msg, spinner="dots"):
+            with self.context.console.status(_status_msg, spinner="dots"):
                 rows = await _loop.run_in_executor(None, _fetch_pool)
         else:
             print("  筛选美股中…")
@@ -974,10 +1074,10 @@ class MarketCommandsMixin:
 
         if not rows:
             msg = f"[yellow]当前条件 '{criteria}' 无匹配标的（池: {len(_US_POOL)} 只）[/yellow]"
-            console.print(msg) if HAS_RICH else print(msg.replace("[yellow]","").replace("[/yellow]",""))
+            self.context.console.print(msg) if self.context.has_rich else print(msg.replace("[yellow]","").replace("[/yellow]",""))
             return
 
-        if HAS_RICH:
+        if self.context.has_rich:
             from rich.table import Table as _Tbl
             t = _Tbl(title=f"美股筛选  {criteria or 'large-cap'}  共 {len(rows)} 只",
                      show_header=True, box=None, padding=(0, 1))
@@ -998,8 +1098,8 @@ class MarketCommandsMixin:
                     mc_s, pe_s,
                     f"[{yr_color}]{yr_s}[/{yr_color}]",
                 )
-            console.print(t)
-            console.print(f"  [dim]来源: yfinance · 池: {len(_US_POOL)} 只大市值美股[/dim]")
+            self.context.console.print(t)
+            self.context.console.print(f"  [dim]来源: yfinance · 池: {len(_US_POOL)} 只大市值美股[/dim]")
         else:
             print(f"  美股筛选  {criteria}")
             for r in rows:
@@ -1032,16 +1132,16 @@ class MarketCommandsMixin:
             i += 1
         topic = " ".join(topic_parts) or "market"
 
-        console.print(f"[dim]Fetching {limit} news items for '{topic}'...[/dim]" if HAS_RICH
+        self.context.console.print(f"[dim]Fetching {limit} news items for '{topic}'...[/dim]" if self.context.has_rich
                       else f"Fetching news for {topic}...")
 
         # Try backend first, then local tools (Finnhub / NewsAPI / AKShare fallback chain)
         result = await execute_aria_tool(self.terminal.api_url, "analyze_news", {
             "query": topic, "limit": limit,
         })
-        if not result.get("success") and "analyze_news" in LOCAL_TOOLS:
+        if not result.get("success") and "analyze_news" in _get_LOCAL_TOOLS():
             # Local fallback: uses Finnhub → NewsAPI → AKShare depending on configured keys
-            local_fn = LOCAL_TOOLS["analyze_news"][0]
+            local_fn = _get_LOCAL_TOOLS()["analyze_news"][0]
             result = await asyncio.get_event_loop().run_in_executor(
                 None, local_fn, {"query": topic, "symbol": topic, "limit": limit}
             )
@@ -1063,14 +1163,14 @@ class MarketCommandsMixin:
                 if articles:
                     sentiment = "public RSS fallback"
             if isinstance(articles, list) and articles:
-                if HAS_RICH:
-                    console.print()
+                if self.context.has_rich:
+                    self.context.console.print()
                     if sentiment:
                         sent_color = "green" if "positive" in sentiment.lower() or "bullish" in sentiment.lower() else (
                             "red" if "negative" in sentiment.lower() or "bearish" in sentiment.lower() else "yellow"
                         )
-                        console.print(f"  Sentiment: [{sent_color}]{sentiment}[/{sent_color}]")
-                        console.print()
+                        self.context.console.print(f"  Sentiment: [{sent_color}]{sentiment}[/{sent_color}]")
+                        self.context.console.print()
                 for idx, a in enumerate(articles[:limit], 1):
                     if isinstance(a, dict):
                         title = a.get("title", "Untitled")
@@ -1082,52 +1182,52 @@ class MarketCommandsMixin:
                     else:
                         title = str(a)
                         source = pub_date = url_item = ""
-                    if HAS_RICH:
-                        console.print(f"  [bold]{idx}.[/bold] {title}")
+                    if self.context.has_rich:
+                        self.context.console.print(f"  [bold]{idx}.[/bold] {title}")
                         meta_parts = [p for p in [source, pub_date] if p]
                         if meta_parts:
-                            console.print(f"     [dim]{' · '.join(meta_parts)}[/dim]")
+                            self.context.console.print(f"     [dim]{' · '.join(meta_parts)}[/dim]")
                     else:
                         meta = f" ({source})" if source else ""
                         print(f"  {idx}. {title}{meta}")
-                if HAS_RICH:
-                    console.print()
+                if self.context.has_rich:
+                    self.context.console.print()
             else:
                 # Empty articles — show helpful config guidance
                 _data_keys = _load_data_keys()
-                if HAS_RICH:
-                    console.print()
-                    console.print(f"  [dim]未找到 '{topic}' 的相关新闻。[/dim]")
+                if self.context.has_rich:
+                    self.context.console.print()
+                    self.context.console.print(f"  [dim]未找到 '{topic}' 的相关新闻。[/dim]")
                     if not _data_keys.get("finnhub") and not _data_keys.get("newsapi"):
-                        console.print("  [dim]配置数据服务 key 可获取更多新闻来源：[/dim]")
-                        console.print("  [dim]  /apikey set finnhub <key>   →  https://finnhub.io/register[/dim]")
-                        console.print("  [dim]  /apikey set newsapi <key>   →  https://newsapi.org/register[/dim]")
-                    console.print()
+                        self.context.console.print("  [dim]配置数据服务 key 可获取更多新闻来源：[/dim]")
+                        self.context.console.print("  [dim]  /apikey set finnhub <key>   →  https://finnhub.io/register[/dim]")
+                        self.context.console.print("  [dim]  /apikey set newsapi <key>   →  https://newsapi.org/register[/dim]")
+                    self.context.console.print()
         else:
             articles = await asyncio.get_event_loop().run_in_executor(
                 None, _fetch_public_news_fallback, topic, limit
             )
             if isinstance(articles, list) and articles:
-                if HAS_RICH:
-                    console.print()
-                    console.print("  [dim]新闻 API 不可用，已使用公共 RSS fallback。[/dim]")
-                    console.print()
+                if self.context.has_rich:
+                    self.context.console.print()
+                    self.context.console.print("  [dim]新闻 API 不可用，已使用公共 RSS fallback。[/dim]")
+                    self.context.console.print()
                 for idx, a in enumerate(articles[:limit], 1):
                     title = a.get("title", "Untitled") if isinstance(a, dict) else str(a)
                     source = a.get("source", "") if isinstance(a, dict) else ""
                     pub_date = a.get("published_at", "") if isinstance(a, dict) else ""
                     if pub_date:
                         pub_date = pub_date[:10] if len(pub_date) >= 10 else pub_date
-                    if HAS_RICH:
-                        console.print(f"  [bold]{idx}.[/bold] {title}")
+                    if self.context.has_rich:
+                        self.context.console.print(f"  [bold]{idx}.[/bold] {title}")
                         meta_parts = [p for p in [source, pub_date] if p]
                         if meta_parts:
-                            console.print(f"     [dim]{' · '.join(meta_parts)}[/dim]")
+                            self.context.console.print(f"     [dim]{' · '.join(meta_parts)}[/dim]")
                     else:
                         meta = f" ({source})" if source else ""
                         print(f"  {idx}. {title}{meta}")
-                if HAS_RICH:
-                    console.print()
+                if self.context.has_rich:
+                    self.context.console.print()
                 return
 
             # Backend + all local fallbacks unavailable — show actionable config guide
@@ -1135,17 +1235,17 @@ class MarketCommandsMixin:
             _data_keys = _load_data_keys()
             _has_finnhub = bool(_data_keys.get("finnhub"))
             _has_newsapi = bool(_data_keys.get("newsapi"))
-            if HAS_RICH:
-                console.print()
-                console.print("  [yellow]⚠ 新闻服务不可用[/yellow]")
+            if self.context.has_rich:
+                self.context.console.print()
+                self.context.console.print("  [yellow]⚠ 新闻服务不可用[/yellow]")
                 if not _has_finnhub and not _has_newsapi:
-                    console.print("  [dim]配置以下任意一个数据服务 key 即可获取新闻：[/dim]")
-                    console.print("  [dim]  Finnhub  (免费60次/分) → /apikey set finnhub <key>   注册: https://finnhub.io/register[/dim]")
-                    console.print("  [dim]  NewsAPI  (免费100次/天) → /apikey set newsapi <key>   注册: https://newsapi.org/register[/dim]")
+                    self.context.console.print("  [dim]配置以下任意一个数据服务 key 即可获取新闻：[/dim]")
+                    self.context.console.print("  [dim]  Finnhub  (免费60次/分) → /apikey set finnhub <key>   注册: https://finnhub.io/register[/dim]")
+                    self.context.console.print("  [dim]  NewsAPI  (免费100次/天) → /apikey set newsapi <key>   注册: https://newsapi.org/register[/dim]")
                 else:
-                    console.print(f"  [dim]错误: {err[:120] if err else '获取失败'}[/dim]")
-                console.print(f"  [dim]或使用: /web {topic} latest news — 通过 Brave 搜索[/dim]")
-                console.print()
+                    self.context.console.print(f"  [dim]错误: {err[:120] if err else '获取失败'}[/dim]")
+                self.context.console.print(f"  [dim]或使用: /web {topic} latest news — 通过 Brave 搜索[/dim]")
+                self.context.console.print()
             else:
                 print("  News unavailable. Configure: /apikey set finnhub <key>")
 
@@ -1153,13 +1253,13 @@ class MarketCommandsMixin:
         symbols = parse_symbols(args, self.terminal.config.get("watchlist", ["AAPL"]))
 
         # 优先使用 MarketDataClient（真实实时数据，代理绕过）
-        if _HAS_MDC:
+        if _get__HAS_MDC():
             mdc = _get_mdc()
-            if HAS_RICH:
-                console.print()
+            if self.context.has_rich:
+                self.context.console.print()
             for symbol in symbols:
-                if HAS_RICH:
-                    with console.status(f"[dim]{symbol}...[/dim]", spinner="dots"):
+                if self.context.has_rich:
+                    with self.context.console.status(f"[dim]{symbol}...[/dim]", spinner="dots"):
                         loop = asyncio.get_event_loop()
                         r = await loop.run_in_executor(None, mdc.quote, symbol)
                 else:
@@ -1172,17 +1272,17 @@ class MarketCommandsMixin:
                         _cn = _ashare_code_to_name(symbol)
                         if _cn:
                             name = _cn
-                    print_quote_result(console=console, has_rich=HAS_RICH, symbol=symbol, quote=r, name=name)
+                    print_quote_result(console=self.context.console, has_rich=self.context.has_rich, symbol=symbol, quote=r, name=name)
                 else:
-                    print_quote_result(console=console, has_rich=HAS_RICH, symbol=symbol, quote=r)
-            if HAS_RICH:
-                console.print()
+                    print_quote_result(console=self.context.console, has_rich=self.context.has_rich, symbol=symbol, quote=r)
+            if self.context.has_rich:
+                self.context.console.print()
             return
 
         # Fallback：原有 Aria 工具
         for symbol in symbols:
-            if HAS_RICH:
-                with console.status(f"[dim]Fetching {symbol}...[/dim]", spinner="dots"):
+            if self.context.has_rich:
+                with self.context.console.status(f"[dim]Fetching {symbol}...[/dim]", spinner="dots"):
                     result = await execute_aria_tool(self.terminal.api_url, "get_market_data", {
                         "symbol": symbol, "market": "US", "period": "1mo"
                     })
@@ -1196,7 +1296,7 @@ class MarketCommandsMixin:
                 continue
             if result.get("success") and result.get("data"):
                 output = format_quote_output(result)
-                console.print(output)
+                self.context.console.print(output)
             else:
                 _print_error(f"Failed: {result.get('error', 'No data')}")
 
@@ -1208,7 +1308,7 @@ class MarketCommandsMixin:
                 k, v = tok.split("=", 1)
                 params[k.strip()] = v.strip()
         tool_name = "screen_ashare"
-        if tool_name in LOCAL_TOOLS:
+        if tool_name in _get_LOCAL_TOOLS():
             await self._run_local_tool(tool_name, params, "A股选股筛选")
         else:
             await self.terminal.send_message(f"帮我筛选A股股票，条件：{args or '市值>50亿，非ST，流动性好'}")
@@ -1226,7 +1326,7 @@ class MarketCommandsMixin:
         params = {"date": _date_arg} if _date_arg else {}
 
         tool_name = "get_limit_up_pool"
-        if tool_name in LOCAL_TOOLS:
+        if tool_name in _get_LOCAL_TOOLS():
             await self._run_local_tool(tool_name, params, "涨停板池")
         else:
             # Direct akshare fallback — avoids "A股" keyword triggering market snapshot routing
@@ -1242,7 +1342,7 @@ class MarketCommandsMixin:
                         if _col:
                             _df = _df[_df[_col].astype(str) == _code_filter]
                     _count = len(_df)
-                    if HAS_RICH:
+                    if self.context.has_rich:
                         from rich.table import Table
                         _date_label = _date_arg or _dt.today().isoformat()
                         tbl = Table(title=f"涨停板池 · {_date_label} · {_count}只", show_header=True, header_style="bold")
@@ -1253,7 +1353,7 @@ class MarketCommandsMixin:
                             tbl.add_column(_col_map.get(c, c), no_wrap=True)
                         for _, row in _df.head(30).iterrows():
                             tbl.add_row(*[str(row[c]) for c in _show_cols])
-                        console.print(tbl)
+                        self.context.console.print(tbl)
                     else:
                         print(f"涨停板池 {_count}只")
                         for _, row in _df.head(20).iterrows():
@@ -1261,8 +1361,8 @@ class MarketCommandsMixin:
                     return
             except Exception as _e:
                 pass
-            if HAS_RICH:
-                console.print("[yellow]akshare 暂不可用，涨停板池无法获取[/yellow]")
+            if self.context.has_rich:
+                self.context.console.print("[yellow]akshare 暂不可用，涨停板池无法获取[/yellow]")
             else:
                 print("akshare unavailable, cannot fetch limit-up pool")
 
@@ -1270,7 +1370,7 @@ class MarketCommandsMixin:
         """北向资金净流入."""
         params = {"days": int(args.strip())} if args.strip().isdigit() else {"days": 10}
         tool_name = "get_northbound_flow"
-        if tool_name in LOCAL_TOOLS:
+        if tool_name in _get_LOCAL_TOOLS():
             await self._run_local_tool(tool_name, params, "北向资金")
         else:
             await self.terminal.send_message("查询最近10天北向资金（沪深港通）净买入情况")

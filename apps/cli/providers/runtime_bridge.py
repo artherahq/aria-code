@@ -127,6 +127,7 @@ def make_provider_fn(
                     api_url, model, thinking_mode=thinking_mode,
                     user_context=_cloud_uctx, auth_token=auth_token,
                     project_context=project_context,
+                    use_react_gateway=bool(config.get("arthera_react_gateway")),
                 ),
                 _on_token,
             )

@@ -10,6 +10,52 @@ import json
 from typing import Callable, Optional
 
 
+def build_chat_payload(
+    message: str,
+    history: list,
+    *,
+    model: str,
+    thinking_mode: str,
+    user_context: Optional[dict],
+    project_context: str,
+    use_react_gateway: bool,
+) -> tuple[str, dict]:
+    """Build either the legacy chat payload or the shared ReAct envelope.
+
+    This is deliberately pure: it gives CLI, desktop, and iOS an auditable
+    parity point without forcing the local-first CLI to use cloud services.
+    """
+    if use_react_gateway:
+        context = dict(user_context or {})
+        if project_context:
+            context["project_context"] = project_context
+        mode = str(context.pop("workspace_mode", "code"))
+        return "/api/v2/chat/react", {
+            "message": {
+                "role": "user",
+                "content": [{"type": "text", "text": message}],
+            },
+            "mode": mode,
+            "surface": "aria_code",
+            "history": history[-20:],
+            "model": {"id": model or "auto", "effort": thinking_mode or "auto"},
+            "context": context,
+        }
+
+    payload: dict = {
+        "message": message,
+        "conversation_history": history[-20:],
+        "model": model,
+        "thinking_mode": thinking_mode,
+        "stream": True,
+    }
+    if user_context:
+        if project_context:
+            user_context = {**user_context, "project_context": project_context}
+        payload["user_context"] = user_context
+    return "/api/v2/ai/chat/stream", payload
+
+
 async def stream_chat(
     base_url: str,
     message: str,
@@ -25,6 +71,7 @@ async def stream_chat(
     on_status: Optional[Callable[[str, str], None]] = None,
     cancel_event: Optional[asyncio.Event] = None,
     project_context: str = "",
+    use_react_gateway: bool = False,
 ) -> dict:
     """Stream AI chat via SSE with cancel support and user context.
 
@@ -37,19 +84,12 @@ async def stream_chat(
     """
     import aiohttp
 
-    url = f"{base_url}/api/v2/ai/chat/stream"
-
-    payload: dict = {
-        "message": message,
-        "conversation_history": history[-20:],
-        "model": model,
-        "thinking_mode": thinking_mode,
-        "stream": True,
-    }
-    if user_context:
-        if project_context:
-            user_context = {**user_context, "project_context": project_context}
-        payload["user_context"] = user_context
+    endpoint, payload = build_chat_payload(
+        message, history, model=model, thinking_mode=thinking_mode,
+        user_context=user_context, project_context=project_context,
+        use_react_gateway=use_react_gateway,
+    )
+    url = f"{base_url.rstrip('/')}{endpoint}"
 
     headers: dict = {}
     if auth_token:
@@ -95,11 +135,12 @@ async def stream_chat(
                     async for chunk in resp.content:
                         if cancel_event and cancel_event.is_set():
                             try:
-                                await session.post(
-                                    f"{base_url}/api/v2/ai/chat/cancel",
-                                    headers=headers,
-                                    timeout=aiohttp.ClientTimeout(total=3),
-                                )
+                                if not use_react_gateway:
+                                    await session.post(
+                                        f"{base_url.rstrip('/')}/api/v2/ai/chat/cancel",
+                                        headers=headers,
+                                        timeout=aiohttp.ClientTimeout(total=3),
+                                    )
                             except Exception:
                                 pass
                             return {
@@ -168,7 +209,7 @@ async def stream_chat(
 
                             elif evt == "status":
                                 if on_status:
-                                    on_status(data.get("state", ""), data.get("message", ""))
+                                    on_status(data.get("state", ""), data.get("label", data.get("message", "")))
 
                             elif evt == "final":
                                 full_response = data.get("answer", full_response)
@@ -179,7 +220,7 @@ async def stream_chat(
                                     usage["completion_tokens"] = u.get("completion_tokens", usage["completion_tokens"])
 
                             elif evt == "error":
-                                return {"success": False, "error": data.get("message", "Unknown error")}
+                                return {"success": False, "error": data.get("message", data.get("error", "Unknown error"))}
 
             return {
                 "success": True,

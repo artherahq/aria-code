@@ -11,13 +11,74 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 
+import json
+import asyncio
+import datetime
+import time
+import shlex
+from typing import Dict, Any, Optional
+
+def _run_event_hook(*args, **kwargs):
+    from aria_cli import _run_event_hook as fn
+    return fn(*args, **kwargs)
+def _load_hooks(*args, **kwargs):
+    from aria_cli import _load_hooks as fn
+    return fn(*args, **kwargs)
+def _display_path(*args, **kwargs):
+    from aria_cli import _display_path as fn
+    return fn(*args, **kwargs)
+def _get_MODELS():
+    from aria_cli import MODELS as val
+    return val
+def _get__HAS_JSON_HOOKS():
+    from aria_cli import _HAS_JSON_HOOKS as val
+    return val
+def _tool_run_command(*args, **kwargs):
+    from aria_cli import _tool_run_command as fn
+    return fn(*args, **kwargs)
+def resolve_model_key(*args, **kwargs):
+    from aria_cli import resolve_model_key as fn
+    return fn(*args, **kwargs)
+def _load_project_context(*args, **kwargs):
+    from aria_cli import _load_project_context as fn
+    return fn(*args, **kwargs)
+def _fire_json_hook(*args, **kwargs):
+    from aria_cli import _fire_json_hook as fn
+    return fn(*args, **kwargs)
+def _print_phase(*args, **kwargs):
+    from aria_cli import _print_phase as fn
+    return fn(*args, **kwargs)
+def _get_CONFIG_DIR():
+    from aria_cli import CONFIG_DIR as val
+    return val
+
+import json
+import asyncio
+import datetime
+import time
+import shlex
+import sys
+import os
+from typing import Dict, Any, Optional
+
+
+import json
+import asyncio
+import datetime
+import time
+import shlex
+import sys
+import os
+from typing import Dict, Any, Optional
+
+
 class WorkflowCommandsMixin:
     """Mixin: interactive workflow and edit-review commands."""
 
     def cmd_hooks(self, args: str):
         global _JSON_HOOKS
         hooks_dirs = [
-            CONFIG_DIR / "hooks",
+            _get_CONFIG_DIR() / "hooks",
             pathlib.Path.cwd() / ".aria" / "hooks",
         ]
         parts = args.strip().split(maxsplit=1)
@@ -25,34 +86,34 @@ class WorkflowCommandsMixin:
         rest = parts[1].strip() if len(parts) > 1 else ""
 
         if sub == "reload":
-            if _HAS_JSON_HOOKS:
+            if _get__HAS_JSON_HOOKS():
                 try:
                     _JSON_HOOKS = _load_hooks()
                     n = sum(len(v) for v in _JSON_HOOKS.values())
-                    if HAS_RICH:
-                        console.print(f"  [green]✓[/green] [dim]hooks.json reloaded ({n} entries)[/dim]")
+                    if self.context.has_rich:
+                        self.context.console.print(f"  [green]✓[/green] [dim]hooks.json reloaded ({n} entries)[/dim]")
                     else:
                         print(f"  hooks.json reloaded ({n} entries)")
                 except Exception as exc:
-                    if HAS_RICH:
-                        console.print(f"  [red]✗ reload failed: {exc}[/red]")
+                    if self.context.has_rich:
+                        self.context.console.print(f"  [red]✗ reload failed: {exc}[/red]")
                     else:
                         print(f"  reload failed: {exc}")
             return
 
         if sub == "list":
-            if _HAS_JSON_HOOKS:
+            if _get__HAS_JSON_HOOKS():
                 try:
                     from apps.cli.hooks import list_hooks as _list_json_hooks
                     _json_rows = _list_json_hooks()
                     if _json_rows:
-                        if HAS_RICH:
-                            console.print()
-                            console.print("  [bold]JSON Hooks[/bold]  [dim](~/.arthera/hooks.json)[/dim]")
+                        if self.context.has_rich:
+                            self.context.console.print()
+                            self.context.console.print("  [bold]JSON Hooks[/bold]  [dim](~/.arthera/hooks.json)[/dim]")
                             for r in _json_rows:
                                 _block = " [red][blocking][/red]" if r["blocking"] else ""
                                 _tool = f"[{r['tool']}]" if r["tool"] != "*" else ""
-                                console.print(
+                                self.context.console.print(
                                     f"  [cyan]{r['event']:<16}[/cyan]{_tool:<14}  "
                                     f"[dim]{r['command']}[/dim]{_block}"
                                 )
@@ -69,27 +130,27 @@ class WorkflowCommandsMixin:
                         if f.is_file() and not f.name.startswith("."):
                             found.append((str(hdir), f.name, str(f)))
             if not found:
-                if HAS_RICH:
-                    console.print("  [dim]No hooks found.[/dim]")
-                    console.print("  [dim]Hook dirs:[/dim]")
+                if self.context.has_rich:
+                    self.context.console.print("  [dim]No hooks found.[/dim]")
+                    self.context.console.print("  [dim]Hook dirs:[/dim]")
                     for d in hooks_dirs:
-                        console.print(f"    [dim]{_display_path(d, fallback='hook dir')}[/dim]")
-                    console.print("  [dim]Events: prompt_submit  response_done  tool_use  compact[/dim]")
+                        self.context.console.print(f"    [dim]{_display_path(d, fallback='hook dir')}[/dim]")
+                    self.context.console.print("  [dim]Events: prompt_submit  response_done  tool_use  compact[/dim]")
                 else:
                     print("No hooks. Dirs:", [str(d) for d in hooks_dirs])
                 return
-            if HAS_RICH:
-                console.print()
+            if self.context.has_rich:
+                self.context.console.print()
                 for hdir, name, path in found:
-                    console.print(f"  [dim]{name:<28}[/dim]  {_display_path(path, fallback='hook')}")
-                console.print()
+                    self.context.console.print(f"  [dim]{name:<28}[/dim]  {_display_path(path, fallback='hook')}")
+                self.context.console.print()
             else:
                 for hdir, name, path in found:
                     print(f"  {name}  {_display_path(path, fallback='hook')}")
 
         elif sub == "edit":
             if not rest:
-                if _HAS_JSON_HOOKS:
+                if _get__HAS_JSON_HOOKS():
                     from apps.cli.hooks import hooks_file_path, create_example_hooks
                     _hpath = hooks_file_path("global")
                     create_example_hooks(_hpath)
@@ -99,13 +160,13 @@ class WorkflowCommandsMixin:
                         _sp.run([editor, str(_hpath)])
                         _JSON_HOOKS = _load_hooks()
                     except Exception as exc:
-                        if HAS_RICH:
-                            console.print(f"[red]Could not open editor: {exc}[/red]")
+                        if self.context.has_rich:
+                            self.context.console.print(f"[red]Could not open editor: {exc}[/red]")
                         else:
                             print(f"Could not open editor: {exc}")
                 return
             event = rest
-            hdir = CONFIG_DIR / "hooks"
+            hdir = _get_CONFIG_DIR() / "hooks"
             hdir.mkdir(parents=True, exist_ok=True)
             script = hdir / f"{event}.sh"
             if not script.exists():
@@ -121,21 +182,21 @@ class WorkflowCommandsMixin:
                 import subprocess as _sp
                 _sp.run([editor, str(script)])
             except Exception as exc:
-                console.print(f"[red]Could not open editor: {exc}[/red]" if HAS_RICH else str(exc))
+                self.context.console.print(f"[red]Could not open editor: {exc}[/red]" if self.context.has_rich else str(exc))
 
         elif sub == "run":
             event = rest or "ResponseDone"
-            if _HAS_JSON_HOOKS:
+            if _get__HAS_JSON_HOOKS():
                 _fire_json_hook(event, session_id=getattr(self.terminal, "session_id", ""), hooks=_JSON_HOOKS)
             _run_event_hook(event, {"ARIA_EVENT": event, "ARIA_SESSION": getattr(self.terminal, "session_id", "")})
-            if HAS_RICH:
-                console.print(f"  [dim]Hook '{event}' triggered[/dim]")
+            if self.context.has_rich:
+                self.context.console.print(f"  [dim]Hook '{event}' triggered[/dim]")
             else:
                 print(f"Hook '{event}' triggered")
 
         else:
-            if HAS_RICH:
-                console.print("[dim]Usage: /hooks list|edit [event]|reload|run [event][/dim]")
+            if self.context.has_rich:
+                self.context.console.print("[dim]Usage: /hooks list|edit [event]|reload|run [event][/dim]")
             else:
                 print("Usage: /hooks list|edit [event]|reload|run [event]")
 
@@ -154,14 +215,14 @@ class WorkflowCommandsMixin:
                 if self.terminal.conversation[i]["role"] == "user" and self.terminal.conversation[i]["content"] == last_user_msg:
                     self.terminal.conversation.pop(i)
                     break
-            console.print("[dim]Regenerating...[/dim]" if HAS_RICH else "Regenerating...")
+            self.context.console.print("[dim]Regenerating...[/dim]" if self.context.has_rich else "Regenerating...")
             await self.terminal.send_message(last_user_msg)
         else:
-            console.print("[dim]No message to regenerate[/dim]" if HAS_RICH else "Nothing to regenerate")
+            self.context.console.print("[dim]No message to regenerate[/dim]" if self.context.has_rich else "Nothing to regenerate")
 
     def cmd_undo(self, args: str):
         if len(self.terminal.conversation) < 2:
-            console.print("[dim]Nothing to undo[/dim]" if HAS_RICH else "Nothing to undo")
+            self.context.console.print("[dim]Nothing to undo[/dim]" if self.context.has_rich else "Nothing to undo")
             return
         removed = 0
         for role in ("assistant", "user"):
@@ -170,8 +231,8 @@ class WorkflowCommandsMixin:
                     self.terminal.conversation.pop(i)
                     removed += 1
                     break
-        if HAS_RICH:
-            console.print(f"[dim]Undone ({removed} messages removed, {len(self.terminal.conversation)} remaining)[/dim]")
+        if self.context.has_rich:
+            self.context.console.print(f"[dim]Undone ({removed} messages removed, {len(self.terminal.conversation)} remaining)[/dim]")
         else:
             print(f"Undone ({removed} removed)")
 
@@ -201,7 +262,7 @@ class WorkflowCommandsMixin:
             store = CheckpointStore()
         except Exception as exc:
             message = f"无法打开检查点存储: {exc}" if is_zh else f"Cannot open checkpoint store: {exc}"
-            console.print(f"[red]{message}[/red]" if HAS_RICH else message)
+            self.context.console.print(f"[red]{message}[/red]" if self.context.has_rich else message)
             return
 
         if mode == "list":
@@ -210,19 +271,19 @@ class WorkflowCommandsMixin:
                 records = store.list(status="active", limit=12)
             if not records:
                 message = "没有可恢复的代码检查点" if is_zh else "No active code checkpoints"
-                console.print(f"[dim]{message}[/dim]" if HAS_RICH else message)
+                self.context.console.print(f"[dim]{message}[/dim]" if self.context.has_rich else message)
                 return
-            if HAS_RICH:
-                console.print()
-                console.print("  [bold]Code checkpoints[/bold]")
+            if self.context.has_rich:
+                self.context.console.print()
+                self.context.console.print("  [bold]Code checkpoints[/bold]")
                 for record in records:
                     paths = ", ".join(pathlib.Path(item.path).name for item in record.files)
                     run_label = (record.run_id or "standalone")[:10]
-                    console.print(
+                    self.context.console.print(
                         f"  [#C08050]{record.checkpoint_id[:10]}[/#C08050]  "
                         f"[dim]{run_label:<10} · {record.source:<10} · {paths}[/dim]"
                     )
-                console.print()
+                self.context.console.print()
             else:
                 for record in records:
                     paths = ", ".join(pathlib.Path(item.path).name for item in record.files)
@@ -236,12 +297,12 @@ class WorkflowCommandsMixin:
                 "  Rewind code to its checkpoint? Later changes are protected by conflict checks. [y/N] "
             )
             try:
-                answer = (console.input(prompt) if HAS_RICH else input(prompt)).strip().lower()
+                answer = (self.context.console.input(prompt) if self.context.has_rich else input(prompt)).strip().lower()
             except (EOFError, KeyboardInterrupt):
                 return
             if answer not in {"y", "yes"}:
                 message = "已取消" if is_zh else "Cancelled"
-                console.print(f"[dim]{message}[/dim]" if HAS_RICH else message)
+                self.context.console.print(f"[dim]{message}[/dim]" if self.context.has_rich else message)
                 return
 
         try:
@@ -258,15 +319,15 @@ class WorkflowCommandsMixin:
                     result = store.restore_latest()
         except CheckpointConflictError as exc:
             message = f"恢复已停止: {exc}" if is_zh else f"Rewind stopped: {exc}"
-            console.print(f"[red]{message}[/red]" if HAS_RICH else message)
+            self.context.console.print(f"[red]{message}[/red]" if self.context.has_rich else message)
             return
         except CheckpointNotFoundError:
             message = "未找到可恢复的检查点" if is_zh else "No restorable checkpoint found"
-            console.print(f"[dim]{message}[/dim]" if HAS_RICH else message)
+            self.context.console.print(f"[dim]{message}[/dim]" if self.context.has_rich else message)
             return
         except Exception as exc:
             message = f"恢复失败: {exc}" if is_zh else f"Rewind failed: {exc}"
-            console.print(f"[red]{message}[/red]" if HAS_RICH else message)
+            self.context.console.print(f"[red]{message}[/red]" if self.context.has_rich else message)
             return
 
         if mode == "both":
@@ -275,10 +336,10 @@ class WorkflowCommandsMixin:
         message = (
             f"已恢复 {count} 个文件" if is_zh else f"Rewound {count} file{'s' if count != 1 else ''}"
         )
-        if HAS_RICH:
-            console.print(f"[green]✓[/green] [dim]{message}[/dim]")
+        if self.context.has_rich:
+            self.context.console.print(f"[green]✓[/green] [dim]{message}[/dim]")
             for path in result.restored_paths:
-                console.print(f"  [dim]{path}[/dim]")
+                self.context.console.print(f"  [dim]{path}[/dim]")
         else:
             print(message)
             for path in result.restored_paths:
@@ -295,29 +356,29 @@ class WorkflowCommandsMixin:
                 last_user_msg = msg["content"]
                 break
         if not last_user_msg:
-            console.print("[dim]No message to retry[/dim]" if HAS_RICH else "Nothing to retry")
+            self.context.console.print("[dim]No message to retry[/dim]" if self.context.has_rich else "Nothing to retry")
             return
         for i in range(len(self.terminal.conversation) - 1, -1, -1):
             if self.terminal.conversation[i]["role"] == "user" and self.terminal.conversation[i]["content"] == last_user_msg:
                 self.terminal.conversation.pop(i)
                 break
         orig_model_key = resolve_model_key(self.terminal.config.get("model", "qwen2.5:7b"))
-        _fallback_model = MODELS.get("qwen-fast") or MODELS.get("qwen7b") or next(iter(MODELS.values()))
-        orig_temp = MODELS.get(orig_model_key, _fallback_model).get("temperature", 0.3)
-        MODELS[orig_model_key]["temperature"] = min(0.9, orig_temp + 0.3)
-        if HAS_RICH:
-            console.print(f"[dim]Retrying with temperature {MODELS[orig_model_key]['temperature']:.1f}...[/dim]")
+        _fallback_model = _get_MODELS().get("qwen-fast") or _get_MODELS().get("qwen7b") or next(iter(_get_MODELS().values()))
+        orig_temp = _get_MODELS().get(orig_model_key, _fallback_model).get("temperature", 0.3)
+        _get_MODELS()[orig_model_key]["temperature"] = min(0.9, orig_temp + 0.3)
+        if self.context.has_rich:
+            self.context.console.print(f"[dim]Retrying with temperature {_get_MODELS()[orig_model_key]['temperature']:.1f}...[/dim]")
         else:
             print("Retrying (temp +0.3)...")
         try:
             await self.terminal.send_message(last_user_msg)
         finally:
-            MODELS[orig_model_key]["temperature"] = orig_temp
+            _get_MODELS()[orig_model_key]["temperature"] = orig_temp
 
     def cmd_note(self, args: str):
         text = args.strip()
         if not text:
-            console.print("[dim]Usage: /note <text>[/dim]" if HAS_RICH else "Usage: /note <text>")
+            self.context.console.print("[dim]Usage: /note <text>[/dim]" if self.context.has_rich else "Usage: /note <text>")
             return
         aria_md = pathlib.Path.cwd() / "ARIA.md"
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -332,8 +393,8 @@ class WorkflowCommandsMixin:
         aria_md.write_text(content, encoding="utf-8")
         global _PROJECT_CONTEXT
         _PROJECT_CONTEXT = _load_project_context()
-        if HAS_RICH:
-            console.print(f"[dim]Note saved to {aria_md.name}[/dim]")
+        if self.context.has_rich:
+            self.context.console.print(f"[dim]Note saved to {aria_md.name}[/dim]")
         else:
             print(f"Saved to {aria_md.name}")
 
@@ -345,17 +406,17 @@ class WorkflowCommandsMixin:
             p = pathlib.Path(raw).expanduser()
             if not p.exists():
                 msg = f"File not found: {raw}"
-                console.print(f"[red]{msg}[/red]") if HAS_RICH else print(msg)
+                self.context.console.print(f"[red]{msg}[/red]") if self.context.has_rich else print(msg)
                 return
             _print_phase("Reading file")
             try:
                 content = p.read_text(errors="replace")[:12000]
             except Exception as e:
-                console.print(f"[red]Cannot read file: {e}[/red]") if HAS_RICH else print(f"Cannot read: {e}")
+                self.context.console.print(f"[red]Cannot read file: {e}[/red]") if self.context.has_rich else print(f"Cannot read: {e}")
                 return
             line_count = content.count("\n")
-            if HAS_RICH:
-                console.print(f"  [dim]↳ {p.name}  ·  {line_count} lines[/dim]")
+            if self.context.has_rich:
+                self.context.console.print(f"  [dim]↳ {p.name}  ·  {line_count} lines[/dim]")
             _print_phase("AI Review")
             prompt = (
                 f"请对以下 `{p.name}` 的代码进行专业审查，查找 Bug、安全问题和改进点。\n"
@@ -370,17 +431,17 @@ class WorkflowCommandsMixin:
             tr = _tool_run_command({"command": diff_cmd})
             if not tr.get("success"):
                 msg = tr.get("error", "git diff failed")
-                console.print(f"[red]{msg}[/red]") if HAS_RICH else print(msg)
+                self.context.console.print(f"[red]{msg}[/red]") if self.context.has_rich else print(msg)
                 return
             diff_text = (tr.get("data") or {}).get("stdout", "").strip()
             if not diff_text:
-                console.print("[dim]No changes to review.[/dim]") if HAS_RICH else print("No changes to review.")
+                self.context.console.print("[dim]No changes to review.[/dim]") if self.context.has_rich else print("No changes to review.")
                 return
             _adds = diff_text.count("\n+") - diff_text.count("\n+++")
             _dels = diff_text.count("\n-") - diff_text.count("\n---")
             _files = diff_text.count("\ndiff --git")
-            if HAS_RICH:
-                console.print(f"  [dim]↳ {_files} files  ·  +{_adds} −{_dels} lines[/dim]")
+            if self.context.has_rich:
+                self.context.console.print(f"  [dim]↳ {_files} files  ·  +{_adds} −{_dels} lines[/dim]")
             diff_text = diff_text[:12000]
             _print_phase("AI Review")
             prompt = (
@@ -403,9 +464,9 @@ class WorkflowCommandsMixin:
                 is_diff=review_is_diff,
             )
             static_review = CodeReviewAgent.format_findings(findings)
-            if HAS_RICH:
-                console.print("[bold]Deterministic Review[/bold]")
-                console.print(static_review)
+            if self.context.has_rich:
+                self.context.console.print("[bold]Deterministic Review[/bold]")
+                self.context.console.print(static_review)
             else:
                 print("Deterministic Review\n" + static_review)
             prompt = (

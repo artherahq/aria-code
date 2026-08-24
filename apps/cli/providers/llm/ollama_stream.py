@@ -89,11 +89,40 @@ def _normalize_requested_tool_call(
     aliased_name = _TOOL_NAME_ALIASES.get(requested_name, requested_name)
     resolved_name = aliased_name if aliased_name in available_names else requested_name
     normalized_params = dict(params or {})
-    if resolved_name in {"get_market_data", "get_market_history"} and not normalized_params.get("symbol"):
-        for key in ("ticker", "code", "stock", "asset"):
-            if normalized_params.get(key):
-                normalized_params["symbol"] = normalized_params.pop(key)
-                break
+
+    # Normalize symbol parameter across all market tools
+    if resolved_name in {"get_market_data", "get_market_history", "calculate_factors", "get_risk_metrics", "get_options_chain"}:
+        sym = normalized_params.get("symbol")
+        if not sym:
+            for key in ("symbols", "ticker", "tickers", "code", "stock", "asset"):
+                if normalized_params.get(key):
+                    sym = normalized_params.pop(key)
+                    break
+        if isinstance(sym, (list, tuple)):
+            sym = sym[0] if sym else ""
+        elif isinstance(sym, dict):
+            sym = sym.get("symbol") or sym.get("ticker") or sym.get("code") or ""
+        sym_str = str(sym or "").strip()
+        if (sym_str.startswith("[") and sym_str.endswith("]")) or (sym_str.startswith("(") and sym_str.endswith(")")):
+            sym_str = sym_str[1:-1].strip()
+        normalized_params["symbol"] = sym_str.strip("'\"` ").upper()
+
+    # Normalize query parameter for web_search
+    if resolved_name in {"web_search", "web_fetch"}:
+        q = (
+            normalized_params.get("query")
+            or normalized_params.get("q")
+            or normalized_params.get("search")
+            or normalized_params.get("keyword")
+            or normalized_params.get("keywords")
+            or normalized_params.get("text")
+            or normalized_params.get("symbol")
+            or ""
+        )
+        if isinstance(q, (list, tuple)):
+            q = " ".join(str(x) for x in q if x)
+        normalized_params["query"] = str(q).strip().strip("'\"`")
+
     return resolved_name, normalized_params, requested_name
 
 

@@ -3,6 +3,58 @@
 from __future__ import annotations
 
 
+import json
+import asyncio
+import datetime
+import time
+import shlex
+from typing import Dict, Any, Optional
+
+def _render_portfolio_bt(*args, **kwargs):
+    from aria_cli import _render_portfolio_bt as fn
+    return fn(*args, **kwargs)
+def _print_error(*args, **kwargs):
+    from aria_cli import _print_error as fn
+    return fn(*args, **kwargs)
+def _render_alerts(*args, **kwargs):
+    from aria_cli import _render_alerts as fn
+    return fn(*args, **kwargs)
+def _get__HAS_LOCAL_FINANCE():
+    from aria_cli import _HAS_LOCAL_FINANCE as val
+    return val
+def _get_LOCAL_TOOLS():
+    from aria_cli import LOCAL_TOOLS as val
+    return val
+def _render_corr_matrix(*args, **kwargs):
+    from aria_cli import _render_corr_matrix as fn
+    return fn(*args, **kwargs)
+def _render_peer_comparison(*args, **kwargs):
+    from aria_cli import _render_peer_comparison as fn
+    return fn(*args, **kwargs)
+def _render_sql_result(*args, **kwargs):
+    from aria_cli import _render_sql_result as fn
+    return fn(*args, **kwargs)
+
+import json
+import asyncio
+import datetime
+import time
+import shlex
+import sys
+import os
+from typing import Dict, Any, Optional
+
+
+import json
+import asyncio
+import datetime
+import time
+import shlex
+import sys
+import os
+from typing import Dict, Any, Optional
+
+
 class DataCommandsMixin:
     """Mixin: data analysis and comparison commands."""
 
@@ -23,18 +75,18 @@ class DataCommandsMixin:
             from data_analysis_tools import (sql_query, sql_list_tables,
                                               export_to_excel, load_csv_data)
         except ImportError as e:
-            if HAS_RICH:
-                console.print(f"[red]data_analysis_tools 未加载: {e}[/red]")
+            if self.context.has_rich:
+                self.context.console.print(f"[red]data_analysis_tools 未加载: {e}[/red]")
             return
 
         if sub == "sql":
             query = rest.strip().strip('"').strip("'")
             if not query:
-                if HAS_RICH:
-                    console.print("[dim]用法: /data sql \"SELECT ...\"|/dim]")
+                if self.context.has_rich:
+                    self.context.console.print("[dim]用法: /data sql \"SELECT ...\"|/dim]")
                 return
-            if HAS_RICH:
-                with console.status("[dim]执行 SQL...[/dim]", spinner="dots"):
+            if self.context.has_rich:
+                with self.context.console.status("[dim]执行 SQL...[/dim]", spinner="dots"):
                     r = await loop.run_in_executor(None, sql_query, {"query": query})
             else:
                 r = sql_query({"query": query})
@@ -51,58 +103,58 @@ class DataCommandsMixin:
             except Exception:
                 export_data = {"示例数据": [{"symbol": s, "note": "需 yfinance"} for s in watchlist]}
             p = {"data": export_data, "filename": fname}
-            if HAS_RICH:
-                with console.status("[dim]生成 Excel...[/dim]", spinner="dots"):
+            if self.context.has_rich:
+                with self.context.console.status("[dim]生成 Excel...[/dim]", spinner="dots"):
                     r = await loop.run_in_executor(None, export_to_excel, p)
             else:
                 r = export_to_excel(p)
             if r.get("success"):
                 msg = f"✓ 已导出: {r['path']}  ({r['total_rows']} 行)"
-                if HAS_RICH:
-                    console.print(f"[green]{msg}[/green]")
+                if self.context.has_rich:
+                    self.context.console.print(f"[green]{msg}[/green]")
                 else:
                     print(msg)
             else:
-                if HAS_RICH:
-                    console.print(f"[red]{r.get('error')}[/red]")
+                if self.context.has_rich:
+                    self.context.console.print(f"[red]{r.get('error')}[/red]")
 
         elif sub == "load":
             csv_path = rest.strip()
             if not csv_path:
-                if HAS_RICH:
-                    console.print("[dim]用法: /data load <csv文件路径>[/dim]")
+                if self.context.has_rich:
+                    self.context.console.print("[dim]用法: /data load <csv文件路径>[/dim]")
                 return
-            if HAS_RICH:
-                with console.status("[dim]加载 CSV...[/dim]", spinner="dots"):
+            if self.context.has_rich:
+                with self.context.console.status("[dim]加载 CSV...[/dim]", spinner="dots"):
                     r = await loop.run_in_executor(None, load_csv_data, {"path": csv_path})
             else:
                 r = load_csv_data({"path": csv_path})
             if r.get("success"):
-                if HAS_RICH:
-                    console.print(f"[green]✓ 已加载 {r['rows']} 行 → 表 {r['table_name']}[/green]")
-                    console.print(f"[dim]列: {', '.join(r['columns'][:10])}[/dim]")
-                    console.print(f"[dim]现在可以: /data sql \"SELECT * FROM {r['table_name']} LIMIT 10\"[/dim]")
+                if self.context.has_rich:
+                    self.context.console.print(f"[green]✓ 已加载 {r['rows']} 行 → 表 {r['table_name']}[/green]")
+                    self.context.console.print(f"[dim]列: {', '.join(r['columns'][:10])}[/dim]")
+                    self.context.console.print(f"[dim]现在可以: /data sql \"SELECT * FROM {r['table_name']} LIMIT 10\"[/dim]")
             else:
-                if HAS_RICH:
-                    console.print(f"[red]{r.get('error')}[/red]")
+                if self.context.has_rich:
+                    self.context.console.print(f"[red]{r.get('error')}[/red]")
 
         elif sub == "tables":
             r = sql_list_tables()
             if r.get("success"):
                 tables = r.get("tables", [])
-                if HAS_RICH:
+                if self.context.has_rich:
                     if tables:
-                        console.print(f"[bold]已加载表:[/bold] {', '.join(tables)}")
+                        self.context.console.print(f"[bold]已加载表:[/bold] {', '.join(tables)}")
                     else:
-                        console.print("[dim]暂无已加载的表。使用 /data load <csv> 加载数据[/dim]")
+                        self.context.console.print("[dim]暂无已加载的表。使用 /data load <csv> 加载数据[/dim]")
 
         else:
-            if HAS_RICH:
-                console.print("[dim]用法: /data [sql|export|load|tables][/dim]")
-                console.print("[dim]  /data sql \"SELECT * FROM my_table LIMIT 10\"[/dim]")
-                console.print("[dim]  /data load ~/Desktop/data.csv[/dim]")
-                console.print("[dim]  /data export my_report.xlsx[/dim]")
-                console.print("[dim]  /data tables[/dim]")
+            if self.context.has_rich:
+                self.context.console.print("[dim]用法: /data [sql|export|load|tables][/dim]")
+                self.context.console.print("[dim]  /data sql \"SELECT * FROM my_table LIMIT 10\"[/dim]")
+                self.context.console.print("[dim]  /data load ~/Desktop/data.csv[/dim]")
+                self.context.console.print("[dim]  /data export my_report.xlsx[/dim]")
+                self.context.console.print("[dim]  /data tables[/dim]")
 
     async def cmd_alert(self, args: str):
         """
@@ -120,34 +172,34 @@ class DataCommandsMixin:
             from data_analysis_tools import (add_price_alert, list_price_alerts,
                                               delete_price_alert, check_alerts)
         except ImportError as e:
-            if HAS_RICH:
-                console.print(f"[red]data_analysis_tools 未加载: {e}[/red]")
+            if self.context.has_rich:
+                self.context.console.print(f"[red]data_analysis_tools 未加载: {e}[/red]")
             return
 
         if sub == "add":
             if len(parts) < 4:
-                if HAS_RICH:
-                    console.print("[dim]用法: /alert add <symbol> <gt|lt|cross_up|cross_down> <price> [备注][/dim]")
+                if self.context.has_rich:
+                    self.context.console.print("[dim]用法: /alert add <symbol> <gt|lt|cross_up|cross_down> <price> [备注][/dim]")
                 return
             sym = parts[1].upper()
             cond = parts[2].lower()
             try:
                 price = float(parts[3])
             except ValueError:
-                if HAS_RICH:
-                    console.print("[red]价格必须是数字[/red]")
+                if self.context.has_rich:
+                    self.context.console.print("[red]价格必须是数字[/red]")
                 return
             note = " ".join(parts[4:]) if len(parts) > 4 else ""
             r = add_price_alert({"symbol": sym, "condition": cond, "price": price, "note": note})
             if r.get("success"):
                 msg = r.get("message", "预警已设置")
-                if HAS_RICH:
-                    console.print(f"[green]✓ {msg}[/green]")
+                if self.context.has_rich:
+                    self.context.console.print(f"[green]✓ {msg}[/green]")
                 else:
                     print(f"✓ {msg}")
             else:
-                if HAS_RICH:
-                    console.print(f"[red]{r.get('error')}[/red]")
+                if self.context.has_rich:
+                    self.context.console.print(f"[red]{r.get('error')}[/red]")
 
         elif sub == "list":
             r = list_price_alerts()
@@ -156,38 +208,38 @@ class DataCommandsMixin:
         elif sub in ("delete", "del", "remove"):
             alert_id = parts[1] if len(parts) > 1 else ""
             if not alert_id:
-                if HAS_RICH:
-                    console.print("[dim]用法: /alert delete <预警ID>[/dim]")
+                if self.context.has_rich:
+                    self.context.console.print("[dim]用法: /alert delete <预警ID>[/dim]")
                 return
             r = delete_price_alert({"alert_id": alert_id})
             if r.get("success"):
-                if HAS_RICH:
-                    console.print(f"[green]✓ 已删除预警 {r['deleted_id']}[/green]")
+                if self.context.has_rich:
+                    self.context.console.print(f"[green]✓ 已删除预警 {r['deleted_id']}[/green]")
             else:
-                if HAS_RICH:
-                    console.print(f"[red]{r.get('error')}[/red]")
+                if self.context.has_rich:
+                    self.context.console.print(f"[red]{r.get('error')}[/red]")
 
         elif sub == "check":
-            if HAS_RICH:
-                with console.status("[dim]检查价格预警...[/dim]", spinner="dots"):
+            if self.context.has_rich:
+                with self.context.console.status("[dim]检查价格预警...[/dim]", spinner="dots"):
                     r = await loop.run_in_executor(None, check_alerts)
             else:
                 r = check_alerts()
             triggered = r.get("triggered", [])
             if triggered:
-                if HAS_RICH:
-                    console.print(f"[bold yellow]🔔 {len(triggered)} 个预警已触发![/bold yellow]")
+                if self.context.has_rich:
+                    self.context.console.print(f"[bold yellow]🔔 {len(triggered)} 个预警已触发![/bold yellow]")
                     for a in triggered:
-                        console.print(f"  [yellow]{a['symbol']}[/yellow] {a.get('condition','')} "
+                        self.context.console.print(f"  [yellow]{a['symbol']}[/yellow] {a.get('condition','')} "
                                       f"{a['price']} → 当前 [bold]{a.get('triggered_price','')}[/bold]")
             else:
                 msg = r.get("message", "暂无触发的预警")
-                if HAS_RICH:
-                    console.print(f"[dim]{msg}[/dim]")
+                if self.context.has_rich:
+                    self.context.console.print(f"[dim]{msg}[/dim]")
 
         else:
-            if HAS_RICH:
-                console.print("[dim]用法: /alert [add|list|delete|check][/dim]")
+            if self.context.has_rich:
+                self.context.console.print("[dim]用法: /alert [add|list|delete|check][/dim]")
 
     async def cmd_corr(self, args: str):
         """/corr AAPL MSFT TSLA SPY [1y|2y|6mo]  — 计算相关性矩阵"""
@@ -205,12 +257,12 @@ class DataCommandsMixin:
         try:
             from data_analysis_tools import calc_correlation_matrix
         except ImportError as e:
-            if HAS_RICH:
-                console.print(f"[red]data_analysis_tools 未加载: {e}[/red]")
+            if self.context.has_rich:
+                self.context.console.print(f"[red]data_analysis_tools 未加载: {e}[/red]")
             return
 
-        if HAS_RICH:
-            with console.status(f"[dim]计算 {', '.join(symbols)} 相关性矩阵...[/dim]", spinner="dots"):
+        if self.context.has_rich:
+            with self.context.console.status(f"[dim]计算 {', '.join(symbols)} 相关性矩阵...[/dim]", spinner="dots"):
                 r = await loop.run_in_executor(None, calc_correlation_matrix,
                                                {"symbols": symbols, "period": period})
         else:
@@ -226,8 +278,8 @@ class DataCommandsMixin:
         try:
             from data_analysis_tools import portfolio_backtest
         except ImportError as e:
-            if HAS_RICH:
-                console.print(f"[red]data_analysis_tools 未加载: {e}[/red]")
+            if self.context.has_rich:
+                self.context.console.print(f"[red]data_analysis_tools 未加载: {e}[/red]")
             return
 
         symbols, weights, period, rebalance = [], [], "2y", "monthly"
@@ -252,15 +304,15 @@ class DataCommandsMixin:
 
         if not symbols:
             symbols = ["AAPL", "MSFT", "GOOGL", "SPY"]
-            if HAS_RICH:
-                console.print(f"[dim]未指定标的，使用默认: {symbols}[/dim]")
+            if self.context.has_rich:
+                self.context.console.print(f"[dim]未指定标的，使用默认: {symbols}[/dim]")
 
         p_params = {"symbols": symbols, "period": period, "rebalance": rebalance}
         if weights:
             p_params["weights"] = weights
 
-        if HAS_RICH:
-            with console.status(f"[dim]回测 {', '.join(symbols)} ({period})...[/dim]", spinner="dots"):
+        if self.context.has_rich:
+            with self.context.console.status(f"[dim]回测 {', '.join(symbols)} ({period})...[/dim]", spinner="dots"):
                 r = await loop.run_in_executor(None, portfolio_backtest, p_params)
         else:
             r = portfolio_backtest(p_params)
@@ -272,15 +324,15 @@ class DataCommandsMixin:
         symbol = parts[0] if parts else "AAPL"
         peers = parts[1:] if len(parts) > 1 else []
 
-        if not _HAS_LOCAL_FINANCE:
-            if HAS_RICH:
-                console.print("[red]local_finance_tools 未加载[/red]")
+        if not _get__HAS_LOCAL_FINANCE():
+            if self.context.has_rich:
+                self.context.console.print("[red]local_finance_tools 未加载[/red]")
             return
 
         import asyncio as _asyncio
         loop = _asyncio.get_event_loop()
-        if HAS_RICH:
-            with console.status(f"[dim]获取 {symbol} 同行数据...[/dim]", spinner="dots"):
+        if self.context.has_rich:
+            with self.context.console.status(f"[dim]获取 {symbol} 同行数据...[/dim]", spinner="dots"):
                 from local_finance_tools import _peer_comparison
                 r = await loop.run_in_executor(None, _peer_comparison,
                                                {"symbol": symbol, "peers": peers})
@@ -320,7 +372,7 @@ class DataCommandsMixin:
             bench_pct = 0.0
             for strat in _STRATS:
                 try:
-                    res = LOCAL_TOOLS["backtest_strategy"][0](
+                    res = _get_LOCAL_TOOLS()["backtest_strategy"][0](
                         {"symbol": symbol, "strategy": strat})
                 except Exception:
                     continue
@@ -354,12 +406,12 @@ class DataCommandsMixin:
                 return await _do()
             except Exception:
                 # Backend unavailable / missing endpoint → local engine
-                if HAS_RICH:
-                    console.print("  [dim]后端不可用，使用本地回测引擎对比…[/dim]")
+                if self.context.has_rich:
+                    self.context.console.print("  [dim]后端不可用，使用本地回测引擎对比…[/dim]")
                 return _do_local()
 
-        if HAS_RICH:
-            with console.status(f"[dim]Comparing strategies on {symbol}...[/dim]", spinner="dots"):
+        if self.context.has_rich:
+            with self.context.console.status(f"[dim]Comparing strategies on {symbol}...[/dim]", spinner="dots"):
                 try:
                     data = await _do_with_fallback()
                 except Exception as e:
@@ -378,7 +430,7 @@ class DataCommandsMixin:
 
         strategies = data.get("strategies", [])
         bh = data.get("benchmark", {})
-        if HAS_RICH:
+        if self.context.has_rich:
             from rich.table import Table
             tbl = Table(title=f"[bold]{symbol} Strategy Comparison[/bold]  {start} → {end}", show_header=True, header_style="bold")
             for col in ["Rank", "Strategy", "Ann.Ret%", "Sharpe", "MaxDD%", "Calmar", "Sortino", "Win%", "Trades"]:
@@ -399,7 +451,7 @@ class DataCommandsMixin:
                         f"{bh.get('annualized_return_pct',0):+.1f}%",
                         f"{bh.get('sharpe_ratio',0):.3f}",
                         f"{bh.get('max_drawdown_pct',0):.1f}%", "—", "—", "—", "2")
-            console.print(tbl)
+            self.context.console.print(tbl)
         else:
             for s in strategies:
                 print(f"{s['name']}: Ann={s.get('annualized_return_pct',0):+.1f}% Sharpe={s.get('sharpe_ratio',0):.2f} DD={s.get('max_drawdown_pct',0):.1f}%")

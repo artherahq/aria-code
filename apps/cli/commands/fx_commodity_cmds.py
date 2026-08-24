@@ -1,6 +1,6 @@
 """FxCommodityCommandsMixin — /crypto, /forex, /commodity.
 
-Method bodies use aria_cli module globals (console, HAS_RICH, _HAS_MDC,
+Method bodies use aria_cli module globals (self.context.console, self.context.has_rich, _get__HAS_MDC(),
 _get_mdc), bound at import time by
 aria_cli._rebind_mixin_globals(FxCommodityCommandsMixin). They also call
 self._run_in_executor / self._run_parallel / self._fetch_and_display_finance,
@@ -9,6 +9,40 @@ elsewhere on the class), not module globals.
 """
 
 from __future__ import annotations
+
+
+import json
+import asyncio
+import datetime
+import time
+import shlex
+from typing import Dict, Any, Optional
+
+def _get__HAS_MDC():
+    from aria_cli import _HAS_MDC as val
+    return val
+def _get_mdc(*args, **kwargs):
+    from aria_cli import _get_mdc as fn
+    return fn(*args, **kwargs)
+
+import json
+import asyncio
+import datetime
+import time
+import shlex
+import sys
+import os
+from typing import Dict, Any, Optional
+
+
+import json
+import asyncio
+import datetime
+import time
+import shlex
+import sys
+import os
+from typing import Dict, Any, Optional
 
 
 class FxCommodityCommandsMixin:
@@ -20,8 +54,8 @@ class FxCommodityCommandsMixin:
         if args.strip().lower().split()[:1] == ["account"]:
             _parts = args.strip().split()
             _exch = _parts[1].lower() if len(_parts) > 1 else "binance"
-            if not _HAS_MDC:
-                console.print("[yellow]market_data_client 不可用[/yellow]" if HAS_RICH else "unavailable")
+            if not _get__HAS_MDC():
+                self.context.console.print("[yellow]market_data_client 不可用[/yellow]" if self.context.has_rich else "unavailable")
                 return
             acct = await self._run_in_executor(
                 lambda: _get_mdc().crypto_account(_exch)
@@ -34,14 +68,14 @@ class FxCommodityCommandsMixin:
                            f"  [dim]建议用「只读」权限的 key — Aria 永不下单[/dim]")
                 else:
                     msg = f"读取失败：{_err}"
-                console.print(f"  [yellow]{msg}[/yellow]" if HAS_RICH else msg)
+                self.context.console.print(f"  [yellow]{msg}[/yellow]" if self.context.has_rich else msg)
                 return
             holdings = acct.get("holdings", [])
-            if HAS_RICH:
-                console.print(f"\n  [bold]{_exch.capitalize()} 账户[/bold]  "
+            if self.context.has_rich:
+                self.context.console.print(f"\n  [bold]{_exch.capitalize()} 账户[/bold]  "
                               f"[dim]只读 · {len(holdings)} 个资产[/dim]")
                 for h in holdings[:15]:
-                    console.print(f"    {h['asset']:<8} [bold]{h['amount']:,.6g}[/bold]"
+                    self.context.console.print(f"    {h['asset']:<8} [bold]{h['amount']:,.6g}[/bold]"
                                   f"  [dim]可用 {h['free']:,.6g}[/dim]")
             else:
                 print(f"{_exch} account ({len(holdings)} assets):")
@@ -50,8 +84,8 @@ class FxCommodityCommandsMixin:
             return
 
         symbols = args.upper().split() if args else ["BTC"]
-        if HAS_RICH:
-            console.print()
+        if self.context.has_rich:
+            self.context.console.print()
         for sym in symbols:
             # yfinance crypto symbol: BTC → BTC-USD, ETH → ETH-USD
             yf_sym = sym + "-USD" if not sym.endswith("-USD") and "/" not in sym else sym
@@ -59,14 +93,14 @@ class FxCommodityCommandsMixin:
                 "get_crypto_data", {"symbol": sym},
                 label=sym, mdc_fallback_symbol=yf_sym
             )
-        if HAS_RICH:
-            console.print()
+        if self.context.has_rich:
+            self.context.console.print()
 
     async def cmd_forex(self, args: str):
         """Forex rates: /forex EUR/USD USD/CNY (with yfinance fallback)"""
         pairs = args.upper().split() if args else ["EUR/USD"]
-        if HAS_RICH:
-            console.print()
+        if self.context.has_rich:
+            self.context.console.print()
         for pair in pairs:
             # yfinance forex symbol: EUR/USD → EURUSD=X
             yf_pair = pair.replace("/", "") + "=X"
@@ -74,8 +108,8 @@ class FxCommodityCommandsMixin:
                 "get_forex_data", {"pair": pair},
                 label=pair, mdc_fallback_symbol=yf_pair
             )
-        if HAS_RICH:
-            console.print()
+        if self.context.has_rich:
+            self.context.console.print()
 
     async def cmd_commodity(self, args: str):
         """Commodities: /commodity gold oil silver (parallel fetch)"""

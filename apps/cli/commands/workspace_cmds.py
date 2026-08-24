@@ -8,6 +8,75 @@ from __future__ import annotations
 from packages.aria_core.paths import aria_home
 
 
+import json
+import asyncio
+import datetime
+import time
+import shlex
+import sys
+import os
+from typing import Dict, Any, Optional
+
+def detect_ollama_models_rich(*args, **kwargs):
+    from aria_cli import detect_ollama_models_rich as fn
+    return fn(*args, **kwargs)
+def _load_project_context(*args, **kwargs):
+    from aria_cli import _load_project_context as fn
+    return fn(*args, **kwargs)
+def _get__HAS_MCP():
+    from aria_cli import _HAS_MCP as val
+    return val
+def _get_LOCAL_TOOL_SCHEMAS():
+    from aria_cli import LOCAL_TOOL_SCHEMAS as val
+    return val
+import pathlib
+def _get_provider_key(*args, **kwargs):
+    from aria_cli import _get_provider_key as fn
+    return fn(*args, **kwargs)
+def _get_rich_box():
+    from aria_cli import rich_box as val
+    return val
+def _arrow_select(*args, **kwargs):
+    from aria_cli import _arrow_select as fn
+    return fn(*args, **kwargs)
+def _get___version__():
+    from aria_cli import __version__ as val
+    return val
+def _get_LOCAL_TOOLS():
+    from aria_cli import LOCAL_TOOLS as val
+    return val
+def get_model_capability(*args, **kwargs):
+    from aria_cli import get_model_capability as fn
+    return fn(*args, **kwargs)
+def _get_MCP_CONFIG_PATH():
+    from aria_cli import MCP_CONFIG_PATH as val
+    return val
+def _get_SESSIONS_DIR():
+    from aria_cli import SESSIONS_DIR as val
+    return val
+def _print_error(*args, **kwargs):
+    from aria_cli import _print_error as fn
+    return fn(*args, **kwargs)
+def _get__HAS_MODEL_CAP():
+    from aria_cli import _HAS_MODEL_CAP as val
+    return val
+def _strip_markdown_fences(*args, **kwargs):
+    from aria_cli import _strip_markdown_fences as fn
+    return fn(*args, **kwargs)
+def _load_data_keys(*args, **kwargs):
+    from aria_cli import _load_data_keys as fn
+    return fn(*args, **kwargs)
+
+import json
+import asyncio
+import datetime
+import time
+import shlex
+import sys
+import os
+from typing import Dict, Any, Optional
+
+
 class WorkspaceCommandsMixin:
     """Mixin: Workspace commands: packages, file, project, init, setup, memory."""
 
@@ -48,15 +117,15 @@ class WorkspaceCommandsMixin:
             return
 
         sub = args.strip().lower()
-        identity = aria_code_identity(__version__)
+        identity = aria_code_identity(_get___version__())
         arthera = discover_arthera_packages()
-        tool_registry = build_registry_from_legacy(LOCAL_TOOLS, LOCAL_TOOL_SCHEMAS)
+        tool_registry = build_registry_from_legacy(_get_LOCAL_TOOLS(), _get_LOCAL_TOOL_SCHEMAS())
         services = list_service_specs()
         agent_count = len(list_agent_manifests())
         skill_count = len(builtin_skill_specs())
         mcp_exposure_count = len(default_exposures())
         server_cfg = arthera_quant_engine_server_config()
-        mcp_config_path = MCP_CONFIG_PATH if _HAS_MCP else aria_home() / "mcp_servers.json"
+        mcp_config_path = _get_MCP_CONFIG_PATH() if _get__HAS_MCP() else aria_home() / "mcp_servers.json"
 
         if sub.startswith("export-manifest") or sub.startswith("manifest"):
             raw_parts = args.strip().split(maxsplit=1)
@@ -89,10 +158,10 @@ class WorkspaceCommandsMixin:
                 arthera_mcp_tools=arthera_specs,
             )
             write_package_manifest(out_path, manifest)
-            if HAS_RICH:
-                console.print()
-                console.print(f"  [green]Package manifest exported[/green] [dim]{out_path}[/dim]")
-                console.print(
+            if self.context.has_rich:
+                self.context.console.print()
+                self.context.console.print(f"  [green]Package manifest exported[/green] [dim]{out_path}[/dim]")
+                self.context.console.print(
                     f"  [dim]tools={len(manifest['capabilities']['tools'])} "
                     f"services={len(manifest['capabilities']['services'])} "
                     f"agents={len(manifest['capabilities']['agents'])} "
@@ -133,16 +202,16 @@ class WorkspaceCommandsMixin:
                 required_architecture_layers=required_architecture_layer_names(),
                 provider_health=GLOBAL_PROVIDER_HEALTH.snapshot(),
             )
-            if HAS_RICH:
+            if self.context.has_rich:
                 from rich.table import Table as _Table
                 color = "green" if report.status == "ok" else "yellow" if report.status == "warn" else "red"
-                console.print()
-                console.print(
+                self.context.console.print()
+                self.context.console.print(
                     f"  [bold]{identity.product}[/bold] "
                     f"[dim]· {identity.company} packages doctor ·[/dim] [{color}]{report.status}[/{color}]\n"
                 )
                 tbl = _Table(
-                    box=rich_box.ROUNDED,
+                    box=_get_rich_box().ROUNDED,
                     border_style="dim",
                     show_header=True,
                     header_style="bold dim",
@@ -159,8 +228,8 @@ class WorkspaceCommandsMixin:
                         check.detail,
                         check.remediation,
                     )
-                console.print(tbl)
-                console.print()
+                self.context.console.print(tbl)
+                self.context.console.print()
             else:
                 print(f"{identity.product} packages doctor: {report.status}")
                 for check in report.checks:
@@ -177,9 +246,9 @@ class WorkspaceCommandsMixin:
                     runtime_status = []
             status = mcp_server_status(mcp_config_path, "arthera_quant_engine", runtime_status)
 
-            if HAS_RICH:
-                console.print()
-                console.print(
+            if self.context.has_rich:
+                self.context.console.print()
+                self.context.console.print(
                     f"  [bold]{identity.product}[/bold] "
                     f"[dim]· {identity.company} package bridge status[/dim]\n"
                 )
@@ -193,14 +262,14 @@ class WorkspaceCommandsMixin:
                 ]
                 for key, value in rows:
                     style = "green" if value in ("yes", "found", "running") else "yellow" if value in ("no", "missing", "not running") else "dim"
-                    console.print(f"  [dim]{key:12s}[/dim] [{style}]{value}[/{style}]")
+                    self.context.console.print(f"  [dim]{key:12s}[/dim] [{style}]{value}[/{style}]")
                 if status["tools"]:
-                    console.print("  [dim]tool names:[/dim] " + ", ".join(status["tools"][:12]))
+                    self.context.console.print("  [dim]tool names:[/dim] " + ", ".join(status["tools"][:12]))
                 if not status["configured"]:
-                    console.print("  [dim]Run /packages connect arthera to write the MCP bridge.[/dim]")
+                    self.context.console.print("  [dim]Run /packages connect arthera to write the MCP bridge.[/dim]")
                 elif not status["running"]:
-                    console.print("  [dim]Run /mcp reload or /packages connect arthera --reload.[/dim]")
-                console.print()
+                    self.context.console.print("  [dim]Run /mcp reload or /packages connect arthera --reload.[/dim]")
+                self.context.console.print()
             else:
                 print(f"{identity.product} · {identity.company} package bridge status")
                 for key, value in status.items():
@@ -221,20 +290,20 @@ class WorkspaceCommandsMixin:
                     mcp_tools = []
             specs = mcp_tools_to_specs(mcp_tools, "arthera_quant_engine")
 
-            if HAS_RICH:
+            if self.context.has_rich:
                 from rich.table import Table as _Table
-                console.print()
-                console.print(
+                self.context.console.print()
+                self.context.console.print(
                     f"  [bold]{identity.product}[/bold] "
                     f"[dim]· {identity.company} MCP tool manifests[/dim]\n"
                 )
                 if not specs:
-                    console.print("  [yellow]No Arthera MCP tools discovered.[/yellow]")
-                    console.print("  [dim]Run /packages connect arthera --reload, then retry /packages tools arthera.[/dim]\n")
+                    self.context.console.print("  [yellow]No Arthera MCP tools discovered.[/yellow]")
+                    self.context.console.print("  [dim]Run /packages connect arthera --reload, then retry /packages tools arthera.[/dim]\n")
                     return
                 tbl = _Table(
                     title="[bold]Arthera QuantEngine Tools[/bold]",
-                    box=rich_box.ROUNDED,
+                    box=_get_rich_box().ROUNDED,
                     border_style="dim",
                     show_header=True,
                     header_style="bold dim",
@@ -248,8 +317,8 @@ class WorkspaceCommandsMixin:
                     caps = ", ".join(spec.capabilities)
                     schema_state = "yes" if spec.schema else "no"
                     tbl.add_row(spec.name, perms, caps, schema_state)
-                console.print(tbl)
-                console.print()
+                self.context.console.print(tbl)
+                self.context.console.print()
             else:
                 if not specs:
                     print("No Arthera MCP tools discovered. Run /packages connect arthera --reload.")
@@ -260,16 +329,16 @@ class WorkspaceCommandsMixin:
 
         if sub in ("services", "service", "usage", "use", "map"):
             usage_specs = list_service_usage_specs()
-            if HAS_RICH:
+            if self.context.has_rich:
                 from rich.table import Table as _Table
-                console.print()
-                console.print(
+                self.context.console.print()
+                self.context.console.print(
                     f"  [bold]{identity.product}[/bold] "
                     f"[dim]· service usage map[/dim]\n"
                 )
                 tbl = _Table(
                     title="[bold]Project Services[/bold]",
-                    box=rich_box.ROUNDED,
+                    box=_get_rich_box().ROUNDED,
                     border_style="dim",
                     show_header=True,
                     header_style="bold dim",
@@ -289,8 +358,8 @@ class WorkspaceCommandsMixin:
                         f"{packages}\n[dim]{mcp}[/dim]",
                         spec.next_step,
                     )
-                console.print(tbl)
-                console.print("[dim]连接 Arthera MCP: /packages connect arthera --reload；券商接入: /broker guide[/dim]\n")
+                self.context.console.print(tbl)
+                self.context.console.print("[dim]连接 Arthera MCP: /packages connect arthera --reload；券商接入: /broker guide[/dim]\n")
             else:
                 for spec in usage_specs:
                     print(f"{spec.name}: {spec.purpose} -> {', '.join(spec.cli_entrypoints)}")
@@ -302,16 +371,16 @@ class WorkspaceCommandsMixin:
             write_mcp_config(mcp_config_path, updated)
             server_path = pathlib.Path(str(server_cfg["args"][0]))
             ready = server_path.exists()
-            if HAS_RICH:
-                console.print()
-                console.print(
+            if self.context.has_rich:
+                self.context.console.print()
+                self.context.console.print(
                     f"  [bold]{identity.product}[/bold] "
                     f"[dim]connected to {identity.company} package bridge[/dim]"
                 )
                 status = "[green]ready[/green]" if ready else "[yellow]configured, server file not found[/yellow]"
-                console.print(f"  {status} [dim]{server_cfg['name']}[/dim]")
-                console.print(f"  [dim]config:[/dim] {mcp_config_path}")
-                console.print(f"  [dim]server:[/dim] {server_path}")
+                self.context.console.print(f"  {status} [dim]{server_cfg['name']}[/dim]")
+                self.context.console.print(f"  [dim]config:[/dim] {mcp_config_path}")
+                self.context.console.print(f"  [dim]server:[/dim] {server_path}")
             else:
                 print(f"Connected {identity.product} -> {server_cfg['name']}")
                 print(f"config: {mcp_config_path}")
@@ -320,25 +389,25 @@ class WorkspaceCommandsMixin:
             if "--reload" in sub or " reload" in sub:
                 await self.cmd_mcp("reload")
             else:
-                if HAS_RICH:
-                    console.print("  [dim]Run /mcp reload to start the server.[/dim]\n")
+                if self.context.has_rich:
+                    self.context.console.print("  [dim]Run /mcp reload to start the server.[/dim]\n")
                 else:
                     print("Run /mcp reload to start the server.")
             return
 
-        if HAS_RICH:
+        if self.context.has_rich:
             from rich.table import Table as _Table
 
-            console.print()
-            console.print(
+            self.context.console.print()
+            self.context.console.print(
                 f"  [bold]{identity.product}[/bold] "
                 f"[dim]v{identity.version} · {identity.company} product[/dim]"
             )
-            console.print(f"  [dim]{identity.description}[/dim]\n")
+            self.context.console.print(f"  [dim]{identity.description}[/dim]\n")
 
             tbl = _Table(
                 title="[bold]Package Facades[/bold]",
-                box=rich_box.ROUNDED,
+                box=_get_rich_box().ROUNDED,
                 border_style="dim",
                 show_header=True,
                 header_style="bold dim",
@@ -353,29 +422,29 @@ class WorkspaceCommandsMixin:
             tbl.add_row("aria_skills", "ready", f"{skill_count} skills")
             tbl.add_row("aria_mcp", "ready", f"{mcp_exposure_count} planned exposures")
             tbl.add_row("aria_infra", "ready", "Arthera package discovery")
-            console.print(tbl)
+            self.context.console.print(tbl)
 
-            console.print()
-            console.print("[bold]Arthera Packages[/bold]")
+            self.context.console.print()
+            self.context.console.print("[bold]Arthera Packages[/bold]")
             from ui.render.output import display_path as _display_path
             if arthera.available:
-                console.print(f"  [green]found[/green] [dim]{_display_path(arthera.root, fallback='package root')}[/dim]")
+                self.context.console.print(f"  [green]found[/green] [dim]{_display_path(arthera.root, fallback='package root')}[/dim]")
                 for name, path in sorted(arthera.packages.items()):
-                    console.print(f"  [dim]·[/dim] [bold]{name:14s}[/bold] [dim]{_display_path(path, fallback='package')}[/dim]")
+                    self.context.console.print(f"  [dim]·[/dim] [bold]{name:14s}[/bold] [dim]{_display_path(path, fallback='package')}[/dim]")
                 if arthera.mcp_servers:
-                    console.print("  [dim]MCP server candidates:[/dim]")
+                    self.context.console.print("  [dim]MCP server candidates:[/dim]")
                     for path in arthera.mcp_servers[:5]:
-                        console.print(f"    [dim]{_display_path(path, fallback='server')}[/dim]")
+                        self.context.console.print(f"    [dim]{_display_path(path, fallback='server')}[/dim]")
             else:
-                console.print(f"  [yellow]not found[/yellow] [dim]{_display_path(arthera.root, fallback='package root')}[/dim]")
+                self.context.console.print(f"  [yellow]not found[/yellow] [dim]{_display_path(arthera.root, fallback='package root')}[/dim]")
 
-            console.print()
-            console.print("[bold]Recommended MCP bridge[/bold]")
-            console.print(f"  [dim]name:[/dim] {server_cfg['name']}")
-            console.print(f"  [dim]command:[/dim] {server_cfg['command']} {' '.join(server_cfg['args'])}")
-            console.print(f"  [dim]env PYTHONPATH:[/dim] {server_cfg['env']['PYTHONPATH']}")
-            console.print(f"  [dim]config:[/dim] {mcp_config_path}")
-            console.print("  [dim]Run /packages connect arthera to write this MCP bridge.[/dim]\n")
+            self.context.console.print()
+            self.context.console.print("[bold]Recommended MCP bridge[/bold]")
+            self.context.console.print(f"  [dim]name:[/dim] {server_cfg['name']}")
+            self.context.console.print(f"  [dim]command:[/dim] {server_cfg['command']} {' '.join(server_cfg['args'])}")
+            self.context.console.print(f"  [dim]env PYTHONPATH:[/dim] {server_cfg['env']['PYTHONPATH']}")
+            self.context.console.print(f"  [dim]config:[/dim] {mcp_config_path}")
+            self.context.console.print("  [dim]Run /packages connect arthera to write this MCP bridge.[/dim]\n")
         else:
             print(f"{identity.product} v{identity.version} · {identity.company} product")
             print(f"services={len(services)} tools={len(tool_registry.list())} agents={agent_count} skills={skill_count} mcp={mcp_exposure_count}")
@@ -404,8 +473,8 @@ class WorkspaceCommandsMixin:
                 from file_analysis_tools import FileSession
                 self.terminal._file_session = FileSession()
             except ImportError as e:
-                if HAS_RICH:
-                    console.print(f"[red]file_analysis_tools 未加载: {e}[/red]")
+                if self.context.has_rich:
+                    self.context.console.print(f"[red]file_analysis_tools 未加载: {e}[/red]")
                 return
 
         fs = self.terminal._file_session
@@ -413,18 +482,18 @@ class WorkspaceCommandsMixin:
         # ────────────────── /file load ────────────────────────────────────────
         if sub == "load":
             if not rest:
-                if HAS_RICH:
-                    console.print("[dim]用法: /file load <文件路径>[/dim]")
-                    console.print("[dim]支持: PDF DOCX XLSX CSV JSON TXT MD 图片 代码文件[/dim]")
+                if self.context.has_rich:
+                    self.context.console.print("[dim]用法: /file load <文件路径>[/dim]")
+                    self.context.console.print("[dim]支持: PDF DOCX XLSX CSV JSON TXT MD 图片 代码文件[/dim]")
                 return
 
-            if HAS_RICH:
-                console.print(f"[dim]正在解析 {rest}...[/dim]")
+            if self.context.has_rich:
+                self.context.console.print(f"[dim]正在解析 {rest}...[/dim]")
 
             # Include images only for vision-capable models
             _curr_model = self.terminal.config.get("model", "")
             include_img = False
-            if _HAS_MODEL_CAP:
+            if _get__HAS_MODEL_CAP():
                 try:
                     _mc = get_model_capability(_curr_model)
                     include_img = bool(_mc.vision)
@@ -436,20 +505,20 @@ class WorkspaceCommandsMixin:
                 None, lambda: parse_file(rest, include_images=include_img))
 
             if not fc.success:
-                if HAS_RICH:
-                    console.print(f"[red]解析失败: {fc.error}[/red]")
+                if self.context.has_rich:
+                    self.context.console.print(f"[red]解析失败: {fc.error}[/red]")
                     # Show which parsers are available
                     parsers = check_parsers()
                     missing = [k for k, v in parsers.items() if not v]
                     if missing:
-                        console.print(f"[yellow]⚠ 未安装解析器: {', '.join(missing)}[/yellow]")
-                        console.print(f"[dim]安装命令: pip install {' '.join(missing)}[/dim]")
+                        self.context.console.print(f"[yellow]⚠ 未安装解析器: {', '.join(missing)}[/yellow]")
+                        self.context.console.print(f"[dim]安装命令: pip install {' '.join(missing)}[/dim]")
                 return
 
             fs.load(rest, include_images=include_img)
             self.terminal._file_ctx_injected = False  # Reset so next msg injects file
 
-            if HAS_RICH:
+            if self.context.has_rich:
                 from rich.panel import Panel as _P
                 from rich import box as _box
                 info_lines = [
@@ -467,7 +536,7 @@ class WorkspaceCommandsMixin:
                 if fc.tables:
                     info_lines.append(f"[dim]包含 {len(fc.tables)} 个表格[/dim]")
                 info_lines.append("\n[dim]发送任何消息即可开始分析，或使用 /file analyze 1-4[/dim]")
-                console.print(_P("\n".join(info_lines),
+                self.context.console.print(_P("\n".join(info_lines),
                                  title="[bold]📄 文件已加载[/bold]",
                                  border_style="green", box=_box.ROUNDED))
 
@@ -475,7 +544,7 @@ class WorkspaceCommandsMixin:
         elif sub == "analyze":
             fc = fs.get_active()
             if not fc:
-                if HAS_RICH: console.print("[dim]请先使用 /file load <路径> 加载文件[/dim]")
+                if self.context.has_rich: self.context.console.print("[dim]请先使用 /file load <路径> 加载文件[/dim]")
                 return
 
             # Determine layer(s) to run
@@ -493,9 +562,9 @@ class WorkspaceCommandsMixin:
             from file_analysis_tools import build_analysis_prompt
 
             for layer in layers_to_run:
-                if HAS_RICH:
-                    console.print(f"\n[bold]{layer_names.get(layer, f'层{layer}')}[/bold]")
-                    console.print(f"[dim]{'─'*50}[/dim]")
+                if self.context.has_rich:
+                    self.context.console.print(f"\n[bold]{layer_names.get(layer, f'层{layer}')}[/bold]")
+                    self.context.console.print(f"[dim]{'─'*50}[/dim]")
 
                 prompt = build_analysis_prompt(fc, layer=layer)
                 # Send to LLM via the normal message pipeline
@@ -508,19 +577,19 @@ class WorkspaceCommandsMixin:
                 )
 
                 if len(layers_to_run) > 1 and layer < layers_to_run[-1]:
-                    if HAS_RICH:
-                        console.print(f"\n[dim]{'═'*60}[/dim]")
-                        console.print("[dim]进入下一层分析...[/dim]\n")
+                    if self.context.has_rich:
+                        self.context.console.print(f"\n[dim]{'═'*60}[/dim]")
+                        self.context.console.print("[dim]进入下一层分析...[/dim]\n")
 
         # ────────────────── /file ask ──────────────────────────────────────────
         elif sub == "ask":
             fc = fs.get_active()
             if not fc:
-                if HAS_RICH: console.print("[dim]请先使用 /file load <路径> 加载文件[/dim]")
+                if self.context.has_rich: self.context.console.print("[dim]请先使用 /file load <路径> 加载文件[/dim]")
                 return
             question = rest.strip()
             if not question:
-                if HAS_RICH:
+                if self.context.has_rich:
                     from rich.prompt import Prompt as _Prompt
                     question = _Prompt.ask("  请输入问题")
                 else:
@@ -542,9 +611,9 @@ class WorkspaceCommandsMixin:
         elif sub == "list":
             files = fs.list_files()
             if not files:
-                if HAS_RICH: console.print("[dim]会话中暂无已加载文件。使用 /file load <路径>[/dim]")
+                if self.context.has_rich: self.context.console.print("[dim]会话中暂无已加载文件。使用 /file load <路径>[/dim]")
                 return
-            if HAS_RICH:
+            if self.context.has_rich:
                 from rich.table import Table as _T
                 from rich import box as _box
                 tb = _T(title="[bold]📂 已加载文件[/bold]", box=_box.ROUNDED)
@@ -556,34 +625,34 @@ class WorkspaceCommandsMixin:
                     tb.add_row(status, f["filename"], f["type"].upper(),
                                str(f["size_kb"]), f"{f['chars']:,}",
                                "[yellow]是[/yellow]" if f["truncated"] else "否")
-                console.print(tb)
-                console.print("[dim]/file ask <问题> 向活跃文件提问[/dim]")
+                self.context.console.print(tb)
+                self.context.console.print("[dim]/file ask <问题> 向活跃文件提问[/dim]")
 
         # ────────────────── /file switch ──────────────────────────────────────
         elif sub == "switch":
             if not rest:
-                if HAS_RICH: console.print("[dim]用法: /file switch <文件名>[/dim]")
+                if self.context.has_rich: self.context.console.print("[dim]用法: /file switch <文件名>[/dim]")
                 return
             if fs.set_active(rest):
                 fc = fs.get_active()
                 self.terminal._file_ctx_injected = False
-                if HAS_RICH:
-                    console.print(f"[green]✓ 已切换到: {fc.filename}[/green]")
+                if self.context.has_rich:
+                    self.context.console.print(f"[green]✓ 已切换到: {fc.filename}[/green]")
             else:
-                if HAS_RICH: console.print(f"[red]未找到文件: {rest}[/red]")
+                if self.context.has_rich: self.context.console.print(f"[red]未找到文件: {rest}[/red]")
 
         # ────────────────── /file clear ──────────────────────────────────────
         elif sub == "clear":
             fs.clear(rest if rest else None)
             self.terminal._file_ctx_injected = False
             msg = f"已清除文件: {rest}" if rest else "已清除所有已加载文件"
-            if HAS_RICH: console.print(f"[dim]{msg}[/dim]")
+            if self.context.has_rich: self.context.console.print(f"[dim]{msg}[/dim]")
 
         # ────────────────── /file check ───────────────────────────────────────
         elif sub == "check":
             from file_analysis_tools import check_parsers
             parsers = check_parsers()
-            if HAS_RICH:
+            if self.context.has_rich:
                 from rich.table import Table as _T
                 from rich import box as _box
                 tb = _T(title="[bold]📦 文件解析器状态[/bold]", box=_box.ROUNDED)
@@ -600,7 +669,7 @@ class WorkspaceCommandsMixin:
                 for lib, ok in parsers.items():
                     status = "[green]✓ 已安装[/green]" if ok else "[red]✗ 未安装[/red]"
                     tb.add_row(lib, status, "" if ok else _CMDS.get(lib,""))
-                console.print(tb)
+                self.context.console.print(tb)
                 formats_ok = []
                 if parsers.get("pdfplumber") or parsers.get("pypdf"):
                     formats_ok.append("PDF")
@@ -609,12 +678,12 @@ class WorkspaceCommandsMixin:
                 if parsers.get("pandas") and parsers.get("openpyxl"):
                     formats_ok.append("Excel/CSV")
                 formats_ok.extend(["JSON", "TXT/MD", "代码文件"])
-                console.print(f"[dim]可解析格式: {', '.join(formats_ok)}[/dim]")
+                self.context.console.print(f"[dim]可解析格式: {', '.join(formats_ok)}[/dim]")
 
         # ────────────────── /file help ─────────────────────────────────────────
         else:
-            if HAS_RICH:
-                console.print("[bold]📄 /file 文件分析命令[/bold]")
+            if self.context.has_rich:
+                self.context.console.print("[bold]📄 /file 文件分析命令[/bold]")
                 rows = [
                     ("/file load <路径>",          "加载文件 (PDF/DOCX/XLSX/CSV/JSON/TXT/代码/图片)"),
                     ("/file analyze 1",            "快速摘要 (300字)"),
@@ -634,7 +703,7 @@ class WorkspaceCommandsMixin:
                 tb.add_column("命令", style="cyan"); tb.add_column("说明", style="dim")
                 for cmd, desc in rows:
                     tb.add_row(cmd, desc)
-                console.print(tb)
+                self.context.console.print(tb)
 
     async def cmd_project(self, args: str):
         """项目分析 (Claude Code / Codex 风格): /project load|tree|grep|ask|task|status|info <参数>"""
@@ -650,7 +719,7 @@ class WorkspaceCommandsMixin:
             _HAS_PT = False
 
         if not _HAS_PT:
-            console.print("[red]❌ project_tools.py 未找到，请确保文件存在。[/red]")
+            self.context.console.print("[red]❌ project_tools.py 未找到，请确保文件存在。[/red]")
             return
 
         parts  = args.strip().split(maxsplit=1)
@@ -661,19 +730,19 @@ class WorkspaceCommandsMixin:
         # ── load ──────────────────────────────────────────────────────────────
         if sub == "load":
             if not rest:
-                console.print("[yellow]用法: /project load <目录路径>[/yellow]")
+                self.context.console.print("[yellow]用法: /project load <目录路径>[/yellow]")
                 return
             from pathlib import Path as _Path
             target = _Path(rest).expanduser().resolve()
             if not target.exists():
-                console.print(f"[red]路径不存在: {target}[/red]")
+                self.context.console.print(f"[red]路径不存在: {target}[/red]")
                 return
 
-            console.print(f"[dim]正在扫描项目: {target} …[/dim]")
+            self.context.console.print(f"[dim]正在扫描项目: {target} …[/dim]")
             try:
                 new_ps = scan_project(str(target), max_files=2000)
             except Exception as e:
-                console.print(f"[red]扫描失败: {e}[/red]")
+                self.context.console.print(f"[red]扫描失败: {e}[/red]")
                 return
 
             self.terminal._project_session = new_ps       # type: ignore[attr-defined]
@@ -706,15 +775,15 @@ class WorkspaceCommandsMixin:
                 tb.add_row("Git 分支", s["git"]["branch"])
             if s["git"].get("changed_count"):
                 tb.add_row("变更文件", str(s["git"]["changed_count"]))
-            console.print("\n[bold]项目已加载 ✓[/bold]")
-            console.print(tb)
-            console.print(f"\n[dim]关键文件: {', '.join(s['key_files'][:6])}[/dim]")
-            console.print("[dim]现在可以直接对话，Aria 将根据项目上下文回答。[/dim]\n")
+            self.context.console.print("\n[bold]项目已加载 ✓[/bold]")
+            self.context.console.print(tb)
+            self.context.console.print(f"\n[dim]关键文件: {', '.join(s['key_files'][:6])}[/dim]")
+            self.context.console.print("[dim]现在可以直接对话，Aria 将根据项目上下文回答。[/dim]\n")
             return
 
         # ── 未加载时提示 ──────────────────────────────────────────────────────
         if ps is None:
-            console.print("[yellow]请先加载项目: /project load <目录路径>[/yellow]")
+            self.context.console.print("[yellow]请先加载项目: /project load <目录路径>[/yellow]")
             return
 
         # ── tree ──────────────────────────────────────────────────────────────
@@ -724,39 +793,39 @@ class WorkspaceCommandsMixin:
             if depth_arg.isdigit():
                 max_lines = int(depth_arg) * 30  # rough approximation
             tree_str = ps.get_tree(max_lines=max_lines)
-            console.print(f"\n[bold]{ps.name}/[/bold]")
-            console.print(f"[dim]{tree_str}[/dim]")
-            console.print(f"\n[dim]共 {ps.stats.get('total_files', 0)} 个文件[/dim]\n")
+            self.context.console.print(f"\n[bold]{ps.name}/[/bold]")
+            self.context.console.print(f"[dim]{tree_str}[/dim]")
+            self.context.console.print(f"\n[dim]共 {ps.stats.get('total_files', 0)} 个文件[/dim]\n")
 
         # ── grep / search ─────────────────────────────────────────────────────
         elif sub in ("grep", "search"):
             if not rest:
-                console.print("[yellow]用法: /project grep <正则表达式> [glob模式][/yellow]")
+                self.context.console.print("[yellow]用法: /project grep <正则表达式> [glob模式][/yellow]")
                 return
             parts2 = rest.split(maxsplit=1)
             pattern = parts2[0]
             glob    = parts2[1] if len(parts2) > 1 else "**/*"
-            console.print(f"[dim]搜索 \"{pattern}\" …[/dim]")
+            self.context.console.print(f"[dim]搜索 \"{pattern}\" …[/dim]")
             results = ps.grep(pattern, glob=glob, max_results=60)
-            console.print(format_grep_results(results, pattern))
+            self.context.console.print(format_grep_results(results, pattern))
 
         # ── status ────────────────────────────────────────────────────────────
         elif sub == "status":
             gi = ps.git_info
             if not gi:
-                console.print("[dim]当前项目不是 Git 仓库[/dim]")
+                self.context.console.print("[dim]当前项目不是 Git 仓库[/dim]")
                 return
-            console.print(f"\n[bold]Git 状态[/bold] — {ps.name}")
-            console.print(f"  分支: [cyan]{gi.get('branch','?')}[/cyan]  "
+            self.context.console.print(f"\n[bold]Git 状态[/bold] — {ps.name}")
+            self.context.console.print(f"  分支: [cyan]{gi.get('branch','?')}[/cyan]  "
                           f"变更: [yellow]{gi.get('changed_count', 0)}[/yellow] 个文件")
             if gi.get("changed_files"):
                 for f in gi["changed_files"][:15]:
-                    console.print(f"  [dim]{f}[/dim]")
+                    self.context.console.print(f"  [dim]{f}[/dim]")
             if gi.get("recent_commits"):
-                console.print("\n[bold]最近提交:[/bold]")
+                self.context.console.print("\n[bold]最近提交:[/bold]")
                 for c in gi["recent_commits"][:5]:
-                    console.print(f"  [dim]{c}[/dim]")
-            console.print()
+                    self.context.console.print(f"  [dim]{c}[/dim]")
+            self.context.console.print()
 
         # ── info ──────────────────────────────────────────────────────────────
         elif sub in ("info", "summary", ""):
@@ -773,23 +842,23 @@ class WorkspaceCommandsMixin:
             tb.add_row("大小",     f"{s['total_size_kb']} KB")
             if s["git"].get("branch"):
                 tb.add_row("Git 分支", s["git"]["branch"])
-            console.print(tb)
-            console.print(f"\n[dim]关键文件: {', '.join(s['key_files'][:8])}[/dim]\n")
+            self.context.console.print(tb)
+            self.context.console.print(f"\n[dim]关键文件: {', '.join(s['key_files'][:8])}[/dim]\n")
 
         # ── read ──────────────────────────────────────────────────────────────
         elif sub == "read":
             if not rest:
-                console.print("[yellow]用法: /project read <文件路径>[/yellow]")
+                self.context.console.print("[yellow]用法: /project read <文件路径>[/yellow]")
                 return
             ok, content = ps.read_file(rest)
             if not ok:
-                console.print(f"[red]{content}[/red]")
+                self.context.console.print(f"[red]{content}[/red]")
                 return
             lang = rest.rsplit(".", 1)[-1] if "." in rest else "text"
-            console.print(f"\n[bold]{rest}[/bold]")
-            if HAS_RICH:
+            self.context.console.print(f"\n[bold]{rest}[/bold]")
+            if self.context.has_rich:
                 from rich.syntax import Syntax
-                console.print(Syntax(content, lang, theme="monokai", line_numbers=True,
+                self.context.console.print(Syntax(content, lang, theme="monokai", line_numbers=True,
                                      word_wrap=False))
             else:
                 print(content)
@@ -798,12 +867,12 @@ class WorkspaceCommandsMixin:
         elif sub == "clear":
             self.terminal._project_session = None            # type: ignore[attr-defined]
             self.terminal._project_ctx_injected = False      # type: ignore[attr-defined]
-            console.print("[dim]项目上下文已清除[/dim]")
+            self.context.console.print("[dim]项目上下文已清除[/dim]")
 
         # ── ask / task → forward to AI with project context ───────────────────
         elif sub in ("ask", "task"):
             if not rest:
-                console.print(f"[yellow]用法: /project {sub} <问题或任务描述>[/yellow]")
+                self.context.console.print(f"[yellow]用法: /project {sub} <问题或任务描述>[/yellow]")
                 return
             # Delegate to the AI; project context is injected automatically via send_message
             prefix = "请基于当前项目完成以下任务：\n" if sub == "task" else ""
@@ -827,9 +896,9 @@ class WorkspaceCommandsMixin:
             tb.add_column("说明", style="dim")
             for cmd, desc in rows:
                 tb.add_row(cmd, desc)
-            console.print("\n[bold]/project — 项目分析命令[/bold]\n")
-            console.print(tb)
-            console.print()
+            self.context.console.print("\n[bold]/project — 项目分析命令[/bold]\n")
+            self.context.console.print(tb)
+            self.context.console.print()
 
     async def cmd_init(self, args: str):
         """Bootstrap an ARIA.md memory file, or scaffold a new project.
@@ -853,16 +922,16 @@ class WorkspaceCommandsMixin:
         _tmpl_key = args.strip().lower().split()[0] if args.strip() else ""
         if _tmpl_key == "list":
             rows = [(k, v["desc"]) for k, v in self._SCAFFOLD_TEMPLATES.items()]
-            if HAS_RICH:
+            if self.context.has_rich:
                 from rich.table import Table as _Table
                 t = _Table(box=None, show_header=True, header_style="bold cyan", padding=(0,2))
                 t.add_column("模板", style="green")
                 t.add_column("说明")
                 for k, d in rows:
                     t.add_row(k, d)
-                console.print("\n  [bold]可用脚手架模板[/bold]")
-                console.print(t)
-                console.print("\n  用法: [cyan]/init <模板名> [目录名][/cyan]\n")
+                self.context.console.print("\n  [bold]可用脚手架模板[/bold]")
+                self.context.console.print(t)
+                self.context.console.print("\n  用法: [cyan]/init <模板名> [目录名][/cyan]\n")
             else:
                 print("可用模板:"); [print(f"  {k}: {d}") for k, d in rows]
             return
@@ -879,15 +948,15 @@ class WorkspaceCommandsMixin:
                 from artifacts import user_projects_dir as _user_projects_dir
                 target_dir = _user_projects_dir() / _target_name
             if target_dir.exists():
-                console.print(f"[yellow]目录已存在: {target_dir}[/yellow]") if HAS_RICH else print(f"目录已存在: {target_dir}")
+                self.context.console.print(f"[yellow]目录已存在: {target_dir}[/yellow]") if self.context.has_rich else print(f"目录已存在: {target_dir}")
             else:
                 target_dir.mkdir(parents=True)
             created = self._create_scaffold(target_dir, tmpl)
-            if HAS_RICH:
+            if self.context.has_rich:
                 from rich.panel import Panel as _SPanel
                 from rich import box as _sbox
                 lines = "\n".join(f"  [dim]{pathlib.Path(p)}[/dim]" for p in created)
-                console.print(_SPanel(
+                self.context.console.print(_SPanel(
                     f"[green]✅ 项目脚手架已创建[/green]  [bold]{_target_name}[/bold]\n\n{lines}\n\n"
                     f"[dim]cd \"{target_dir}\" && pip install -r requirements.txt[/dim]",
                     title=f"[bold cyan]/init {_tmpl_key}[/bold cyan]",
@@ -924,7 +993,7 @@ class WorkspaceCommandsMixin:
 
         if aria_md.exists() and not force:
             msg = "ARIA.md already exists. Use /init --force to regenerate."
-            console.print(f"[yellow]{msg}[/yellow]") if HAS_RICH else print(msg)
+            self.context.console.print(f"[yellow]{msg}[/yellow]") if self.context.has_rich else print(msg)
             return
 
         # Scan for common project signal files
@@ -969,7 +1038,7 @@ class WorkspaceCommandsMixin:
             f"- **Notes**: <其他重要信息>\n"
         )
 
-        console.print("[dim]分析项目结构中...[/dim]") if HAS_RICH else print("Analyzing project...")
+        self.context.console.print("[dim]分析项目结构中...[/dim]") if self.context.has_rich else print("Analyzing project...")
         await self.terminal.send_message(prompt)
 
         # Extract the last assistant response and write to ARIA.md
@@ -993,7 +1062,7 @@ class WorkspaceCommandsMixin:
                 aria_md.write_text(content + "\n", encoding="utf-8")
                 _PROJECT_CONTEXT = _load_project_context()
                 msg = f"ARIA.md created at {aria_md}"
-                console.print(f"\n[green]{msg}[/green]") if HAS_RICH else print(f"\n{msg}")
+                self.context.console.print(f"\n[green]{msg}[/green]") if self.context.has_rich else print(f"\n{msg}")
 
     async def cmd_setup(self, args: str):
         """Guided first-run setup wizard (Open Interpreter style).
@@ -1004,10 +1073,10 @@ class WorkspaceCommandsMixin:
 
         _is_interactive = sys.stdin.isatty()
 
-        if HAS_RICH:
-            console.print()
-            console.print("[bold cyan]━━ Aria Setup Wizard ━━━━━━━━━━━━━━━━━━━━━━━━━━━[/bold cyan]")
-            console.print()
+        if self.context.has_rich:
+            self.context.console.print()
+            self.context.console.print("[bold cyan]━━ Aria Setup Wizard ━━━━━━━━━━━━━━━━━━━━━━━━━━━[/bold cyan]")
+            self.context.console.print()
 
         # ── Step 1: Detect LOCAL backends only (not cloud LLM providers) ───────
         _LOCAL_BACKENDS_ONLY = {"ollama", "lmstudio", "vllm", "llamacpp", "jan"}
@@ -1019,21 +1088,21 @@ class WorkspaceCommandsMixin:
         except ImportError:
             backends = {}
 
-        console.print("  [bold]Step 1/4 · 本地 Backend[/bold]") if HAS_RICH else print("Step 1: Local Backends")
+        self.context.console.print("  [bold]Step 1/4 · 本地 Backend[/bold]") if self.context.has_rich else print("Step 1: Local Backends")
         ollama_online = backends.get("ollama", False)
         for name, ok in backends.items():
             icon  = "✅" if ok else "○"
             color = "green" if ok else "dim"
             url   = BACKEND_DEFAULTS.get(name, {}).get("default_url", "") if "BACKEND_DEFAULTS" in dir() else ""
-            if HAS_RICH:
-                console.print(f"  {icon} [{color}]{name:12s}[/{color}] [dim]{url}[/dim]")
+            if self.context.has_rich:
+                self.context.console.print(f"  {icon} [{color}]{name:12s}[/{color}] [dim]{url}[/dim]")
             else:
                 print(f"  {'✓' if ok else '✗'} {name:12s} {url}")
-        console.print() if HAS_RICH else print()
+        self.context.console.print() if self.context.has_rich else print()
 
         # ── Step 2: Pick default Ollama model (if Ollama online) ────────────
         if ollama_online and _is_interactive:
-            console.print("  [bold]Step 2/4 · 选择默认本地模型[/bold]") if HAS_RICH else print("Step 2: Default model")
+            self.context.console.print("  [bold]Step 2/4 · 选择默认本地模型[/bold]") if self.context.has_rich else print("Step 2: Default model")
             rich_models, _ = detect_ollama_models_rich(
                 self.terminal.config.get("ollama_url", "http://localhost:11434")
             )
@@ -1046,16 +1115,16 @@ class WorkspaceCommandsMixin:
                 if picked is not None:
                     chosen = model_names[picked]
                     self.terminal.config["model"] = chosen
-                    save_config(self.terminal.config)
+                    self.context.save_config(self.terminal.config)
                     msg = f"✓ 默认模型设为 {chosen}"
-                    console.print(f"  [green]{msg}[/green]") if HAS_RICH else print(f"  {msg}")
-            console.print() if HAS_RICH else print()
+                    self.context.console.print(f"  [green]{msg}[/green]") if self.context.has_rich else print(f"  {msg}")
+            self.context.console.print() if self.context.has_rich else print()
         else:
-            console.print("  [dim]Step 2/4 · (Ollama 未运行，跳过模型选择)[/dim]") if HAS_RICH else print("  Skipping model select (Ollama offline)")
-            console.print() if HAS_RICH else print()
+            self.context.console.print("  [dim]Step 2/4 · (Ollama 未运行，跳过模型选择)[/dim]") if self.context.has_rich else print("  Skipping model select (Ollama offline)")
+            self.context.console.print() if self.context.has_rich else print()
 
         # ── Step 3: Cloud API keys ───────────────────────────────────────────
-        console.print("  [bold]Step 3/4 · Cloud API Key 配置[/bold]") if HAS_RICH else print("Step 3: Cloud API Keys")
+        self.context.console.print("  [bold]Step 3/4 · Cloud API Key 配置[/bold]") if self.context.has_rich else print("Step 3: Cloud API Keys")
         _SETUP_PROVIDERS = [
             ("deepseek",  "DeepSeek",  "推荐：deepseek-chat，性价比最高"),
             ("openai",    "OpenAI",    "GPT-4o，o1等"),
@@ -1066,10 +1135,10 @@ class WorkspaceCommandsMixin:
             existing_key = _get_provider_key(prov)
             if existing_key:
                 masked = existing_key[:6] + "****" + existing_key[-4:]
-                console.print(f"  🔑 {label:12s} [dim]已配置 ({masked})[/dim]") if HAS_RICH else print(f"  {label}: 已配置")
+                self.context.console.print(f"  🔑 {label:12s} [dim]已配置 ({masked})[/dim]") if self.context.has_rich else print(f"  {label}: 已配置")
                 continue
             if _is_interactive:
-                console.print(f"  [cyan]{label}[/cyan] [dim]({desc})[/dim]") if HAS_RICH else print(f"  {label}: {desc}")
+                self.context.console.print(f"  [cyan]{label}[/cyan] [dim]({desc})[/dim]") if self.context.has_rich else print(f"  {label}: {desc}")
                 try:
                     key = _gp.getpass(f"  Enter {label} API key (留空跳过): ").strip()
                 except Exception:
@@ -1077,11 +1146,11 @@ class WorkspaceCommandsMixin:
                 if key:
                     self.cmd_apikey(f"set {prov} {key}")
             else:
-                console.print(f"  ○ {label:12s} [dim]未配置  → /apikey set {prov} <key>[/dim]") if HAS_RICH else print(f"  {label}: not configured")
-        console.print() if HAS_RICH else print()
+                self.context.console.print(f"  ○ {label:12s} [dim]未配置  → /apikey set {prov} <key>[/dim]") if self.context.has_rich else print(f"  {label}: not configured")
+        self.context.console.print() if self.context.has_rich else print()
 
         # ── Step 3.5: Data Service API keys ──────────────────────────────────
-        console.print("  [bold]Step 3.5/4 · 市场数据服务 Key（后端离线时使用）[/bold]") if HAS_RICH else print("Step 3.5: Data Service Keys")
+        self.context.console.print("  [bold]Step 3.5/4 · 市场数据服务 Key（后端离线时使用）[/bold]") if self.context.has_rich else print("Step 3.5: Data Service Keys")
         _SETUP_DATA = [
             ("finnhub",      "Finnhub",      "股票实时行情+新闻",     "https://finnhub.io/register"),
             ("newsapi",      "NewsAPI",       "财经新闻聚合",          "https://newsapi.org/register"),
@@ -1093,11 +1162,11 @@ class WorkspaceCommandsMixin:
             existing_key = _existing_data.get(svc, "")
             if existing_key:
                 masked = existing_key[:6] + "****" + existing_key[-4:]
-                console.print(f"  🔑 {label:16s} [dim]已配置 ({masked})[/dim]") if HAS_RICH else print(f"  {label}: configured")
+                self.context.console.print(f"  🔑 {label:16s} [dim]已配置 ({masked})[/dim]") if self.context.has_rich else print(f"  {label}: configured")
                 continue
             if _is_interactive:
-                console.print(f"  [cyan]{label}[/cyan] [dim]({desc})[/dim]") if HAS_RICH else print(f"  {label}: {desc}")
-                console.print(f"  [dim]注册：{signup_url}[/dim]") if HAS_RICH else print(f"  Register: {signup_url}")
+                self.context.console.print(f"  [cyan]{label}[/cyan] [dim]({desc})[/dim]") if self.context.has_rich else print(f"  {label}: {desc}")
+                self.context.console.print(f"  [dim]注册：{signup_url}[/dim]") if self.context.has_rich else print(f"  Register: {signup_url}")
                 try:
                     key = _gp.getpass(f"  Enter {label} API key (留空跳过): ").strip()
                 except Exception:
@@ -1105,17 +1174,17 @@ class WorkspaceCommandsMixin:
                 if key:
                     self.cmd_apikey(f"set {svc} {key}")
             else:
-                if HAS_RICH:
-                    console.print(f"  ○ {label:16s} [dim]未配置  → /apikey set {svc} <key>[/dim]")
-                    console.print(f"    [dim]注册：{signup_url}[/dim]")
+                if self.context.has_rich:
+                    self.context.console.print(f"  ○ {label:16s} [dim]未配置  → /apikey set {svc} <key>[/dim]")
+                    self.context.console.print(f"    [dim]注册：{signup_url}[/dim]")
                 else:
                     print(f"  {label}: not configured  → /apikey set {svc} <key>")
-        console.print() if HAS_RICH else print()
+        self.context.console.print() if self.context.has_rich else print()
 
         # ── Step 3.8: MCP servers ────────────────────────────────────────────
         sub = args.strip().lower()
         if sub in ("mcp", "all"):
-            console.print("  [bold]Step 3.8/4 · MCP 服务器[/bold]") if HAS_RICH else print("Step 3.8: MCP Servers")
+            self.context.console.print("  [bold]Step 3.8/4 · MCP 服务器[/bold]") if self.context.has_rich else print("Step 3.8: MCP Servers")
             _mcp_cfg_path = aria_home() / "mcp_servers.json"
             if _mcp_cfg_path.exists():
                 try:
@@ -1125,22 +1194,22 @@ class WorkspaceCommandsMixin:
                     enabled_srv = [s for s in _servers if s.get("enabled", False)]
                     disabled_srv = [s for s in _servers if not s.get("enabled", True)]
                     for s in enabled_srv:
-                        console.print(f"  ✅ {s['name']:16s} [dim]{s.get('description','')[:50]}[/dim]") if HAS_RICH else print(f"  ✓ {s['name']}")
+                        self.context.console.print(f"  ✅ {s['name']:16s} [dim]{s.get('description','')[:50]}[/dim]") if self.context.has_rich else print(f"  ✓ {s['name']}")
                     for s in disabled_srv:
                         note = s.get("_setup", "")
-                        console.print(f"  ○  {s['name']:16s} [dim]{s.get('description','')[:50]}[/dim]") if HAS_RICH else print(f"  ✗ {s['name']}")
+                        self.context.console.print(f"  ○  {s['name']:16s} [dim]{s.get('description','')[:50]}[/dim]") if self.context.has_rich else print(f"  ✗ {s['name']}")
                         if note:
-                            console.print(f"     [dim]安装: {note}[/dim]") if HAS_RICH else print(f"     Setup: {note}")
+                            self.context.console.print(f"     [dim]安装: {note}[/dim]") if self.context.has_rich else print(f"     Setup: {note}")
                     if disabled_srv:
-                        console.print() if HAS_RICH else print()
-                        console.print("  [dim]安装后编辑 ~/.arthera/mcp_servers.json 将对应项 enabled 改为 true[/dim]") if HAS_RICH else print("  Edit mcp_servers.json: set enabled=true after installing")
+                        self.context.console.print() if self.context.has_rich else print()
+                        self.context.console.print("  [dim]安装后编辑 ~/.arthera/mcp_servers.json 将对应项 enabled 改为 true[/dim]") if self.context.has_rich else print("  Edit mcp_servers.json: set enabled=true after installing")
                 except Exception:
                     pass
-            console.print() if HAS_RICH else print()
+            self.context.console.print() if self.context.has_rich else print()
 
         # ── Step 4: Messaging channels (Feishu / Telegram) ──────────────────
         if sub in ("feishu", "telegram", "notify", "all", ""):
-            console.print("  [bold]Step 4/5 · 消息通知连接[/bold]") if HAS_RICH else print("Step 4: Messaging")
+            self.context.console.print("  [bold]Step 4/5 · 消息通知连接[/bold]") if self.context.has_rich else print("Step 4: Messaging")
             _env_path = pathlib.Path.home() / ".aria" / ".env"
             _env_vars: dict = {}
             if _env_path.exists():
@@ -1168,16 +1237,16 @@ class WorkspaceCommandsMixin:
             else:
                 _tg_status = "[dim]未配置[/dim]  → /setup telegram"
 
-            if HAS_RICH:
-                console.print(f"  飞书  {_fs_status}")
-                console.print(f"  Telegram  {_tg_status}")
+            if self.context.has_rich:
+                self.context.console.print(f"  飞书  {_fs_status}")
+                self.context.console.print(f"  Telegram  {_tg_status}")
             else:
                 print(f"  Feishu: {_fs_mode or 'not configured'}")
                 print(f"  Telegram: {'configured' if _tg_token else 'not configured'}")
 
             # Sub-command: launch wizard for just this channel
             if sub in ("feishu", "telegram"):
-                console.print() if HAS_RICH else print()
+                self.context.console.print() if self.context.has_rich else print()
                 try:
                     # setup_wizard 是随包发布的顶层模块（见 pyproject py-modules），
                     # 直接 import 即可。原先用 __file__ 往上数四层拼路径：这个方法
@@ -1194,26 +1263,26 @@ class WorkspaceCommandsMixin:
                     _wiz._save_env(_e)
                 except Exception as _we:
                     _fallback_flag = "--feishu" if sub == "feishu" else "--telegram"
-                    if HAS_RICH:
-                        console.print(f"  [yellow]请运行: python3 setup_wizard.py {_fallback_flag}[/yellow]")
+                    if self.context.has_rich:
+                        self.context.console.print(f"  [yellow]请运行: python3 setup_wizard.py {_fallback_flag}[/yellow]")
                     else:
                         print(f"  Run: python3 setup_wizard.py {_fallback_flag}")
                 return
 
-            console.print() if HAS_RICH else print()
+            self.context.console.print() if self.context.has_rich else print()
 
         # ── Step 5: Summary ─────────────────────────────────────────────────
-        console.print("  [bold]Step 5/5 · 配置完成[/bold]") if HAS_RICH else print("Step 5: Done")
+        self.context.console.print("  [bold]Step 5/5 · 配置完成[/bold]") if self.context.has_rich else print("Step 5: Done")
         model = self.terminal.config.get("model", "?")
         provider = self.terminal.config.get("local_provider", "ollama")
-        console.print(f"  模型: [cyan]{model}[/cyan]  Provider: [cyan]{provider}[/cyan]") if HAS_RICH else print(f"  Model: {model}  Provider: {provider}")
-        console.print()  if HAS_RICH else print()
-        console.print(
+        self.context.console.print(f"  模型: [cyan]{model}[/cyan]  Provider: [cyan]{provider}[/cyan]") if self.context.has_rich else print(f"  Model: {model}  Provider: {provider}")
+        self.context.console.print()  if self.context.has_rich else print()
+        self.context.console.print(
             "  [dim]提示: /model — 切换模型   /providers — 查看所有 provider\n"
             "        /setup feishu — 配置飞书   /setup telegram — 配置 Telegram[/dim]"
-        ) if HAS_RICH else print("  Tip: /model  /providers  /setup feishu  /setup telegram")
-        console.print("[bold cyan]━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[/bold cyan]") if HAS_RICH else print("─" * 50)
-        console.print() if HAS_RICH else print()
+        ) if self.context.has_rich else print("  Tip: /model  /providers  /setup feishu  /setup telegram")
+        self.context.console.print("[bold cyan]━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[/bold cyan]") if self.context.has_rich else print("─" * 50)
+        self.context.console.print() if self.context.has_rich else print()
 
     def cmd_memory(self, args: str):
         """Manage persistent memory: project ARIA.md and global user profile.
@@ -1237,21 +1306,21 @@ class WorkspaceCommandsMixin:
         if sub == "show":
             if not aria_md.exists():
                 msg = f"No ARIA.md in {pathlib.Path.cwd()}"
-                console.print(f"[dim]{msg}[/dim]") if HAS_RICH else print(msg)
+                self.context.console.print(f"[dim]{msg}[/dim]") if self.context.has_rich else print(msg)
                 return
             content = aria_md.read_text(encoding="utf-8")
-            if HAS_RICH:
+            if self.context.has_rich:
                 try:
                     from rich.markdown import Markdown as _RMd
-                    console.print(_RMd(content))
+                    self.context.console.print(_RMd(content))
                 except Exception:
-                    console.print(content)
+                    self.context.console.print(content)
             else:
                 print(content)
 
         elif sub == "add":
             if not rest:
-                console.print("[dim]Usage: /memory add <fact>[/dim]") if HAS_RICH else print("Usage: /memory add <fact>")
+                self.context.console.print("[dim]Usage: /memory add <fact>[/dim]") if self.context.has_rich else print("Usage: /memory add <fact>")
                 return
             self.cmd_note(rest)
 
@@ -1259,15 +1328,15 @@ class WorkspaceCommandsMixin:
             if aria_md.exists():
                 aria_md.write_text("# Memory\n\n", encoding="utf-8")
                 _PROJECT_CONTEXT = _load_project_context()
-                console.print("[dim]Memory cleared.[/dim]") if HAS_RICH else print("Memory cleared.")
+                self.context.console.print("[dim]Memory cleared.[/dim]") if self.context.has_rich else print("Memory cleared.")
             else:
-                console.print("[dim]Nothing to clear.[/dim]") if HAS_RICH else print("Nothing to clear.")
+                self.context.console.print("[dim]Nothing to clear.[/dim]") if self.context.has_rich else print("Nothing to clear.")
 
         elif sub == "search":
             # Semantic search in ARIA.md and strategy vault using simple grep
             # (ChromaDB RAG upgrade planned for Phase 2)
             if not rest:
-                console.print("[dim]Usage: /memory search <query>[/dim]") if HAS_RICH else print("Usage: /memory search <query>")
+                self.context.console.print("[dim]Usage: /memory search <query>[/dim]") if self.context.has_rich else print("Usage: /memory search <query>")
                 return
             query_low = rest.lower()
             results = []
@@ -1277,7 +1346,7 @@ class WorkspaceCommandsMixin:
                     if query_low in line.lower() and line.strip():
                         results.append(("ARIA.md", line.strip()))
             # 2. Search session history titles
-            for sess_file in sorted(SESSIONS_DIR.glob("*.json"), key=lambda p: -p.stat().st_mtime)[:20]:
+            for sess_file in sorted(_get_SESSIONS_DIR().glob("*.json"), key=lambda p: -p.stat().st_mtime)[:20]:
                 try:
                     sess = json.loads(sess_file.read_text(encoding="utf-8"))
                     title = sess.get("metadata", {}).get("title", "")
@@ -1298,20 +1367,20 @@ class WorkspaceCommandsMixin:
                 pass
 
             if results:
-                if HAS_RICH:
-                    console.print()
-                    console.print(f"  [bold]记忆搜索: '{rest}'[/bold]  [dim]{len(results)} 条结果[/dim]")
-                    console.print()
+                if self.context.has_rich:
+                    self.context.console.print()
+                    self.context.console.print(f"  [bold]记忆搜索: '{rest}'[/bold]  [dim]{len(results)} 条结果[/dim]")
+                    self.context.console.print()
                     for src, text in results[:15]:
-                        console.print(f"  [dim]{src:<12s}[/dim]  {text}")
-                    console.print()
+                        self.context.console.print(f"  [dim]{src:<12s}[/dim]  {text}")
+                    self.context.console.print()
                 else:
                     print(f"  Search '{rest}': {len(results)} results")
                     for src, text in results[:15]:
                         print(f"  [{src}] {text}")
             else:
                 msg = f"未找到与 '{rest}' 相关的记忆"
-                console.print(f"[dim]{msg}[/dim]") if HAS_RICH else print(msg)
+                self.context.console.print(f"[dim]{msg}[/dim]") if self.context.has_rich else print(msg)
 
         elif sub == "profile":
             # Per-user ARIA.md at ~/.arthera/ARIA.md — injected into every session
@@ -1322,26 +1391,26 @@ class WorkspaceCommandsMixin:
 
             if gsub == "show":
                 if not _profile_path.exists():
-                    if HAS_RICH:
-                        console.print("[dim]~/.arthera/ARIA.md 还不存在。用 /memory profile add <内容> 创建。[/dim]")
+                    if self.context.has_rich:
+                        self.context.console.print("[dim]~/.arthera/ARIA.md 还不存在。用 /memory profile add <内容> 创建。[/dim]")
                     else:
                         print("~/.arthera/ARIA.md not found. Use /memory profile add <text> to create.")
                     return
                 content = _profile_path.read_text(encoding="utf-8")
-                if HAS_RICH:
+                if self.context.has_rich:
                     try:
                         from rich.markdown import Markdown as _RMd3
-                        console.print()
-                        console.print("  [dim]~/.arthera/ARIA.md[/dim]")
-                        console.print(_RMd3(content))
+                        self.context.console.print()
+                        self.context.console.print("  [dim]~/.arthera/ARIA.md[/dim]")
+                        self.context.console.print(_RMd3(content))
                     except Exception:
-                        console.print(content)
+                        self.context.console.print(content)
                 else:
                     print(content)
 
             elif gsub == "add":
                 if not grest:
-                    console.print("[dim]Usage: /memory profile add <内容>[/dim]") if HAS_RICH else print("Usage: /memory profile add <text>")
+                    self.context.console.print("[dim]Usage: /memory profile add <内容>[/dim]") if self.context.has_rich else print("Usage: /memory profile add <text>")
                     return
                 _profile_path.parent.mkdir(parents=True, exist_ok=True)
                 now_str = datetime.now().strftime("%Y-%m-%d")
@@ -1358,8 +1427,8 @@ class WorkspaceCommandsMixin:
                     )
                 # Refresh project context so change takes effect immediately
                 _PROJECT_CONTEXT = _load_project_context()
-                if HAS_RICH:
-                    console.print("  [dim]✓ 已写入 ~/.arthera/ARIA.md — 下次对话自动注入[/dim]")
+                if self.context.has_rich:
+                    self.context.console.print("  [dim]✓ 已写入 ~/.arthera/ARIA.md — 下次对话自动注入[/dim]")
                 else:
                     print("Saved to ~/.arthera/ARIA.md")
 
@@ -1367,20 +1436,20 @@ class WorkspaceCommandsMixin:
                 if _profile_path.exists():
                     _profile_path.write_text("# 用户背景\n\n", encoding="utf-8")
                     _PROJECT_CONTEXT = _load_project_context()
-                    console.print("[dim]~/.arthera/ARIA.md 已清空。[/dim]") if HAS_RICH else print("Profile cleared.")
+                    self.context.console.print("[dim]~/.arthera/ARIA.md 已清空。[/dim]") if self.context.has_rich else print("Profile cleared.")
                 else:
-                    console.print("[dim]文件不存在，无需清空。[/dim]") if HAS_RICH else print("Nothing to clear.")
+                    self.context.console.print("[dim]文件不存在，无需清空。[/dim]") if self.context.has_rich else print("Nothing to clear.")
 
             else:
-                if HAS_RICH:
-                    console.print("[dim]Usage: /memory profile [show|add <内容>|clear][/dim]")
+                if self.context.has_rich:
+                    self.context.console.print("[dim]Usage: /memory profile [show|add <内容>|clear][/dim]")
                 else:
                     print("Usage: /memory profile [show|add <text>|clear]")
 
         elif sub == "global":
             # Global user memory (cross-project, cross-session)
             if not self.memory_mgr:
-                console.print("[dim]Memory manager not available.[/dim]") if HAS_RICH else print("Memory manager not available.")
+                self.context.console.print("[dim]Memory manager not available.[/dim]") if self.context.has_rich else print("Memory manager not available.")
                 return
             gparts = rest.strip().split(maxsplit=1)
             gsub   = gparts[0].lower() if gparts else "show"
@@ -1389,34 +1458,34 @@ class WorkspaceCommandsMixin:
             if gsub == "show":
                 entries = self.memory_mgr.list_all()
                 if not entries:
-                    console.print("[dim]全局 Memory 为空。用 /memory global add <内容> 添加。[/dim]") if HAS_RICH else print("Global memory is empty.")
+                    self.context.console.print("[dim]全局 Memory 为空。用 /memory global add <内容> 添加。[/dim]") if self.context.has_rich else print("Global memory is empty.")
                     return
-                if HAS_RICH:
+                if self.context.has_rich:
                     from rich.markdown import Markdown as _RMd2
                     for e in entries:
-                        console.print(f"\n[bold cyan]{e['title']}[/bold cyan]  [dim]{e['file']}[/dim]")
-                        console.print(_RMd2(e["content"]) if e["content"] else "[dim](empty)[/dim]")
+                        self.context.console.print(f"\n[bold cyan]{e['title']}[/bold cyan]  [dim]{e['file']}[/dim]")
+                        self.context.console.print(_RMd2(e["content"]) if e["content"] else "[dim](empty)[/dim]")
                 else:
                     for e in entries:
                         print(f"\n## {e['title']}\n{e['content']}")
 
             elif gsub == "add":
                 if not grest:
-                    console.print("[dim]Usage: /memory global add <内容>[/dim]") if HAS_RICH else print("Usage: /memory global add <content>")
+                    self.context.console.print("[dim]Usage: /memory global add <内容>[/dim]") if self.context.has_rich else print("Usage: /memory global add <content>")
                     return
                 self.memory_mgr.append("user_profile", grest, title="User Profile")
-                console.print(f"[dim]已写入全局 Memory: {grest[:60]}[/dim]") if HAS_RICH else print(f"Saved: {grest[:60]}")
+                self.context.console.print(f"[dim]已写入全局 Memory: {grest[:60]}[/dim]") if self.context.has_rich else print(f"Saved: {grest[:60]}")
 
             elif gsub == "clear":
                 n = self.memory_mgr.clear_all()
-                console.print(f"[dim]全局 Memory 已清空（删除 {n} 个文件）。[/dim]") if HAS_RICH else print(f"Global memory cleared ({n} files).")
+                self.context.console.print(f"[dim]全局 Memory 已清空（删除 {n} 个文件）。[/dim]") if self.context.has_rich else print(f"Global memory cleared ({n} files).")
 
             else:
-                console.print("[dim]Usage: /memory global [show|add <内容>|clear][/dim]") if HAS_RICH else print("Usage: /memory global [show|add|clear]")
+                self.context.console.print("[dim]Usage: /memory global [show|add <内容>|clear][/dim]") if self.context.has_rich else print("Usage: /memory global [show|add|clear]")
 
         else:
-            if HAS_RICH:
-                console.print("[dim]Usage: /memory [show|add <fact>|clear|search <query>|profile|global][/dim]")
-                console.print("[dim]       /memory profile add <内容>  — 写入全局用户背景（每次会话自动注入）[/dim]")
+            if self.context.has_rich:
+                self.context.console.print("[dim]Usage: /memory [show|add <fact>|clear|search <query>|profile|global][/dim]")
+                self.context.console.print("[dim]       /memory profile add <内容>  — 写入全局用户背景（每次会话自动注入）[/dim]")
             else:
                 print("Usage: /memory [show|add <fact>|clear|search <query>|profile|global]")

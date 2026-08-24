@@ -422,39 +422,7 @@ PROVIDERS_FILE = _PATHS.providers_file  # Cloud API keys (Open Interpreter style
 
 # ── Cloud Provider key map ───────────────────────────────────────────────────
 # Maps provider short name → environment variable name for API key.
-_PROVIDER_KEY_MAP: Dict[str, str] = {
-    # ── 国际主流 ──────────────────────────────────────────────────────
-    "deepseek":    "DEEPSEEK_API_KEY",
-    "openai":      "OPENAI_API_KEY",
-    "anthropic":   "ANTHROPIC_API_KEY",
-    "claude":      "ANTHROPIC_API_KEY",
-    "groq":        "GROQ_API_KEY",
-    "together":    "TOGETHER_API_KEY",
-    "google":      "GOOGLE_API_KEY",
-    "gemini":      "GOOGLE_API_KEY",        # alias
-    "xai":         "XAI_API_KEY",
-    "grok":        "XAI_API_KEY",           # alias
-    "mistral":     "MISTRAL_API_KEY",
-    "cohere":      "COHERE_API_KEY",
-    "perplexity":  "PERPLEXITY_API_KEY",
-    # ── 国内主流 ──────────────────────────────────────────────────────
-    "dashscope":   "DASHSCOPE_API_KEY",
-    "aliyun":      "DASHSCOPE_API_KEY",     # alias
-    "siliconflow": "SILICONFLOW_API_KEY",
-    "moonshot":    "MOONSHOT_API_KEY",
-    "zhipu":       "ZHIPUAI_API_KEY",
-    "glm":         "ZHIPUAI_API_KEY",       # alias
-    "baidu":       "QIANFAN_ACCESS_KEY",
-    "ernie":       "QIANFAN_ACCESS_KEY",    # alias
-    "qianfan":     "QIANFAN_ACCESS_KEY",    # alias
-    "bytedance":   "ARK_API_KEY",
-    "doubao":      "ARK_API_KEY",           # alias
-    "ark":         "ARK_API_KEY",           # alias
-    "minimax":     "MINIMAX_API_KEY",
-    "stepfun":     "STEPFUN_API_KEY",
-    "01ai":        "ONEAI_API_KEY",
-    "yi":          "ONEAI_API_KEY",         # alias
-}
+from apps.cli.constants import _PROVIDER_KEY_MAP, _DATA_KEY_MAP, _DATA_SIGNUP_URLS, _LLM_SIGNUP_URLS
 
 # Default base URLs for cloud providers (OpenAI-compatible unless noted)
 # _PROVIDER_BASE_URLS 已移到 apps/cli/provider_endpoints.py（28 个端点）。
@@ -462,67 +430,11 @@ _PROVIDER_KEY_MAP: Dict[str, str] = {
 from apps.cli.provider_endpoints import _PROVIDER_BASE_URLS
 
 
-# ── Data / Market Service key map ────────────────────────────────────────────
-# Maps service short name → environment variable name for API key.
-# When the Arthera backend (Alibaba Cloud) is offline, these are used directly.
-_DATA_KEY_MAP: Dict[str, str] = {
-    "finnhub":      "FINNHUB_API_KEY",       # Real-time stock data + news (free tier: 60/min)
-    "newsapi":      "NEWS_API_KEY",           # Financial news aggregator (free: 100/day)
-    "brave":        "BRAVE_SEARCH_API_KEY",   # Web search (free: 2000/month)
-    "tavily":       "TAVILY_API_KEY",         # AI-optimised web search (free: 1000/month)
-    "coingecko":    "COINGECKO_API_KEY",      # Crypto data Pro (basic tier is free)
-    "alphavantage": "ALPHA_VANTAGE_API_KEY",  # Stock history (free: 25/day)
-    "polygon":      "POLYGON_API_KEY",        # US market data (free tier available)
-    "fmp":          "FMP_API_KEY",            # Financial Modeling Prep (free tier)
-    "twelvedata":   "TWELVEDATA_API_KEY",     # Global market data (free: 800/day)
-    "figma":        "FIGMA_API_KEY",          # Figma Personal Access Token (read-only file access)
-}
 
-# Registration / signup URLs for each data service
-_DATA_SIGNUP_URLS: Dict[str, str] = {
-    "finnhub":      "https://finnhub.io/register",
-    "newsapi":      "https://newsapi.org/register",
-    "brave":        "https://api.search.brave.com/app/keys",
-    "tavily":       "https://app.tavily.com",
-    "coingecko":    "https://www.coingecko.com/en/api",
-    "alphavantage": "https://www.alphavantage.co/support/#api-key",
-    "polygon":      "https://polygon.io/signup",
-    "fmp":          "https://financialmodelingprep.com/register",
-    "twelvedata":   "https://twelvedata.com/register",
-    "figma":        "https://www.figma.com/developers/api#access-tokens",
-}
 
-# LLM provider signup URLs
-_LLM_SIGNUP_URLS: Dict[str, str] = {
-    # ── 国际主流 ──────────────────────────────────────────────────────
-    "deepseek":    "https://platform.deepseek.com/api_keys",
-    "openai":      "https://platform.openai.com/api-keys",
-    "anthropic":   "https://console.anthropic.com/settings/keys",
-    "claude":      "https://console.anthropic.com/settings/keys",
-    "groq":        "https://console.groq.com/keys",
-    "together":    "https://api.together.ai/settings/api-keys",
-    "google":      "https://aistudio.google.com/app/apikey",
-    "gemini":      "https://aistudio.google.com/app/apikey",
-    "xai":         "https://console.x.ai",
-    "grok":        "https://console.x.ai",
-    "mistral":     "https://console.mistral.ai/api-keys",
-    "cohere":      "https://dashboard.cohere.com/api-keys",
-    "perplexity":  "https://www.perplexity.ai/settings/api",
-    # ── 国内主流 ──────────────────────────────────────────────────────
-    "dashscope":   "https://dashscope.console.aliyun.com/apiKey",
-    "aliyun":      "https://dashscope.console.aliyun.com/apiKey",
-    "siliconflow": "https://cloud.siliconflow.cn/account/ak",
-    "moonshot":    "https://platform.moonshot.cn/console/api-keys",
-    "zhipu":       "https://open.bigmodel.cn/usercenter/apikeys",
-    "baidu":       "https://qianfan.cloud.baidu.com/user/accessToken",
-    "ernie":       "https://qianfan.cloud.baidu.com/user/accessToken",
-    "bytedance":   "https://ark.volcengine.com/api-key",
-    "doubao":      "https://ark.volcengine.com/api-key",
-    "minimax":     "https://platform.minimaxi.com/user-center/basic-information/interface-key",
-    "stepfun":     "https://platform.stepfun.com/interface-key",
-    "01ai":        "https://platform.lingyiwanwu.com/apikeys",
-    "yi":          "https://platform.lingyiwanwu.com/apikeys",
-}
+
+
+
 
 # One-line description for each provider (shown in picker)
 _PROVIDER_DESC: Dict[str, str] = {
@@ -1363,6 +1275,39 @@ try:
         logger.info("Registered %d image generation tools", _n_image)
 except Exception as _exc:
     logger.debug("Image tool registration error: %s", _exc)
+    
+# ── Register enterprise logistics & corporate finance analysis tools ────────
+try:
+    from tools.logistics_tools import register_logistics_tools as _reg_logistics
+    _n_logistics = _reg_logistics(LOCAL_TOOLS, LOCAL_TOOL_SCHEMAS)
+    if _n_logistics:
+        logger.info("Registered %d logistics tools", _n_logistics)
+except Exception as _exc:
+    logger.debug("Logistics tools init error: %s", _exc)
+
+try:
+    from tools.enterprise_finance_tools import register_enterprise_finance_tools as _reg_corp_fin
+    _n_corp_fin = _reg_corp_fin(LOCAL_TOOLS, LOCAL_TOOL_SCHEMAS)
+    if _n_corp_fin:
+        logger.info("Registered %d enterprise finance tools", _n_corp_fin)
+except Exception as _exc:
+    logger.debug("Enterprise finance tools init error: %s", _exc)
+
+try:
+    from tools.stripe_tools import register_stripe_tools as _reg_stripe
+    _n_stripe = _reg_stripe(LOCAL_TOOLS, LOCAL_TOOL_SCHEMAS)
+    if _n_stripe:
+        logger.info("Registered %d stripe tools", _n_stripe)
+except Exception as _exc:
+    logger.debug("Stripe tools init error: %s", _exc)
+
+try:
+    from tools.broker_tools import register_broker_tools as _reg_broker
+    _n_broker = _reg_broker(LOCAL_TOOLS, LOCAL_TOOL_SCHEMAS)
+    if _n_broker:
+        logger.info("Registered %d broker tools", _n_broker)
+except Exception as _exc:
+    logger.debug("Broker tools init error: %s", _exc)
 
 # Ollama tool schemas (for function calling) — extend so finance schemas added above are kept
 
@@ -3699,31 +3644,6 @@ def _rebind_module_function_globals(module, names):
                 _attr.__defaults__, _attr.__closure__,
             )
 
-_rebind_mixin_globals(CoreCommandsMixin)
-_rebind_mixin_globals(BrokerCommandsMixin)
-_rebind_mixin_globals(BacktestCommandsMixin)
-_rebind_mixin_globals(AnalysisCommandsMixin)
-_rebind_mixin_globals(ASharePredictionCommandsMixin)
-_rebind_mixin_globals(DataCommandsMixin)
-_rebind_mixin_globals(OpsCommandsMixin)
-_rebind_mixin_globals(DiagnosticCommandsMixin)
-_rebind_mixin_globals(DiagnosticOpsCommandsMixin)
-_rebind_mixin_globals(UiCommandsMixin)
-_rebind_mixin_globals(SessionUxCommandsMixin)
-_rebind_mixin_globals(AuthCommandsMixin)
-_rebind_mixin_globals(FileCommandsMixin)
-_rebind_mixin_globals(FxCommodityCommandsMixin)
-_rebind_mixin_globals(FinanceServiceCommandsMixin)
-_rebind_mixin_globals(OrchestratorCommandsMixin)
-_rebind_mixin_globals(WorkflowCommandsMixin)
-_rebind_mixin_globals(BusinessWorkflowCommandsMixin)
-_rebind_mixin_globals(WarehouseCommandsMixin)
-_rebind_mixin_globals(SessionCommandsMixin)
-_rebind_mixin_globals(WorkspaceCommandsMixin)
-_rebind_mixin_globals(ModelCommandsMixin)
-_rebind_mixin_globals(MarketCommandsMixin)
-_rebind_mixin_globals(PortfolioCommandsMixin)
-_rebind_mixin_globals(PdfExportCommandsMixin)
 
 import apps.cli.tool_executor as _tool_executor_module
 _rebind_module_function_globals(_tool_executor_module, _tool_executor_module.__all__)
@@ -4327,11 +4247,20 @@ def _p(msg: str, style: str = ""):
 # Main Terminal — Claude Code-like REPL
 # ============================================================================
 
+from apps.cli.context import AriaContext
+
 class ArtheraTerminal:
     """Interactive REPL inspired by Claude Code CLI."""
 
     def __init__(self, config: dict):
         self.config = config
+        self.context = AriaContext(
+            console=globals().get('console'),
+            config=config,
+            workspace=globals().get('workspace_ctx'),
+            save_config_cb=save_config,
+            load_config_cb=load_config
+        )
         _sync_write_policy(config)  # ensure module-level policy matches loaded config
         self.api_url = config.get("api_url", DEFAULT_CONFIG["api_url"])
         self.conversation: List[dict] = []
@@ -5378,11 +5307,14 @@ class ArtheraTerminal:
             _response_header_printed = True
             _answer_model = self._actual_model or self.config.get("model", "")
             _answer_meta = f"  [dim]· {_answer_model}[/dim]" if _answer_model else ""
+            _agent_name = getattr(self, "_active_agent_name", "Aria")
+            _agent_color = getattr(self, "_active_agent_color", "blue")
+            if _agent_name == "Aria":
+                _agent_color = "bold"
             if HAS_RICH:
-                console.print(f"[bold]Aria[/bold]{_answer_meta}")
+                console.print(f"[{_agent_color}]{_agent_name}[/{_agent_color}]{_answer_meta}")
             else:
-                print(f"Aria{' · ' + _answer_model if _answer_model else ''}")
-
+                print(f"{_agent_name}{' · ' + _answer_model if _answer_model else ''}")
         # ── Single-shot turn through the shared runtime Gateway ─────────────
         # The per-round inline agent loop that used to live here was removed
         # (2026-07) after the runtime path was validated with real turns:
@@ -6419,6 +6351,17 @@ class ArtheraTerminal:
         """Run the interactive REPL loop."""
         self.print_header()
         await self._startup_health_check()
+        try:
+            from ui.banner import render_session_banner
+            render_session_banner(
+                self.session_id,
+                console=console,
+                has_rich=HAS_RICH,
+                lang=self.config.get("ui_lang", "en") or "en",
+                web_url=self.config.get("web_url", "https://arthera.ai"),
+            )
+        except Exception:
+            pass
 
         # Background: settle pending market calls (>24h) vs live prices so the
         # prediction track record + DPO signals accrue with zero user effort.
@@ -6784,6 +6727,7 @@ class ArtheraTerminal:
                             user_context=user_context,
                             auth_token=auth_token,
                             project_context=_PROJECT_CONTEXT,
+                            use_react_gateway=bool(self.config.get("arthera_react_gateway")),
                         ),
                         prompt,
                         [],

@@ -14,6 +14,112 @@ def _detect_lang_for_team(text: str) -> str:
     return "zh" if zh_chars / max(len(text), 1) > 0.15 else "en"
 
 
+import json
+import asyncio
+import datetime
+import time
+import shlex
+from typing import Dict, Any, Optional
+
+def parse_team_args(*args, **kwargs):
+    from aria_cli import parse_team_args as fn
+    return fn(*args, **kwargs)
+def evaluate_command_policy(*args, **kwargs):
+    from aria_cli import evaluate_command_policy as fn
+    return fn(*args, **kwargs)
+def resolve_team_symbols(*args, **kwargs):
+    from aria_cli import resolve_team_symbols as fn
+    return fn(*args, **kwargs)
+def team_agent_names(*args, **kwargs):
+    from aria_cli import team_agent_names as fn
+    return fn(*args, **kwargs)
+def execute_aria_tool(*args, **kwargs):
+    from aria_cli import execute_aria_tool as fn
+    return fn(*args, **kwargs)
+def export_report_pdf(*args, **kwargs):
+    from aria_cli import export_report_pdf as fn
+    return fn(*args, **kwargs)
+def run_team_analysis(*args, **kwargs):
+    from aria_cli import run_team_analysis as fn
+    return fn(*args, **kwargs)
+def save_markdown_report(*args, **kwargs):
+    from aria_cli import save_markdown_report as fn
+    return fn(*args, **kwargs)
+def all_agents_failed(*args, **kwargs):
+    from aria_cli import all_agents_failed as fn
+    return fn(*args, **kwargs)
+def logger(*args, **kwargs):
+    from aria_cli import logger as fn
+    return fn(*args, **kwargs)
+def _get_Panel():
+    from aria_cli import Panel as val
+    return val
+def save_team_report(*args, **kwargs):
+    from aria_cli import save_team_report as fn
+    return fn(*args, **kwargs)
+def _print_verdict_banner(*args, **kwargs):
+    from aria_cli import _print_verdict_banner as fn
+    return fn(*args, **kwargs)
+def _get_mdc(*args, **kwargs):
+    from aria_cli import _get_mdc as fn
+    return fn(*args, **kwargs)
+def _print_error(*args, **kwargs):
+    from aria_cli import _print_error as fn
+    return fn(*args, **kwargs)
+def report_agent_names(*args, **kwargs):
+    from aria_cli import report_agent_names as fn
+    return fn(*args, **kwargs)
+def _tool_run_command(*args, **kwargs):
+    from aria_cli import _tool_run_command as fn
+    return fn(*args, **kwargs)
+def run_deep_cli(*args, **kwargs):
+    from aria_cli import run_deep_cli as fn
+    return fn(*args, **kwargs)
+def report_agent_health(*args, **kwargs):
+    from aria_cli import report_agent_health as fn
+    return fn(*args, **kwargs)
+def report_file_size_kb(*args, **kwargs):
+    from aria_cli import report_file_size_kb as fn
+    return fn(*args, **kwargs)
+def generate_html_report(*args, **kwargs):
+    from aria_cli import generate_html_report as fn
+    return fn(*args, **kwargs)
+def _get__HAS_MDC():
+    from aria_cli import _HAS_MDC as val
+    return val
+def _sanitize_team_result_with_market_data(*args, **kwargs):
+    from aria_cli import _sanitize_team_result_with_market_data as fn
+    return fn(*args, **kwargs)
+def update_report_index(*args, **kwargs):
+    from aria_cli import update_report_index as fn
+    return fn(*args, **kwargs)
+def build_markdown_report_prompt(*args, **kwargs):
+    from aria_cli import build_markdown_report_prompt as fn
+    return fn(*args, **kwargs)
+def parse_report_args(*args, **kwargs):
+    from aria_cli import parse_report_args as fn
+    return fn(*args, **kwargs)
+
+import json
+import asyncio
+import datetime
+import time
+import shlex
+import sys
+import os
+from typing import Dict, Any, Optional
+
+
+import json
+import asyncio
+import datetime
+import time
+import shlex
+import sys
+import os
+from typing import Dict, Any, Optional
+
+
 class PortfolioCommandsMixin:
     """Mixin: Portfolio commands: journal, report, portfolio, apply_plan, team."""
 
@@ -34,7 +140,7 @@ class PortfolioCommandsMixin:
             from portfolio_ledger import PortfolioLedger as _PL
         except ImportError:
             msg = "portfolio_ledger 模块未找到"
-            console.print(f"[red]{msg}[/red]") if HAS_RICH else print(msg)
+            self.context.console.print(f"[red]{msg}[/red]") if self.context.has_rich else print(msg)
             return
 
         ledger = _PL()
@@ -46,7 +152,7 @@ class PortfolioCommandsMixin:
             # /journal add buy AAPL 100 185.50 [reason...]
             if len(parts) < 5:
                 usage = "用法: /journal add <buy|sell> <symbol> <qty> <price> [理由]"
-                console.print(f"[yellow]{usage}[/yellow]") if HAS_RICH else print(usage)
+                self.context.console.print(f"[yellow]{usage}[/yellow]") if self.context.has_rich else print(usage)
                 return
             try:
                 side   = parts[1].upper()
@@ -58,9 +164,9 @@ class PortfolioCommandsMixin:
                 amount = round(qty * price, 2)
                 msg    = (f"✓ 已记录: #{tid} {side} {symbol} × {qty} @ {price}"
                           f"  总额 {amount:,.2f}  {reason}")
-                console.print(f"[green]{msg}[/green]") if HAS_RICH else print(msg)
+                self.context.console.print(f"[green]{msg}[/green]") if self.context.has_rich else print(msg)
             except Exception as e:
-                console.print(f"[red]记录失败: {e}[/red]") if HAS_RICH else print(f"记录失败: {e}")
+                self.context.console.print(f"[red]记录失败: {e}[/red]") if self.context.has_rich else print(f"记录失败: {e}")
             return
 
         # ── delete ───────────────────────────────────────────────────────────
@@ -69,9 +175,9 @@ class PortfolioCommandsMixin:
                 tid = int(parts[1])
                 ok  = ledger.delete_trade(tid)
                 msg = f"✓ 已删除记录 #{tid}" if ok else f"未找到记录 #{tid}"
-                console.print(f"[{'green' if ok else 'yellow'}]{msg}[/{'green' if ok else 'yellow'}]") if HAS_RICH else print(msg)
+                self.context.console.print(f"[{'green' if ok else 'yellow'}]{msg}[/{'green' if ok else 'yellow'}]") if self.context.has_rich else print(msg)
             except Exception as e:
-                console.print(f"[red]删除失败: {e}[/red]") if HAS_RICH else print(f"删除失败: {e}")
+                self.context.console.print(f"[red]删除失败: {e}[/red]") if self.context.has_rich else print(f"删除失败: {e}")
             return
 
         # ── trades history ───────────────────────────────────────────────────
@@ -79,7 +185,7 @@ class PortfolioCommandsMixin:
             sym    = parts[1].upper() if len(parts) > 1 else None
             trades = ledger.get_trades(symbol=sym, limit=30)
             title  = f"交易记录{f' — {sym}' if sym else ''} (最近 {len(trades)} 条)"
-            if HAS_RICH:
+            if self.context.has_rich:
                 from rich.table import Table
                 tbl = Table(title=title, box=None, show_header=True, header_style="bold")
                 tbl.add_column("#", style="dim", width=4)
@@ -102,9 +208,9 @@ class PortfolioCommandsMixin:
                         f"{t['amount']:,.2f}",
                         (t["reason"] or "")[:18],
                     )
-                console.print(tbl)
+                self.context.console.print(tbl)
                 if not trades:
-                    console.print("[dim]无交易记录[/dim]")
+                    self.context.console.print("[dim]无交易记录[/dim]")
             else:
                 print(title)
                 for t in trades:
@@ -117,15 +223,15 @@ class PortfolioCommandsMixin:
             try:
                 out = ledger.export_csv()
                 msg = f"✓ 已导出 {ledger.trade_count()} 条记录 → {out}"
-                console.print(f"[green]{msg}[/green]") if HAS_RICH else print(msg)
+                self.context.console.print(f"[green]{msg}[/green]") if self.context.has_rich else print(msg)
             except Exception as e:
-                console.print(f"[red]导出失败: {e}[/red]") if HAS_RICH else print(f"导出失败: {e}")
+                self.context.console.print(f"[red]导出失败: {e}[/red]") if self.context.has_rich else print(f"导出失败: {e}")
             return
 
         # ── realized P&L ─────────────────────────────────────────────────────
         if sub == "realized":
             rows = ledger.get_realized_pnl()
-            if HAS_RICH:
+            if self.context.has_rich:
                 from rich.table import Table
                 tbl = Table(title="已实现盈亏（FIFO）", box=None, header_style="bold")
                 tbl.add_column("标的", width=8)
@@ -139,10 +245,10 @@ class PortfolioCommandsMixin:
                         f"[{color}]{pnl:+,.2f}[/{color}]",
                         f"{r['open_lots']:,.4g}" if r["has_open"] else "已平仓",
                     )
-                console.print(tbl)
+                self.context.console.print(tbl)
                 total = sum(r["realized_pnl"] for r in rows)
                 tc    = "green" if total >= 0 else "red"
-                console.print(f"  [bold]合计已实现盈亏: [{tc}]{total:+,.2f}[/{tc}][/bold]")
+                self.context.console.print(f"  [bold]合计已实现盈亏: [{tc}]{total:+,.2f}[/{tc}][/bold]")
             else:
                 for r in rows:
                     print(f"  {r['symbol']}: {r['realized_pnl']:+,.2f}")
@@ -152,13 +258,13 @@ class PortfolioCommandsMixin:
         if sub == "pnl":
             positions = ledger.get_positions()
             if not positions:
-                console.print("[dim]暂无持仓记录。用 /journal add buy … 添加。[/dim]") if HAS_RICH else print("暂无持仓")
+                self.context.console.print("[dim]暂无持仓记录。用 /journal add buy … 添加。[/dim]") if self.context.has_rich else print("暂无持仓")
                 return
             # fetch live prices via yfinance
             live_prices: dict = {}
             syms = [p["symbol"] for p in positions]
-            if HAS_RICH:
-                console.print(f"  [dim]获取 {len(syms)} 只股票实时报价…[/dim]")
+            if self.context.has_rich:
+                self.context.console.print(f"  [dim]获取 {len(syms)} 只股票实时报价…[/dim]")
             try:
                 import yfinance as yf
                 for sym in syms:
@@ -171,7 +277,7 @@ class PortfolioCommandsMixin:
             except ImportError:
                 pass
             rows = ledger.get_pnl_with_prices(live_prices)
-            if HAS_RICH:
+            if self.context.has_rich:
                 from rich.table import Table
                 tbl = Table(title="持仓盈亏", box=None, header_style="bold")
                 tbl.add_column("标的", width=8)
@@ -195,12 +301,12 @@ class PortfolioCommandsMixin:
                         f"[{color}]{pnl:+,.2f}[/{color}]" if has_price else "—",
                         f"[{color}]{pct:+.2f}%[/{color}]" if has_price else "—",
                     )
-                console.print(tbl)
+                self.context.console.print(tbl)
                 total_pnl  = sum(r.get("unrealized_pnl", 0) for r in rows if "unrealized_pnl" in r)
                 total_mv   = sum(r.get("market_value", 0) for r in rows if "market_value" in r)
                 total_cost = sum(r["cost_basis"] for r in rows)
                 tc = "green" if total_pnl >= 0 else "red"
-                console.print(
+                self.context.console.print(
                     f"  [bold]总持仓成本 {total_cost:,.2f}  "
                     f"总市值 {total_mv:,.2f}  "
                     f"未实现盈亏 [{tc}]{total_pnl:+,.2f}[/{tc}][/bold]"
@@ -220,9 +326,9 @@ class PortfolioCommandsMixin:
         positions = ledger.get_positions()
         if not positions:
             hint = "暂无持仓记录。\n  添加示例: /journal add buy AAPL 100 185.50 首次建仓"
-            console.print(f"[dim]{hint}[/dim]") if HAS_RICH else print(hint)
+            self.context.console.print(f"[dim]{hint}[/dim]") if self.context.has_rich else print(hint)
             return
-        if HAS_RICH:
+        if self.context.has_rich:
             from rich.table import Table
             tbl = Table(
                 title=f"当前持仓（{len(positions)} 只，共 {ledger.trade_count()} 条交易）",
@@ -241,8 +347,8 @@ class PortfolioCommandsMixin:
                     f"{pos['cost_basis']:,.2f}",
                     pos.get("first_trade", ""),
                 )
-            console.print(tbl)
-            console.print(
+            self.context.console.print(tbl)
+            self.context.console.print(
                 "  [dim]更多命令: /journal pnl | /journal trades | "
                 "/journal realized | /journal export[/dim]"
             )
@@ -276,7 +382,7 @@ class PortfolioCommandsMixin:
 
         # ── Markdown report mode (works fully offline) ────────────────────────
         if fmt in ("md", "markdown"):
-            console.print(f"\n  📄 生成 [bold]{symbol}[/bold] Markdown 投研报告 ({report_type})...") if HAS_RICH else print(f"\n  Generating {symbol} Markdown report...")
+            self.context.console.print(f"\n  📄 生成 [bold]{symbol}[/bold] Markdown 投研报告 ({report_type})...") if self.context.has_rich else print(f"\n  Generating {symbol} Markdown report...")
 
             # Fetch real data through the service boundary so provenance and
             # quality metadata travel with the report prompt and artifact.
@@ -295,7 +401,7 @@ class PortfolioCommandsMixin:
                 data_quality = data_bundle.quality or {}
             except Exception as _ds_exc:
                 logger.debug("report markdown data service failed: %s", _ds_exc)
-                if _HAS_MDC:
+                if _get__HAS_MDC():
                     try:
                         mdc = _get_mdc()
                         q = mdc.quote(symbol)
@@ -341,9 +447,9 @@ class PortfolioCommandsMixin:
                     created_at=_dt.now(),
                 )
                 out_f = saved.path
-                if HAS_RICH:
-                    console.print(f"\n  [green]✅ 报告已保存: {out_f}[/green]")
-                    console.print(f"  [dim]预览: open {out_f}[/dim]\n")
+                if self.context.has_rich:
+                    self.context.console.print(f"\n  [green]✅ 报告已保存: {out_f}[/green]")
+                    self.context.console.print(f"  [dim]预览: open {out_f}[/dim]\n")
                 else:
                     print(f"\n  Saved: {out_f}")
 
@@ -358,8 +464,8 @@ class PortfolioCommandsMixin:
                                                _Path(out_f).with_suffix(".pdf")),
                         )
                         if _pdf_out:
-                            if HAS_RICH:
-                                console.print(
+                            if self.context.has_rich:
+                                self.context.console.print(
                                     f"  [green]PDF 导出成功[/green]  "
                                     f"[link={_pdf_out}]{_pdf_out.name}[/link]"
                                 )
@@ -372,14 +478,14 @@ class PortfolioCommandsMixin:
                                 pass
                         else:
                             _msg = "PDF 导出失败：安装 Chrome/Edge，或 pip install pyobjc-framework-WebKit"
-                            console.print(f"  [yellow]{_msg}[/yellow]") if HAS_RICH else print(f"  {_msg}")
+                            self.context.console.print(f"  [yellow]{_msg}[/yellow]") if self.context.has_rich else print(f"  {_msg}")
                     except Exception as _pdf_exc:
                         logger.debug("[report] md pdf export error: %s", _pdf_exc)
             return
 
         # ── HTML 研报（Bloomberg 暗色主题）────────────────────────────────
-        if HAS_RICH:
-            console.print(f"\n  [dim]正在生成 [bold]{symbol}[/bold] 专业研报（数据清洗 + 图表 + Agent 分析）…[/dim]")
+        if self.context.has_rich:
+            self.context.console.print(f"\n  [dim]正在生成 [bold]{symbol}[/bold] 专业研报（数据清洗 + 图表 + Agent 分析）…[/dim]")
         else:
             print(f"\n  正在生成 {symbol} 研报…")
 
@@ -394,9 +500,9 @@ class PortfolioCommandsMixin:
                 icon = "✗"
                 error = str(getattr(result, "error", "") or "失败")
                 detail = "超时" if error == "timeout" else error[:60]
-            if HAS_RICH:
+            if self.context.has_rich:
                 color = "yellow" if degraded else "green" if success else "red"
-                console.print(f"  [{color}]{icon}[/{color}] {name}  [dim]{detail}[/dim]")
+                self.context.console.print(f"  [{color}]{icon}[/{color}] {name}  [dim]{detail}[/dim]")
             else:
                 print(f"  {icon} {name}  {detail}")
 
@@ -404,11 +510,11 @@ class PortfolioCommandsMixin:
             succeeded = sum(1 for result in results if getattr(result, "success", False))
             total = len(results)
             message = f"Agent 阶段完成 {succeeded}/{total}，正在整理报告…"
-            console.print(f"  [dim]{message}[/dim]") if HAS_RICH else print(f"  {message}")
+            self.context.console.print(f"  [dim]{message}[/dim]") if self.context.has_rich else print(f"  {message}")
 
         try:
-            if HAS_RICH:
-                console.print(f"  [dim]{len(_agent_names_for_report)} agents 并行分析…[/dim]")
+            if self.context.has_rich:
+                self.context.console.print(f"  [dim]{len(_agent_names_for_report)} agents 并行分析…[/dim]")
                 _html_report = await generate_html_report(
                     symbol=symbol,
                     report_type=report_type,
@@ -429,14 +535,14 @@ class PortfolioCommandsMixin:
             out_f = _html_report.path
             _team_result = _html_report.team_result
         except Exception as e:
-            if HAS_RICH:
-                console.print(f"  [red]研报生成失败: {e}[/red]")
+            if self.context.has_rich:
+                self.context.console.print(f"  [red]研报生成失败: {e}[/red]")
             else:
                 print(f"  研报生成失败: {e}")
             return
 
         if not out_f:
-            console.print("  [red]研报生成失败（无输出文件）[/red]") if HAS_RICH else print("  研报生成失败")
+            self.context.console.print("  [red]研报生成失败（无输出文件）[/red]") if self.context.has_rich else print("  研报生成失败")
             return
 
         path = str(out_f)
@@ -453,25 +559,25 @@ class PortfolioCommandsMixin:
         _agents_partial = bool(
             _agent_health.get("failed") and _agent_health.get("succeeded")
         )
-        if HAS_RICH:
+        if self.context.has_rich:
             if _all_agents_failed:
-                console.print(
+                self.context.console.print(
                     f"\n  [yellow]⚠ 研报已保存（所有 Agent 分析失败，内容仅含基础数据）[/yellow]"
                     f"  [dim]{out_f.name}  ({_file_kb}KB)[/dim]"
                 )
             elif _agents_partial:
-                console.print(
+                self.context.console.print(
                     f"\n  [yellow]⚠ 研报已保存（Agent 部分完成 "
                     f"{_agent_health['succeeded']}/{_agent_health['expected']}，结论置信度已降级）[/yellow]"
                     f"  [dim]{out_f.name}  ({_file_kb}KB)[/dim]"
                 )
             else:
-                console.print(
+                self.context.console.print(
                     f"\n  [green]✅ 研报已保存[/green]"
                     f"  [link={path}]{path_label}[/link]"
                     f"  [dim]({_file_kb}KB)[/dim]"
                 )
-            console.print(f"  [dim]文件: {path_label}[/dim]")
+            self.context.console.print(f"  [dim]文件: {path_label}[/dim]")
             if _team_result:
                 _health_suffix = (
                     f" · agents {_agent_health['succeeded']}/{_agent_health['expected']}"
@@ -489,15 +595,15 @@ class PortfolioCommandsMixin:
         # ── PDF 导出 ──────────────────────────────────────────────────────────
         if export_pdf_flag:
             try:
-                if HAS_RICH:
-                    with console.status("[dim]导出 PDF…[/dim]", spinner="dots"):
+                if self.context.has_rich:
+                    with self.context.console.status("[dim]导出 PDF…[/dim]", spinner="dots"):
                         _pdf_path = await export_report_pdf(out_f)
                 else:
                     _pdf_path = await export_report_pdf(out_f)
                 if _pdf_path:
                     _pdf_kb = report_file_size_kb(_pdf_path)
-                    if HAS_RICH:
-                        console.print(
+                    if self.context.has_rich:
+                        self.context.console.print(
                             f"  [green]PDF 导出成功[/green]"
                             f"  [link={_pdf_path}]{_pdf_path.name}[/link]"
                             f"  [dim]({_pdf_kb}KB)[/dim]"
@@ -511,8 +617,8 @@ class PortfolioCommandsMixin:
                         pass
                 else:
                     _hint = "安装 Chrome/Edge 即可（自动检测），或 pip install weasyprint / brew install wkhtmltopdf"
-                    if HAS_RICH:
-                        console.print(
+                    if self.context.has_rich:
+                        self.context.console.print(
                             f"  [yellow]PDF 导出失败[/yellow]  "
                             f"[dim]请安装: {_hint}  或在浏览器按 Cmd+P → 存储为 PDF[/dim]"
                         )
@@ -524,8 +630,8 @@ class PortfolioCommandsMixin:
         # ── 更新研报索引 ──────────────────────────────────────────────────────
         try:
             _idx = await update_report_index(out_f.parent)
-            if _idx and HAS_RICH:
-                console.print(
+            if _idx and self.context.has_rich:
+                self.context.console.print(
                     f"  [dim]索引已更新: [link={_idx}]{_idx.name}[/link][/dim]"
                 )
         except Exception as _e:
@@ -579,7 +685,7 @@ class PortfolioCommandsMixin:
 
         if not symbols:
             msg = "请先设置 watchlist、记录持仓（/journal add buy ...）或指定标的：/portfolio analyze AAPL TSLA MSFT"
-            console.print(f"[yellow]{msg}[/yellow]") if HAS_RICH else print(msg)
+            self.context.console.print(f"[yellow]{msg}[/yellow]") if self.context.has_rich else print(msg)
             return
 
         # 尝试使用新 PortfolioAgent
@@ -600,11 +706,11 @@ class PortfolioCommandsMixin:
                 hdr = "分析 watchlist 组合（等权，无真实持仓数据）"
             if rebalance:
                 hdr = "再平衡方案：" + hdr
-            if HAS_RICH:
-                console.print()
-                console.print(f"  [bold cyan]━━━ /portfolio {hdr} ━━━[/bold cyan]")
-                console.print(f"  [dim]标的 ({len(symbols)}): {', '.join(symbols)}[/dim]")
-                console.print()
+            if self.context.has_rich:
+                self.context.console.print()
+                self.context.console.print(f"  [bold cyan]━━━ /portfolio {hdr} ━━━[/bold cyan]")
+                self.context.console.print(f"  [dim]标的 ({len(symbols)}): {', '.join(symbols)}[/dim]")
+                self.context.console.print()
             else:
                 print(f"\n  ━━━ /portfolio ━━━\n  标的: {', '.join(symbols)}\n")
 
@@ -628,15 +734,15 @@ class PortfolioCommandsMixin:
                 print()  # 换行（流式输出后）
 
                 if not result:
-                    if HAS_RICH:
-                        console.print("[yellow]  ⚠ 组合分析返回空结果[/yellow]")
+                    if self.context.has_rich:
+                        self.context.console.print("[yellow]  ⚠ 组合分析返回空结果[/yellow]")
                     return
 
-                if HAS_RICH:
-                    console.print()
+                if self.context.has_rich:
+                    self.context.console.print()
                     for pt in (result.key_points or []):
-                        console.print(f"  [dim]• {pt}[/dim]")
-                    console.print()
+                        self.context.console.print(f"  [dim]• {pt}[/dim]")
+                    self.context.console.print()
                     # Derive portfolio verdict from signal for the banner
                     _port_verdict = {
                         "BUY":        "HEALTHY",
@@ -653,31 +759,31 @@ class PortfolioCommandsMixin:
                         print(f"  • {pt}")
                     print(f"\n  置信度: {result.confidence:.0%}  信号: {result.signal}")
 
-                if rebalance and HAS_RICH:
-                    console.print("\n  [dim]提示: 再平衡建议已包含在上方分析中。"
+                if rebalance and self.context.has_rich:
+                    self.context.console.print("\n  [dim]提示: 再平衡建议已包含在上方分析中。"
                                   "如需详细方案，可追问 Aria 具体操作步骤。[/dim]")
 
             except Exception as e:
                 msg = f"组合分析失败: {e}"
-                console.print(f"  [red]{msg}[/red]") if HAS_RICH else print(f"  {msg}")
+                self.context.console.print(f"  [red]{msg}[/red]") if self.context.has_rich else print(f"  {msg}")
             return
 
         # 旧路径回退（无新 agents 包时）
-        if HAS_RICH:
-            console.print("[dim]Assessing portfolio risk...[/dim]")
+        if self.context.has_rich:
+            self.context.console.print("[dim]Assessing portfolio risk...[/dim]")
         else:
             print("Assessing portfolio risk...")
         result = await execute_aria_tool(self.terminal.api_url, "assess_portfolio_risk", {
             "symbols": symbols[:10],
         })
         if result.get("success") and result.get("data"):
-            if HAS_RICH:
-                console.print("\n  [bold]Portfolio Risk[/bold]\n")
-                console.print(f"[dim]{json.dumps(result['data'], indent=2, ensure_ascii=False)[:1000]}[/dim]")
+            if self.context.has_rich:
+                self.context.console.print("\n  [bold]Portfolio Risk[/bold]\n")
+                self.context.console.print(f"[dim]{json.dumps(result['data'], indent=2, ensure_ascii=False)[:1000]}[/dim]")
             else:
                 print(json.dumps(result.get("data", {}), indent=2, ensure_ascii=False))
         else:
-            console.print(f"[dim]No data: {result.get('error', '')}[/dim]" if HAS_RICH
+            self.context.console.print(f"[dim]No data: {result.get('error', '')}[/dim]" if self.context.has_rich
                           else f"No data: {result.get('error', '')}")
 
     async def _portfolio_holdings_by_strategy(self):
@@ -685,7 +791,7 @@ class PortfolioCommandsMixin:
         try:
             from portfolio_ledger import PortfolioLedger
         except ImportError:
-            console.print("[red]portfolio_ledger 模块未找到[/red]") if HAS_RICH else print("portfolio_ledger 未找到")
+            self.context.console.print("[red]portfolio_ledger 模块未找到[/red]") if self.context.has_rich else print("portfolio_ledger 未找到")
             return
         ledger = PortfolioLedger()
         names = []
@@ -696,13 +802,13 @@ class PortfolioCommandsMixin:
             pass
         groups = ledger.positions_by_strategy(names)
         if not groups:
-            console.print("[dim]暂无持仓。用 /deploy 或 /journal add 建仓后在此按策略查看。[/dim]"
-                          if HAS_RICH else "暂无持仓。")
+            self.context.console.print("[dim]暂无持仓。用 /deploy 或 /journal add 建仓后在此按策略查看。[/dim]"
+                          if self.context.has_rich else "暂无持仓。")
             return
 
         syms = sorted({p["symbol"] for poss in groups.values() for p in poss})
-        if HAS_RICH:
-            console.print(f"  [dim]获取 {len(syms)} 只实时报价…[/dim]")
+        if self.context.has_rich:
+            self.context.console.print(f"  [dim]获取 {len(syms)} 只实时报价…[/dim]")
         live = {}
         try:
             import yfinance as yf
@@ -717,10 +823,10 @@ class PortfolioCommandsMixin:
             pass
 
         g_cost = g_mv = 0.0
-        if HAS_RICH:
+        if self.context.has_rich:
             from rich.table import Table
-            console.print()
-            console.print("  [bold cyan]持仓看板 · 按来源策略[/bold cyan]")
+            self.context.console.print()
+            self.context.console.print("  [bold cyan]持仓看板 · 按来源策略[/bold cyan]")
             for grp, poss in groups.items():
                 tbl = Table(box=None, header_style="bold", pad_edge=False)
                 tbl.add_column("标的", width=8)
@@ -747,17 +853,17 @@ class PortfolioCommandsMixin:
                         tbl.add_row(p["symbol"], f"{p['net_qty']:,.4g}", f"{p['avg_cost']:,.2f}",
                                     "N/A", f"{cost:,.0f}", "—", "—")
                 g_cost += sub_cost; g_mv += sub_mv
-                console.print(f"\n  [bold]{grp}[/bold]  [dim]{len(poss)} 持仓 · 成本 {sub_cost:,.0f}[/dim]")
-                console.print(tbl)
+                self.context.console.print(f"\n  [bold]{grp}[/bold]  [dim]{len(poss)} 持仓 · 成本 {sub_cost:,.0f}[/dim]")
+                self.context.console.print(tbl)
                 if have:
                     spnl = sub_mv - sub_cost; sc = "green" if spnl >= 0 else "red"
                     spct = spnl / sub_cost * 100 if sub_cost else 0.0
-                    console.print(f"  [dim]小计 市值 {sub_mv:,.0f} · 浮盈 [{sc}]{spnl:+,.0f} ({spct:+.1f}%)[/{sc}][/dim]")
+                    self.context.console.print(f"  [dim]小计 市值 {sub_mv:,.0f} · 浮盈 [{sc}]{spnl:+,.0f} ({spct:+.1f}%)[/{sc}][/dim]")
             gpnl = g_mv - g_cost; gc = "green" if gpnl >= 0 else "red"
             gpct = gpnl / g_cost * 100 if g_cost else 0.0
-            console.print(f"\n  [bold]合计[/bold] 成本 {g_cost:,.0f} · 市值 {g_mv:,.0f} · "
+            self.context.console.print(f"\n  [bold]合计[/bold] 成本 {g_cost:,.0f} · 市值 {g_mv:,.0f} · "
                           f"浮盈 [{gc}]{gpnl:+,.0f} ({gpct:+.1f}%)[/{gc}]")
-            console.print()
+            self.context.console.print()
         else:
             for grp, poss in groups.items():
                 print(f"[{grp}]")
@@ -776,35 +882,35 @@ class PortfolioCommandsMixin:
             idx = arg_tokens.index("--from")
             if idx + 1 >= len(arg_tokens):
                 msg = "Usage: /apply-plan --from <step_number>"
-                console.print(f"[dim]{msg}[/dim]" if HAS_RICH else msg)
+                self.context.console.print(f"[dim]{msg}[/dim]" if self.context.has_rich else msg)
                 return
             try:
                 start_idx = max(0, int(arg_tokens[idx + 1]) - 1)
             except ValueError:
                 msg = "Invalid step number for --from"
-                console.print(f"[red]{msg}[/red]" if HAS_RICH else msg)
+                self.context.console.print(f"[red]{msg}[/red]" if self.context.has_rich else msg)
                 return
 
         if not plan:
-            console.print("[dim]No pending plan. Use /plan first.[/dim]" if HAS_RICH
+            self.context.console.print("[dim]No pending plan. Use /plan first.[/dim]" if self.context.has_rich
                           else "No pending plan. Use /plan first.")
             return
         if start_idx > 0:
             if start_idx >= len(plan):
                 msg = f"--from {start_idx + 1} exceeds available steps ({len(plan)})"
-                console.print(f"[red]{msg}[/red]" if HAS_RICH else msg)
+                self.context.console.print(f"[red]{msg}[/red]" if self.context.has_rich else msg)
                 return
             plan = plan[start_idx:]
-        if "--resume" in arg_tokens and HAS_RICH:
-            console.print(f"[dim]Resuming execution from step 1 of remaining {len(plan)} step(s).[/dim]")
+        if "--resume" in arg_tokens and self.context.has_rich:
+            self.context.console.print(f"[dim]Resuming execution from step 1 of remaining {len(plan)} step(s).[/dim]")
 
         policy = self.terminal.config.get("command_policy", "safe")
         results = []
         failed = None
         for i, step in enumerate(plan, 1):
             started_at = time.time()
-            if HAS_RICH:
-                console.print(f"[dim]Step {i}/{len(plan)}:[/dim] [bold]{step}[/bold]")
+            if self.context.has_rich:
+                self.context.console.print(f"[dim]Step {i}/{len(plan)}:[/dim] [bold]{step}[/bold]")
             else:
                 print(f"Step {i}/{len(plan)}: {step}")
 
@@ -845,16 +951,16 @@ class PortfolioCommandsMixin:
         if failed:
             idx, step, err = failed
             self.terminal.pending_plan = plan[idx - 1:]
-            if HAS_RICH:
-                console.print(f"[red]Plan failed at step {idx}[/red]: [bold]{step}[/bold]")
-                console.print(f"[red]{err}[/red]")
-                console.print("[dim]Recovery hints:[/dim]")
+            if self.context.has_rich:
+                self.context.console.print(f"[red]Plan failed at step {idx}[/red]: [bold]{step}[/bold]")
+                self.context.console.print(f"[red]{err}[/red]")
+                self.context.console.print("[dim]Recovery hints:[/dim]")
                 if "blocked by policy" in (err or "").lower():
-                    console.print("  [dim]> /run --dry-run <command> to inspect risk[/dim]")
-                    console.print("  [dim]> /config set command_policy=balanced (or full) if needed[/dim]")
+                    self.context.console.print("  [dim]> /run --dry-run <command> to inspect risk[/dim]")
+                    self.context.console.print("  [dim]> /config set command_policy=balanced (or full) if needed[/dim]")
                 else:
-                    console.print("  [dim]> Fix code/config, then rerun /apply-plan[/dim]")
-                    console.print("  [dim]> Use /git diff to inspect changes[/dim]")
+                    self.context.console.print("  [dim]> Fix code/config, then rerun /apply-plan[/dim]")
+                    self.context.console.print("  [dim]> Use /git diff to inspect changes[/dim]")
             else:
                 print(f"Plan failed at step {idx}: {step}\n{err}")
                 if "blocked by policy" in (err or "").lower():
@@ -862,10 +968,10 @@ class PortfolioCommandsMixin:
                 else:
                     print("Recovery: fix issue, then rerun /apply-plan")
         else:
-            if HAS_RICH:
-                console.print(f"[green]Plan completed ({len(plan)} steps)[/green]")
+            if self.context.has_rich:
+                self.context.console.print(f"[green]Plan completed ({len(plan)} steps)[/green]")
                 for i, row in enumerate(results, 1):
-                    console.print(f"  [dim]{i}. {row['step']} ({row['duration']}s)[/dim]")
+                    self.context.console.print(f"  [dim]{i}. {row['step']} ({row['duration']}s)[/dim]")
             else:
                 print(f"Plan completed ({len(plan)} steps)")
             self.terminal.pending_plan = []
@@ -913,7 +1019,7 @@ class PortfolioCommandsMixin:
                        f"命中率 {hits / total:.0%}（置信度校准已更新）")
             else:
                 msg = "暂无到期预测可校准（先用 /deep 跑几次分析积累预测）。"
-            console.print(f"[green]✓[/green] {msg}") if HAS_RICH else print(msg)
+            self.context.console.print(f"[green]✓[/green] {msg}") if self.context.has_rich else print(msg)
             return
 
         team_args = parse_team_args(args)
@@ -932,9 +1038,9 @@ class PortfolioCommandsMixin:
             def _on_agent_done(name, result):
                 _kps = getattr(result, "key_points", None)
                 _kp = (_kps[0] if isinstance(_kps, (list, tuple)) and _kps else "")
-                if HAS_RICH:
+                if self.context.has_rich:
                     render_agent_node(
-                        console, name, getattr(result, "signal", None), _kp,
+                        self.context.console, name, getattr(result, "signal", None), _kp,
                         success=bool(getattr(result, "success", True)),
                         error=getattr(result, "error", None),
                         degraded=bool(getattr(result, "degraded", False)),
@@ -942,8 +1048,8 @@ class PortfolioCommandsMixin:
                 else:
                     print(f"  ⎿ {name}  {getattr(result, 'signal', '')}  {_kp[:50]}")
 
-            if HAS_RICH:
-                render_agent_tree_root(console, sym, len(agent_names), lang=_lang)
+            if self.context.has_rich:
+                render_agent_tree_root(self.context.console, sym, len(agent_names), lang=_lang)
             else:
                 print(f"\n  ⏺ 深度分析 {sym}  {len(agent_names)} 个分析师")
 
@@ -957,11 +1063,11 @@ class PortfolioCommandsMixin:
                 continue
 
             md = render_tier(result, tier)
-            if HAS_RICH:
+            if self.context.has_rich:
                 from rich import box as _box
                 from rich.markdown import Markdown
                 from rich.panel import Panel
-                console.print(Panel(
+                self.context.console.print(Panel(
                     Markdown(md), border_style="dim", box=_box.ROUNDED,
                     title=f"[bold]深度研究 · {sym}[/bold] [dim]({tier})[/dim]",
                     title_align="left", padding=(1, 2),
@@ -1010,9 +1116,9 @@ class PortfolioCommandsMixin:
                 _kps = getattr(result, "key_points", None)
                 if _kps:
                     _kp = _kps[0] if isinstance(_kps, (list, tuple)) else str(_kps)
-                if HAS_RICH:
+                if self.context.has_rich:
                     render_agent_node(
-                        console, name,
+                        self.context.console, name,
                         getattr(result, "signal", None), _kp,
                         success=bool(getattr(result, "success", True)),
                         error=getattr(result, "error", None),
@@ -1021,8 +1127,8 @@ class PortfolioCommandsMixin:
                 else:
                     print(f"  ⎿ {name}  {getattr(result, 'signal', '')}  {_kp[:50]}")
 
-            if HAS_RICH:
-                render_agent_tree_root(console, sym, _agent_count, lang=_lang)
+            if self.context.has_rich:
+                render_agent_tree_root(self.context.console, sym, _agent_count, lang=_lang)
             else:
                 print(f"\n  ⏺ 多代理分析 {sym}  {_agent_count} 个分析师并行")
 
@@ -1031,8 +1137,8 @@ class PortfolioCommandsMixin:
                 from apps.cli.runtime_consumer import TerminalRuntimeEventConsumer
                 consumer = TerminalRuntimeEventConsumer(
                     terminal=self.terminal,
-                    console=console,
-                    has_rich=HAS_RICH,
+                    console=self.context.console,
+                    has_rich=self.context.has_rich,
                     markdown_cls=None,
                     live_cls=None,
                     strip_latex=lambda x: x,
@@ -1058,17 +1164,17 @@ class PortfolioCommandsMixin:
                 _data_bundle = _analysis.data_bundle
                 _quality_notes = _analysis.quality_notes or []
 
-                if HAS_RICH:
-                    # Synthesis leaf closes the tree, then the detailed Panel
+                if self.context.has_rich:
+                    # Synthesis leaf closes the tree, then the detailed _get_Panel()
                     render_agent_synthesis_leaf(
-                        console,
+                        self.context.console,
                         team_result.final_signal,
                         team_result.confidence,
                         team_result.elapsed_sec,
                         lang=_lang,
                     )
                     if _quality_notes:
-                        console.print(
+                        self.context.console.print(
                             "  [yellow]数据质量警告:[/yellow] "
                             + "; ".join(_quality_notes[:3])
                         )
@@ -1079,11 +1185,11 @@ class PortfolioCommandsMixin:
                         for r in (team_result.results or [])
                     )
                     if _has_debate:
-                        console.print(
+                        self.context.console.print(
                             "  [#C08050]🔥 信号分歧已触发 DebateAgent 调解[/#C08050]"
                         )
 
-                    # Synthesis in a Panel for visual separation
+                    # Synthesis in a _get_Panel() for visual separation
                     from rich import box as _rbox_team
                     from ui.render.team import SIGNAL_COLORS as _SC, VERDICT_STYLE as _VS
                     from apps.cli.commands.team import (
@@ -1100,7 +1206,7 @@ class PortfolioCommandsMixin:
                     _sig_icon  = _VS.get(_sig_str.upper(), ("dim", "●"))[1]
                     _footer    = (f"[{_sig_color}]{_sig_icon} {_sig_str}[/{_sig_color}]"
                                   f"{_conf_str}{_elapsed}")
-                    console.print(Panel(
+                    self.context.console.print(Panel(
                         f"{_market_summary}\n\n{_syn}\n\n{_footer}",
                         title="[bold]综合结论[/bold]",
                         box=_rbox_team.ROUNDED,
@@ -1139,11 +1245,11 @@ class PortfolioCommandsMixin:
                 # agents 包不可用 — 不再回退到已废弃的 financial_agents
                 _m = (f"多代理分析模块加载失败：{_imp_err}。"
                       "请确认 agents 包完整（/install 或 pip install -e .）。")
-                console.print(f"\n  [red]{_m}[/red]") if HAS_RICH else print(f"\n  {_m}")
+                self.context.console.print(f"\n  [red]{_m}[/red]") if self.context.has_rich else print(f"\n  {_m}")
                 continue
             except Exception as e:
                 msg = f"团队分析失败: {e}"
-                console.print(f"\n  [red]{msg}[/red]") if HAS_RICH else print(f"\n  {msg}")
+                self.context.console.print(f"\n  [red]{msg}[/red]") if self.context.has_rich else print(f"\n  {msg}")
                 continue
 
     async def _save_team_report(self, symbol: str, team_result, data_bundle=None, quality_notes: Optional[list] = None) -> None:
@@ -1160,4 +1266,4 @@ class PortfolioCommandsMixin:
         except Exception:
             short_path = str(saved.path)
         msg = f"  报告已保存: .../{short_path}"
-        console.print(f"  [dim]{msg}[/dim]") if HAS_RICH else print(msg)
+        self.context.console.print(f"  [dim]{msg}[/dim]") if self.context.has_rich else print(msg)

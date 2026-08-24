@@ -155,6 +155,34 @@ def build_prediction_service(config: dict):
     return service
 
 
+import json
+import asyncio
+import datetime
+import time
+import shlex
+from typing import Dict, Any, Optional
+
+
+import json
+import asyncio
+import datetime
+import time
+import shlex
+import sys
+import os
+from typing import Dict, Any, Optional
+
+
+import json
+import asyncio
+import datetime
+import time
+import shlex
+import sys
+import os
+from typing import Dict, Any, Optional
+
+
 class ASharePredictionCommandsMixin:
     """Expose QuantEngine prediction runs to the interactive and direct CLI."""
 
@@ -171,7 +199,7 @@ class ASharePredictionCommandsMixin:
                 symbols = load_universe_file(parsed.universe_file) if parsed.universe_file else None
             except ValueError as exc:
                 msg = f"⚠ {exc}"
-                console.print(f"[yellow]{msg}[/yellow]") if HAS_RICH else print(msg)
+                self.context.console.print(f"[yellow]{msg}[/yellow]") if self.context.has_rich else print(msg)
                 return
 
             # The service's built-in 'all' alias is a curated broad list, not
@@ -181,19 +209,19 @@ class ASharePredictionCommandsMixin:
                     symbols, universe_meta = await asyncio.to_thread(fetch_live_ashare_universe)
                 except Exception as exc:
                     msg = f"无法构建实时全 A 股股票池：{exc}"
-                    console.print(f"[red]{msg}[/red]") if HAS_RICH else print(msg)
+                    self.context.console.print(f"[red]{msg}[/red]") if self.context.has_rich else print(msg)
                     return
-                console.print(
+                self.context.console.print(
                     f"[dim]已从 {universe_meta['source']} 获取 {universe_meta['count']} 只股票；"
                     f"已排除 {universe_meta['excluded_st']} 只 ST/退市风险标的。[/dim]"
-                    if HAS_RICH else f"Live universe: {universe_meta['count']} stocks"
+                    if self.context.has_rich else f"Live universe: {universe_meta['count']} stocks"
                 )
             if parsed.universe == "all" and not symbols:
                 msg = (
                     "全 A 股运行需要 --universe-file <文件>（一行/逗号分隔的完整当日股票池）。\n"
                     "内置 all 只是精选 broad 股票池，不能冒充全市场。"
                 )
-                console.print(f"[yellow]{msg}[/yellow]") if HAS_RICH else print(msg)
+                self.context.console.print(f"[yellow]{msg}[/yellow]") if self.context.has_rich else print(msg)
                 return
 
             # No hidden 500-stock truncation for an explicit externally supplied
@@ -206,7 +234,7 @@ class ASharePredictionCommandsMixin:
                 f"开始 A 股次交易日预测：{scope} · {parsed.period} · {parsed.strategy}\n"
                 "将拉取历史行情并生成可审计报告；结果仅供研究/仿真，不执行交易。"
             )
-            console.print(f"[dim]{notice}[/dim]") if HAS_RICH else print(notice)
+            self.context.console.print(f"[dim]{notice}[/dim]") if self.context.has_rich else print(notice)
             try:
                 service = build_prediction_service(self.terminal.config)
                 result = await asyncio.to_thread(
@@ -217,7 +245,7 @@ class ASharePredictionCommandsMixin:
                 )
             except Exception as exc:
                 msg = f"A 股预测引擎未能完成：{exc}"
-                console.print(f"[red]{msg}[/red]") if HAS_RICH else print(msg)
+                self.context.console.print(f"[red]{msg}[/red]") if self.context.has_rich else print(msg)
                 return
             self._print_ashare_result(result)
             return
@@ -226,9 +254,9 @@ class ASharePredictionCommandsMixin:
                 result = await asyncio.to_thread(build_prediction_service(self.terminal.config).evaluate_latest, rest.strip() or None)
             except Exception as exc:
                 msg = f"A 股预测评估未能完成：{exc}"
-                console.print(f"[red]{msg}[/red]") if HAS_RICH else print(msg)
+                self.context.console.print(f"[red]{msg}[/red]") if self.context.has_rich else print(msg)
                 return
-            console.print(result) if HAS_RICH else print(result)
+            self.context.console.print(result) if self.context.has_rich else print(result)
             return
         if action == "universe":
             include_st = "--include-st" in rest.split()
@@ -236,14 +264,14 @@ class ASharePredictionCommandsMixin:
                 symbols, meta = await asyncio.to_thread(fetch_live_ashare_universe, include_st=include_st)
             except Exception as exc:
                 msg = f"无法构建实时 A 股股票池：{exc}"
-                console.print(f"[red]{msg}[/red]") if HAS_RICH else print(msg)
+                self.context.console.print(f"[red]{msg}[/red]") if self.context.has_rich else print(msg)
                 return
             msg = f"实时 A 股股票池：{meta['count']} 只 · 来源 {meta['source']} · 排除 ST/退市风险 {meta['excluded_st']} 只"
-            console.print(f"[green]{msg}[/green]") if HAS_RICH else print(msg)
-            console.print("[dim]运行完整扫描：/ashare predict all --live-universe[/dim]" if HAS_RICH else "Run: /ashare predict all --live-universe")
+            self.context.console.print(f"[green]{msg}[/green]") if self.context.has_rich else print(msg)
+            self.context.console.print("[dim]运行完整扫描：/ashare predict all --live-universe[/dim]" if self.context.has_rich else "Run: /ashare predict all --live-universe")
             return
         msg = "Usage: /ashare [status|latest|universe|predict|evaluate]"
-        console.print(f"[yellow]{msg}[/yellow]") if HAS_RICH else print(msg)
+        self.context.console.print(f"[yellow]{msg}[/yellow]") if self.context.has_rich else print(msg)
 
     def _print_ashare_status(self, *, show_candidates: bool):
         try:
@@ -255,7 +283,7 @@ class ASharePredictionCommandsMixin:
             error = ""
         if not result:
             msg = f"没有本地预测结果。{'引擎不可用：' + error if error else '运行 /ashare predict core50 开始。'}"
-            console.print(f"[yellow]{msg}[/yellow]") if HAS_RICH else print(msg)
+            self.context.console.print(f"[yellow]{msg}[/yellow]") if self.context.has_rich else print(msg)
             return
         freshness = prediction_freshness(result)
         summary = result.get("summary") or {}
@@ -267,7 +295,7 @@ class ASharePredictionCommandsMixin:
             f"覆盖：{summary.get('succeeded', 0)}/{summary.get('requested', 0)} · 质量：{summary.get('qualityStatus', '-')}",
             f"强候选/候选/弱候选：{summary.get('strongCandidates', 0)}/{summary.get('longCandidates', 0)}/{summary.get('weakCandidates', 0)}",
         ]
-        console.print("\n".join(lines))
+        self.context.console.print("\n".join(lines))
         if show_candidates:
             self._print_ashare_result(result, include_header=False)
 
@@ -278,14 +306,14 @@ class ASharePredictionCommandsMixin:
         candidates = [item for item in predictions if item.get("signal") in {"strong_candidate", "long_candidate", "weak_candidate"}]
         if include_header:
             title = "A 股次交易日预测（质量通过）" if freshness["is_quality_pass"] else "A 股次交易日预测（质量未通过）"
-            console.print(f"[bold]{title}[/bold]" if HAS_RICH else title)
-        console.print(
+            self.context.console.print(f"[bold]{title}[/bold]" if self.context.has_rich else title)
+        self.context.console.print(
             f"覆盖 {summary.get('succeeded', 0)}/{summary.get('requested', 0)} · "
             f"数据 {freshness['latest_data_date'] or '-'} · "
             f"候选 {len(candidates)} · 阻断 {summary.get('blocked', 0)}"
         )
         if not freshness["is_current"]:
-            console.print("[yellow]⚠ 数据不是当前交易日前一日，结果只可作为历史记录。[/yellow]" if HAS_RICH else "⚠ Result is stale; historical only.")
+            self.context.console.print("[yellow]⚠ 数据不是当前交易日前一日，结果只可作为历史记录。[/yellow]" if self.context.has_rich else "⚠ Result is stale; historical only.")
         for item in candidates[:10]:
             pred = item.get("prediction") or {}
             line = (
@@ -294,6 +322,6 @@ class ASharePredictionCommandsMixin:
                 f"预测收益 {float(pred.get('predictedReturn') or 0):+.1%}  "
                 f"风险 {float(pred.get('riskScore') or 0):.2f}"
             )
-            console.print(line)
+            self.context.console.print(line)
         if not candidates:
-            console.print("  无通过候选；不应以模型名义强行给出买入名单。")
+            self.context.console.print("  无通过候选；不应以模型名义强行给出买入名单。")

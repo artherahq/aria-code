@@ -10,6 +10,34 @@
 from __future__ import annotations
 
 
+import json
+import asyncio
+import datetime
+import time
+import shlex
+from typing import Dict, Any, Optional
+
+
+import json
+import asyncio
+import datetime
+import time
+import shlex
+import sys
+import os
+from typing import Dict, Any, Optional
+
+
+import json
+import asyncio
+import datetime
+import time
+import shlex
+import sys
+import os
+from typing import Dict, Any, Optional
+
+
 class PdfExportCommandsMixin:
     """Mixin: /export-pdf <report.md> [--type=shortterm] [--theme=institutional|bloomberg] [--sections=a,b] [--exclude=x,y]"""
 
@@ -17,7 +45,7 @@ class PdfExportCommandsMixin:
     def _parse_export_pdf_args(args: str) -> dict:
         # 模块级的自由函数在 aria_cli.py 的 _rebind_mixin_globals() 之后会失联
         # ——它把这个类每个方法的 __globals__ 换成 aria_cli.py 自己的模块命名空间
-        # （为了让 console/HAS_RICH 这类裸名字能解析到），代价是原模块里定义的
+        # （为了让 self.context.console/self.context.has_rich 这类裸名字能解析到），代价是原模块里定义的
         # 兄弟函数就不再可见了。写成 staticmethod 走 self._xxx 属性查找，不受影响。
         parts = args.split()
         out = {"path": None, "type": "shortterm", "theme": "institutional", "include": None, "exclude": None}
@@ -44,26 +72,26 @@ class PdfExportCommandsMixin:
 
         opts = self._parse_export_pdf_args(args.strip())
         if not opts["path"]:
-            console.print("[dim]用法: /export-pdf <report.md> [--type=shortterm] [--theme=institutional|bloomberg] [--sections=a,b] [--exclude=x,y][/dim]"
-                          if HAS_RICH else "用法: /export-pdf <report.md> [--type=...] [--theme=...] [--sections=...] [--exclude=...]")
+            self.context.console.print("[dim]用法: /export-pdf <report.md> [--type=shortterm] [--theme=institutional|bloomberg] [--sections=a,b] [--exclude=x,y][/dim]"
+                          if self.context.has_rich else "用法: /export-pdf <report.md> [--type=...] [--theme=...] [--sections=...] [--exclude=...]")
             return
 
         src = Path(opts["path"]).expanduser()
         if not src.exists():
-            console.print(f"[red]找不到文件: {src}[/red]" if HAS_RICH else f"找不到文件: {src}")
+            self.context.console.print(f"[red]找不到文件: {src}[/red]" if self.context.has_rich else f"找不到文件: {src}")
             return
 
         parser = PARSERS.get(opts["type"])
         if parser is None:
             avail = ", ".join(PARSERS.keys())
-            console.print(f"[red]未知报告类型 '{opts['type']}'，目前支持: {avail}[/red]" if HAS_RICH
+            self.context.console.print(f"[red]未知报告类型 '{opts['type']}'，目前支持: {avail}[/red]" if self.context.has_rich
                           else f"未知报告类型 '{opts['type']}'，目前支持: {avail}")
             return
 
         theme = THEMES.get(opts["theme"])
         if theme is None:
             avail = ", ".join(THEMES.keys())
-            console.print(f"[red]未知主题 '{opts['theme']}'，目前支持: {avail}[/red]" if HAS_RICH
+            self.context.console.print(f"[red]未知主题 '{opts['theme']}'，目前支持: {avail}[/red]" if self.context.has_rich
                           else f"未知主题 '{opts['theme']}'，目前支持: {avail}")
             return
 
@@ -72,8 +100,8 @@ class PdfExportCommandsMixin:
             if opts["include"] or opts["exclude"]:
                 doc = doc.select(include=opts["include"], exclude=opts["exclude"])
             if not doc.sections:
-                console.print("[yellow]筛选后没有剩下任何 section，检查 --sections/--exclude 关键词是否匹配得上标题[/yellow]"
-                              if HAS_RICH else "筛选后没有剩下任何 section，检查 --sections/--exclude 关键词")
+                self.context.console.print("[yellow]筛选后没有剩下任何 section，检查 --sections/--exclude 关键词是否匹配得上标题[/yellow]"
+                              if self.context.has_rich else "筛选后没有剩下任何 section，检查 --sections/--exclude 关键词")
                 return
 
             html_doc = render_document(doc, theme)
@@ -87,11 +115,11 @@ class PdfExportCommandsMixin:
             html_path.unlink(missing_ok=True)  # 中间产物，转完就不需要留着
 
             if pdf_path is None:
-                console.print("[red]PDF 转换失败 —— 需要 weasyprint 或系统装了 wkhtmltopdf[/red]" if HAS_RICH
+                self.context.console.print("[red]PDF 转换失败 —— 需要 weasyprint 或系统装了 wkhtmltopdf[/red]" if self.context.has_rich
                               else "PDF 转换失败 —— 需要 weasyprint 或系统装了 wkhtmltopdf")
                 return
 
             msg = f"✓ PDF 已生成 ({theme.name} 主题, {len(doc.sections)} 个 section): {pdf_path}"
-            console.print(f"[green]{msg}[/green]" if HAS_RICH else msg)
+            self.context.console.print(f"[green]{msg}[/green]" if self.context.has_rich else msg)
         except Exception as e:
-            console.print(f"[red]渲染失败: {e}[/red]" if HAS_RICH else f"渲染失败: {e}")
+            self.context.console.print(f"[red]渲染失败: {e}[/red]" if self.context.has_rich else f"渲染失败: {e}")

@@ -52,6 +52,67 @@ def format_architecture_report(layers, counts, *, gaps_only: bool = False,
     return lines
 
 
+import json
+import asyncio
+import datetime
+import time
+import shlex
+from typing import Dict, Any, Optional
+
+def _test_datasource(*args, **kwargs):
+    from aria_cli import _test_datasource as fn
+    return fn(*args, **kwargs)
+def _print_error(*args, **kwargs):
+    from aria_cli import _print_error as fn
+    return fn(*args, **kwargs)
+def _get_ARIA_TOOLS():
+    from aria_cli import ARIA_TOOLS as val
+    return val
+def get_model_cfg(*args, **kwargs):
+    from aria_cli import get_model_cfg as fn
+    return fn(*args, **kwargs)
+def _get_LOCAL_TOOLS():
+    from aria_cli import LOCAL_TOOLS as val
+    return val
+def _get___version__():
+    from aria_cli import __version__ as val
+    return val
+def _get_Panel():
+    from aria_cli import Panel as val
+    return val
+def _get_provider_key(*args, **kwargs):
+    from aria_cli import _get_provider_key as fn
+    return fn(*args, **kwargs)
+def _get_rich_box():
+    from aria_cli import rich_box as val
+    return val
+def _get__HAS_MCP():
+    from aria_cli import _HAS_MCP as val
+    return val
+def _get_CONFIG_DIR():
+    from aria_cli import CONFIG_DIR as val
+    return val
+
+import json
+import asyncio
+import datetime
+import time
+import shlex
+import sys
+import os
+from typing import Dict, Any, Optional
+
+
+import json
+import asyncio
+import datetime
+import time
+import shlex
+import sys
+import os
+from typing import Dict, Any, Optional
+
+
 class DiagnosticOpsCommandsMixin:
     """Mixin: diagnostics, feedback, usage, and source inspection commands."""
 
@@ -62,15 +123,15 @@ class DiagnosticOpsCommandsMixin:
                 list_architecture_layers, architecture_status_counts)
         except Exception as exc:  # pragma: no cover - import guard
             msg = f"架构契约不可用: {exc}"
-            console.print(f"[red]{msg}[/red]") if HAS_RICH else print(msg)
+            self.context.console.print(f"[red]{msg}[/red]") if self.context.has_rich else print(msg)
             return
         gaps_only = "gap" in args.lower()
         lines = format_architecture_report(
             list_architecture_layers(), architecture_status_counts(),
-            gaps_only=gaps_only, rich=HAS_RICH)
-        if HAS_RICH:
-            console.print(Panel("\n".join(lines), title="[bold]Aria 架构[/bold]",
-                                border_style="#C08050", box=rich_box.ROUNDED,
+            gaps_only=gaps_only, rich=self.context.has_rich)
+        if self.context.has_rich:
+            self.context.console.print(_get_Panel()("\n".join(lines), title="[bold]Aria 架构[/bold]",
+                                border_style="#C08050", box=_get_rich_box().ROUNDED,
                                 padding=(0, 1)))
         else:
             print("\n".join(lines))
@@ -78,7 +139,7 @@ class DiagnosticOpsCommandsMixin:
     def cmd_bug(self, args: str):
         desc = args.strip()
         if not desc:
-            console.print("[dim]用法: /bug <描述你遇到的问题>[/dim]" if HAS_RICH
+            self.context.console.print("[dim]用法: /bug <描述你遇到的问题>[/dim]" if self.context.has_rich
                           else "Usage: /bug <description>")
             return
         ctx_parts = []
@@ -87,13 +148,13 @@ class DiagnosticOpsCommandsMixin:
             ctx_parts.append(f"{m.get('role','')}: {_c}")
         ctx = "\n".join(ctx_parts)
         import platform as _pf
-        env = (f"v{__version__} · {_pf.system()} · py{_pf.python_version()} · "
+        env = (f"v{_get___version__()} · {_pf.system()} · py{_pf.python_version()} · "
                f"model={self.terminal.config.get('model','')}")
         self.terminal._record_feedback("bug", ctx, comment=f"{desc}\n\n[env] {env}")
         gh = "https://github.com/artherahq/aria-code/issues"
-        if HAS_RICH:
-            console.print("  [#C08050]✓ 已记录问题（本地）[/#C08050]")
-            console.print(f"  [dim]上传需 /privacy opt-in · 或直接提 issue: {gh}[/dim]")
+        if self.context.has_rich:
+            self.context.console.print("  [#C08050]✓ 已记录问题（本地）[/#C08050]")
+            self.context.console.print(f"  [dim]上传需 /privacy opt-in · 或直接提 issue: {gh}[/dim]")
         else:
             print(f"  ✓ Bug recorded locally. Upload via /privacy opt-in, or file: {gh}")
 
@@ -101,25 +162,25 @@ class DiagnosticOpsCommandsMixin:
         res = self.terminal._verify_predictions(min_age_hours=24.0)
         try:
             from apps.cli.prediction_feedback import PredictionTracker
-            acc = PredictionTracker(CONFIG_DIR).accuracy()
+            acc = PredictionTracker(_get_CONFIG_DIR()).accuracy()
         except Exception:
             acc = {}
-        if HAS_RICH:
-            console.print()
-            console.print("  [bold]预测战绩[/bold]  [dim]LLM 方向判断 vs 实际行情[/dim]")
+        if self.context.has_rich:
+            self.context.console.print()
+            self.context.console.print("  [bold]预测战绩[/bold]  [dim]LLM 方向判断 vs 实际行情[/dim]")
             if res.get("settled"):
-                console.print(f"  [dim]本次结算 {res['settled']} 笔："
+                self.context.console.print(f"  [dim]本次结算 {res['settled']} 笔："
                               f"命中 [green]{res['correct']}[/green] / "
                               f"落空 [red]{res['wrong']}[/red][/dim]")
             _acc = acc.get("accuracy")
             _acc_str = f"{_acc:.0%}" if _acc is not None else "—"
-            console.print(
+            self.context.console.print(
                 f"  累计：已结算 [bold]{acc.get('settled',0)}[/bold] · "
                 f"命中率 [#C08050]{_acc_str}[/#C08050] · "
                 f"待结算 [dim]{acc.get('pending',0)}[/dim]"
             )
             if not acc.get("total"):
-                console.print("  [dim]暂无记录 — 用 /team 或 /analyze 让 AI 给出方向判断后会自动追踪[/dim]")
+                self.context.console.print("  [dim]暂无记录 — 用 /team 或 /analyze 让 AI 给出方向判断后会自动追踪[/dim]")
         else:
             print(f"  预测战绩: 结算{res.get('settled',0)} 命中率"
                   f"{acc.get('accuracy')} 待结算{acc.get('pending',0)}")
@@ -143,23 +204,23 @@ class DiagnosticOpsCommandsMixin:
         ss = int(elapsed % 60)
         duration = f"{hh}h {mm:02d}m {ss:02d}s" if hh else f"{mm}m {ss:02d}s"
 
-        if HAS_RICH:
-            console.print()
-            console.print("[bold]Session Usage[/bold]")
-            console.print()
-            console.print(f"  [dim]{'Duration':<22}[/dim]{duration}")
-            console.print(f"  [dim]{'Turns':<22}[/dim]{turns}")
-            console.print(f"  [dim]{'Input tokens':<22}[/dim]{inp:,}")
-            console.print(f"  [dim]{'Output tokens':<22}[/dim]{out:,}")
+        if self.context.has_rich:
+            self.context.console.print()
+            self.context.console.print("[bold]Session Usage[/bold]")
+            self.context.console.print()
+            self.context.console.print(f"  [dim]{'Duration':<22}[/dim]{duration}")
+            self.context.console.print(f"  [dim]{'Turns':<22}[/dim]{turns}")
+            self.context.console.print(f"  [dim]{'Input tokens':<22}[/dim]{inp:,}")
+            self.context.console.print(f"  [dim]{'Output tokens':<22}[/dim]{out:,}")
             if think:
-                console.print(f"  [dim]{'Thinking tokens':<22}[/dim]{think:,}")
-            console.print(f"  [dim]{'Total tokens':<22}[/dim][bold]{total:,}[/bold]")
+                self.context.console.print(f"  [dim]{'Thinking tokens':<22}[/dim]{think:,}")
+            self.context.console.print(f"  [dim]{'Total tokens':<22}[/dim][bold]{total:,}[/bold]")
             if is_local:
-                console.print(f"  [dim]{'Est. cost':<22}[/dim][green]$0.00 (local)[/green]")
+                self.context.console.print(f"  [dim]{'Est. cost':<22}[/dim][green]$0.00 (local)[/green]")
             elif total > 0:
-                console.print(f"  [dim]{'Est. cost':<22}[/dim]${cost_usd:.4f} USD")
-            console.print(f"  [dim]{'Provider':<22}[/dim]{self.terminal._last_provider}")
-            console.print()
+                self.context.console.print(f"  [dim]{'Est. cost':<22}[/dim]${cost_usd:.4f} USD")
+            self.context.console.print(f"  [dim]{'Provider':<22}[/dim]{self.terminal._last_provider}")
+            self.context.console.print()
         else:
             print(f"  Session: {duration}  Turns: {turns}")
             print(f"  Tokens: {inp:,} in / {out:,} out / {total:,} total")
@@ -168,7 +229,7 @@ class DiagnosticOpsCommandsMixin:
 
     def cmd_todo(self, args: str):
         import json as _json
-        todo_file = CONFIG_DIR / "todos.json"
+        todo_file = _get_CONFIG_DIR() / "todos.json"
 
         def _load():
             try:
@@ -179,7 +240,7 @@ class DiagnosticOpsCommandsMixin:
             return []
 
         def _save(tasks):
-            CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+            _get_CONFIG_DIR().mkdir(parents=True, exist_ok=True)
             todo_file.write_text(_json.dumps(tasks, ensure_ascii=False, indent=2), encoding="utf-8")
 
         parts = args.strip().split(maxsplit=1)
@@ -189,58 +250,58 @@ class DiagnosticOpsCommandsMixin:
 
         if sub in ("", "list", "ls"):
             if not tasks:
-                console.print("[dim]No tasks. Add with: /todo add <task>[/dim]" if HAS_RICH else "No tasks")
+                self.context.console.print("[dim]No tasks. Add with: /todo add <task>[/dim]" if self.context.has_rich else "No tasks")
                 return
-            if HAS_RICH:
-                console.print()
+            if self.context.has_rich:
+                self.context.console.print()
                 for i, t in enumerate(tasks):
                     status_icon = "[green]✓[/green]" if t.get("done") else "[yellow]○[/yellow]"
                     style = "dim" if t.get("done") else ""
                     text = t.get("text", "")
-                    console.print(f"  {status_icon} [dim]{i}[/dim]  [{style}]{text}[/{style}]" if style
+                    self.context.console.print(f"  {status_icon} [dim]{i}[/dim]  [{style}]{text}[/{style}]" if style
                                   else f"  {status_icon} [dim]{i}[/dim]  {text}")
                 pending = sum(1 for t in tasks if not t.get("done"))
-                console.print(f"\n  [dim]{pending}/{len(tasks)} pending[/dim]")
-                console.print()
+                self.context.console.print(f"\n  [dim]{pending}/{len(tasks)} pending[/dim]")
+                self.context.console.print()
             else:
                 for i, t in enumerate(tasks):
                     mark = "✓" if t.get("done") else "○"
                     print(f"  {mark} {i}  {t.get('text', '')}")
         elif sub == "add":
             if not rest:
-                console.print("[dim]Usage: /todo add <task text>[/dim]" if HAS_RICH else "Usage: /todo add <task>")
+                self.context.console.print("[dim]Usage: /todo add <task text>[/dim]" if self.context.has_rich else "Usage: /todo add <task>")
                 return
             task = {"text": rest, "done": False, "id": len(tasks)}
             tasks.append(task)
             _save(tasks)
-            console.print(f"  [dim]✓ Added: {rest}[/dim]" if HAS_RICH else f"Added: {rest}")
+            self.context.console.print(f"  [dim]✓ Added: {rest}[/dim]" if self.context.has_rich else f"Added: {rest}")
         elif sub in ("done", "check", "complete"):
             try:
                 idx = int(rest)
                 tasks[idx]["done"] = True
                 _save(tasks)
-                console.print(f"  [dim]✓ Done: {tasks[idx]['text']}[/dim]" if HAS_RICH
+                self.context.console.print(f"  [dim]✓ Done: {tasks[idx]['text']}[/dim]" if self.context.has_rich
                               else f"Done: {tasks[idx]['text']}")
             except (ValueError, IndexError):
-                console.print("[dim]Usage: /todo done <id>[/dim]" if HAS_RICH else "Usage: /todo done <id>")
+                self.context.console.print("[dim]Usage: /todo done <id>[/dim]" if self.context.has_rich else "Usage: /todo done <id>")
         elif sub in ("remove", "rm", "delete", "del"):
             try:
                 idx = int(rest)
                 removed = tasks.pop(idx)
                 _save(tasks)
-                console.print(f"  [dim]Removed: {removed['text']}[/dim]" if HAS_RICH
+                self.context.console.print(f"  [dim]Removed: {removed['text']}[/dim]" if self.context.has_rich
                               else f"Removed: {removed['text']}")
             except (ValueError, IndexError):
-                console.print("[dim]Usage: /todo remove <id>[/dim]" if HAS_RICH else "bad index")
+                self.context.console.print("[dim]Usage: /todo remove <id>[/dim]" if self.context.has_rich else "bad index")
         elif sub == "clear":
             _save([])
-            console.print("[dim]All tasks cleared[/dim]" if HAS_RICH else "Cleared")
+            self.context.console.print("[dim]All tasks cleared[/dim]" if self.context.has_rich else "Cleared")
         else:
             full_text = (sub + " " + rest).strip()
             task = {"text": full_text, "done": False, "id": len(tasks)}
             tasks.append(task)
             _save(tasks)
-            console.print(f"  [dim]✓ Added: {full_text}[/dim]" if HAS_RICH else f"Added: {full_text}")
+            self.context.console.print(f"  [dim]✓ Added: {full_text}[/dim]" if self.context.has_rich else f"Added: {full_text}")
 
     def cmd_doctor(self, args: str):
         try:
@@ -262,9 +323,9 @@ class DiagnosticOpsCommandsMixin:
                 check_network="--network" in (args or "").split(),
                 context_stats=_ctx_stats,
             )
-            if HAS_RICH:
+            if self.context.has_rich:
                 from rich.table import Table as _DoctorTable
-                table = _DoctorTable(title="Aria Code doctor", box=rich_box.ROUNDED)
+                table = _DoctorTable(title="Aria Code doctor", box=_get_rich_box().ROUNDED)
                 table.add_column("Status", width=8)
                 table.add_column("Check", style="bold")
                 table.add_column("Detail", style="dim")
@@ -277,17 +338,17 @@ class DiagnosticOpsCommandsMixin:
                         check.detail,
                         check.suggestion,
                     )
-                console.print()
-                console.print(table)
+                self.context.console.print()
+                self.context.console.print(table)
                 color = "green" if report.errors == 0 and report.warnings == 0 else ("yellow" if report.errors == 0 else "red")
-                console.print(f"[{color}]{report.passed} passed · {report.warnings} warnings · {report.errors} errors[/{color}]")
-                console.print()
+                self.context.console.print(f"[{color}]{report.passed} passed · {report.warnings} warnings · {report.errors} errors[/{color}]")
+                self.context.console.print()
             else:
                 from doctor import format_doctor_plain
                 print(format_doctor_plain(report))
             return
         except Exception as exc:
-            console.print(f"[yellow]doctor module unavailable, using legacy checks: {exc}[/yellow]" if HAS_RICH else f"doctor module unavailable: {exc}")
+            self.context.console.print(f"[yellow]doctor module unavailable, using legacy checks: {exc}[/yellow]" if self.context.has_rich else f"doctor module unavailable: {exc}")
 
         import importlib as _il
         import subprocess as _sp
@@ -366,7 +427,7 @@ class DiagnosticOpsCommandsMixin:
         for pkg, desc in _pkgs:
             try:
                 m = _il.import_module(pkg)
-                ver = getattr(m, "__version__", "?")
+                ver = getattr(m, "_get___version__()", "?")
                 _ok(f"pkg: {pkg}", f"{desc} v{ver}")
             except ImportError:
                 _warn(f"pkg: {pkg}", f"{desc} not installed (pip install {pkg})")
@@ -378,7 +439,7 @@ class DiagnosticOpsCommandsMixin:
         else:
             _warn("ARIA.md", f"not found in {pathlib.Path.cwd()} (use /init to create)")
 
-        if _HAS_MCP:
+        if _get__HAS_MCP():
             try:
                 reg = self.terminal._mcp_registry
                 if reg and hasattr(reg, "list_tools"):
@@ -391,25 +452,25 @@ class DiagnosticOpsCommandsMixin:
         else:
             _warn("MCP", "mcp_client not found — MCP support disabled")
 
-        tool_count = len(ARIA_TOOLS) + len(LOCAL_TOOLS)
+        tool_count = len(_get_ARIA_TOOLS()) + len(_get_LOCAL_TOOLS())
         _ok("Aria tools", f"{tool_count} tools loaded")
 
-        console.print() if HAS_RICH else None
-        if HAS_RICH:
-            console.print("[bold]Aria Code — Diagnostics[/bold]")
-            console.print()
+        self.context.console.print() if self.context.has_rich else None
+        if self.context.has_rich:
+            self.context.console.print("[bold]Aria Code — Diagnostics[/bold]")
+            self.context.console.print()
             icons = {"ok": "[green]✓[/green]", "warn": "[yellow]⚠[/yellow]", "err": "[red]✗[/red]"}
             for status, label, detail in checks:
                 icon = icons[status]
                 detail_str = f"  [dim]{detail}[/dim]" if detail else ""
-                console.print(f"  {icon}  {label:<28}{detail_str}")
-            console.print()
+                self.context.console.print(f"  {icon}  {label:<28}{detail_str}")
+            self.context.console.print()
             n_ok = sum(1 for s, *_ in checks if s == "ok")
             n_w = sum(1 for s, *_ in checks if s == "warn")
             n_e = sum(1 for s, *_ in checks if s == "err")
             summary_color = "green" if n_e == 0 and n_w == 0 else ("yellow" if n_e == 0 else "red")
-            console.print(f"  [{summary_color}]{n_ok} passed · {n_w} warnings · {n_e} errors[/{summary_color}]")
-            console.print()
+            self.context.console.print(f"  [{summary_color}]{n_ok} passed · {n_w} warnings · {n_e} errors[/{summary_color}]")
+            self.context.console.print()
 
             _fh_ok = bool(_get_provider_key("finnhub"))
             _av_ok = bool(_get_provider_key("alphavantage"))
@@ -419,9 +480,9 @@ class DiagnosticOpsCommandsMixin:
 
             _guide_needed = not (_fh_ok and _av_ok and _na_ok and _llm_ok)
             if _guide_needed:
-                console.print("[bold]数据源配置指南[/bold]  [dim](完整功能需要以下 key)[/dim]")
-                console.print()
-            console.print("  [dim]Use /doctor --network for network checks[/dim]")
+                self.context.console.print("[bold]数据源配置指南[/bold]  [dim](完整功能需要以下 key)[/dim]")
+                self.context.console.print()
+            self.context.console.print("  [dim]Use /doctor --network for network checks[/dim]")
         else:
             print("Diagnostics complete")
 
@@ -468,7 +529,7 @@ class DiagnosticOpsCommandsMixin:
                         last_msg = m["content"] if isinstance(m["content"], str) else ""
                         break
                 if not last_msg:
-                    console.print("[yellow]没有可分析的历史提问，改用全量扫描[/yellow]" if HAS_RICH
+                    self.context.console.print("[yellow]没有可分析的历史提问，改用全量扫描[/yellow]" if self.context.has_rich
                                   else "No history; full scan")
                     report = build_full_dependency_report(include_optional="--required" not in flags)
                 else:
@@ -483,16 +544,16 @@ class DiagnosticOpsCommandsMixin:
 
         # ── Nothing missing ───────────────────────────────────────────────────
         if not pip_packages and not (report and (report.missing_commands or report.missing_env)):
-            console.print("[green]✓ 环境完整，没有检测到缺失的 Python 包[/green]" if HAS_RICH
+            self.context.console.print("[green]✓ 环境完整，没有检测到缺失的 Python 包[/green]" if self.context.has_rich
                           else "All dependencies satisfied")
             return
 
         # ── Show findings ─────────────────────────────────────────────────────
-        if HAS_RICH:
-            console.print()
-            console.print("[bold]环境检测结果[/bold]")
+        if self.context.has_rich:
+            self.context.console.print()
+            self.context.console.print("[bold]环境检测结果[/bold]")
             if pip_packages:
-                console.print(f"  [yellow]缺少 {len(pip_packages)} 个 Python 包:[/yellow]")
+                self.context.console.print(f"  [yellow]缺少 {len(pip_packages)} 个 Python 包:[/yellow]")
                 for p in pip_packages:
                     purpose = ""
                     if report:
@@ -500,16 +561,16 @@ class DiagnosticOpsCommandsMixin:
                             if r.package == p:
                                 purpose = f"  [dim]— {r.purpose}{'（可选）' if not r.required else ''}[/dim]"
                                 break
-                    console.print(f"    • [cyan]{p}[/cyan]{purpose}")
+                    self.context.console.print(f"    • [cyan]{p}[/cyan]{purpose}")
             if command_hints:
-                console.print("  [yellow]缺少命令行工具:[/yellow]")
+                self.context.console.print("  [yellow]缺少命令行工具:[/yellow]")
                 for h in command_hints:
-                    console.print(f"    • [dim]{h}[/dim]")
+                    self.context.console.print(f"    • [dim]{h}[/dim]")
             if env_hints:
-                console.print("  [dim]未配置的环境变量（可选，不自动处理）:[/dim]")
+                self.context.console.print("  [dim]未配置的环境变量（可选，不自动处理）:[/dim]")
                 for h in env_hints:
-                    console.print(f"    • [dim]{h}[/dim]")
-            console.print()
+                    self.context.console.print(f"    • [dim]{h}[/dim]")
+            self.context.console.print()
         else:
             print(f"Missing packages: {', '.join(pip_packages)}")
             for h in command_hints:
@@ -517,8 +578,8 @@ class DiagnosticOpsCommandsMixin:
 
         if not pip_packages:
             if command_hints:
-                console.print("[dim]命令行工具需手动安装（见上方提示），Aria 不会自动执行系统级安装[/dim]"
-                              if HAS_RICH else "Install CLI tools manually (see hints above)")
+                self.context.console.print("[dim]命令行工具需手动安装（见上方提示），Aria 不会自动执行系统级安装[/dim]"
+                              if self.context.has_rich else "Install CLI tools manually (see hints above)")
             return
 
         # ── Select packages ───────────────────────────────────────────────────
@@ -537,17 +598,17 @@ class DiagnosticOpsCommandsMixin:
                     r.package for r in report.missing_python
                     if not r.required and r.package in pip_packages
                 ]
-                if HAS_RICH:
-                    console.print("[bold]选择安装范围[/bold]")
-                    console.print("  [cyan]all[/cyan]      安装全部缺失 Python 包")
-                    console.print("  [cyan]required[/cyan]  只安装必需包")
-                    console.print("  [cyan]optional[/cyan]  只安装可选增强包")
-                    console.print("  [cyan]custom[/cyan]    手动输入包名或编号")
-                    console.print("  [cyan]plan[/cyan]      只显示计划，不安装")
-                    console.print("  [cyan]skip[/cyan]      跳过")
+                if self.context.has_rich:
+                    self.context.console.print("[bold]选择安装范围[/bold]")
+                    self.context.console.print("  [cyan]all[/cyan]      安装全部缺失 Python 包")
+                    self.context.console.print("  [cyan]required[/cyan]  只安装必需包")
+                    self.context.console.print("  [cyan]optional[/cyan]  只安装可选增强包")
+                    self.context.console.print("  [cyan]custom[/cyan]    手动输入包名或编号")
+                    self.context.console.print("  [cyan]plan[/cyan]      只显示计划，不安装")
+                    self.context.console.print("  [cyan]skip[/cyan]      跳过")
                     for idx, pkg in enumerate(pip_packages, 1):
                         kind = "required" if pkg in required_pkgs else "optional"
-                        console.print(f"    [dim]{idx}.[/dim] {pkg} [dim]({kind})[/dim]")
+                        self.context.console.print(f"    [dim]{idx}.[/dim] {pkg} [dim]({kind})[/dim]")
                 else:
                     print("Select install scope: all | required | optional | custom | plan | skip")
                     for idx, pkg in enumerate(pip_packages, 1):
@@ -555,17 +616,17 @@ class DiagnosticOpsCommandsMixin:
                         print(f"  {idx}. {pkg} ({kind})")
                 default_mode = "required" if required_pkgs and optional_pkgs else "all"
                 try:
-                    choice = console.input(f"安装范围 [{default_mode}]: ") if HAS_RICH else input(f"Install scope [{default_mode}]: ")
+                    choice = self.context.console.input(f"安装范围 [{default_mode}]: ") if self.context.has_rich else input(f"Install scope [{default_mode}]: ")
                 except (EOFError, KeyboardInterrupt):
-                    console.print("\n[dim]已取消[/dim]" if HAS_RICH else "Cancelled")
+                    self.context.console.print("\n[dim]已取消[/dim]" if self.context.has_rich else "Cancelled")
                     return
                 choice = (choice or default_mode).strip().lower()
                 custom_items: list[str] = []
                 if choice == "custom":
                     try:
-                        raw_custom = console.input("输入包名或编号（空格/逗号分隔）: ") if HAS_RICH else input("Packages or numbers: ")
+                        raw_custom = self.context.console.input("输入包名或编号（空格/逗号分隔）: ") if self.context.has_rich else input("Packages or numbers: ")
                     except (EOFError, KeyboardInterrupt):
-                        console.print("\n[dim]已取消[/dim]" if HAS_RICH else "Cancelled")
+                        self.context.console.print("\n[dim]已取消[/dim]" if self.context.has_rich else "Cancelled")
                         return
                     for item in raw_custom.replace(",", " ").split():
                         if item.isdigit():
@@ -579,15 +640,15 @@ class DiagnosticOpsCommandsMixin:
                 )
             pip_packages = list(selection.pip_packages)
             if selection.mode in {"plan", "dry-run", "dry_run"}:
-                console.print("[dim]已生成安装计划，未执行安装。[/dim]" if HAS_RICH else "Install plan only; no changes made.")
+                self.context.console.print("[dim]已生成安装计划，未执行安装。[/dim]" if self.context.has_rich else "Install plan only; no changes made.")
                 return
             if not pip_packages:
-                console.print("[dim]没有选择任何 Python 包，未安装。[/dim]" if HAS_RICH else "No packages selected.")
+                self.context.console.print("[dim]没有选择任何 Python 包，未安装。[/dim]" if self.context.has_rich else "No packages selected.")
                 return
-            if selection.skipped_packages and HAS_RICH:
-                console.print(f"[dim]跳过: {', '.join(selection.skipped_packages)}[/dim]")
+            if selection.skipped_packages and self.context.has_rich:
+                self.context.console.print(f"[dim]跳过: {', '.join(selection.skipped_packages)}[/dim]")
         elif "--plan" in flags:
-            console.print("[dim]显式包安装计划已显示，未执行安装。[/dim]" if HAS_RICH else "Install plan only; no changes made.")
+            self.context.console.print("[dim]显式包安装计划已显示，未执行安装。[/dim]" if self.context.has_rich else "Install plan only; no changes made.")
             return
 
         # ── Confirm ───────────────────────────────────────────────────────────
@@ -596,18 +657,18 @@ class DiagnosticOpsCommandsMixin:
         if "--yes" not in flags:
             prompt = f"将运行: {pretty}\n确认安装? [y/N]: "
             try:
-                answer = console.input(prompt) if HAS_RICH else input(prompt)
+                answer = self.context.console.input(prompt) if self.context.has_rich else input(prompt)
             except (EOFError, KeyboardInterrupt):
-                console.print("\n[dim]已取消[/dim]" if HAS_RICH else "Cancelled")
+                self.context.console.print("\n[dim]已取消[/dim]" if self.context.has_rich else "Cancelled")
                 return
             if answer.strip().lower() not in {"y", "yes"}:
-                console.print("[dim]已取消，未安装任何包[/dim]" if HAS_RICH else "Cancelled")
+                self.context.console.print("[dim]已取消，未安装任何包[/dim]" if self.context.has_rich else "Cancelled")
                 return
-        elif HAS_RICH:
-            console.print(f"[dim]Auto install: {pretty}[/dim]")
+        elif self.context.has_rich:
+            self.context.console.print(f"[dim]Auto install: {pretty}[/dim]")
 
         # ── Install ───────────────────────────────────────────────────────────
-        console.print(f"\n[dim]⏳ 安装中: {' '.join(pip_packages)}…[/dim]" if HAS_RICH
+        self.context.console.print(f"\n[dim]⏳ 安装中: {' '.join(pip_packages)}…[/dim]" if self.context.has_rich
                       else f"Installing {' '.join(pip_packages)}...")
         try:
             proc = await asyncio.get_event_loop().run_in_executor(
@@ -615,7 +676,7 @@ class DiagnosticOpsCommandsMixin:
                 lambda: _sp.run(pip_cmd, capture_output=True, text=True, timeout=300),
             )
         except Exception as exc:
-            console.print(f"[red]安装失败: {exc}[/red]" if HAS_RICH else f"Install failed: {exc}")
+            self.context.console.print(f"[red]安装失败: {exc}[/red]" if self.context.has_rich else f"Install failed: {exc}")
             return
 
         if proc.returncode == 0:
@@ -638,18 +699,18 @@ class DiagnosticOpsCommandsMixin:
                 refresh_optional_parsers()
             except Exception:
                 pass
-            if HAS_RICH:
-                console.print(f"  [green]✓ 安装完成: {', '.join(ok_list) or '—'}[/green]")
+            if self.context.has_rich:
+                self.context.console.print(f"  [green]✓ 安装完成: {', '.join(ok_list) or '—'}[/green]")
                 if fail_list:
-                    console.print(f"  [yellow]⚠ 已安装但当前会话需重启才能加载: {', '.join(fail_list)}[/yellow]")
+                    self.context.console.print(f"  [yellow]⚠ 已安装但当前会话需重启才能加载: {', '.join(fail_list)}[/yellow]")
                 elif ok_list:
-                    console.print("  [dim]能力已刷新，当前会话可直接使用。[/dim]")
+                    self.context.console.print("  [dim]能力已刷新，当前会话可直接使用。[/dim]")
             else:
                 print(f"Installed: {', '.join(ok_list)}")
         else:
             err_tail = (proc.stderr or proc.stdout or "")[-400:]
-            console.print(f"[red]pip 安装失败 (code {proc.returncode}):[/red]\n[dim]{err_tail}[/dim]"
-                          if HAS_RICH else f"pip failed: {err_tail}")
+            self.context.console.print(f"[red]pip 安装失败 (code {proc.returncode}):[/red]\n[dim]{err_tail}[/dim]"
+                          if self.context.has_rich else f"pip failed: {err_tail}")
 
     async def cmd_datasource(self, args: str):
         sub = args.strip().lower()
@@ -664,16 +725,16 @@ class DiagnosticOpsCommandsMixin:
             paths = [
                 "~/.aria/datasources.yaml",
                 "~/.aria/.env",
-                str(CONFIG_DIR / "providers.json"),
+                str(_get_CONFIG_DIR() / "providers.json"),
             ]
-            if HAS_RICH:
-                console.print("  [bold]数据源配置文件:[/bold]")
+            if self.context.has_rich:
+                self.context.console.print("  [bold]数据源配置文件:[/bold]")
                 for p in paths:
                     import pathlib
                     full = pathlib.Path(p).expanduser()
                     exists = "[green]✓[/green]" if full.exists() else "[dim]✗ (未创建)[/dim]"
-                    console.print(f"  {exists}  [dim]{p}[/dim]")
-                console.print("\n  [dim]环境变量: TUSHARE_TOKEN FRED_API_KEY ALPHA_VANTAGE_KEY[/dim]")
+                    self.context.console.print(f"  {exists}  [dim]{p}[/dim]")
+                self.context.console.print("\n  [dim]环境变量: TUSHARE_TOKEN FRED_API_KEY ALPHA_VANTAGE_KEY[/dim]")
             return
 
         try:
@@ -683,10 +744,10 @@ class DiagnosticOpsCommandsMixin:
             _print_error("datasources 模块未找到")
             return
 
-        if HAS_RICH:
+        if self.context.has_rich:
             from rich.markup import escape
             from rich.table import Table
-            from rich import box as rich_box
+            from rich import box
             from ui.render.responsive import StackedRecord, render_stacked_records, structured_layout
 
             _DESC = {
@@ -710,7 +771,7 @@ class DiagnosticOpsCommandsMixin:
                     status, needs_key, markets = "[red]错误[/red]", "?", "?"
                 source_rows.append((name, markets, needs_key, status, _DESC.get(name, "")))
 
-            layout = structured_layout(console)
+            layout = structured_layout(self.context.console)
             if layout == "stacked":
                 records = [
                     StackedRecord(
@@ -724,14 +785,14 @@ class DiagnosticOpsCommandsMixin:
                     for name, markets, needs_key, status, description in source_rows
                 ]
                 render_stacked_records(
-                    console,
+                    self.context.console,
                     title="数据源状态",
                     records=records,
                     footer="/datasource config — 配置文件路径",
                 )
                 return
 
-            table = Table(title="数据源状态", box=rich_box.SIMPLE, header_style="bold dim")
+            table = Table(title="数据源状态", box=_get_rich_box().SIMPLE, header_style="bold dim")
             table.add_column("名称", width=16)
             table.add_column("市场", width=20)
             table.add_column("需要Key", width=8)
@@ -743,8 +804,8 @@ class DiagnosticOpsCommandsMixin:
                 if layout == "full":
                     row.append(description)
                 table.add_row(*row)
-            console.print(table)
-            console.print("  [dim]/datasource config — 配置文件路径[/dim]")
+            self.context.console.print(table)
+            self.context.console.print("  [dim]/datasource config — 配置文件路径[/dim]")
         else:
             for name, cls in _SOURCE_REGISTRY.items():
                 src = cls()

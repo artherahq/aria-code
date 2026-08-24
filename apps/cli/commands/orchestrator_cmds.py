@@ -3,6 +3,34 @@
 from __future__ import annotations
 
 
+import json
+import asyncio
+import datetime
+import time
+import shlex
+from typing import Dict, Any, Optional
+
+
+import json
+import asyncio
+import datetime
+import time
+import shlex
+import sys
+import os
+from typing import Dict, Any, Optional
+
+
+import json
+import asyncio
+import datetime
+import time
+import shlex
+import sys
+import os
+from typing import Dict, Any, Optional
+
+
 class OrchestratorCommandsMixin:
     def cmd_orchestrate(self, args: str):
         """Preview the verifiable Agent task graph for a request."""
@@ -11,10 +39,10 @@ class OrchestratorCommandsMixin:
         request = args.strip()
         if not request:
             message = "Usage: /orchestrate <任务描述>"
-            console.print(f"[yellow]{message}[/yellow]") if HAS_RICH else print(message)
+            self.context.console.print(f"[yellow]{message}[/yellow]") if self.context.has_rich else print(message)
             return
         graph = build_task_graph(request)
-        if HAS_RICH:
+        if self.context.has_rich:
             from rich.table import Table
 
             table = Table(title=f"任务编排 · {graph.kind}", header_style="bold cyan")
@@ -27,9 +55,9 @@ class OrchestratorCommandsMixin:
                     stage.title, stage.objective, "、".join(stage.depends_on) or "—",
                     stage.verification or "—",
                 )
-            console.print(table)
+            self.context.console.print(table)
             ready = "、".join(stage.title for stage in graph.ready(()))
-            console.print(f"[dim]可立即并行：{ready}。写入操作仍受权限与 worktree 隔离约束。[/dim]")
+            self.context.console.print(f"[dim]可立即并行：{ready}。写入操作仍受权限与 worktree 隔离约束。[/dim]")
         else:
             for stage in graph.stages:
                 deps = ", ".join(stage.depends_on) or "none"

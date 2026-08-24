@@ -1,13 +1,58 @@
 """FileCommandsMixin — Claude Code-style file ops: read/write/edit/ls/search + staged changes.
 
-Method bodies use aria_cli module globals (console, HAS_RICH, the _tool_* file
-tools, _display_path, pathlib, Syntax, _SYNTAX_THEME, GLOBAL_CHANGE_STORE), which
+Method bodies use aria_cli module globals (self.context.console, self.context.has_rich, the _tool_* file
+tools, _display_path, pathlib, _get_Syntax(), _get__SYNTAX_THEME(), _get_GLOBAL_CHANGE_STORE()), which
 are bound at import time by aria_cli._rebind_mixin_globals(FileCommandsMixin).
 Note cmd_read uses `pathlib.Path` (a bound global), not a bare `Path`, so no
 local import is required.
 """
 
 from __future__ import annotations
+
+
+import json
+import asyncio
+import datetime
+import time
+import shlex
+import sys
+import os
+from typing import Dict, Any, Optional
+
+def _display_path(*args, **kwargs):
+    from aria_cli import _display_path as fn
+    return fn(*args, **kwargs)
+def _tool_read_file(*args, **kwargs):
+    from aria_cli import _tool_read_file as fn
+    return fn(*args, **kwargs)
+def _get_GLOBAL_CHANGE_STORE():
+    from aria_cli import GLOBAL_CHANGE_STORE as val
+    return val
+def _get_Syntax():
+    from aria_cli import Syntax as val
+    return val
+def _get__SYNTAX_THEME():
+    from aria_cli import _SYNTAX_THEME as val
+    return val
+def _tool_list_files(*args, **kwargs):
+    from aria_cli import _tool_list_files as fn
+    return fn(*args, **kwargs)
+import pathlib
+def _tool_write_file(*args, **kwargs):
+    from aria_cli import _tool_write_file as fn
+    return fn(*args, **kwargs)
+def _tool_search_code(*args, **kwargs):
+    from aria_cli import _tool_search_code as fn
+    return fn(*args, **kwargs)
+
+import json
+import asyncio
+import datetime
+import time
+import shlex
+import sys
+import os
+from typing import Dict, Any, Optional
 
 
 class FileCommandsMixin:
@@ -17,7 +62,7 @@ class FileCommandsMixin:
         """Read a file: /read <path> [offset] [limit]"""
         parts = args.split()
         if not parts:
-            console.print("[dim]Usage: /read <file_path> [start_line] [num_lines][/dim]" if HAS_RICH
+            self.context.console.print("[dim]Usage: /read <file_path> [start_line] [num_lines][/dim]" if self.context.has_rich
                           else "Usage: /read <path> [offset] [limit]")
             return
         params = {"path": parts[0]}
@@ -34,8 +79,8 @@ class FileCommandsMixin:
         result = _tool_read_file(params)
         if result["success"]:
             content = result["data"]["content"]
-            if HAS_RICH:
-                # Use Syntax for code files
+            if self.context.has_rich:
+                # Use _get_Syntax() for code files
                 path = result["data"]["path"]
                 ext = pathlib.Path(path).suffix
                 lang_map = {".py": "python", ".js": "javascript", ".ts": "typescript",
@@ -44,16 +89,16 @@ class FileCommandsMixin:
                             ".swift": "swift", ".html": "html", ".css": "css",
                             ".sh": "bash", ".sql": "sql", ".rs": "rust", ".go": "go"}
                 lang = lang_map.get(ext, "text")
-                # Strip line numbers we added, use Syntax's own
+                # Strip line numbers we added, use _get_Syntax()'s own
                 raw = "\n".join(line.split("│ ", 1)[1] if "│ " in line else line
                                 for line in content.split("\n"))
-                console.print(f"\n[dim]{_display_path(path)} ({result['data']['lines']} lines)[/dim]")
-                console.print(Syntax(raw, lang, line_numbers=True, theme=_SYNTAX_THEME))
+                self.context.console.print(f"\n[dim]{_display_path(path)} ({result['data']['lines']} lines)[/dim]")
+                self.context.console.print(_get_Syntax()(raw, lang, line_numbers=True, theme=_get__SYNTAX_THEME()))
             else:
                 print(f"\n{_display_path(result['data']['path'])} ({result['data']['lines']} lines)")
                 print(content)
         else:
-            console.print(f"[red]{result['error']}[/red]" if HAS_RICH else result["error"])
+            self.context.console.print(f"[red]{result['error']}[/red]" if self.context.has_rich else result["error"])
 
     def cmd_write(self, args: str):
         """Write a file: /write [--stage] <path> then paste content, end with EOF line."""
@@ -64,14 +109,14 @@ class FileCommandsMixin:
             parts = [p for p in parts if p != "--stage"]
         path = " ".join(parts).strip()
         if not path:
-            console.print("[dim]Usage: /write [--stage] <file_path>[/dim]" if HAS_RICH
+            self.context.console.print("[dim]Usage: /write [--stage] <file_path>[/dim]" if self.context.has_rich
                           else "Usage: /write [--stage] <path>")
-            console.print("[dim]Then paste content, end with a line containing only 'EOF'[/dim]" if HAS_RICH
+            self.context.console.print("[dim]Then paste content, end with a line containing only 'EOF'[/dim]" if self.context.has_rich
                           else "Paste content, end with EOF")
             return
-        if HAS_RICH:
+        if self.context.has_rich:
             mode = "Staging" if stage_only else "Writing"
-            console.print(f"[dim]{mode} {_display_path(path)} — paste content, end with 'EOF' on a new line:[/dim]")
+            self.context.console.print(f"[dim]{mode} {_display_path(path)} — paste content, end with 'EOF' on a new line:[/dim]")
         else:
             print(f"{'Staging' if stage_only else 'Writing'} {_display_path(path)} — paste content, end with EOF:")
         lines = []
@@ -82,22 +127,22 @@ class FileCommandsMixin:
                     break
                 lines.append(line)
         except (EOFError, KeyboardInterrupt):
-            console.print("[dim]Cancelled[/dim]" if HAS_RICH else "Cancelled")
+            self.context.console.print("[dim]Cancelled[/dim]" if self.context.has_rich else "Cancelled")
             return
         content = "\n".join(lines) + "\n"
         result = _tool_write_file({"path": path, "content": content, "stage_only": stage_only})
         if not result["success"]:
-            console.print(f"[red]{result['error']}[/red]" if HAS_RICH else result["error"])
+            self.context.console.print(f"[red]{result['error']}[/red]" if self.context.has_rich else result["error"])
         elif stage_only:
             change_id = result.get("data", {}).get("change_id", "")
             msg = f"Staged change {change_id}. Review with /changes, apply with /apply-change {change_id}."
-            console.print(f"[dim]{msg}[/dim]" if HAS_RICH else msg)
+            self.context.console.print(f"[dim]{msg}[/dim]" if self.context.has_rich else msg)
 
     async def cmd_edit(self, args: str):
         """Edit a file interactively: /edit <path> — AI edits based on instruction."""
         parts = args.strip().split(maxsplit=1)
         if not parts:
-            console.print("[dim]Usage: /edit <file_path> <instruction>[/dim]" if HAS_RICH
+            self.context.console.print("[dim]Usage: /edit <file_path> <instruction>[/dim]" if self.context.has_rich
                           else "Usage: /edit <path> <instruction>")
             return
         path = parts[0]
@@ -106,15 +151,15 @@ class FileCommandsMixin:
         # Read the file first
         read_result = _tool_read_file({"path": path})
         if not read_result["success"]:
-            console.print(f"[red]{read_result['error']}[/red]" if HAS_RICH else read_result["error"])
+            self.context.console.print(f"[red]{read_result['error']}[/red]" if self.context.has_rich else read_result["error"])
             return
 
         if not instruction:
             # Show file and ask for instruction
-            if HAS_RICH:
-                console.print(f"[dim]{_display_path(read_result['data']['path'])} ({read_result['data']['lines']} lines)[/dim]")
+            if self.context.has_rich:
+                self.context.console.print(f"[dim]{_display_path(read_result['data']['path'])} ({read_result['data']['lines']} lines)[/dim]")
             try:
-                instruction = (console.input("[bold]>[/bold] What to change: ") if HAS_RICH
+                instruction = (self.context.console.input("[bold]>[/bold] What to change: ") if self.context.has_rich
                                else input("What to change: ")).strip()
             except (EOFError, KeyboardInterrupt):
                 return
@@ -139,21 +184,21 @@ class FileCommandsMixin:
         result = _tool_list_files({"path": path, "pattern": pattern})
         if result["success"]:
             items = result["data"]["items"]
-            if HAS_RICH:
-                console.print(f"\n[dim]{_display_path(result['data']['path'], fallback='directory')} ({result['data']['count']} items)[/dim]\n")
+            if self.context.has_rich:
+                self.context.console.print(f"\n[dim]{_display_path(result['data']['path'], fallback='directory')} ({result['data']['count']} items)[/dim]\n")
                 for item in items:
                     if item["type"] == "dir":
-                        console.print(f"  [bold]{item['name']}/[/bold]")
+                        self.context.console.print(f"  [bold]{item['name']}/[/bold]")
                     else:
                         size = item["size"]
                         size_str = f"{size:,}" if size < 10000 else f"{size/1024:.1f}K"
-                        console.print(f"  {item['name']}  [dim]{size_str}[/dim]")
+                        self.context.console.print(f"  {item['name']}  [dim]{size_str}[/dim]")
             else:
                 for item in items:
                     suffix = "/" if item["type"] == "dir" else ""
                     print(f"  {item['name']}{suffix}")
         else:
-            console.print(f"[red]{result['error']}[/red]" if HAS_RICH else result["error"])
+            self.context.console.print(f"[red]{result['error']}[/red]" if self.context.has_rich else result["error"])
 
     def cmd_search(self, args: str):
         """Search code: /search <pattern> [path] [glob]
@@ -164,7 +209,7 @@ class FileCommandsMixin:
         args = args.strip().strip('"\'')
         parts = args.split()
         if not parts:
-            console.print("[dim]Usage: /search <pattern> [path] [file_glob][/dim]" if HAS_RICH
+            self.context.console.print("[dim]Usage: /search <pattern> [path] [file_glob][/dim]" if self.context.has_rich
                           else "Usage: /search <pattern> [path] [glob]")
             return
 
@@ -201,37 +246,37 @@ class FileCommandsMixin:
         result = _tool_search_code(params)
         if result["success"]:
             matches = result["data"]["matches"]
-            if HAS_RICH:
-                console.print(f"\n[dim]{result['data']['count']} matches for '{result['data']['pattern']}'[/dim]\n")
+            if self.context.has_rich:
+                self.context.console.print(f"\n[dim]{result['data']['count']} matches for '{result['data']['pattern']}'[/dim]\n")
                 for m in matches[:30]:
-                    console.print(f"  [dim]{m['file']}:{m['line']}[/dim]  {m['content'][:100]}")
+                    self.context.console.print(f"  [dim]{m['file']}:{m['line']}[/dim]  {m['content'][:100]}")
             else:
                 print(f"\n{result['data']['count']} matches:")
                 for m in matches[:30]:
                     print(f"  {m['file']}:{m['line']}  {m['content'][:100]}")
         else:
-            console.print(f"[red]{result['error']}[/red]" if HAS_RICH else result["error"])
+            self.context.console.print(f"[red]{result['error']}[/red]" if self.context.has_rich else result["error"])
 
     def cmd_changes(self, args: str):
         """List staged file changes."""
         include_closed = "--all" in args.split()
-        changes = GLOBAL_CHANGE_STORE.list(include_closed=include_closed)
+        changes = _get_GLOBAL_CHANGE_STORE().list(include_closed=include_closed)
         if not changes:
             msg = "No staged changes."
-            console.print(f"[dim]{msg}[/dim]" if HAS_RICH else msg)
+            self.context.console.print(f"[dim]{msg}[/dim]" if self.context.has_rich else msg)
             return
-        if HAS_RICH:
-            console.print()
+        if self.context.has_rich:
+            self.context.console.print()
             for change in changes:
                 added = sum(1 for line in change.diff.splitlines() if line.startswith("+") and not line.startswith("+++"))
                 removed = sum(1 for line in change.diff.splitlines() if line.startswith("-") and not line.startswith("---"))
                 status = "applied" if change.applied else "rejected" if change.rejected else "pending"
                 color = "green" if change.applied else "red" if change.rejected else "yellow"
-                console.print(f"[{color}]{change.change_id}[/{color}] [bold]{change.path}[/bold] [dim]{status} +{added}/-{removed}[/dim]")
+                self.context.console.print(f"[{color}]{change.change_id}[/{color}] [bold]{change.path}[/bold] [dim]{status} +{added}/-{removed}[/dim]")
                 preview = "\n".join(change.diff.splitlines()[:18])
                 if preview:
-                    console.print(Syntax(preview, "diff", theme=_SYNTAX_THEME))
-            console.print()
+                    self.context.console.print(_get_Syntax()(preview, "diff", theme=_get__SYNTAX_THEME()))
+            self.context.console.print()
         else:
             for change in changes:
                 status = "applied" if change.applied else "rejected" if change.rejected else "pending"
@@ -242,26 +287,26 @@ class FileCommandsMixin:
         """Apply a staged file change."""
         change_id = args.strip()
         if not change_id:
-            console.print("[dim]Usage: /apply-change <change_id>[/dim]" if HAS_RICH
+            self.context.console.print("[dim]Usage: /apply-change <change_id>[/dim]" if self.context.has_rich
                           else "Usage: /apply-change <change_id>")
             return
         try:
-            change = GLOBAL_CHANGE_STORE.apply(change_id)
+            change = _get_GLOBAL_CHANGE_STORE().apply(change_id)
             msg = f"Applied change {change.change_id}: {change.path}"
-            console.print(f"[green]{msg}[/green]" if HAS_RICH else msg)
+            self.context.console.print(f"[green]{msg}[/green]" if self.context.has_rich else msg)
         except Exception as exc:
-            console.print(f"[red]{exc}[/red]" if HAS_RICH else str(exc))
+            self.context.console.print(f"[red]{exc}[/red]" if self.context.has_rich else str(exc))
 
     def cmd_reject_change(self, args: str):
         """Reject a staged file change."""
         change_id = args.strip()
         if not change_id:
-            console.print("[dim]Usage: /reject-change <change_id>[/dim]" if HAS_RICH
+            self.context.console.print("[dim]Usage: /reject-change <change_id>[/dim]" if self.context.has_rich
                           else "Usage: /reject-change <change_id>")
             return
         try:
-            change = GLOBAL_CHANGE_STORE.reject(change_id)
+            change = _get_GLOBAL_CHANGE_STORE().reject(change_id)
             msg = f"Rejected change {change.change_id}: {change.path}"
-            console.print(f"[dim]{msg}[/dim]" if HAS_RICH else msg)
+            self.context.console.print(f"[dim]{msg}[/dim]" if self.context.has_rich else msg)
         except Exception as exc:
-            console.print(f"[red]{exc}[/red]" if HAS_RICH else str(exc))
+            self.context.console.print(f"[red]{exc}[/red]" if self.context.has_rich else str(exc))

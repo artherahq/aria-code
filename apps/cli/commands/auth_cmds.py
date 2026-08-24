@@ -1,12 +1,46 @@
 """AuthCommandsMixin — Arthera backend auth: /login, /logout, /whoami.
 
-Method bodies use aria_cli module globals (console, HAS_RICH, _esc_watcher,
-save_config, _print_error, asyncio, datetime) which are bound at import time by
+Method bodies use aria_cli module globals (self.context.console, self.context.has_rich, _esc_watcher,
+self.context.save_config, _print_error, asyncio, datetime) which are bound at import time by
 aria_cli._rebind_mixin_globals(AuthCommandsMixin). getpass/aiohttp are imported
 locally inside cmd_login, so this module needs no module-level imports.
 """
 
 from __future__ import annotations
+
+
+import json
+import asyncio
+import datetime
+import time
+import shlex
+from typing import Dict, Any, Optional
+
+def _esc_watcher(*args, **kwargs):
+    from aria_cli import _esc_watcher as fn
+    return fn(*args, **kwargs)
+def _print_error(*args, **kwargs):
+    from aria_cli import _print_error as fn
+    return fn(*args, **kwargs)
+
+import json
+import asyncio
+import datetime
+import time
+import shlex
+import sys
+import os
+from typing import Dict, Any, Optional
+
+
+import json
+import asyncio
+import datetime
+import time
+import shlex
+import sys
+import os
+from typing import Dict, Any, Optional
 
 
 class AuthCommandsMixin:
@@ -26,13 +60,13 @@ class AuthCommandsMixin:
             email = parts[0]
         else:
             try:
-                prompt_fn = console.input if HAS_RICH else input
+                prompt_fn = self.context.console.input if self.context.has_rich else input
                 email = prompt_fn("  Email: ").strip()
             except (EOFError, KeyboardInterrupt):
-                console.print("[dim]Cancelled[/dim]" if HAS_RICH else "Cancelled")
+                self.context.console.print("[dim]Cancelled[/dim]" if self.context.has_rich else "Cancelled")
                 return
         if not email:
-            console.print("[dim]Usage: /login <email>[/dim]" if HAS_RICH else "Usage: /login <email>")
+            self.context.console.print("[dim]Usage: /login <email>[/dim]" if self.context.has_rich else "Usage: /login <email>")
             return
 
         # Always prompt for password — never accept it as a CLI argument (security)
@@ -40,17 +74,17 @@ class AuthCommandsMixin:
             _esc_watcher.pause()
             password = _getpass.getpass("  Password: ")
         except (EOFError, KeyboardInterrupt):
-            console.print("[dim]Cancelled[/dim]" if HAS_RICH else "Cancelled")
+            self.context.console.print("[dim]Cancelled[/dim]" if self.context.has_rich else "Cancelled")
             return
         finally:
             _esc_watcher.resume()
 
         if not password:
-            console.print("[red]Password cannot be empty[/red]" if HAS_RICH else "Password cannot be empty")
+            self.context.console.print("[red]Password cannot be empty[/red]" if self.context.has_rich else "Password cannot be empty")
             return
 
-        if HAS_RICH:
-            console.print("[dim]Authenticating...[/dim]")
+        if self.context.has_rich:
+            self.context.console.print("[dim]Authenticating...[/dim]")
 
         try:
             async with aiohttp.ClientSession() as session:
@@ -70,8 +104,8 @@ class AuthCommandsMixin:
                         # Store token expiry if provided
                         if data.get("expires_at"):
                             self.terminal.config["token_expires_at"] = data["expires_at"]
-                        save_config(self.terminal.config)
-                        console.print(f"[green]✓ Logged in as {user_id}[/green]" if HAS_RICH
+                        self.context.save_config(self.terminal.config)
+                        self.context.console.print(f"[green]✓ Logged in as {user_id}[/green]" if self.context.has_rich
                                       else f"Logged in as {user_id}")
                     elif resp.status == 401:
                         _print_error("Invalid email or password", "login")
@@ -94,8 +128,8 @@ class AuthCommandsMixin:
         self.terminal.config["auth_token"] = None
         self.terminal.config["user_id"] = None
         self.terminal.config.pop("token_expires_at", None)
-        save_config(self.terminal.config)
-        console.print("[dim]Logged out[/dim]" if HAS_RICH else "Logged out")
+        self.context.save_config(self.terminal.config)
+        self.context.console.print("[dim]Logged out[/dim]" if self.context.has_rich else "Logged out")
 
     def cmd_whoami(self, args: str):
         """Show current authentication status."""
@@ -105,29 +139,29 @@ class AuthCommandsMixin:
         expires = cfg.get("token_expires_at")
 
         if not token:
-            console.print("[dim]Not logged in — use /login <email>[/dim]" if HAS_RICH
+            self.context.console.print("[dim]Not logged in — use /login <email>[/dim]" if self.context.has_rich
                           else "Not logged in")
             return
 
-        if HAS_RICH:
-            console.print()
-            console.print(f"  [dim]User:[/dim]    {user_id or 'unknown'}")
-            console.print(f"  [dim]Token:[/dim]   {token[:12]}...")
+        if self.context.has_rich:
+            self.context.console.print()
+            self.context.console.print(f"  [dim]User:[/dim]    {user_id or 'unknown'}")
+            self.context.console.print(f"  [dim]Token:[/dim]   {token[:12]}...")
             if expires:
                 # Check expiry
                 try:
                     exp_dt = datetime.fromisoformat(expires.replace("Z", "+00:00"))
                     now = datetime.now(exp_dt.tzinfo)
                     if now > exp_dt:
-                        console.print(f"  [dim]Expires:[/dim] [red]EXPIRED ({expires[:10]})[/red]")
-                        console.print("  [dim]Run /login to refresh your session[/dim]")
+                        self.context.console.print(f"  [dim]Expires:[/dim] [red]EXPIRED ({expires[:10]})[/red]")
+                        self.context.console.print("  [dim]Run /login to refresh your session[/dim]")
                     else:
                         delta = exp_dt - now
                         hours = int(delta.total_seconds() // 3600)
-                        console.print(f"  [dim]Expires:[/dim] {expires[:10]} [dim](in {hours}h)[/dim]")
+                        self.context.console.print(f"  [dim]Expires:[/dim] {expires[:10]} [dim](in {hours}h)[/dim]")
                 except Exception:
-                    console.print(f"  [dim]Expires:[/dim] {expires}")
-            console.print()
+                    self.context.console.print(f"  [dim]Expires:[/dim] {expires}")
+            self.context.console.print()
         else:
             print(f"User: {user_id or 'unknown'}")
             print(f"Token: {token[:12]}...")

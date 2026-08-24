@@ -3,6 +3,43 @@
 from __future__ import annotations
 
 
+import json
+import asyncio
+import datetime
+import time
+import shlex
+from typing import Dict, Any, Optional
+
+def _p(*args, **kwargs):
+    from aria_cli import _p as fn
+    return fn(*args, **kwargs)
+def _print_realty_result(*args, **kwargs):
+    from aria_cli import _print_realty_result as fn
+    return fn(*args, **kwargs)
+def _print_risk_scan(*args, **kwargs):
+    from aria_cli import _print_risk_scan as fn
+    return fn(*args, **kwargs)
+
+import json
+import asyncio
+import datetime
+import time
+import shlex
+import sys
+import os
+from typing import Dict, Any, Optional
+
+
+import json
+import asyncio
+import datetime
+import time
+import shlex
+import sys
+import os
+from typing import Dict, Any, Optional
+
+
 class BusinessWorkflowCommandsMixin:
     """Mixin: financial research and realty/operations workflow commands."""
 
@@ -118,8 +155,8 @@ class BusinessWorkflowCommandsMixin:
 
     async def cmd_realty_risk_scan(self, args: str):
         project_id = args.strip() or "demo_project"
-        if HAS_RICH:
-            console.print(f"\n  [bold]风险扫描[/bold]  项目: [cyan]{project_id}[/cyan]")
+        if self.context.has_rich:
+            self.context.console.print(f"\n  [bold]风险扫描[/bold]  项目: [cyan]{project_id}[/cyan]")
         api_url = self.terminal.config.get("api_url", "http://localhost:8000")
         try:
             import aiohttp
@@ -244,8 +281,8 @@ class BusinessWorkflowCommandsMixin:
         })
 
     async def _run_realty_agent(self, agent_name: str, project_id: str, input_data: dict):
-        if HAS_RICH:
-            with console.status(f"[dim]运行 {agent_name} Agent...[/dim]", spinner="dots"):
+        if self.context.has_rich:
+            with self.context.console.status(f"[dim]运行 {agent_name} Agent...[/dim]", spinner="dots"):
                 result = await self._call_realty_agent(agent_name, project_id, input_data)
         else:
             print(f"Running {agent_name}...")
@@ -255,8 +292,8 @@ class BusinessWorkflowCommandsMixin:
 
     async def _run_realty_team(self, agents: list, project_id: str, input_data: dict):
         import asyncio
-        if HAS_RICH:
-            with console.status(f"[dim]并行扫描 {', '.join(agents)}...[/dim]", spinner="dots"):
+        if self.context.has_rich:
+            with self.context.console.status(f"[dim]并行扫描 {', '.join(agents)}...[/dim]", spinner="dots"):
                 tasks = [self._call_realty_agent(n, project_id, input_data) for n in agents]
                 results = await asyncio.gather(*tasks, return_exceptions=False)
         else:

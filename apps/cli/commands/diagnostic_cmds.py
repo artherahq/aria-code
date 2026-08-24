@@ -6,6 +6,55 @@ import json
 import os
 
 
+import json
+import asyncio
+import datetime
+import time
+import shlex
+from typing import Dict, Any, Optional
+
+def _get_ARIA_TOOLS():
+    from aria_cli import ARIA_TOOLS as val
+    return val
+def get_model_cfg(*args, **kwargs):
+    from aria_cli import get_model_cfg as fn
+    return fn(*args, **kwargs)
+def _get_MODELS():
+    from aria_cli import MODELS as val
+    return val
+def _get_LOCAL_TOOLS():
+    from aria_cli import LOCAL_TOOLS as val
+    return val
+def _get_SKILLS():
+    from aria_cli import SKILLS as val
+    return val
+def _get_Syntax():
+    from aria_cli import Syntax as val
+    return val
+def _get__SYNTAX_THEME():
+    from aria_cli import _SYNTAX_THEME as val
+    return val
+
+import json
+import asyncio
+import datetime
+import time
+import shlex
+import sys
+import os
+from typing import Dict, Any, Optional
+
+
+import json
+import asyncio
+import datetime
+import time
+import shlex
+import sys
+import os
+from typing import Dict, Any, Optional
+
+
 class DiagnosticCommandsMixin:
     """Mixin providing runtime diagnostics commands."""
 
@@ -14,11 +63,11 @@ class DiagnosticCommandsMixin:
         t = self.terminal
         cfg = t.config
         model_id = cfg.get("model", "qwen2.5:7b")
-        tool_count = len(ARIA_TOOLS) + len(LOCAL_TOOLS)
-        skill_count = len(SKILLS)
+        tool_count = len(_get_ARIA_TOOLS()) + len(_get_LOCAL_TOOLS())
+        skill_count = len(_get_SKILLS())
 
         _lp = t._last_provider or ""
-        _badge = next((v.get("badge", "") for v in MODELS.values() if v["id"] == model_id), "")
+        _badge = next((v.get("badge", "") for v in _get_MODELS().values() if v["id"] == model_id), "")
         if _lp == "ollama":
             runtime = "local (Ollama)"
         elif _lp in ("deepseek", "openai", "anthropic", "groq", "dashscope", "together"):
@@ -45,13 +94,13 @@ class DiagnosticCommandsMixin:
         except Exception:
             provider_summary = None
 
-        mk = next((k for k, v in MODELS.items() if v["id"] == model_id), None)
-        model_display = MODELS[mk]["name"] if mk else model_id
+        mk = next((k for k, v in _get_MODELS().items() if v["id"] == model_id), None)
+        model_display = _get_MODELS()[mk]["name"] if mk else model_id
 
-        if HAS_RICH:
-            console.print()
-            console.print("[bold]Runtime Status[/bold]")
-            console.print()
+        if self.context.has_rich:
+            self.context.console.print()
+            self.context.console.print("[bold]Runtime Status[/bold]")
+            self.context.console.print()
             rows = [
                 ("runtime", runtime),
                 ("model", model_display),
@@ -71,8 +120,8 @@ class DiagnosticCommandsMixin:
             rows.append(("banner", cfg.get("banner", "full")))
             rows.append(("workspace", os.getcwd().replace(os.path.expanduser("~"), "~")))
             for k, v in rows:
-                console.print(f"  [dim]{k:<12}[/dim][cyan]{v}[/cyan]")
-            console.print()
+                self.context.console.print(f"  [dim]{k:<12}[/dim][cyan]{v}[/cyan]")
+            self.context.console.print()
         else:
             print("\nRuntime Status")
             print(f"  runtime  {runtime}")
@@ -89,12 +138,12 @@ class DiagnosticCommandsMixin:
         trace = getattr(self.terminal, "runtime_trace", None)
         if trace is None:
             msg = "Runtime trace is unavailable."
-            console.print(f"[dim]{msg}[/dim]" if HAS_RICH else msg)
+            self.context.console.print(f"[dim]{msg}[/dim]" if self.context.has_rich else msg)
             return
         if "--json" in args.split():
             payload = json.dumps(trace.to_dict(), ensure_ascii=False, indent=2)
-            if HAS_RICH:
-                console.print(Syntax(payload, "json", theme=_SYNTAX_THEME))
+            if self.context.has_rich:
+                self.context.console.print(_get_Syntax()(payload, "json", theme=_get__SYNTAX_THEME()))
             else:
                 print(payload)
             return
@@ -102,14 +151,14 @@ class DiagnosticCommandsMixin:
         calls = trace.tool_calls[-20:]
         if not calls and not turns:
             msg = "No tool calls recorded yet."
-            console.print(f"[dim]{msg}[/dim]" if HAS_RICH else msg)
+            self.context.console.print(f"[dim]{msg}[/dim]" if self.context.has_rich else msg)
             return
-        if HAS_RICH:
-            console.print()
-            console.print("[bold]Runtime Trace[/bold]")
-            console.print()
+        if self.context.has_rich:
+            self.context.console.print()
+            self.context.console.print("[bold]Runtime Trace[/bold]")
+            self.context.console.print()
             if turns:
-                console.print("  [dim]Recent turns[/dim]")
+                self.context.console.print("  [dim]Recent turns[/dim]")
                 for turn in turns:
                     ok = bool(turn.success)
                     style = "green" if ok else "red"
@@ -117,23 +166,23 @@ class DiagnosticCommandsMixin:
                     summary = turn.summary or turn.final_text[:120]
                     if len(summary) > 120:
                         summary = summary[:117] + "..."
-                    console.print(
+                    self.context.console.print(
                         f"    [{style}]{status:<8}[/{style}] "
                         f"[bold]{turn.provider or '?'}[/bold] "
                         f"[dim]{summary}[/dim]"
                     )
-                console.print()
+                self.context.console.print()
             for call in calls:
                 ok = bool(call.result.get("success"))
                 style = "green" if ok else "red"
-                console.print(
+                self.context.console.print(
                     f"  [{style}]{'ok' if ok else 'err':<3}[/{style}] "
                     f"[bold]{call.tool}[/bold] "
                     f"[dim]{call.elapsed_ms:.0f} ms[/dim]"
                 )
                 if not ok and call.result.get("error"):
-                    console.print(f"      [red]{str(call.result.get('error'))[:180]}[/red]")
-            console.print()
+                    self.context.console.print(f"      [red]{str(call.result.get('error'))[:180]}[/red]")
+            self.context.console.print()
         else:
             print("\nRuntime Trace")
             for turn in turns:
@@ -149,8 +198,8 @@ class DiagnosticCommandsMixin:
 
     async def cmd_health(self, args: str):
         import aiohttp
-        if HAS_RICH:
-            console.print()
+        if self.context.has_rich:
+            self.context.console.print()
         urls = [
             ("AWS Backend", self.terminal.api_url, "/health"),
             ("Local Server", self.terminal.config.get("local_url", "http://localhost:8001"), "/health"),
@@ -166,14 +215,14 @@ class DiagnosticCommandsMixin:
                             detail = ", ".join(models)
                         else:
                             detail = f"v{data.get('version', '?')}"
-                        if HAS_RICH:
-                            console.print(f"  [green]●[/green] [dim]{label}[/dim]  {detail}")
+                        if self.context.has_rich:
+                            self.context.console.print(f"  [green]●[/green] [dim]{label}[/dim]  {detail}")
                         else:
                             print(f"  + {label}  {detail}")
             except Exception:
-                if HAS_RICH:
-                    console.print(f"  [red]●[/red] [dim]{label}[/dim]  offline")
+                if self.context.has_rich:
+                    self.context.console.print(f"  [red]●[/red] [dim]{label}[/dim]  offline")
                 else:
                     print(f"  - {label}  offline")
-        if HAS_RICH:
-            console.print()
+        if self.context.has_rich:
+            self.context.console.print()

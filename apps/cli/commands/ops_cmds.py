@@ -3,6 +3,58 @@
 from __future__ import annotations
 
 
+import json
+import asyncio
+import datetime
+import time
+import shlex
+from typing import Dict, Any, Optional
+
+def _display_path(*args, **kwargs):
+    from aria_cli import _display_path as fn
+    return fn(*args, **kwargs)
+def _tool_github(*args, **kwargs):
+    from aria_cli import _tool_github as fn
+    return fn(*args, **kwargs)
+def _get_LOCAL_TOOLS():
+    from aria_cli import LOCAL_TOOLS as val
+    return val
+def _get_provider_key(*args, **kwargs):
+    from aria_cli import _get_provider_key as fn
+    return fn(*args, **kwargs)
+def _tool_run_command(*args, **kwargs):
+    from aria_cli import _tool_run_command as fn
+    return fn(*args, **kwargs)
+def _tool_write_file(*args, **kwargs):
+    from aria_cli import _tool_write_file as fn
+    return fn(*args, **kwargs)
+def _get_Syntax():
+    from aria_cli import Syntax as val
+    return val
+def _get__SYNTAX_THEME():
+    from aria_cli import _SYNTAX_THEME as val
+    return val
+
+import json
+import asyncio
+import datetime
+import time
+import shlex
+import sys
+import os
+from typing import Dict, Any, Optional
+
+
+import json
+import asyncio
+import datetime
+import time
+import shlex
+import sys
+import os
+from typing import Dict, Any, Optional
+
+
 class OpsCommandsMixin:
     """Mixin: operational and workflow helper commands."""
 
@@ -16,11 +68,11 @@ class OpsCommandsMixin:
             if symbol not in watchlist:
                 watchlist.append(symbol)
                 self.terminal.config["watchlist"] = watchlist
-                save_config(self.terminal.config)
-                console.print(f"[green]Added {symbol} to watchlist[/green]" if HAS_RICH
+                self.context.save_config(self.terminal.config)
+                self.context.console.print(f"[green]Added {symbol} to watchlist[/green]" if self.context.has_rich
                               else f"Added {symbol}")
             else:
-                console.print(f"[dim]{symbol} already in watchlist[/dim]" if HAS_RICH
+                self.context.console.print(f"[dim]{symbol} already in watchlist[/dim]" if self.context.has_rich
                               else f"{symbol} already in watchlist")
 
         elif action == "remove" and len(parts) > 1:
@@ -28,19 +80,19 @@ class OpsCommandsMixin:
             if symbol in watchlist:
                 watchlist.remove(symbol)
                 self.terminal.config["watchlist"] = watchlist
-                save_config(self.terminal.config)
-                console.print(f"[dim]Removed {symbol} from watchlist[/dim]" if HAS_RICH
+                self.context.save_config(self.terminal.config)
+                self.context.console.print(f"[dim]Removed {symbol} from watchlist[/dim]" if self.context.has_rich
                               else f"Removed {symbol}")
             else:
-                console.print(f"[red]{symbol} not in watchlist[/red]" if HAS_RICH
+                self.context.console.print(f"[red]{symbol} not in watchlist[/red]" if self.context.has_rich
                               else f"{symbol} not in watchlist")
 
         else:
-            if HAS_RICH:
+            if self.context.has_rich:
                 if watchlist:
-                    console.print(f"  [dim]Watchlist:[/dim] {', '.join(watchlist)}")
+                    self.context.console.print(f"  [dim]Watchlist:[/dim] {', '.join(watchlist)}")
                 else:
-                    console.print("  [dim]Watchlist: Empty[/dim]")
+                    self.context.console.print("  [dim]Watchlist: Empty[/dim]")
             else:
                 print(f"Watchlist: {', '.join(watchlist)}")
 
@@ -73,7 +125,7 @@ class OpsCommandsMixin:
             ("Charts/reports", "artifact services", "HTML/PNG charts, dashboards, Markdown/HTML reports"),
             ("News/Web", f"finnhub:{_key_status('finnhub')} · newsapi:{_key_status('newsapi')} · brave:{_key_status('brave')}", "news command + web search fallback"),
             ("Cloud AI/data", f"dashscope:{_key_status('dashscope')} · openai:{_key_status('openai')} · anthropic:{_key_status('anthropic')}", "optional external providers"),
-            ("MCP/tools", f"{len(LOCAL_TOOLS)} local tools", "tool loop with repeat-call guard"),
+            ("MCP/tools", f"{len(_get_LOCAL_TOOLS())} local tools", "tool loop with repeat-call guard"),
         ]
 
         service_groups = [
@@ -114,28 +166,28 @@ class OpsCommandsMixin:
             "/export md strategy_report.md",
         ]
 
-        if HAS_RICH:
-            console.print()
-            console.print("[bold]CLI Services[/bold] [dim](runtime boundaries + workflow)[/dim]")
-            console.print()
-            console.print("  [bold]Runtime Service Map[/bold]")
+        if self.context.has_rich:
+            self.context.console.print()
+            self.context.console.print("[bold]CLI Services[/bold] [dim](runtime boundaries + workflow)[/dim]")
+            self.context.console.print()
+            self.context.console.print("  [bold]Runtime Service Map[/bold]")
             for name, status, detail in runtime_services:
-                console.print(f"    [dim]{name:<16}[/dim] [bold]{status}[/bold]  [dim]{detail}[/dim]")
+                self.context.console.print(f"    [dim]{name:<16}[/dim] [bold]{status}[/bold]  [dim]{detail}[/dim]")
             if provider_summary is not None:
                 color = "green" if provider_summary.status == "ok" else ("red" if provider_summary.status == "err" else "yellow")
-                console.print(f"    [dim]{'Provider health':<16}[/dim] [{color}]{provider_summary.status}[/{color}]  [dim]{provider_summary.detail}[/dim]")
-                console.print(f"    [dim]{'Suggestion':<16}[/dim] [dim]{provider_summary.suggestion}[/dim]")
-            console.print()
+                self.context.console.print(f"    [dim]{'Provider health':<16}[/dim] [{color}]{provider_summary.status}[/{color}]  [dim]{provider_summary.detail}[/dim]")
+                self.context.console.print(f"    [dim]{'Suggestion':<16}[/dim] [dim]{provider_summary.suggestion}[/dim]")
+            self.context.console.print()
             for group_name, items in service_groups:
-                console.print(f"  [bold #C08050]{group_name}[/bold #C08050]")
+                self.context.console.print(f"  [bold #C08050]{group_name}[/bold #C08050]")
                 for item in items:
-                    console.print(f"    [dim]> {item}[/dim]")
-                console.print()
+                    self.context.console.print(f"    [dim]> {item}[/dim]")
+                self.context.console.print()
 
-            console.print("  [bold]Quick Start Flow[/bold]")
+            self.context.console.print("  [bold]Quick Start Flow[/bold]")
             for cmd in quick_flow:
-                console.print(f"    [bold]{cmd}[/bold]")
-            console.print()
+                self.context.console.print(f"    [bold]{cmd}[/bold]")
+            self.context.console.print()
         else:
             print("\nCLI Services (runtime boundaries + workflow)\n")
             print("  Runtime Service Map")
@@ -160,10 +212,10 @@ class OpsCommandsMixin:
         """Create an executable plan and store it for /apply-plan."""
         raw = args.strip()
         if not raw:
-            if HAS_RICH:
-                console.print("[dim]Usage: /plan <steps>  — see examples below[/dim]")
-                console.print("[dim]  /plan fetch AAPL quote -> generate chart -> write report[/dim]")
-                console.print("[dim]  /plan 1. Analyze sentiment  2. Build model  3. Backtest[/dim]")
+            if self.context.has_rich:
+                self.context.console.print("[dim]Usage: /plan <steps>  — see examples below[/dim]")
+                self.context.console.print("[dim]  /plan fetch AAPL quote -> generate chart -> write report[/dim]")
+                self.context.console.print("[dim]  /plan 1. Analyze sentiment  2. Build model  3. Backtest[/dim]")
             else:
                 print("Usage: /plan <steps>")
                 print("  /plan fetch AAPL quote -> generate chart -> write report")
@@ -173,22 +225,22 @@ class OpsCommandsMixin:
         from plan_utils import parse_plan
         plan_steps = parse_plan(raw)
         if not plan_steps:
-            console.print("[dim]No valid steps found[/dim]" if HAS_RICH else "No valid steps found")
+            self.context.console.print("[dim]No valid steps found[/dim]" if self.context.has_rich else "No valid steps found")
             return
 
         self.terminal.pending_plan = [s.description for s in plan_steps]
 
-        if HAS_RICH:
-            console.print()
-            console.print(f"[bold]Execution Plan[/bold]  [dim]({len(plan_steps)} steps)[/dim]")
-            console.print()
+        if self.context.has_rich:
+            self.context.console.print()
+            self.context.console.print(f"[bold]Execution Plan[/bold]  [dim]({len(plan_steps)} steps)[/dim]")
+            self.context.console.print()
             for s in plan_steps:
                 dep_str = f"  [dim](after {', '.join(str(d) for d in s.deps)})[/dim]" if s.deps else ""
                 label = f" [dim][{s.name}][/dim]" if s.name else ""
-                console.print(f"  [dim]{s.index}.[/dim]{label} [bold]{s.description}[/bold]{dep_str}")
-            console.print()
-            console.print("[dim]Run /apply-plan to execute these steps.[/dim]")
-            console.print()
+                self.context.console.print(f"  [dim]{s.index}.[/dim]{label} [bold]{s.description}[/bold]{dep_str}")
+            self.context.console.print()
+            self.context.console.print("[dim]Run /apply-plan to execute these steps.[/dim]")
+            self.context.console.print()
         else:
             print(f"\nExecution Plan ({len(plan_steps)} steps)")
             for s in plan_steps:
@@ -202,7 +254,7 @@ class OpsCommandsMixin:
         rows = list(getattr(self.terminal, "last_plan_results", []) or [])
         if not rows:
             msg = "No plan report available. Run /apply-plan first."
-            console.print(f"[dim]{msg}[/dim]" if HAS_RICH else msg)
+            self.context.console.print(f"[dim]{msg}[/dim]" if self.context.has_rich else msg)
             return
 
         parts = args.split()
@@ -212,18 +264,18 @@ class OpsCommandsMixin:
         out_file = parts[1] if len(parts) > 1 else None
 
         if fmt == "show":
-            if HAS_RICH:
-                console.print()
-                console.print("[bold]Last Plan Report[/bold]")
+            if self.context.has_rich:
+                self.context.console.print()
+                self.context.console.print("[bold]Last Plan Report[/bold]")
                 for idx, row in enumerate(rows, 1):
                     status_color = "green" if row["status"] == "completed" else ("yellow" if row["status"] == "blocked" else "red")
-                    console.print(
+                    self.context.console.print(
                         f"  [dim]{idx}.[/dim] [{status_color}]{row['status']}[/{status_color}] "
                         f"[bold]{row['step']}[/bold] [dim]({row['duration']}s, exit={row.get('exit_code')})[/dim]"
                     )
                     if row.get("error"):
-                        console.print(f"     [red]{row['error']}[/red]")
-                console.print()
+                        self.context.console.print(f"     [red]{row['error']}[/red]")
+                self.context.console.print()
             else:
                 print("\nLast Plan Report")
                 for idx, row in enumerate(rows, 1):
@@ -234,7 +286,7 @@ class OpsCommandsMixin:
 
         if fmt not in {"md", "json"}:
             msg = "Usage: /plan-report [md|json] [file] [--open]"
-            console.print(f"[dim]{msg}[/dim]" if HAS_RICH else msg)
+            self.context.console.print(f"[dim]{msg}[/dim]" if self.context.has_rich else msg)
             return
 
         if not out_file:
@@ -259,14 +311,14 @@ class OpsCommandsMixin:
             if result.get("success"):
                 saved_path = result["data"]["path"]
                 msg = f"Plan report saved to {_display_path(saved_path)}"
-                console.print(f"[green]{msg}[/green]" if HAS_RICH else msg)
+                self.context.console.print(f"[green]{msg}[/green]" if self.context.has_rich else msg)
                 if open_after:
                     self._open_file(saved_path)
             else:
                 err = result.get("error", "Failed to save report")
-                console.print(f"[red]{err}[/red]" if HAS_RICH else err)
+                self.context.console.print(f"[red]{err}[/red]" if self.context.has_rich else err)
         except Exception as e:
-            console.print(f"[red]{e}[/red]" if HAS_RICH else str(e))
+            self.context.console.print(f"[red]{e}[/red]" if self.context.has_rich else str(e))
 
     def cmd_git(self, args: str):
         """Git helper shortcuts."""
@@ -297,13 +349,13 @@ class OpsCommandsMixin:
             status_probe = _tool_run_command({"command": "git status --porcelain", "policy": policy})
             if not status_probe.get("success"):
                 err = status_probe.get("error", "Failed to inspect git status")
-                console.print(f"[red]{err}[/red]" if HAS_RICH else err)
+                self.context.console.print(f"[red]{err}[/red]" if self.context.has_rich else err)
                 return
 
             status_out = status_probe.get("data", {}).get("stdout", "").strip()
             if not status_out:
                 msg = "No changes to commit."
-                console.print(f"[dim]{msg}[/dim]" if HAS_RICH else msg)
+                self.context.console.print(f"[dim]{msg}[/dim]" if self.context.has_rich else msg)
                 return
 
             changed_files = []
@@ -324,8 +376,8 @@ class OpsCommandsMixin:
                 sample = ", ".join(files) if files else "workspace"
                 total = len(status_out.splitlines())
                 sub_args = f"chore: update {total} file(s) ({sample})"
-                if HAS_RICH:
-                    console.print(f"[dim]Auto commit message:[/dim] {sub_args}")
+                if self.context.has_rich:
+                    self.context.console.print(f"[dim]Auto commit message:[/dim] {sub_args}")
                 else:
                     print(f"Auto commit message: {sub_args}")
 
@@ -339,18 +391,18 @@ class OpsCommandsMixin:
             cmd = mapping[sub]
         else:
             msg = "Usage: /git [status|diff|summary|patch|log [N]|branch|stash|remote|commit <msg>]"
-            console.print(f"[dim]{msg}[/dim]" if HAS_RICH else msg)
+            self.context.console.print(f"[dim]{msg}[/dim]" if self.context.has_rich else msg)
             return
         result = _tool_run_command({"command": cmd, "policy": policy})
         if not result.get("success"):
-            console.print(f"[red]{result.get('error', 'Command failed')}[/red]" if HAS_RICH
+            self.context.console.print(f"[red]{result.get('error', 'Command failed')}[/red]" if self.context.has_rich
                           else result.get("error", "Command failed"))
             return
         data = result.get("data", {})
         out = (data.get("stdout", "") + ("\n" + data.get("stderr", "") if data.get("stderr") else "")).strip()
         if out:
-            if HAS_RICH:
-                console.print(Syntax(out, "text", theme=_SYNTAX_THEME))
+            if self.context.has_rich:
+                self.context.console.print(_get_Syntax()(out, "text", theme=_get__SYNTAX_THEME()))
             else:
                 print(out)
 
@@ -371,7 +423,7 @@ class OpsCommandsMixin:
                 "  commits [N]    Show last N commits (default 10)",
             ]
             for ln in lines:
-                console.print(f"  [dim]{ln}[/dim]" if HAS_RICH else ln)
+                self.context.console.print(f"  [dim]{ln}[/dim]" if self.context.has_rich else ln)
             return
 
         parts = raw.split(maxsplit=1)
@@ -385,19 +437,19 @@ class OpsCommandsMixin:
             r = _tool_github(p)
             if not r.get("success"):
                 msg = r.get("error", "GitHub command failed")
-                console.print(f"[red]{msg}[/red]" if HAS_RICH else msg)
+                self.context.console.print(f"[red]{msg}[/red]" if self.context.has_rich else msg)
                 return
             data = r.get("data", {})
             out = data.get("stdout", "") if isinstance(data, dict) else str(data)
             if out.strip():
-                if HAS_RICH:
+                if self.context.has_rich:
                     try:
                         import json as _jj
                         parsed = _jj.loads(out)
                         from rich.pretty import pprint as _pp
                         _pp(parsed, expand_all=False)
                     except Exception:
-                        console.print(Syntax(out, "text", theme=_SYNTAX_THEME))
+                        self.context.console.print(_get_Syntax()(out, "text", theme=_get__SYNTAX_THEME()))
                 else:
                     print(out)
 
@@ -418,19 +470,19 @@ class OpsCommandsMixin:
             _run("list_commits", {"limit": n})
         elif sub == "search":
             if not subarg:
-                console.print("[dim]Usage: /gh search <query>[/dim]" if HAS_RICH else "Usage: /gh search <query>")
+                self.context.console.print("[dim]Usage: /gh search <query>[/dim]" if self.context.has_rich else "Usage: /gh search <query>")
                 return
             _run("search", {"q": subarg, "kind": "code"})
         elif sub in ("create-pr", "createpr", "create_pr"):
             try:
-                title = (console.input("  PR title: ") if HAS_RICH else input("  PR title: ")).strip()
-                body = (console.input("  PR body (optional): ") if HAS_RICH else input("  PR body (optional): ")).strip()
-                base = (console.input("  Base branch [main]: ") if HAS_RICH else input("  Base branch [main]: ")).strip() or "main"
+                title = (self.context.console.input("  PR title: ") if self.context.has_rich else input("  PR title: ")).strip()
+                body = (self.context.console.input("  PR body (optional): ") if self.context.has_rich else input("  PR body (optional): ")).strip()
+                base = (self.context.console.input("  Base branch [main]: ") if self.context.has_rich else input("  Base branch [main]: ")).strip() or "main"
                 _run("create_pr", {"title": title, "body": body, "base": base})
             except (EOFError, KeyboardInterrupt):
-                console.print("[dim]Cancelled[/dim]" if HAS_RICH else "Cancelled")
+                self.context.console.print("[dim]Cancelled[/dim]" if self.context.has_rich else "Cancelled")
         else:
-            console.print(f"[dim]Unknown /gh sub-command: {sub}. Try /gh help[/dim]" if HAS_RICH
+            self.context.console.print(f"[dim]Unknown /gh sub-command: {sub}. Try /gh help[/dim]" if self.context.has_rich
                           else f"Unknown /gh sub-command: {sub}. Try /gh help")
 
     def cmd_lsp(self, args: str):
@@ -442,7 +494,7 @@ class OpsCommandsMixin:
         try:
             from runtime.lsp import available_servers, server_for, get_diagnostics
         except ImportError as _e:
-            console.print(f"[red]runtime.lsp not available: {_e}[/red]") if HAS_RICH else print(f"Error: {_e}")
+            self.context.console.print(f"[red]runtime.lsp not available: {_e}[/red]") if self.context.has_rich else print(f"Error: {_e}")
             return
 
         target = args.strip().strip('"\'')
@@ -450,22 +502,22 @@ class OpsCommandsMixin:
         # No arg or "status" → show installed servers
         if not target or target.lower() == "status":
             servers = available_servers()
-            if HAS_RICH:
-                console.print()
-                console.print("  [bold]Language Servers[/bold]  [dim]on-demand diagnostics[/dim]")
-                console.print()
+            if self.context.has_rich:
+                self.context.console.print()
+                self.context.console.print("  [bold]Language Servers[/bold]  [dim]on-demand diagnostics[/dim]")
+                self.context.console.print()
                 _hints = {
                     "pylsp": "pip install 'python-lsp-server[all]'",
                     "typescript-language-server": "npm i -g typescript-language-server typescript",
                 }
                 for exe, installed in servers.items():
                     if installed:
-                        console.print(f"  [green]●[/green] [bold]{exe}[/bold]  [dim]installed[/dim]")
+                        self.context.console.print(f"  [green]●[/green] [bold]{exe}[/bold]  [dim]installed[/dim]")
                     else:
-                        console.print(f"  [dim]○ {exe}  not installed — {_hints.get(exe, '')}[/dim]")
-                console.print()
-                console.print("  [dim]/lsp <file>  — run diagnostics on a file[/dim]")
-                console.print()
+                        self.context.console.print(f"  [dim]○ {exe}  not installed — {_hints.get(exe, '')}[/dim]")
+                self.context.console.print()
+                self.context.console.print("  [dim]/lsp <file>  — run diagnostics on a file[/dim]")
+                self.context.console.print()
             else:
                 print("\n  Language Servers:")
                 for exe, installed in servers.items():
@@ -476,34 +528,34 @@ class OpsCommandsMixin:
         import pathlib
         p = pathlib.Path(target).expanduser()
         if not p.exists():
-            console.print(f"[red]File not found: {p}[/red]" if HAS_RICH else f"File not found: {p}")
+            self.context.console.print(f"[red]File not found: {p}[/red]" if self.context.has_rich else f"File not found: {p}")
             return
         if not server_for(p):
             msg = f"No language server installed for '{p.suffix}' files"
-            console.print(f"[yellow]{msg}[/yellow]" if HAS_RICH else msg)
+            self.context.console.print(f"[yellow]{msg}[/yellow]" if self.context.has_rich else msg)
             return
 
-        if HAS_RICH:
-            with console.status(f"[dim]Analyzing {p.name}…[/dim]", spinner="dots"):
+        if self.context.has_rich:
+            with self.context.console.status(f"[dim]Analyzing {p.name}…[/dim]", spinner="dots"):
                 diags = get_diagnostics(p)
         else:
             print(f"  Analyzing {p.name}…")
             diags = get_diagnostics(p)
 
         if not diags:
-            console.print(f"[green]✓ No diagnostics — {p.name} is clean[/green]" if HAS_RICH
+            self.context.console.print(f"[green]✓ No diagnostics — {p.name} is clean[/green]" if self.context.has_rich
                           else f"No diagnostics for {p.name}")
             return
 
         errors = sum(1 for d in diags if d["severity"] == "error")
         warnings = sum(1 for d in diags if d["severity"] == "warning")
-        if HAS_RICH:
+        if self.context.has_rich:
             from rich.table import Table
             from rich import box as _rbox
-            console.print()
-            console.print(f"  [bold]{p.name}[/bold]  "
+            self.context.console.print()
+            self.context.console.print(f"  [bold]{p.name}[/bold]  "
                           f"[red]{errors} error(s)[/red] · [yellow]{warnings} warning(s)[/yellow]")
-            console.print()
+            self.context.console.print()
             t = Table(box=_rbox.SIMPLE, padding=(0, 1), show_header=True)
             t.add_column("Loc", style="dim", justify="right", min_width=7)
             t.add_column("Severity", min_width=8)
@@ -517,8 +569,8 @@ class OpsCommandsMixin:
                     f"[{color}]{d['severity']}[/{color}]",
                     f"{d['message']}{src}",
                 )
-            console.print(t)
-            console.print()
+            self.context.console.print(t)
+            self.context.console.print()
         else:
             print(f"\n  {p.name}: {errors} errors, {warnings} warnings")
             for d in diags[:40]:
@@ -551,12 +603,12 @@ class OpsCommandsMixin:
 
         if shell == "bash":
             script = _build_bash_completion(cmds)
-            console.print(script if not HAS_RICH else f"[dim]{script}[/dim]")
+            self.context.console.print(script if not self.context.has_rich else f"[dim]{script}[/dim]")
             return
 
         if shell == "zsh":
             script = _build_zsh_completion(cmds)
-            console.print(script if not HAS_RICH else f"[dim]{script}[/dim]")
+            self.context.console.print(script if not self.context.has_rich else f"[dim]{script}[/dim]")
             return
 
         if shell == "install":
@@ -587,26 +639,26 @@ class OpsCommandsMixin:
                     if str(target) not in existing:
                         rc.write_text(existing.rstrip("\n") + f"\n{source_line}\n")
                 msg = f"Bash completion installed → {target}\nRestart your shell or run: source ~/.bashrc"
-            if HAS_RICH:
-                console.print(f"[green]✓[/green]  {msg}")
+            if self.context.has_rich:
+                self.context.console.print(f"[green]✓[/green]  {msg}")
             else:
                 print(msg)
             return
 
         # Default: instructions
         detected = _detect_user_shell()
-        if HAS_RICH:
-            console.print()
-            console.print("  [bold]Shell Completions[/bold]  [dim]aria-code slash commands[/dim]")
-            console.print()
-            console.print(f"  Detected shell: [bold]{detected}[/bold]")
-            console.print()
-            console.print("  [dim]/completions bash     — print bash completion script[/dim]")
-            console.print("  [dim]/completions zsh      — print zsh completion script[/dim]")
-            console.print("  [dim]/completions install  — auto-install for your shell[/dim]")
-            console.print()
-            console.print(f"  [dim]{len(cmds)} slash commands registered[/dim]")
-            console.print()
+        if self.context.has_rich:
+            self.context.console.print()
+            self.context.console.print("  [bold]Shell Completions[/bold]  [dim]aria-code slash commands[/dim]")
+            self.context.console.print()
+            self.context.console.print(f"  Detected shell: [bold]{detected}[/bold]")
+            self.context.console.print()
+            self.context.console.print("  [dim]/completions bash     — print bash completion script[/dim]")
+            self.context.console.print("  [dim]/completions zsh      — print zsh completion script[/dim]")
+            self.context.console.print("  [dim]/completions install  — auto-install for your shell[/dim]")
+            self.context.console.print()
+            self.context.console.print(f"  [dim]{len(cmds)} slash commands registered[/dim]")
+            self.context.console.print()
         else:
             print(f"\n  Shell: {detected}  |  {len(cmds)} commands registered")
             print("  /completions bash|zsh|install")
