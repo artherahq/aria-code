@@ -49,7 +49,7 @@ def redact(text: str) -> str:
 
 def _crash_dir() -> Path:
     try:
-        from packages.aria_core.paths import aria_home
+        from aria_code.packages.aria_core.paths import aria_home
         root = aria_home()
     except Exception:
         root = Path.home() / ".aria-code"

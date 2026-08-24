@@ -216,7 +216,7 @@ def test_build_skill_prompt_block_uses_configured_catalog(tmp_path, monkeypatch)
 # trading-strategy skill) above ui-asset-sourcing.
 
 def test_cjk_stop_words_are_dropped_from_terms():
-    from packages.aria_skills.loader import _terms
+    from aria_code.packages.aria_skills.loader import _terms
 
     terms = _terms("帮我设计一个牙科诊所的预约网站")
     assert "帮我" not in terms
@@ -224,7 +224,7 @@ def test_cjk_stop_words_are_dropped_from_terms():
 
 
 def test_cjk_stop_word_plus_one_char_windows_are_dropped():
-    from packages.aria_skills.loader import _terms
+    from aria_code.packages.aria_skills.loader import _terms
 
     terms = _terms("帮我设计一个网站")
     # 帮我 + one char carries no more signal than 帮我 alone
@@ -233,7 +233,7 @@ def test_cjk_stop_word_plus_one_char_windows_are_dropped():
 
 
 def test_cjk_content_words_survive_filtering():
-    from packages.aria_skills.loader import _terms
+    from aria_code.packages.aria_skills.loader import _terms
 
     terms = _terms("帮我设计一个牙科诊所的预约网站，要配图和图标")
     for keep in ("牙科", "网站", "配图", "图标"):
@@ -241,7 +241,7 @@ def test_cjk_content_words_survive_filtering():
 
 
 def test_latin_terms_unaffected_by_cjk_filtering():
-    from packages.aria_skills.loader import _terms
+    from aria_code.packages.aria_skills.loader import _terms
 
     terms = _terms("design a landing page for a dental clinic")
     assert "dental" in terms and "clinic" in terms
@@ -250,7 +250,7 @@ def test_latin_terms_unaffected_by_cjk_filtering():
 
 def test_chinese_design_request_does_not_rank_quant_skill_above_design_skills():
     """Regression: the whole point of the CJK stop list."""
-    from packages.aria_skills.loader import _match_score, discover_external_skills
+    from aria_code.packages.aria_skills.loader import _match_score, discover_external_skills
 
     skills = {s.name: s for s in discover_external_skills()}
     if not {"ui-asset-sourcing", "strategy-generation"} <= set(skills):
@@ -265,7 +265,7 @@ def test_chinese_design_request_does_not_rank_quant_skill_above_design_skills():
 
 def test_chinese_quant_request_still_routes_to_quant_skills():
     """The stop list must not over-filter and break the catalog's core domain."""
-    from packages.aria_skills.loader import _match_score, discover_external_skills
+    from aria_code.packages.aria_skills.loader import _match_score, discover_external_skills
 
     skills = {s.name: s for s in discover_external_skills()}
     if not {"strategy-generation", "ui-asset-sourcing"} <= set(skills):

@@ -38,7 +38,7 @@ requires_charts = pytest.mark.skipif(
 def test_no_skill_backed_exposures_reach_tools_list():
     # skill: targets aren't clean callables in this server — must never
     # silently appear as a callable tool.
-    from packages.aria_mcp.bridge import default_exposures
+    from aria_code.packages.aria_mcp.bridge import default_exposures
 
     tool_names = {t["name"] for t in TOOLS}
     for exposure in default_exposures():
@@ -51,7 +51,7 @@ def test_execute_order_preview_is_not_bound_at_module_level():
     # _call_broker_confirm_order's gated path), but only as a function-local
     # import inside that one handler — never a module-level attribute a
     # careless import elsewhere in this file could pick up unguarded.
-    import packages.aria_mcp.server as server_mod
+    import aria_code.packages.aria_mcp.server as server_mod
 
     assert not hasattr(server_mod, "execute_order_preview")
     assert "_call_broker_confirm_order" in dir(server_mod)
@@ -82,7 +82,7 @@ async def test_confirm_order_refuses_missing_preview_id():
 
 @pytest.mark.asyncio
 async def test_confirm_order_refuses_when_chat_confirm_not_enabled(monkeypatch):
-    import packages.aria_mcp.server as server_mod
+    import aria_code.packages.aria_mcp.server as server_mod
 
     class _FakeBroker:
         broker_id = "some_broker"
@@ -99,7 +99,7 @@ async def test_confirm_order_refuses_when_chat_confirm_not_enabled(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_confirm_order_executes_only_when_both_gates_pass(monkeypatch):
-    import packages.aria_mcp.server as server_mod
+    import aria_code.packages.aria_mcp.server as server_mod
 
     class _FakeBroker:
         broker_id = "some_broker"
@@ -342,8 +342,8 @@ async def test_comparison_chart_no_usable_data_reports_error(monkeypatch):
 @pytest.mark.asyncio
 @requires_charts
 async def test_allocation_chart_writes_artifact_on_success(monkeypatch, tmp_path):
-    import packages.aria_mcp.server as server_mod
-    from brokers.base import Position
+    import aria_code.packages.aria_mcp.server as server_mod
+    from aria_code.brokers.base import Position
 
     class _FakeBroker:
         def positions(self):
@@ -361,7 +361,7 @@ async def test_allocation_chart_writes_artifact_on_success(monkeypatch, tmp_path
 
 @pytest.mark.asyncio
 async def test_allocation_chart_no_positions_reports_error(monkeypatch):
-    import packages.aria_mcp.server as server_mod
+    import aria_code.packages.aria_mcp.server as server_mod
 
     class _FakeBroker:
         def positions(self):
@@ -387,7 +387,7 @@ def _fake_skill(name, qualified, description="", instructions="body", integrity=
 
 @pytest.mark.asyncio
 async def test_skill_list_returns_all_when_no_query(monkeypatch):
-    from packages.aria_skills import loader
+    from aria_code.packages.aria_skills import loader
 
     skills = [_fake_skill("a", "cat:a"), _fake_skill("b", "cat:b")]
     monkeypatch.setattr(loader, "discover_external_skills", lambda *a, **kw: skills)
@@ -400,7 +400,7 @@ async def test_skill_list_returns_all_when_no_query(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_skill_list_ranks_by_query_when_matches_exist(monkeypatch):
-    from packages.aria_skills import loader
+    from aria_code.packages.aria_skills import loader
 
     skills = [_fake_skill("a", "cat:a"), _fake_skill("b", "cat:b")]
     monkeypatch.setattr(loader, "discover_external_skills", lambda *a, **kw: skills)
@@ -414,7 +414,7 @@ async def test_skill_list_ranks_by_query_when_matches_exist(monkeypatch):
 @pytest.mark.asyncio
 async def test_skill_list_falls_back_to_full_list_when_query_matches_nothing(monkeypatch):
     """An off-topic query must not read as "no skills are installed"."""
-    from packages.aria_skills import loader
+    from aria_code.packages.aria_skills import loader
 
     skills = [_fake_skill("a", "cat:a"), _fake_skill("b", "cat:b")]
     monkeypatch.setattr(loader, "discover_external_skills", lambda *a, **kw: skills)
@@ -427,7 +427,7 @@ async def test_skill_list_falls_back_to_full_list_when_query_matches_nothing(mon
 
 @pytest.mark.asyncio
 async def test_skill_list_omits_instructions_to_keep_listing_small(monkeypatch):
-    from packages.aria_skills import loader
+    from aria_code.packages.aria_skills import loader
 
     monkeypatch.setattr(loader, "discover_external_skills",
                         lambda *a, **kw: [_fake_skill("a", "cat:a", instructions="x" * 5000)])
@@ -437,7 +437,7 @@ async def test_skill_list_omits_instructions_to_keep_listing_small(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_skill_list_surfaces_integrity(monkeypatch):
-    from packages.aria_skills import loader
+    from aria_code.packages.aria_skills import loader
 
     monkeypatch.setattr(loader, "discover_external_skills",
                         lambda *a, **kw: [_fake_skill("a", "cat:a", integrity="unlocked")])
@@ -447,7 +447,7 @@ async def test_skill_list_surfaces_integrity(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_skill_get_returns_full_instructions_by_bare_name(monkeypatch):
-    from packages.aria_skills import loader
+    from aria_code.packages.aria_skills import loader
 
     monkeypatch.setattr(loader, "discover_external_skills",
                         lambda *a, **kw: [_fake_skill("ui-design-system", "cat:ui-design-system",
@@ -459,7 +459,7 @@ async def test_skill_get_returns_full_instructions_by_bare_name(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_skill_get_accepts_qualified_name(monkeypatch):
-    from packages.aria_skills import loader
+    from aria_code.packages.aria_skills import loader
 
     monkeypatch.setattr(loader, "discover_external_skills",
                         lambda *a, **kw: [_fake_skill("ui-design-system", "cat:ui-design-system")])
@@ -476,7 +476,7 @@ async def test_skill_get_requires_name():
 
 @pytest.mark.asyncio
 async def test_skill_get_unknown_name_lists_available(monkeypatch):
-    from packages.aria_skills import loader
+    from aria_code.packages.aria_skills import loader
 
     monkeypatch.setattr(loader, "discover_external_skills",
                         lambda *a, **kw: [_fake_skill("a", "cat:a")])
@@ -489,7 +489,7 @@ async def test_skill_get_unknown_name_lists_available(monkeypatch):
 async def test_skill_get_lists_bundled_reference_docs(tmp_path, monkeypatch):
     """Several skills' instructions say "read references/X.md first" — over
     MCP the caller can't touch this filesystem, so the names must be listed."""
-    from packages.aria_skills import loader
+    from aria_code.packages.aria_skills import loader
 
     skill_dir = tmp_path / "my-skill"
     (skill_dir / "references").mkdir(parents=True)
@@ -506,7 +506,7 @@ async def test_skill_get_lists_bundled_reference_docs(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_skill_get_fetches_reference_content(tmp_path, monkeypatch):
-    from packages.aria_skills import loader
+    from aria_code.packages.aria_skills import loader
 
     skill_dir = tmp_path / "my-skill"
     (skill_dir / "references").mkdir(parents=True)
@@ -525,7 +525,7 @@ async def test_skill_get_fetches_reference_content(tmp_path, monkeypatch):
 @pytest.mark.parametrize("bad", ["../../../etc/passwd", "../SKILL.md", "/etc/passwd", "../../secret.md"])
 async def test_skill_get_reference_blocks_path_traversal(tmp_path, monkeypatch, bad):
     """`reference` is caller-controlled and lands in a filesystem path."""
-    from packages.aria_skills import loader
+    from aria_code.packages.aria_skills import loader
 
     skill_dir = tmp_path / "my-skill"
     (skill_dir / "references").mkdir(parents=True)
@@ -544,7 +544,7 @@ async def test_skill_get_reference_blocks_path_traversal(tmp_path, monkeypatch, 
 
 @pytest.mark.asyncio
 async def test_skill_get_reference_unknown_name_lists_available(tmp_path, monkeypatch):
-    from packages.aria_skills import loader
+    from aria_code.packages.aria_skills import loader
 
     skill_dir = tmp_path / "my-skill"
     (skill_dir / "references").mkdir(parents=True)
@@ -561,7 +561,7 @@ async def test_skill_get_reference_unknown_name_lists_available(tmp_path, monkey
 
 @pytest.mark.asyncio
 async def test_skill_get_no_references_dir_returns_empty_list(tmp_path, monkeypatch):
-    from packages.aria_skills import loader
+    from aria_code.packages.aria_skills import loader
 
     skill_dir = tmp_path / "my-skill"
     skill_dir.mkdir(parents=True)

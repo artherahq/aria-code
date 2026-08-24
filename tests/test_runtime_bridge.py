@@ -2,7 +2,7 @@ import asyncio
 import inspect
 import unittest
 
-import apps.cli.providers.runtime_bridge as rb
+import aria_code.apps.cli.providers.runtime_bridge as rb
 from aria_code.apps.cli.providers.runtime_bridge import build_tool_executor, make_provider_fn
 
 

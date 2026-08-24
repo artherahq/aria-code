@@ -301,7 +301,7 @@ def quick_predict(
     一行调用接口。
 
     示例:
-        from packages.quant_engine.sports.predictor import quick_predict
+        from aria_code.packages.quant_engine.sports.predictor import quick_predict
         r = quick_predict("germany", "ivory coast", tournament_context="must_win")
         print(f"德国赢: {r['home_win']*100:.1f}%")
     """

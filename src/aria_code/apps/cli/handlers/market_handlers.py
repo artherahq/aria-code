@@ -1,7 +1,7 @@
 """Market data handlers extracted from aria_cli.py.
 
 Handles market data prefetching, snapshot rows, and full snapshot analysis.
-Imports market detection helpers from apps.cli.utils.market_detect.
+Imports market detection helpers from aria_code.apps.cli.utils.market_detect.
 _HAS_MDC and _get_mdc are resolved via lazy import to avoid circular deps.
 """
 from __future__ import annotations
@@ -804,7 +804,7 @@ def _fetch_snapshot_row_for_symbol(symbol: str, mdc) -> dict:
     quality: dict = {}
     stale = False
     try:
-        from packages.aria_services.data import DataService
+        from aria_code.packages.aria_services.data import DataService
         service = DataService(market_client=mdc, router=False)
         quote_result = service.quote(symbol)
         fund_result = service.fundamentals(symbol)
@@ -1504,7 +1504,7 @@ def _try_handle_market_snapshot_analysis(message: str, history: list = None) -> 
         try:
             mdc = _get_mdc_lazy()
             try:
-                from packages.aria_services.data import DataService as _SnapshotDataService
+                from aria_code.packages.aria_services.data import DataService as _SnapshotDataService
                 with _ctxlib_snapshot.redirect_stdout(_io_snapshot.StringIO()), _ctxlib_snapshot.redirect_stderr(_io_snapshot.StringIO()):
                     _quote_result = _SnapshotDataService(market_client=mdc, router=False).quote(symbol)
                 quote = _quote_result.data or {}

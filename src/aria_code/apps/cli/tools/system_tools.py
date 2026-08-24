@@ -157,7 +157,7 @@ def tool_run_command(
         sandbox = params.get("sandbox", False)
         if sandbox:
             try:
-                from apps.cli.sandbox import run_in_docker_sandbox
+                from aria_code.apps.cli.sandbox import run_in_docker_sandbox
                 result = run_in_docker_sandbox(
                     command=command,
                     cwd=cwd,
@@ -606,7 +606,7 @@ def tool_github(
 
         # ── Aria Code[bot] identity via GitHub App ─────────────────────────────
         try:
-            from apps.cli.github_app_auth import (
+            from aria_code.apps.cli.github_app_auth import (
                 get_installation_token, get_aria_git_url,
                 aria_bot_env, ARIA_BOT_NAME, ARIA_BOT_EMAIL,
             )
@@ -636,7 +636,7 @@ def tool_github(
         # Always credit the Aria GitHub account so it appears in Contributors
         if auth_available:
             try:
-                from apps.cli.github_app_auth import ARIA_GITHUB_LOGIN, ARIA_GITHUB_EMAIL
+                from aria_code.apps.cli.github_app_auth import ARIA_GITHUB_LOGIN, ARIA_GITHUB_EMAIL
                 body += f"\n\nCo-Authored-By: {ARIA_GITHUB_LOGIN} <{ARIA_GITHUB_EMAIL}>"
             except ImportError:
                 pass

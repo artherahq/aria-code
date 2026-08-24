@@ -150,7 +150,7 @@ class SessionUxCommandsMixin:
         the defaults decided for the schema.
         """
         try:
-            from packages.aria_services.context_checkpoints import (
+            from aria_code.packages.aria_services.context_checkpoints import (
                 ContextCheckpointStore,
                 default_checkpoint_root,
             )
@@ -188,7 +188,7 @@ class SessionUxCommandsMixin:
             loop.run_until_complete(self._smart_compact_async(silent=False))
         except RuntimeError:
             if len(self.terminal.conversation) > 6:
-                from apps.cli.message_processing import compact_messages
+                from aria_code.apps.cli.message_processing import compact_messages
                 compacted = compact_messages(
                     self.terminal.conversation,
                     model_key=self.terminal.config.get("model", "qwen2.5:7b"),
@@ -216,7 +216,7 @@ class SessionUxCommandsMixin:
             max_ctx = int(get_model_cfg(self.terminal.config.get("model", "qwen2.5:7b")).get("num_ctx", 16384) or 16384)
         except Exception:
             max_ctx = 16384
-        from packages.aria_services.context import build_context_service
+        from aria_code.packages.aria_services.context import build_context_service
         context_service = build_context_service(max_tokens=max_ctx)
         summary_prompt = context_service.build_summary_prompt(conv)
 

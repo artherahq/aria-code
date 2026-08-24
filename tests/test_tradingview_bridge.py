@@ -13,8 +13,8 @@ from aria_code.brokers.paper_broker import PaperBroker
 
 
 def _patch_trade_paths(monkeypatch, tmp_path):
-    import brokers.paper_broker as paper_mod
-    import brokers.trading as trading_mod
+    import aria_code.brokers.paper_broker as paper_mod
+    import aria_code.brokers.trading as trading_mod
 
     monkeypatch.setattr(paper_mod, "PAPER_LEDGER_PATH", tmp_path / "paper_ledger.json")
     monkeypatch.setattr(trading_mod, "TRADE_PREVIEWS_PATH", tmp_path / "trade_previews.json")
@@ -172,7 +172,7 @@ def test_enqueue_rejects_without_secret(monkeypatch, tmp_path):
 def test_verify_webhook_hmac_roundtrip():
     import hashlib
     import hmac as _hmac
-    from apps.cli.tradingview_bridge import verify_webhook_hmac
+    from aria_code.apps.cli.tradingview_bridge import verify_webhook_hmac
     body = '{"symbol":"AAPL","action":"BUY"}'
     sig = _hmac.new(b"k", body.encode(), hashlib.sha256).hexdigest()
     assert verify_webhook_hmac(body, sig, secret="k") is True

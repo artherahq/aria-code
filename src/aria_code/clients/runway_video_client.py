@@ -38,7 +38,7 @@ APPROX_COST_PER_SECOND_USD = 0.25
 
 
 def _providers_path() -> Path:
-    from apps.cli.config_paths import resolve_paths
+    from aria_code.apps.cli.config_paths import resolve_paths
     return resolve_paths().providers_file
 
 

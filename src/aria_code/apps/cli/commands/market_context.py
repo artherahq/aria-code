@@ -83,9 +83,9 @@ async def build_analyze_context(
 
     # ── Primary: cloud DataService bundle ────────────────────────────────────
     try:
-        from packages.aria_services import data as service_data
+        from aria_code.packages.aria_services import data as service_data
         try:
-            from datasources.router import get_router as get_data_router
+            from aria_code.datasources.router import get_router as get_data_router
             router = get_data_router()
         except Exception:
             router = None
@@ -126,7 +126,7 @@ async def build_analyze_context(
     # ── Fallback 2: DataRouter (yfinance direct) ─────────────────────────────
     if not quote or not quote.get("price"):
         try:
-            from datasources.router import DataRouter
+            from aria_code.datasources.router import DataRouter
             router_direct = DataRouter()
             raw_q = await loop.run_in_executor(None, router_direct.quote, symbol)
             if raw_q:
@@ -260,7 +260,7 @@ async def _append_support_resistance(
     levels: dict[str, list[float]] = {"support": [], "resistance": []}
 
     try:
-        from datasources.router import DataRouter
+        from aria_code.datasources.router import DataRouter
         hist_result = await loop.run_in_executor(None, DataRouter().history, symbol, 90)
         if hist_result and hist_result.data is not None and not hist_result.data.empty:
             df = hist_result.data
@@ -327,7 +327,7 @@ async def _append_fundamentals(
 
     # Try DataRouter (yfinance / alpha_vantage / edgar chain)
     try:
-        from datasources.router import DataRouter
+        from aria_code.datasources.router import DataRouter
         fund = await loop.run_in_executor(None, DataRouter().fundamentals, symbol)
         if fund:
             def _row(label_cn: str, label_en: str, val: Optional[float], fmt: str = ".2f") -> None:

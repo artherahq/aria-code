@@ -272,7 +272,7 @@ def strategy_order_to_intent(order: StrategyOrder, *, price: float | None = None
                              source: str = "strategy"):
     """Convert a StrategyOrder into a broker OrderIntent so the SAME strategy can
     drive live trading through the preview -> risk -> (auto)execute pipeline."""
-    from brokers.trading import OrderIntent
+    from aria_code.brokers.trading import OrderIntent
     if order.action == "target":
         return OrderIntent(symbol=order.symbol, side="buy",
                            target_weight=order.target_weight, source=source)

@@ -2,8 +2,8 @@
 
 Import this instead of repeating the try/except blocks everywhere:
 
-    from ui.console import console, HAS_RICH, HAS_PT, _SYNTAX_THEME
-    from ui.console import _EscWatcher, _esc_watcher
+    from aria_code.ui.console import console, HAS_RICH, HAS_PT, _SYNTAX_THEME
+    from aria_code.ui.console import _EscWatcher, _esc_watcher
 """
 
 from __future__ import annotations
@@ -136,7 +136,7 @@ if HAS_RICH:
 
     def make_markdown(markup: str) -> Markdown:
         """Create Markdown with Aria's low-saturation terminal theme."""
-        from ui.render.output import adapt_markdown_for_width
+        from aria_code.ui.render.output import adapt_markdown_for_width
 
         markup = adapt_markdown_for_width(markup, getattr(console, "width", 80))
         return Markdown(

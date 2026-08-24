@@ -3,7 +3,7 @@ agents/sports/football_agent.py — Football Analysis Agent
 ===========================================================
 LLM-powered football match analysis using Elo + Dixon-Coles prediction + form data.
 
-Prediction comes from packages.quant_engine.sports.predictor (Elo ratings,
+Prediction comes from aria_code.packages.quant_engine.sports.predictor (Elo ratings,
 Dixon-Coles with negative-binomial tail for lopsided matches, dynamic
 Elo/DC mixing weights, recency-form and head-to-head adjustments, and
 self-calibration), not football_data_client.predict_match — that function
@@ -80,7 +80,7 @@ class FootballAgent:
         neutral_venue: bool = False,
     ) -> MatchPrediction:
         from football_data_client import get_team_stats
-        from packages.quant_engine.sports.predictor import quick_predict
+        from aria_code.packages.quant_engine.sports.predictor import quick_predict
 
         # neutral_venue defaults False: club leagues (pl/bl1/sa/pd/fl1, the
         # default `league="pl"`) really do have a home team playing at home.

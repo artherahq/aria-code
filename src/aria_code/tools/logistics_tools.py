@@ -91,7 +91,7 @@ def tool_analyze_logistics_data(params: Dict[str, Any]) -> Dict[str, Any]:
         ]
 
     try:
-        from packages.quant_engine.services.logistics_analytics_service import LogisticsAnalyticsService
+        from aria_code.packages.quant_engine.services.logistics_analytics_service import LogisticsAnalyticsService
         service = LogisticsAnalyticsService()
         audit = service.analyze_shipping_data(waybills)
         res = audit.to_dict()

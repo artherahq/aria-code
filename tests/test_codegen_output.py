@@ -42,7 +42,7 @@ async def test_cmd_code_saves_to_user_generated_dir_by_default(monkeypatch, tmp_
 
 def test_cmd_code_relative_save_paths_go_to_user_workspace(monkeypatch, tmp_path):
     from artifacts import user_generated_dir
-    from apps.cli.codegen_paths import resolve_user_code_path
+    from aria_code.apps.cli.codegen_paths import resolve_user_code_path
 
     monkeypatch.setenv("ARIA_USER_OUTPUT_ROOT", str(tmp_path))
     path = resolve_user_code_path("my strategy", "strategy.py", user_generated_dir=user_generated_dir())

@@ -147,7 +147,7 @@ def test_market_snapshot_handles_multi_symbol_company_names(monkeypatch):
 
 def test_market_snapshot_resolves_sidike_without_inheriting_previous_symbol(monkeypatch):
     import aria_cli
-    from apps.cli.utils.market_detect import _extract_market_symbol
+    from aria_code.apps.cli.utils.market_detect import _extract_market_symbol
 
     monkeypatch.setattr(aria_cli, "_HAS_MDC", True)
     monkeypatch.setattr(aria_cli, "_get_mdc", lambda: _SnapshotMDC())
@@ -293,7 +293,7 @@ def test_market_tool_summary_preserves_data_provenance_and_rsi_direction():
 
 
 def test_run_command_activity_summary_uses_exit_code_field():
-    from ui.render.output import _one_line_tool_summary
+    from aria_code.ui.render.output import _one_line_tool_summary
 
     icon, detail = _one_line_tool_summary(
         "run_command",
@@ -307,7 +307,7 @@ def test_run_command_activity_summary_uses_exit_code_field():
 
 
 def test_activity_summary_hides_local_file_paths():
-    from ui.render.output import _one_line_tool_summary
+    from aria_code.ui.render.output import _one_line_tool_summary
 
     _icon, detail = _one_line_tool_summary(
         "write_file",
@@ -323,7 +323,7 @@ def test_activity_summary_hides_local_file_paths():
 
 
 def test_activity_summary_hides_web_fetch_url():
-    from ui.render.output import _one_line_tool_summary
+    from aria_code.ui.render.output import _one_line_tool_summary
 
     _icon, detail = _one_line_tool_summary(
         "web_fetch",
@@ -339,7 +339,7 @@ def test_activity_summary_hides_web_fetch_url():
 
 
 def test_activity_summary_hides_full_output_path():
-    from ui.render.output import _one_line_tool_summary
+    from aria_code.ui.render.output import _one_line_tool_summary
 
     _icon, detail = _one_line_tool_summary(
         "run_command",
@@ -354,14 +354,14 @@ def test_activity_summary_hides_full_output_path():
 
 
 def test_tool_display_label_marks_mcp_without_target_details():
-    from ui.render.output import tool_display_label
+    from aria_code.ui.render.output import tool_display_label
 
     assert tool_display_label("mcp__github__read_file") == "github · read file · MCP"
     assert tool_display_label("web_search") == "web_search · web search"
 
 
 def test_display_path_returns_filename_only():
-    from ui.render.output import display_path
+    from aria_code.ui.render.output import display_path
 
     assert display_path("/Users/mac/Desktop/aria-code/report.html") == "report.html"
     assert display_path("", fallback="artifact") == "artifact"
@@ -369,7 +369,7 @@ def test_display_path_returns_filename_only():
 
 def test_report_markdown_prompt_omits_na_placeholders(monkeypatch, tmp_path):
     import aria_cli
-    import packages.aria_services.data as service_data
+    import aria_code.packages.aria_services.data as service_data
 
     prompts = []
 
@@ -441,8 +441,8 @@ def test_market_render_import_does_not_require_prompt_toolkit():
                 return None
 
         sys.meta_path.insert(0, BlockPromptToolkit())
-        from ui.render.market import print_quote_result, print_ta_result
-        from ui.input_box import HAS_PROMPT_TOOLKIT
+        from aria_code.ui.render.market import print_quote_result, print_ta_result
+        from aria_code.ui.input_box import HAS_PROMPT_TOOLKIT
         assert HAS_PROMPT_TOOLKIT is False
         print("ok")
     """)
@@ -487,7 +487,7 @@ def test_repetition_recovery_drops_unfinished_markdown_table():
 
 
 def test_narrow_terminal_converts_markdown_table_to_stacked_records():
-    from ui.render.output import adapt_markdown_for_width
+    from aria_code.ui.render.output import adapt_markdown_for_width
 
     source = (
         "| 维度 | 观察 | 结论 |\n"
@@ -504,8 +504,8 @@ def test_narrow_terminal_converts_markdown_table_to_stacked_records():
 
 
 def test_turn_footer_defaults_to_compact_without_token_noise():
-    from runtime import AgentTurnState
-    from ui.render.output import format_turn_footer
+    from aria_code.runtime import AgentTurnState
+    from aria_code.ui.render.output import format_turn_footer
 
     state = AgentTurnState(provider="ollama")
     state.add_usage({"prompt_tokens": 100, "completion_tokens": 50})
@@ -522,7 +522,7 @@ def test_turn_footer_defaults_to_compact_without_token_noise():
 
 
 def test_context_compaction_decision_uses_incoming_content():
-    from apps.cli.message_processing import context_compaction_decision
+    from aria_code.apps.cli.message_processing import context_compaction_decision
 
     messages = [{"role": "user", "content": "x" * 1500} for _ in range(8)]
     decision = context_compaction_decision(
@@ -539,7 +539,7 @@ def test_context_compaction_decision_uses_incoming_content():
 def test_analyze_context_uses_data_service_quality(monkeypatch):
     import asyncio
     import aria_cli
-    import packages.aria_services.data as service_data
+    import aria_code.packages.aria_services.data as service_data
 
     class FakeBundle:
         quote = {"success": True, "price": 100.0, "change_pct": 1.2, "name": "Apple"}
@@ -576,8 +576,8 @@ def test_analyze_context_uses_data_service_quality(monkeypatch):
 
 def test_team_result_sanitizer_removes_stale_split_prices():
     import aria_cli
-    from agents.base import AgentResult
-    from agents.team import TeamResult
+    from aria_code.agents.base import AgentResult
+    from aria_code.agents.team import TeamResult
     from data_service import DataBundle
 
     team_result = TeamResult(
@@ -615,8 +615,8 @@ def test_team_result_sanitizer_removes_stale_split_prices():
 def test_team_report_includes_data_quality_section(monkeypatch, tmp_path):
     import asyncio
     import aria_cli
-    from agents.base import AgentResult
-    from agents.team import TeamResult
+    from aria_code.agents.base import AgentResult
+    from aria_code.agents.team import TeamResult
     from data_service import DataBundle
 
     monkeypatch.setenv("ARIA_ARTIFACT_ROOT", str(tmp_path / "project-artifacts"))

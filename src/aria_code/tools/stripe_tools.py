@@ -65,7 +65,7 @@ def tool_analyze_stripe_data(params: Dict[str, Any]) -> Dict[str, Any]:
         ]
 
     try:
-        from packages.quant_engine.services.stripe_analytics_service import StripeAnalyticsService
+        from aria_code.packages.quant_engine.services.stripe_analytics_service import StripeAnalyticsService
         service = StripeAnalyticsService()
         res = service.analyze_stripe_data(charges, subscriptions).to_dict()
     except Exception:

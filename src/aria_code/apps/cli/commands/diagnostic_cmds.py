@@ -89,7 +89,7 @@ class DiagnosticCommandsMixin:
         auto_compact_runs = int(getattr(t, "_auto_compact_count", 0) or 0)
         provider_summary = None
         try:
-            from packages.aria_services.provider_health import GLOBAL_PROVIDER_HEALTH
+            from aria_code.packages.aria_services.provider_health import GLOBAL_PROVIDER_HEALTH
             provider_summary = GLOBAL_PROVIDER_HEALTH.summary()
         except Exception:
             provider_summary = None

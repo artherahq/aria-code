@@ -14,7 +14,7 @@ import os
 import platform
 import sys
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Any, Tuple
 
 
 def get_ide_config_paths() -> Dict[str, Path]:

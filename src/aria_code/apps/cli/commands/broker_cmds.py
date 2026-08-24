@@ -114,7 +114,7 @@ class BrokerCommandsMixin:
 
     async def _cmd_broker_status(self):
         from aria_cli import   _get_broker_registry
-        from brokers.trading import global_dry_run
+        from aria_code.brokers.trading import global_dry_run
 
         # Risk-off banner: make a global trading freeze impossible to miss.
         if global_dry_run():
@@ -158,11 +158,11 @@ class BrokerCommandsMixin:
     async def _cmd_broker_guide(self, broker_type: str = ""):
         """Show broker capability matrix or a single broker setup plan."""
         from aria_cli import   Panel, rich_box, _print_error
-        from brokers.capabilities import (
+        from aria_code.brokers.capabilities import (
             broker_connection_plan, broker_dependency_state,
             get_broker_capability, list_broker_capabilities,
         )
-        from brokers.config import get_broker_config
+        from aria_code.brokers.config import get_broker_config
 
         query = (broker_type or "").strip().split(maxsplit=1)[0].lower()
         spec = get_broker_capability(query) if query else None
@@ -247,8 +247,8 @@ class BrokerCommandsMixin:
     async def _cmd_broker_doctor(self, args: str = ""):
         """Check configured broker fields, SDK availability, and connection state."""
         from aria_cli import   Panel, rich_box
-        from brokers.capabilities import broker_dependency_state, get_broker_capability
-        from brokers.config import BROKERS_CONFIG_PATH, list_broker_configs, validate_broker_config
+        from aria_code.brokers.capabilities import broker_dependency_state, get_broker_capability
+        from aria_code.brokers.config import BROKERS_CONFIG_PATH, list_broker_configs, validate_broker_config
         from aria_cli import _get_broker_registry
 
         cfgs = list_broker_configs()
@@ -345,7 +345,7 @@ class BrokerCommandsMixin:
     async def _cmd_broker_services(self):
         """Show how broker data flows into Aria services."""
         from aria_cli import   rich_box
-        from brokers.capabilities import broker_service_playbook
+        from aria_code.brokers.capabilities import broker_service_playbook
 
         rows = broker_service_playbook()
         if self.context.has_rich:
@@ -375,7 +375,7 @@ class BrokerCommandsMixin:
             _print_error("尚未配置任何券商", f"请先编辑 {_BROKERS_CONFIG_PATH}")
             return
         if not broker_id:
-            from brokers.config import get_default_broker_config
+            from aria_code.brokers.config import get_default_broker_config
             cfg = get_default_broker_config()
             if not cfg:
                 _print_error("未设置默认券商", "请用 /broker connect <id> 指定")
@@ -456,7 +456,7 @@ class BrokerCommandsMixin:
 
     async def _cmd_broker_add(self, broker_type: str):
         from aria_cli import ( Panel, rich_box, _print_error, _supported_broker_types, _get_broker_template, _add_broker_cfg, _BROKERS_CONFIG_PATH)
-        from ui.picker import arrow_select
+        from aria_code.ui.picker import arrow_select
 
         supported = _supported_broker_types()
 
@@ -804,7 +804,7 @@ class BrokerCommandsMixin:
 
     async def _cmd_broker_init(self):
         from aria_cli import   Panel, rich_box, _BROKERS_CONFIG_PATH
-        from brokers.config import print_all_templates
+        from aria_code.brokers.config import print_all_templates
         if self.context.has_rich:
             self.context.console.print(Panel(
                 f"[dim]将以下内容保存到[/dim] [bold]{_BROKERS_CONFIG_PATH}[/bold] [dim]，填写实际凭证后运行 /broker connect 连接。[/dim]\n\n"
@@ -891,8 +891,8 @@ class BrokerCommandsMixin:
     async def cmd_paper(self, args: str):
         """本地仿盘账户: /paper start [cash] [currency] | account | positions | orders | reset."""
         from aria_cli import   _print_error
-        from brokers.config import add_broker_config, get_broker_config, set_default_broker
-        from brokers.paper_broker import PAPER_LEDGER_PATH, PaperBroker
+        from aria_code.brokers.config import add_broker_config, get_broker_config, set_default_broker
+        from aria_code.brokers.paper_broker import PAPER_LEDGER_PATH, PaperBroker
 
         parts = args.strip().split()
         sub = parts[0].lower() if parts else "account"
@@ -956,7 +956,7 @@ class BrokerCommandsMixin:
         """两阶段交易: /trade mode | preview SYMBOL buy|sell QTY PRICE | confirm PREVIEW_ID | previews
         | allow-chat-confirm [broker_id] | disallow-chat-confirm [broker_id]."""
         from aria_cli import   _print_error, _get_broker_registry
-        from brokers import (
+        from aria_code.brokers import (
             OrderIntent, build_order_preview, execute_order_preview,
             list_order_previews, policy_from_config,
         )
@@ -993,7 +993,7 @@ class BrokerCommandsMixin:
             return
 
         if sub in ("allow-chat-confirm", "disallow-chat-confirm"):
-            from brokers.config import get_broker_config, set_chat_confirm_enabled
+            from aria_code.brokers.config import get_broker_config, set_chat_confirm_enabled
 
             target_id = parts[1] if len(parts) > 1 else (broker.broker_id if broker else "")
             if not target_id:
@@ -1137,7 +1137,7 @@ class BrokerCommandsMixin:
     async def _prompt_no_broker_action(self) -> None:
         """未配置券商时显示可导航的操作菜单，选择后直接路由到对应功能。"""
         from aria_cli import (  Panel, rich_box, _BROKERS_CONFIG_PATH)
-        from ui.picker import arrow_select
+        from aria_code.ui.picker import arrow_select
         import subprocess
         import sys as _sys
 
@@ -1161,7 +1161,7 @@ class BrokerCommandsMixin:
             try:
                 import pathlib as _pl
                 import json as _json
-                from brokers.config import print_all_templates
+                from aria_code.brokers.config import print_all_templates
                 path = _pl.Path(str(_BROKERS_CONFIG_PATH or
                                     aria_home() / "brokers.json"))
                 path.parent.mkdir(parents=True, exist_ok=True)
@@ -1179,7 +1179,7 @@ class BrokerCommandsMixin:
 
                 if self.context.has_rich:
                     from rich.syntax import Syntax
-                    from ui.render.output import display_path as _display_path
+                    from aria_code.ui.render.output import display_path as _display_path
                     self.context.console.print()
                     self.context.console.print(Panel(
                         f"[bold]已在编辑器中打开:[/bold] {_display_path(path, fallback='config')}\n\n"

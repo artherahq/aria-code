@@ -6,7 +6,7 @@ brokers/registry.py — 券商注册表 & 连接管理器
 
 用法::
 
-    from brokers.registry import BrokerRegistry
+    from aria_code.brokers.registry import BrokerRegistry
 
     reg = BrokerRegistry()
     broker = reg.connect("xt_main")         # 从 brokers.json 读取并连接

@@ -19,17 +19,17 @@ from aria_code.packages.aria_services.settings import (  # noqa: F401  (re-expor
 
 
 def _normalize_provider(name: str) -> str:
-    from apps.cli.providers.chat_routing import normalize_provider_name
+    from aria_code.apps.cli.providers.chat_routing import normalize_provider_name
     return normalize_provider_name(name)
 
 
 def _detect_lang() -> str:
-    from apps.cli.i18n import detect_system_lang
+    from aria_code.apps.cli.i18n import detect_system_lang
     return detect_system_lang()
 
 
 def _auto_select_model(ollama_url: str, fallback: str) -> str:
-    from apps.cli.i18n import auto_select_model
+    from aria_code.apps.cli.i18n import auto_select_model
     return auto_select_model(ollama_url, fallback=fallback)
 
 

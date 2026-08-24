@@ -764,7 +764,7 @@ class MarketCommandsMixin:
                 return
         else:
             try:
-                from agents.sports.football_agent import FootballAgent
+                from aria_code.agents.sports.football_agent import FootballAgent
 
                 agent = FootballAgent(llm_call=None)
 

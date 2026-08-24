@@ -451,7 +451,7 @@ class CoreCommandsMixin:
     def cmd_tasks(self, args: str):
         """Show and manage background subagent tasks."""
         try:
-            from runtime.subagent import _TASKS, tool_task_cancel
+            from aria_code.runtime.subagent import _TASKS, tool_task_cancel
         except ImportError:
             msg = "Subagent module not available."
             self.context.console.print(f"[red]{msg}[/red]") if self.context.has_rich else print(msg)
@@ -501,7 +501,7 @@ class CoreCommandsMixin:
     def cmd_delegate(self, args: str):
         """Delegate a task to the Claude Code or Codex CLI as a background subagent."""
         try:
-            from runtime.subagent import tool_spawn_task
+            from aria_code.runtime.subagent import tool_spawn_task
         except ImportError:
             msg = "Subagent module not available."
             self.context.console.print(f"[red]{msg}[/red]") if self.context.has_rich else print(msg)
@@ -591,7 +591,7 @@ class CoreCommandsMixin:
         if not silent and self.context.has_rich:
             self.context.console.print("[dim]Summarising conversation...[/dim]")
 
-        from packages.aria_services.context import build_context_service
+        from aria_code.packages.aria_services.context import build_context_service
 
         model_key = self.terminal.config.get("model", "qwen2.5:7b")
         max_ctx = int(get_model_cfg(model_key).get("num_ctx", 16384) or 16384)
@@ -644,7 +644,7 @@ class CoreCommandsMixin:
         # Architecture coverage summary (observability layer) — /architecture for the
         # full layered view. Best-effort; never let it break /doctor.
         try:
-            from packages.aria_core import architecture_gaps, architecture_status_counts
+            from aria_code.packages.aria_core import architecture_gaps, architecture_status_counts
             _c = architecture_status_counts()
             _done, _total = _c.get("done", 0), sum(_c.values())
             _line = (f"架构契约: {_done}/{_total} 层完成 · {len(architecture_gaps())} 层待办"
@@ -828,7 +828,7 @@ class CoreCommandsMixin:
             save_path = parts[1].strip() if len(parts) > 1 else None
 
         from artifacts import user_generated_dir
-        from apps.cli.codegen_paths import resolve_user_code_path
+        from aria_code.apps.cli.codegen_paths import resolve_user_code_path
         default_save = resolve_user_code_path(
             description,
             None,
@@ -1727,7 +1727,7 @@ class CoreCommandsMixin:
             return
 
         try:
-            from apps.cli.prompts.ui import UI_SYSTEM_PROMPT
+            from aria_code.apps.cli.prompts.ui import UI_SYSTEM_PROMPT
         except ImportError:
             UI_SYSTEM_PROMPT = ""
         try:
@@ -1842,7 +1842,7 @@ class CoreCommandsMixin:
         raw_symbol = symbol_parts[0] if symbol_parts else "AAPL"
         symbol = _resolve_market_arg_symbol(raw_symbol)
         try:
-            from apps.cli.tradingview_bridge import (
+            from aria_code.apps.cli.tradingview_bridge import (
                 export_pine_strategy,
                 tradingview_symbol,
                 tradingview_url,
@@ -2060,7 +2060,7 @@ class CoreCommandsMixin:
 
         compare_start = time.perf_counter()
         try:
-            from apps.cli.handlers.chart_handlers import handle_multi_stock_comparison_direct as _multi_chart
+            from aria_code.apps.cli.handlers.chart_handlers import handle_multi_stock_comparison_direct as _multi_chart
             result = await asyncio.get_event_loop().run_in_executor(
                 None, lambda: _multi_chart([resolved for _, resolved in symbols], period=period)
             )
@@ -2260,10 +2260,10 @@ class CoreCommandsMixin:
         service_result = None
         if self.context.has_rich:
             with self.context.console.status(f"[dim]计算 {symbol} 技术指标...[/dim]", spinner="dots"):
-                from packages.aria_services.data import DataService
+                from aria_code.packages.aria_services.data import DataService
                 service_result = DataService().technical_indicators(symbol, days=days)
         else:
-            from packages.aria_services.data import DataService
+            from aria_code.packages.aria_services.data import DataService
             service_result = DataService().technical_indicators(symbol, days=days)
         if not service_result or not service_result.success:
             _ta_warns = (service_result.warnings or []) if service_result else []

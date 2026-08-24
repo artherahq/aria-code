@@ -57,7 +57,7 @@ def _get_data_service():
 
 # ── Optional: broker integration ────────────────────────────────────────────
 try:
-    from brokers import (                                  # noqa: E402
+    from aria_code.brokers import (                                  # noqa: E402
         get_registry as _get_broker_registry,
         list_broker_configs as _list_broker_configs,
         BROKERS_CONFIG_PATH as _BROKERS_CONFIG_PATH,
@@ -530,7 +530,7 @@ def tool_broker_order(params: dict) -> dict:
                 "error": "confirmed=true 需要 preview_id；请先生成订单预览。",
             }
         try:
-            from brokers import execute_order_preview
+            from aria_code.brokers import execute_order_preview
             return execute_order_preview(broker, preview_id, confirmed=True)
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -549,7 +549,7 @@ def tool_broker_order(params: dict) -> dict:
         return {"success": False, "error": "quantity 必须是正数"}
 
     try:
-        from brokers import OrderIntent, build_order_preview
+        from aria_code.brokers import OrderIntent, build_order_preview
         preview = build_order_preview(
             broker,
             OrderIntent(

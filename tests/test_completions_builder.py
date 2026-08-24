@@ -4,7 +4,7 @@ import pytest
 
 
 def _import_builders():
-    from apps.cli.commands.ops_cmds import _build_bash_completion, _build_zsh_completion, _detect_user_shell
+    from aria_code.apps.cli.commands.ops_cmds import _build_bash_completion, _build_zsh_completion, _detect_user_shell
     return _build_bash_completion, _build_zsh_completion, _detect_user_shell
 
 

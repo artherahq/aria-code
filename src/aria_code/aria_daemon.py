@@ -331,7 +331,7 @@ async def _auto_analyze_alert(symbol: str, price: float, pct_str: str) -> None:
     """Run a lightweight technical+risk analysis after an alert fires and push the result."""
     try:
         sys.path.insert(0, str(_ARIA_CODE_DIR))
-        from agents.team import AgentTeam
+        from aria_code.agents.team import AgentTeam
         team = AgentTeam(agent_names=["technical", "risk"])
         result = await asyncio.wait_for(team.run(symbol), timeout=45.0)
         signal  = result.signal or "N/A"
@@ -458,9 +458,9 @@ def _maybe_auto_execute(preview_result: dict) -> list[str]:
     if not (broker_id and preview_id):
         return ["Webhook 只生成预览，不会自动执行实盘/仿盘订单。"]
     try:
-        from brokers.config import get_broker_config
-        from brokers.automation import AutoExecutePolicy, run_auto_execute
-        from brokers.registry import get_registry
+        from aria_code.brokers.config import get_broker_config
+        from aria_code.brokers.automation import AutoExecutePolicy, run_auto_execute
+        from aria_code.brokers.registry import get_registry
 
         policy = AutoExecutePolicy.from_config(get_broker_config(broker_id) or {})
         if not policy.enabled:
@@ -479,7 +479,7 @@ def _maybe_auto_execute(preview_result: dict) -> list[str]:
 async def _run_tradingview_alert(payload: dict) -> str:
     """Handle a TradingView alert webhook job."""
     try:
-        from apps.cli.tradingview_bridge import build_tradingview_order_preview, parse_tradingview_alert
+        from aria_code.apps.cli.tradingview_bridge import build_tradingview_order_preview, parse_tradingview_alert
         alert = parse_tradingview_alert(payload)
     except Exception as exc:
         raise ValueError(f"TradingView alert 解析失败: {exc}") from exc
@@ -532,8 +532,8 @@ async def _run_tradingview_alert(payload: dict) -> str:
     # summary stays as the fallback when no model backend is reachable.
     analysis = ""
     try:
-        from apps.channels.intake import analyze_alert_via_gateway
-        from apps.channels.tradingview import task_prompt
+        from aria_code.apps.channels.intake import analyze_alert_via_gateway
+        from aria_code.apps.channels.tradingview import task_prompt
         _gw_config = {
             "model": os.environ.get("ARIA_DAEMON_MODEL", "qwen2.5:7b"),
             "ollama_url": os.environ.get("OLLAMA_URL", "http://localhost:11434"),
@@ -899,7 +899,7 @@ async def _webhook_http_server() -> None:
     """Small local HTTP endpoint for TradingView webhooks."""
     try:
         from aiohttp import web
-        from apps.cli.tradingview_bridge import enqueue_tradingview_alert
+        from aria_code.apps.cli.tradingview_bridge import enqueue_tradingview_alert
     except ImportError as exc:
         logger.warning("Webhook HTTP server disabled: %s", exc)
         return
@@ -925,7 +925,7 @@ async def _webhook_http_server() -> None:
         # nor ARIA_WEBHOOK_SECRET configured, only loopback clients may submit —
         # an open endpoint reachable off-host would accept injected alerts.
         try:
-            from apps.channels.intake import should_refuse_open_intake
+            from aria_code.apps.channels.intake import should_refuse_open_intake
             secret_configured = bool(os.environ.get("ARIA_WEBHOOK_SECRET", "").strip())
             if should_refuse_open_intake(
                 getattr(request, "remote", None),

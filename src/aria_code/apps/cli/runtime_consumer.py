@@ -557,7 +557,7 @@ class TerminalRuntimeEventConsumer:
             from_provider, to_provider = match.group(1), match.group(2)
         else:
             from_provider, to_provider = self.fallback_from, "cloud"
-        from ui.render.output import print_fallback_toast
+        from aria_code.ui.render.output import print_fallback_toast
 
         print_fallback_toast(
             from_provider,
@@ -623,7 +623,7 @@ class TerminalApprovalEventConsumer:
             tool_name,
         )
         if not approval.approved:
-            from ui.render.output import print_tool_blocked
+            from aria_code.ui.render.output import print_tool_blocked
 
             print_tool_blocked(tool_name, "用户取消", console=self.console, has_rich=self.has_rich)
         return approval

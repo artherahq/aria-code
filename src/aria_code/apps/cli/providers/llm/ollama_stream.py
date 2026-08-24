@@ -9,7 +9,7 @@ import re
 from datetime import datetime
 
 try:
-    from packages.aria_skills.loader import CORE_FILE_TOOLS as _CORE_FILE_TOOLS
+    from aria_code.packages.aria_skills.loader import CORE_FILE_TOOLS as _CORE_FILE_TOOLS
 except Exception:
     _CORE_FILE_TOOLS: frozenset[str] = frozenset()
 
@@ -274,7 +274,7 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
 
     _is_general = (_intent == "general")
     try:
-        from apps.cli.intent_router import build_intent_route
+        from aria_code.apps.cli.intent_router import build_intent_route
         _route = build_intent_route(_intent_message)
     except Exception:
         _route = None
@@ -285,7 +285,7 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
     _is_tool_followup = message.lstrip().startswith("## Tool Results")
     _skill_activation = None
     try:
-        from packages.aria_skills import activate_external_skills as _activate_external_skills
+        from aria_code.packages.aria_skills import activate_external_skills as _activate_external_skills
 
         _skill_activation = _activate_external_skills(
             _intent_message,

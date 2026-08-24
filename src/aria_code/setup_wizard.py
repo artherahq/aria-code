@@ -49,7 +49,7 @@ _CFG_FILE = _ARIA_DIR / "config.json"
 # ── System language detection ─────────────────────────────────────────────────
 
 try:
-    from apps.cli.i18n import detect_system_lang as _detect_lang
+    from aria_code.apps.cli.i18n import detect_system_lang as _detect_lang
     _SYS_LANG = _detect_lang()
 except Exception:
     _SYS_LANG = "en"

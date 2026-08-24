@@ -278,7 +278,7 @@ def _build_cfg(name: str, model: Optional[str] = None) -> ProviderConfig:
         if name.lower() in _env_names:
             logger.debug(
                 "⚠ API key for '%s' loaded from ~/.arthera/providers.json (plaintext). "
-                "Migrate to env var: export %s=<key>  then remove api_key from providers.json.",
+                "Migrate to env var: export %s=<key>  then remove api_key from aria_code.providers.json.",
                 name, _env_names[name.lower()],
             )
     # 补充 base_url（支持用户自定义端点 / 代理）

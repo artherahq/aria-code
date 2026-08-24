@@ -127,7 +127,7 @@ class ModelCommandsMixin:
         #           /model openai/gpt-4.5          /model openai/o3  /model openai/o4-mini
         if "/" in name and not name.startswith("http"):
             _prov, _mod = name.split("/", 1)
-            from apps.cli.providers.chat_routing import normalize_provider_name
+            from aria_code.apps.cli.providers.chat_routing import normalize_provider_name
 
             _prov = normalize_provider_name(_prov)
             _mod  = _mod.strip()
@@ -184,7 +184,7 @@ class ModelCommandsMixin:
         ).lower()
         current_id  = self.terminal.config.get("model", "qwen2.5:7b")
         try:
-            from apps.cli.i18n import t as _i18nt
+            from aria_code.apps.cli.i18n import t as _i18nt
             _lang = self.terminal.config.get("ui_lang", "en") or "en"
             _i18n = lambda k: _i18nt(k, lang=_lang)
         except Exception:
@@ -543,7 +543,7 @@ class ModelCommandsMixin:
                     return
                 ref = raw_parts[ref_index + 1]
             try:
-                from packages.aria_skills import install_catalog
+                from aria_code.packages.aria_skills import install_catalog
 
                 installed = install_catalog(raw_parts[1], ref=ref)
                 message = (
@@ -574,7 +574,7 @@ class ModelCommandsMixin:
             "code": "Code Generation",
         }
         try:
-            from packages.aria_skills import (
+            from aria_code.packages.aria_skills import (
                 discover_external_skills,
                 recent_skill_activation_traces,
             )
@@ -779,7 +779,7 @@ class ModelCommandsMixin:
         Consumer-app subscriptions deliberately are not treated as credentials.
         This keeps external model use explicit, attributable, and opt-in.
         """
-        from apps.cli.providers.collaboration import (
+        from aria_code.apps.cli.providers.collaboration import (
             collaboration_readiness, consult, resolve_collaborator,
         )
 
@@ -866,8 +866,8 @@ class ModelCommandsMixin:
                 return
             notice = f"正在向 {len(targets)} 个模型征询独立意见…"
             self.context.console.print(f"[dim]{notice}[/dim]") if self.context.has_rich else print(notice)
-            from providers.llm.base import Message
-            from providers.llm.registry import get_provider
+            from aria_code.providers.llm.base import Message
+            from aria_code.providers.llm.registry import get_provider
 
             results = await consult(
                 rest, targets, get_provider=get_provider, message_factory=Message,
@@ -1247,7 +1247,7 @@ class ModelCommandsMixin:
         from pathlib import Path as _P
 
         try:
-            from providers.llm.autoconfig import probe_environment, render_providers_yaml
+            from aria_code.providers.llm.autoconfig import probe_environment, render_providers_yaml
         except Exception as exc:
             self.context.console.print(f"[red]无法加载配置生成器: {exc}[/red]" if self.context.has_rich else f"无法加载配置生成器: {exc}")
             return
@@ -1431,7 +1431,7 @@ class ModelCommandsMixin:
 
         # ── Free data source registry (akshare / yfinance / tushare) ────────────
         try:
-            from datasources.router import DataRouter as _DR
+            from aria_code.datasources.router import DataRouter as _DR
             free_sources = _DR().list_sources()
         except Exception:
             free_sources = []
@@ -1630,7 +1630,7 @@ class ModelCommandsMixin:
         /permissions remove <tool>— remove this tool from policy
         """
         try:
-            from runtime.tool_policy import (
+            from aria_code.runtime.tool_policy import (
                 load_tool_policy, save_tool_policy,
                 add_to_policy, remove_from_policy,
             )
@@ -1717,7 +1717,7 @@ class ModelCommandsMixin:
 
     def cmd_config(self, args: str):
         """Show or set CLI configuration."""
-        from apps.cli.config_paths import config_snapshot
+        from aria_code.apps.cli.config_paths import config_snapshot
         parts = args.strip().split(maxsplit=1)
         if not parts or parts[0] == "show":
             # Show current config
@@ -1817,7 +1817,7 @@ class ModelCommandsMixin:
                         self.context.console.print(f"[red]{msg}[/red]" if self.context.has_rich else msg)
                         return
                 elif key == "local_provider":
-                    from apps.cli.providers.chat_routing import normalize_provider_name
+                    from aria_code.apps.cli.providers.chat_routing import normalize_provider_name
 
                     val = normalize_provider_name(val)
                 elif key == "model":
@@ -1907,7 +1907,7 @@ class ModelCommandsMixin:
                         return
                     if val == "auto":
                         try:
-                            from apps.cli.i18n import detect_system_lang as _dsl
+                            from aria_code.apps.cli.i18n import detect_system_lang as _dsl
                             val = _dsl()
                         except Exception:
                             val = "en"
@@ -1986,7 +1986,7 @@ class ModelCommandsMixin:
                 return
             tool = parts[1].strip()
             try:
-                from runtime.tool_policy import add_to_policy
+                from aria_code.runtime.tool_policy import add_to_policy
                 add_to_policy(tool, "allow")
                 msg = f"✓ 工具 '{tool}' 加入永久白名单（始终自动批准，无需确认）"
                 self.context.console.print(f"[green]{msg}[/green]") if self.context.has_rich else print(msg)
@@ -2001,7 +2001,7 @@ class ModelCommandsMixin:
                 return
             tool = parts[1].strip()
             try:
-                from runtime.tool_policy import add_to_policy
+                from aria_code.runtime.tool_policy import add_to_policy
                 add_to_policy(tool, "deny")
                 msg = f"✓ 工具 '{tool}' 加入黑名单（始终拒绝，不会执行）"
                 self.context.console.print(f"[red]{msg}[/red]") if self.context.has_rich else print(msg)
@@ -2016,7 +2016,7 @@ class ModelCommandsMixin:
                 return
             tool = parts[1].strip()
             try:
-                from runtime.tool_policy import add_to_policy
+                from aria_code.runtime.tool_policy import add_to_policy
                 add_to_policy(tool, "ask")
                 msg = f"✓ 工具 '{tool}' 设为始终询问（每次执行前都弹出确认）"
                 self.context.console.print(f"[yellow]{msg}[/yellow]") if self.context.has_rich else print(msg)
@@ -2028,7 +2028,7 @@ class ModelCommandsMixin:
             # /config policy reset    — reset to defaults
             sub = parts[1].lower() if len(parts) > 1 else "show"
             try:
-                from runtime.tool_policy import load_tool_policy, save_tool_policy, remove_from_policy
+                from aria_code.runtime.tool_policy import load_tool_policy, save_tool_policy, remove_from_policy
                 if sub == "reset":
                     save_tool_policy({"allowed": [], "denied": [], "ask_always": []})
                     msg = "✓ 工具权限策略已重置为默认值"

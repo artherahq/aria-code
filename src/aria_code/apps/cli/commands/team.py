@@ -276,7 +276,7 @@ def build_team_agent_data(data_bundle: Any) -> dict[str, dict[str, Any]]:
     if quote and isinstance(rows, list) and rows:
         try:
             import pandas as pd
-            from agents.financial.risk import _compute_risk
+            from aria_code.agents.financial.risk import _compute_risk
 
             metrics = _compute_risk(pd.DataFrame(rows))
             if metrics:
@@ -325,8 +325,8 @@ def clean_team_synthesis_text(text: str) -> str:
 
 def build_team_llm_provider(config: dict[str, Any]) -> Any:
     try:
-        from providers.llm.base import ProviderConfig
-        from providers.llm.ollama import OllamaProvider
+        from aria_code.providers.llm.base import ProviderConfig
+        from aria_code.providers.llm.ollama import OllamaProvider
 
         model = config.get("model", "qwen2.5:7b")
         url = config.get("ollama_url", "http://localhost:11434")
@@ -337,9 +337,9 @@ def build_team_llm_provider(config: dict[str, Any]) -> Any:
 
 
 async def fetch_team_data_bundle(symbol: str) -> Any:
-    from packages.aria_services.data import DataService
+    from aria_code.packages.aria_services.data import DataService
     try:
-        from datasources.router import get_router
+        from aria_code.datasources.router import get_router
         router = get_router()
     except Exception as exc:
         logger.debug("team data router unavailable, using market client only: %s", exc)
@@ -364,9 +364,9 @@ async def run_team_analysis(
     on_tool_start: Callable[[str, dict], None] | None = None,
     on_tool_end: Callable[[str, Any], None] | None = None,
 ) -> TeamAnalysisResult:
-    from agents.team import run_team
+    from aria_code.agents.team import run_team
     try:
-        from datasources.router import get_router
+        from aria_code.datasources.router import get_router
         data_router = get_router()
     except Exception as exc:
         logger.debug("team data router unavailable for agents: %s", exc)
@@ -423,7 +423,7 @@ async def run_team_analysis(
             logging.getLogger(name).setLevel(level or logging.NOTSET)
 
     quality_notes = sanitize_result(team_result, data_bundle) if sanitize_result else []
-    from packages.aria_services.research_quality import assess_team_report
+    from aria_code.packages.aria_services.research_quality import assess_team_report
 
     assessment = assess_team_report(team_result, data_bundle)
     gate_notes = [*assessment.blocking_reasons, *assessment.warnings]
@@ -455,8 +455,8 @@ async def run_deep_cli(
     on_agent_done: Callable[[str, Any], None] | None = None,
 ):
     """Run the deep analysis pipeline (P0–P3) reusing the team provider plumbing."""
-    from agents.deep.pipeline import DeepAnalysisPipeline
-    from datasources.router import get_router
+    from aria_code.agents.deep.pipeline import DeepAnalysisPipeline
+    from aria_code.datasources.router import get_router
 
     llm_provider = build_team_llm_provider(config)
     noisy = ["agents.base", "agents.team", "agents.deep", "datasources.router", "data_cleaner"]
@@ -517,7 +517,7 @@ def build_team_report_markdown(
     quality_notes: list[str] | None = None,
     created_at: datetime | None = None,
 ) -> str:
-    from packages.aria_services.research_quality import assess_team_report
+    from aria_code.packages.aria_services.research_quality import assess_team_report
 
     created = created_at or datetime.now()
     quality_notes = quality_notes or []
@@ -611,7 +611,7 @@ def save_team_report(
     created_at: datetime | None = None,
 ) -> SavedTeamReport:
     from artifacts import create_user_artifact, write_artifact_metadata, write_artifact_raw_data
-    from packages.aria_services.research_quality import assess_team_report
+    from aria_code.packages.aria_services.research_quality import assess_team_report
 
     created = created_at or datetime.now()
     quality_notes = quality_notes or []

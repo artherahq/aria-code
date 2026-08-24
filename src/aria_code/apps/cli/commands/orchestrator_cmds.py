@@ -34,7 +34,7 @@ from typing import Dict, Any, Optional
 class OrchestratorCommandsMixin:
     def cmd_orchestrate(self, args: str):
         """Preview the verifiable Agent task graph for a request."""
-        from runtime.task_orchestrator import build_task_graph
+        from aria_code.runtime.task_orchestrator import build_task_graph
 
         request = args.strip()
         if not request:

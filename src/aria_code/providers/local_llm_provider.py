@@ -227,7 +227,7 @@ class LocalLLMProvider:
             api_key = config.get("local_api_key", os.getenv("LOCAL_LLM_API_KEY", ""))
             return cls(backend=backend, base_url=url, model=model, api_key=api_key)
 
-        # Cloud provider backends: read API key from providers.json or env var
+        # Cloud provider backends: read API key from aria_code.providers.json or env var
         _cloud_env_map = {
             "deepseek":    "DEEPSEEK_API_KEY",
             "openai":      "OPENAI_API_KEY",

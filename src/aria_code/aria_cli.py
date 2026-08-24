@@ -72,7 +72,7 @@ from datetime import datetime
 from typing import Optional, Dict, Any, List, Callable, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from brokers.base import AccountInfo
+    from aria_code.brokers.base import AccountInfo
 
 from aria_code.apps.cli.plotly_html import plotly_script_tag
 from aria_code.apps.cli.bootstrap import (
@@ -108,7 +108,7 @@ try:
     # runtime/run_state.py) — still landing separately. Degrade gracefully rather than
     # fail the whole module import: _run_store stays None, every _transition_runtime_run/
     # _begin_runtime_run call already no-ops when that's the case (see ArtheraTerminal).
-    from runtime import RunStatus, RunStore
+    from aria_code.runtime import RunStatus, RunStore
 except ImportError:
     RunStore = None
 
@@ -341,7 +341,7 @@ except ImportError:
     _HAS_ARIARC = False
 
 try:
-    from brokers import (
+    from aria_code.brokers import (
         get_registry as _get_broker_registry,
         list_broker_configs as _list_broker_configs,
         get_broker_config as _get_broker_cfg,
@@ -1198,7 +1198,7 @@ LOCAL_TOOLS = {
 
 # ── Register subagent tools ──────────────────────────────────────────────────
 try:
-    from runtime.subagent import SUBAGENT_TOOLS, SUBAGENT_SCHEMAS
+    from aria_code.runtime.subagent import SUBAGENT_TOOLS, SUBAGENT_SCHEMAS
     LOCAL_TOOLS.update(SUBAGENT_TOOLS)
     logger.info("Registered %d subagent tools", len(SUBAGENT_TOOLS))
 except Exception as _exc:
@@ -1207,7 +1207,7 @@ except Exception as _exc:
 
 # ── Register LSP diagnostics tool ─────────────────────────────────────────────
 try:
-    from runtime.lsp import LSP_TOOLS, LSP_SCHEMAS
+    from aria_code.runtime.lsp import LSP_TOOLS, LSP_SCHEMAS
     LOCAL_TOOLS.update(LSP_TOOLS)
     logger.info("Registered %d LSP tools", len(LSP_TOOLS))
 except Exception as _exc:
@@ -1278,7 +1278,7 @@ except Exception as _exc:
     
 # ── Register enterprise logistics & corporate finance analysis tools ────────
 try:
-    from tools.logistics_tools import register_logistics_tools as _reg_logistics
+    from aria_code.tools.logistics_tools import register_logistics_tools as _reg_logistics
     _n_logistics = _reg_logistics(LOCAL_TOOLS, LOCAL_TOOL_SCHEMAS)
     if _n_logistics:
         logger.info("Registered %d logistics tools", _n_logistics)
@@ -1286,7 +1286,7 @@ except Exception as _exc:
     logger.debug("Logistics tools init error: %s", _exc)
 
 try:
-    from tools.enterprise_finance_tools import register_enterprise_finance_tools as _reg_corp_fin
+    from aria_code.tools.enterprise_finance_tools import register_enterprise_finance_tools as _reg_corp_fin
     _n_corp_fin = _reg_corp_fin(LOCAL_TOOLS, LOCAL_TOOL_SCHEMAS)
     if _n_corp_fin:
         logger.info("Registered %d enterprise finance tools", _n_corp_fin)
@@ -1294,7 +1294,7 @@ except Exception as _exc:
     logger.debug("Enterprise finance tools init error: %s", _exc)
 
 try:
-    from tools.stripe_tools import register_stripe_tools as _reg_stripe
+    from aria_code.tools.stripe_tools import register_stripe_tools as _reg_stripe
     _n_stripe = _reg_stripe(LOCAL_TOOLS, LOCAL_TOOL_SCHEMAS)
     if _n_stripe:
         logger.info("Registered %d stripe tools", _n_stripe)
@@ -1302,7 +1302,7 @@ except Exception as _exc:
     logger.debug("Stripe tools init error: %s", _exc)
 
 try:
-    from tools.broker_tools import register_broker_tools as _reg_broker
+    from aria_code.tools.broker_tools import register_broker_tools as _reg_broker
     _n_broker = _reg_broker(LOCAL_TOOLS, LOCAL_TOOL_SCHEMAS)
     if _n_broker:
         logger.info("Registered %d broker tools", _n_broker)
@@ -1313,7 +1313,7 @@ try:
     try:
         from aria_code.tools.extended_tools import register_extended_tools as _reg_ext
     except ImportError:
-        from tools.extended_tools import register_extended_tools as _reg_ext
+        from aria_code.tools.extended_tools import register_extended_tools as _reg_ext
     _reg_ext(LOCAL_TOOLS)
     logger.info("Registered extended enterprise tools (Slack, Feishu, TradingView, QuickBooks, Shopify, Snowflake)")
 except Exception as _exc:
@@ -1323,7 +1323,7 @@ try:
     try:
         from aria_code.tools.code_audit_tools import register_code_audit_tools as _reg_audit
     except ImportError:
-        from tools.code_audit_tools import register_code_audit_tools as _reg_audit
+        from aria_code.tools.code_audit_tools import register_code_audit_tools as _reg_audit
     _reg_audit(LOCAL_TOOLS)
     logger.info("Registered code audit & diff tools")
 except Exception as _exc:
@@ -1379,7 +1379,7 @@ _PLAN_MODE = PlanModeState()
 
 # Load JSON hooks once at startup; reloaded on demand via /hooks reload
 try:
-    from apps.cli.hooks import load_hooks as _load_hooks, fire as _fire_json_hook
+    from aria_code.apps.cli.hooks import load_hooks as _load_hooks, fire as _fire_json_hook
     _JSON_HOOKS: dict = _load_hooks()
     _HAS_JSON_HOOKS = True
 except Exception:
@@ -1522,7 +1522,7 @@ from aria_code.apps.cli.prompts.coding import CODING_SYSTEM_PROMPT  # noqa: F401
 
 def _detect_lang(text: str) -> str:
     """Thin shim — implementation in apps/cli/prompts/system_prompts.py."""
-    from apps.cli.prompts.system_prompts import detect_lang as _f
+    from aria_code.apps.cli.prompts.system_prompts import detect_lang as _f
     return _f(text)
 
 
@@ -1531,20 +1531,20 @@ from aria_code.apps.cli.prompts.system_prompts import LANG_RULE as _LANG_RULE
 
 def _build_coding_prompt_lite(user_message: str) -> str:
     """Thin shim — implementation in apps/cli/prompts/system_prompts.py."""
-    from apps.cli.prompts.system_prompts import build_coding_prompt_lite as _f
+    from aria_code.apps.cli.prompts.system_prompts import build_coding_prompt_lite as _f
     return _f(user_message)
 
 
 def _build_analysis_prompt_lite(user_message: str) -> str:
     """Thin shim — implementation in apps/cli/prompts/system_prompts.py."""
-    from apps.cli.prompts.system_prompts import build_analysis_prompt_lite as _f
+    from aria_code.apps.cli.prompts.system_prompts import build_analysis_prompt_lite as _f
     return _f(user_message)
 
 
 # NOTE: FINANCE_CHAT_PROMPT is a function now — it injects the current date dynamically.
 def _build_finance_prompt(user_message: str = "") -> str:
     """Thin shim — implementation in apps/cli/prompts/system_prompts.py."""
-    from apps.cli.prompts.system_prompts import build_finance_prompt as _f
+    from aria_code.apps.cli.prompts.system_prompts import build_finance_prompt as _f
     return _f(user_message)
 
 FINANCE_CHAT_PROMPT = _build_finance_prompt()  # evaluated once at import; rebuilt per stream call
@@ -1556,7 +1556,7 @@ FINANCE_CHAT_PROMPT = _build_finance_prompt()  # evaluated once at import; rebui
 
 def _build_analysis_system_prompt() -> str:
     """Thin shim — implementation in apps/cli/prompts/system_prompts.py."""
-    from apps.cli.prompts.system_prompts import build_analysis_system_prompt as _f
+    from aria_code.apps.cli.prompts.system_prompts import build_analysis_system_prompt as _f
     return _f()
 
 ANALYSIS_SYSTEM_PROMPT = _build_analysis_system_prompt()
@@ -1564,7 +1564,7 @@ ANALYSIS_SYSTEM_PROMPT = _build_analysis_system_prompt()
 
 def _build_prefetched_analysis_prompt(nano: bool = False, user_message: str = "") -> str:
     """Thin shim — implementation in apps/cli/prompts/system_prompts.py."""
-    from apps.cli.prompts.system_prompts import build_prefetched_analysis_prompt as _f
+    from aria_code.apps.cli.prompts.system_prompts import build_prefetched_analysis_prompt as _f
     return _f(nano=nano, user_message=user_message)
 
 
@@ -1770,19 +1770,19 @@ def _fix_json_string(raw: str) -> str:
 
 def _parse_text_tool_calls(text: str) -> list:
     """Thin shim — implementation in apps/cli/message_processing.py."""
-    from apps.cli.message_processing import parse_text_tool_calls as _f
+    from aria_code.apps.cli.message_processing import parse_text_tool_calls as _f
     return _f(text)
 
 
 def _strip_tool_call_tags(text: str) -> str:
     """Thin shim — implementation in apps/cli/message_processing.py."""
-    from apps.cli.message_processing import strip_tool_call_tags as _f
+    from aria_code.apps.cli.message_processing import strip_tool_call_tags as _f
     return _f(text)
 
 
 def _compact_messages(messages: list, max_chars: int = 0, model_key: str = "qwen7b") -> list:
     """Thin shim — implementation in apps/cli/message_processing.py."""
-    from apps.cli.message_processing import compact_messages as _f
+    from aria_code.apps.cli.message_processing import compact_messages as _f
     return _f(messages, max_chars=max_chars, model_key=model_key)
 
 
@@ -1790,7 +1790,7 @@ def _compact_messages(messages: list, max_chars: int = 0, model_key: str = "qwen
 
 def _build_broker_context_block() -> str:
     """Thin shim — implementation in apps/cli/message_processing.py."""
-    from apps.cli.message_processing import build_broker_context_block as _f
+    from aria_code.apps.cli.message_processing import build_broker_context_block as _f
     return _f()
 
 
@@ -1978,7 +1978,7 @@ def _try_handle_strategy_advice(message: str) -> dict:
 def _run_deterministic_chain(message: str, *, model_has_tools: bool,
                              history: list = None) -> dict:
     """Thin wrapper around the SDK-safe deterministic router."""
-    from apps.cli.deterministic import run_deterministic_chain
+    from aria_code.apps.cli.deterministic import run_deterministic_chain
 
     return run_deterministic_chain(
         message,
@@ -2557,7 +2557,7 @@ def _natural_language_visual_artifact_route(message: str, available_commands: se
     if not text or text.startswith("/"):
         return None
     try:
-        from apps.cli.intent_router import build_intent_route
+        from aria_code.apps.cli.intent_router import build_intent_route
 
         route = build_intent_route(text)
         if not route.visual_artifact:
@@ -2575,7 +2575,7 @@ def _natural_language_visual_artifact_route(message: str, available_commands: se
 def _fetch_macro_data(indicator: str, country: str = "WLD", days: int = 365):
     """Fetch macro data from FRED or World Bank, return list of (date, value) tuples."""
     try:
-        from datasources.sources.fred_source import FREDSource, MACRO_ALIASES
+        from aria_code.datasources.sources.fred_source import FREDSource, MACRO_ALIASES
         if indicator.upper() in MACRO_ALIASES or indicator.upper() in MACRO_ALIASES.values():
             src = FREDSource()
             h = src.history(indicator, days=days)
@@ -2584,7 +2584,7 @@ def _fetch_macro_data(indicator: str, country: str = "WLD", days: int = 365):
     except Exception as _e:
         pass
     try:
-        from datasources.sources.world_bank_source import WorldBankSource
+        from aria_code.datasources.sources.world_bank_source import WorldBankSource
         src = WorldBankSource()
         h = src.history(f"{country}:{indicator}", days=days)
         if h and h.data is not None and not h.data.empty:
@@ -2597,7 +2597,7 @@ def _fetch_macro_data(indicator: str, country: str = "WLD", days: int = 365):
 def _fetch_edgar_data(symbol: str, sub: str = "filings"):
     """Fetch SEC EDGAR data for a US stock."""
     try:
-        from datasources.sources.edgar_source import EDGARSource
+        from aria_code.datasources.sources.edgar_source import EDGARSource
         src = EDGARSource()
         if sub == "filings":
             return src.get_recent_filings(symbol)
@@ -2613,7 +2613,7 @@ def _fetch_edgar_data(symbol: str, sub: str = "filings"):
 def _test_datasource(name: str) -> None:
     """Test connectivity of a named data source."""
     try:
-        from datasources.router import _SOURCE_REGISTRY
+        from aria_code.datasources.router import _SOURCE_REGISTRY
         cls = _SOURCE_REGISTRY.get(name.lower())
         if not cls:
             if HAS_RICH:
@@ -2782,7 +2782,7 @@ async def stream_chat(base_url: str, message: str, history: list,
                       on_tool_result=None, on_status=None,
                       cancel_event: asyncio.Event = None) -> dict:
     """Thin shim — implementation lives in apps/cli/providers/llm/sse_stream.py."""
-    from apps.cli.providers.llm.sse_stream import stream_chat as _stream_chat
+    from aria_code.apps.cli.providers.llm.sse_stream import stream_chat as _stream_chat
     return await _stream_chat(
         base_url, message, history,
         model=model, thinking_mode=thinking_mode,
@@ -2848,7 +2848,7 @@ def _build_user_context(config: dict) -> Optional[dict]:
 # ============================================================================
 
 def _clean_tool_error_message(error: object) -> str:
-    from ui.render.output import clean_tool_error_message as _ctm
+    from aria_code.ui.render.output import clean_tool_error_message as _ctm
     return _ctm(error)
 
 
@@ -3083,7 +3083,7 @@ def _fuzzy_match(query: str, candidates: list, max_results: int = 3) -> list:
 
 
 def _error_hint(error: str, context: str = "") -> str:
-    from ui.render.output import error_hint as _eh
+    from aria_code.ui.render.output import error_hint as _eh
     return _eh(error, context)
 
 
@@ -3094,7 +3094,7 @@ class _null_ctx:
 
 
 def _print_error(msg: str, context: str = ""):
-    from ui.render.output import print_error as _pe
+    from aria_code.ui.render.output import print_error as _pe
     _pe(msg, context, console=console, has_rich=HAS_RICH, rich_box=rich_box)
 
 
@@ -3339,7 +3339,7 @@ from aria_code.ui.render.output import display_path as _display_path
 
 
 def _print_tool_result(tool_name: str, result: dict, elapsed: float = 0, params: dict = None):
-    from ui.render.output import print_tool_result as _ptr
+    from aria_code.ui.render.output import print_tool_result as _ptr
     _ptr(
         tool_name, result, elapsed, params,
         console=console, has_rich=HAS_RICH, rich_box=rich_box,
@@ -3665,18 +3665,18 @@ def _rebind_module_function_globals(module, names):
             )
 
 
-import apps.cli.tool_executor as _tool_executor_module
+import aria_code.apps.cli.tool_executor as _tool_executor_module
 _rebind_module_function_globals(_tool_executor_module, _tool_executor_module.__all__)
 
 # _test_api_key 同理：model_cmds.py 的 mixin 用裸名调用它。
-import apps.cli.provider_endpoints as _provider_endpoints_module
+import aria_code.apps.cli.provider_endpoints as _provider_endpoints_module
 _rebind_module_function_globals(_provider_endpoints_module, ["_test_api_key"])
 
 # ── Broker rendering ──────────────────────────────────────────────────────────
 # 实现已移到 apps/cli/broker_render.py。同 football_reports：这些函数依赖本模块的
 # console / HAS_RICH / Panel / rich_box，必须重绑到本模块 globals，普通 import 会
 # 在运行期 NameError。broker_cmds.py 与测试都通过 aria_cli 命名空间取用。
-import apps.cli.broker_render as _broker_render_module
+import aria_code.apps.cli.broker_render as _broker_render_module
 _rebind_module_function_globals(_broker_render_module, _broker_render_module.__all__)
 
 class SlashCommands(
@@ -3684,12 +3684,12 @@ class SlashCommands(
     """Claude Code-style slash command system."""
 
 
-    def __init__(self, terminal: 'ArtheraTerminal'):
-        self.terminal = terminal
-
     @property
     def context(self):
         return self.terminal.context
+
+    def __init__(self, terminal: 'ArtheraTerminal'):
+        self.terminal = terminal
         self.commands = {
             # ── Session ───────────────────────────────────────────────────────
             "/help":      (self.cmd_help,     "Show commands and examples"),
@@ -4082,7 +4082,7 @@ class SlashCommands(
     # ── Project scaffold templates ────────────────────────────────────────────
 
     # Scaffold templates moved to apps.cli.commands.scaffold_templates
-    from apps.cli.commands.scaffold_templates import SCAFFOLD_TEMPLATES as _SCAFFOLD_TEMPLATES  # noqa
+    from aria_code.apps.cli.commands.scaffold_templates import SCAFFOLD_TEMPLATES as _SCAFFOLD_TEMPLATES  # noqa
 
 
 
@@ -4300,7 +4300,7 @@ class ArtheraTerminal:
             logger.debug("Durable run store unavailable: %s", exc)
         # JSONL session store: crash-safe, append-per-turn
         try:
-            from apps.cli.session_jsonl import JsonlSessionStore
+            from aria_code.apps.cli.session_jsonl import JsonlSessionStore
             self._jsonl_store: Optional[Any] = JsonlSessionStore()
             self._jsonl_store.init_session(self.session_id)
         except Exception:
@@ -4347,7 +4347,7 @@ class ArtheraTerminal:
 
         # ── Wire subagent runner so spawn_task can use the same LLM ─────────
         try:
-            from runtime.subagent import (
+            from aria_code.runtime.subagent import (
                 register_runner as _register_subagent_runner,
                 restore_tasks as _restore_subagent_tasks,
             )
@@ -4426,8 +4426,8 @@ class ArtheraTerminal:
         # completer and slash-command executor so displayed behavior matches
         # submitted behavior.
         try:
-            from apps.cli.config_paths import resolve_user_output_root
-            from packages.aria_services.references import build_reference_service
+            from aria_code.apps.cli.config_paths import resolve_user_output_root
+            from aria_code.packages.aria_services.references import build_reference_service
             self._reference_service = build_reference_service(
                 workspace=pathlib.Path.cwd(),
                 output_root=resolve_user_output_root(),
@@ -4458,7 +4458,7 @@ class ArtheraTerminal:
 
         if HAS_PT and _interactive:
             try:
-                from apps.cli.config_paths import resolve_user_output_root as _reference_output_root
+                from aria_code.apps.cli.config_paths import resolve_user_output_root as _reference_output_root
                 _completion_output_root = _reference_output_root()
             except Exception:
                 _completion_output_root = None
@@ -4572,9 +4572,9 @@ class ArtheraTerminal:
             _ui_lang = self.config.get("ui_lang", "en") or "en"
             if _banner_mode == "compact":
                 _model_label = f"{m['name']} {m['version']}" if current_key else current_id
-                from ui.banner import render_compact_banner as _rcb
+                from aria_code.ui.banner import render_compact_banner as _rcb
                 try:
-                    from apps.cli.update_check import get_update_notice as _gun
+                    from aria_code.apps.cli.update_check import get_update_notice as _gun
                     _update_notice = _gun(wait_ms=1200)
                 except Exception:
                     _update_notice = None
@@ -4593,7 +4593,7 @@ class ArtheraTerminal:
             else:
                 _model_label = f"{m['name']} {m['version']}" if current_key else current_id
                 try:
-                    from apps.cli.i18n import t as _i18n_t
+                    from aria_code.apps.cli.i18n import t as _i18n_t
                     _lite_word  = _i18n_t("lite", lang=_ui_lang)
                     _cloud_word = _i18n_t("cloud", lang=_ui_lang)
                     _local_word = _i18n_t("local", lang=_ui_lang)
@@ -4607,10 +4607,10 @@ class ArtheraTerminal:
                     _rt_label = f"{_model_label}  [dim]{_local_word}[/dim]"
 
                 _best_id = (MODELS.get("qwen7b") or {}).get("id", "qwen2.5:7b")
-                from ui.banner import render_startup_dashboard as _rsd, render_try_hints as _rth
-                from ui.startup_dashboard import StartupDashboardViewModel as _StartupDashboardViewModel
+                from aria_code.ui.banner import render_startup_dashboard as _rsd, render_try_hints as _rth
+                from aria_code.ui.startup_dashboard import StartupDashboardViewModel as _StartupDashboardViewModel
                 try:
-                    from apps.cli.update_check import get_update_notice as _gun
+                    from aria_code.apps.cli.update_check import get_update_notice as _gun
                     _update_notice = _gun(wait_ms=1200)
                 except Exception:
                     _update_notice = None
@@ -4656,7 +4656,7 @@ class ArtheraTerminal:
                         )
         else:
             if _banner_mode != "off":
-                from ui.banner import render_full_banner as _rfb
+                from aria_code.ui.banner import render_full_banner as _rfb
                 _rfb(
                     version=__version__,
                     rt_label=_runtime,
@@ -4671,17 +4671,17 @@ class ArtheraTerminal:
                 )
 
     def _privacy_status_label(self, rich: bool = False) -> str:
-        from ui.banner import privacy_status_label as _psl
+        from aria_code.ui.banner import privacy_status_label as _psl
         _lang = self.config.get("ui_lang", "en") or "en"
         return _psl(self.config, rich=rich, lang=_lang)
 
     def _control_status_label(self, rich: bool = False) -> str:
-        from ui.banner import control_status_label as _csl
+        from aria_code.ui.banner import control_status_label as _csl
         _lang = self.config.get("ui_lang", "en") or "en"
         return _csl(self.config, rich=rich, lang=_lang)
 
     def _ollama_status_label(self, rich: bool = False) -> str:
-        from ui.banner import ollama_status_label as _osl
+        from aria_code.ui.banner import ollama_status_label as _osl
         _lang = self.config.get("ui_lang", "en") or "en"
         return _osl(
             getattr(self, "_ollama_alive", False),
@@ -4797,7 +4797,7 @@ class ArtheraTerminal:
         if message.startswith("/"):
             return False
         try:
-            from apps.cli.commands.market_cmds import (
+            from aria_code.apps.cli.commands.market_cmds import (
                 _is_probable_football_query as _pfq,
                 _parse_nl_team_pair as _pfnl,
             )
@@ -4914,7 +4914,7 @@ class ArtheraTerminal:
         # can silently pick the first ticker.  The clarification lives outside
         # conversation history so the eventual request is recorded only once.
         if not system_override and not message.lstrip().startswith("/"):
-            from apps.cli.market_universe import (
+            from aria_code.apps.cli.market_universe import (
                 ambiguous_market_candidates,
                 select_market_candidate,
             )
@@ -5088,7 +5088,7 @@ class ArtheraTerminal:
         if _is_broker_setup_intent(message):
             _btype = _detect_broker_type(message)
             if HAS_RICH:
-                from apps.cli.utils.market_detect import _BROKER_SETUP_NAMES
+                from aria_code.apps.cli.utils.market_detect import _BROKER_SETUP_NAMES
                 _display = _BROKER_SETUP_NAMES.get(_btype, ("",))[0] if _btype else ""
                 _label = f"  正在启动{_display}配置向导…" if _display else "  正在启动券商配置向导…"
                 console.print(f"\n[bold]Aria[/bold]  [dim]{_label}[/dim]\n")
@@ -5228,7 +5228,7 @@ class ArtheraTerminal:
         # Context pressure warning — only once per session when > 85% full
         _est_tokens = sum(len(m.get("content", "")) for m in self.conversation) // 3
         _max_ctx    = get_model_cfg(self.config.get("model", "qwen2.5:7b")).get("num_ctx", 16384)
-        from ui.render.output import print_context_warning as _pcw
+        from aria_code.ui.render.output import print_context_warning as _pcw
         _pcw(_est_tokens, _max_ctx, console=console, has_rich=HAS_RICH,
              session_id=getattr(self, "session_id", ""))
 
@@ -5317,7 +5317,7 @@ class ArtheraTerminal:
         elapsed = 0.0
 
         try:
-            from apps.cli.todo_tracker import clear_todos as _clear_todos
+            from aria_code.apps.cli.todo_tracker import clear_todos as _clear_todos
             _clear_todos()  # reset task checklist for this new turn
         except Exception:
             pass
@@ -5347,7 +5347,7 @@ class ArtheraTerminal:
         # loop-guard and (now) per-tool approval. This block only adapts the
         # terminal — stream consumer, approval UI, run-store transitions —
         # to that loop and renders its outcome.
-        from apps.cli.providers.runtime_bridge import run_chat_via_runtime
+        from aria_code.apps.cli.providers.runtime_bridge import run_chat_via_runtime
 
         response_text = ""
         stream_consumer = TerminalRuntimeEventConsumer(
@@ -5427,7 +5427,7 @@ class ArtheraTerminal:
         # only a confirmed-successful turn clears it.
         _rt_sys_ov = getattr(self, "_system_override", None)
         _rt_turn = None
-        from packages.aria_services.research_protocol import (
+        from aria_code.packages.aria_services.research_protocol import (
             grounding_tool_names,
             requires_financial_evidence,
         )
@@ -5544,7 +5544,7 @@ class ArtheraTerminal:
             _rescue = None
             if _fallback_mode != "off" and "ARIA-4223" not in str(_err):
                 try:
-                    from providers.llm.registry import stream_cloud_fallback
+                    from aria_code.providers.llm.registry import stream_cloud_fallback
                     _rescue = await stream_cloud_fallback(
                         current_message, self.conversation,
                         on_token=on_token,
@@ -5825,7 +5825,7 @@ class ArtheraTerminal:
 
             _ctx_max = get_model_cfg(self.config.get("model", "qwen2.5:7b")).get("num_ctx", 16384)
             if HAS_RICH:
-                from ui.render.output import format_turn_footer as _format_turn_footer
+                from aria_code.ui.render.output import format_turn_footer as _format_turn_footer
                 _footer = _format_turn_footer(
                     metadata,
                     mode=self.config.get("response_footer", "compact"),
@@ -5834,7 +5834,7 @@ class ArtheraTerminal:
                 if _footer:
                     console.print(f"\n[dim]{_footer}[/dim]")
             else:
-                from ui.render.output import format_turn_footer as _format_turn_footer
+                from aria_code.ui.render.output import format_turn_footer as _format_turn_footer
                 _footer = _format_turn_footer(
                     metadata,
                     mode=self.config.get("response_footer", "compact"),
@@ -5872,7 +5872,7 @@ class ArtheraTerminal:
                     if HAS_RICH:
                         console.print(f"  [dim]↩ Auto-compacted context after response ({_old_pct}% full)[/dim]")
                 elif _ctx_fill_pct >= 0.85:
-                    from ui.render.output import print_context_warning as _print_context_warning
+                    from aria_code.ui.render.output import print_context_warning as _print_context_warning
                     _print_context_warning(
                         prompt_t,
                         _ctx_max,
@@ -6122,7 +6122,7 @@ class ArtheraTerminal:
         honors ARIA_NO_TELEMETRY, never raises.
         """
         try:
-            from apps.cli.prediction_feedback import PredictionTracker
+            from aria_code.apps.cli.prediction_feedback import PredictionTracker
             if not entry_price or entry_price <= 0:
                 try:
                     import market_data_client as _mdc
@@ -6143,7 +6143,7 @@ class ArtheraTerminal:
     def _verify_predictions(self, min_age_hours: float = 24.0) -> dict:
         """Settle pending predictions against live prices; emit DPO feedback."""
         try:
-            from apps.cli.prediction_feedback import PredictionTracker
+            from aria_code.apps.cli.prediction_feedback import PredictionTracker
 
             def _quote(sym: str):
                 try:
@@ -6211,7 +6211,7 @@ class ArtheraTerminal:
         return f"{model_label} · {cwd} · {privacy} · /help · esc · {est_tokens:,}/{max_ctx:,}"
 
     def _bottom_toolbar_parts(self):
-        from ui.banner import bottom_toolbar_parts as _btp
+        from aria_code.ui.banner import bottom_toolbar_parts as _btp
         # /clear、/compact 等把对话截短后,上一轮的真实 token 计数即失效
         # (自愈式判定,免去在每个重置点手工清零)。
         known = getattr(self, "_last_prompt_tokens", 0)
@@ -6233,7 +6233,7 @@ class ArtheraTerminal:
         except Exception:
             threshold = 0.78
         try:
-            from apps.cli.message_processing import context_compaction_decision
+            from aria_code.apps.cli.message_processing import context_compaction_decision
             decision = context_compaction_decision(
                 self.conversation,
                 model_key=self.config.get("model", "qwen2.5:7b"),
@@ -6379,7 +6379,7 @@ class ArtheraTerminal:
         self.print_header()
         await self._startup_health_check()
         try:
-            from ui.banner import render_session_banner
+            from aria_code.ui.banner import render_session_banner
             render_session_banner(
                 self.session_id,
                 console=console,
@@ -6443,7 +6443,7 @@ class ArtheraTerminal:
             try:
                 if self._pt_session:
                     if self.config.get("input_style", "panel") == "panel":
-                        from ui import PanelInputConfig, run_panel_input_async
+                        from aria_code.ui import PanelInputConfig, run_panel_input_async
                         # Drain notifications queued while pt was active (avoids stdout corruption)
                         while self._pending_notifications:
                             _note = self._pending_notifications.pop(0)
@@ -6703,7 +6703,7 @@ class ArtheraTerminal:
         if _is_broker_setup_intent(prompt):
             _btype_p = _detect_broker_type(prompt)
             if HAS_RICH:
-                from apps.cli.utils.market_detect import _BROKER_SETUP_NAMES
+                from aria_code.apps.cli.utils.market_detect import _BROKER_SETUP_NAMES
                 _display_p = _BROKER_SETUP_NAMES.get(_btype_p, ("",))[0] if _btype_p else ""
                 _label_p = f"  正在启动{_display_p}配置向导…" if _display_p else "  正在启动券商配置向导…"
                 console.print(f"\n[bold]Aria[/bold]  [dim]{_label_p}[/dim]\n")
@@ -6913,7 +6913,7 @@ Examples:
 
     # ── Start background update check (non-blocking, daemon thread) ──────────
     try:
-        from apps.cli.update_check import start_update_check
+        from aria_code.apps.cli.update_check import start_update_check
         _ui_lang_early = config.get("ui_lang", "en") or "en"
         start_update_check(__version__, lang=_ui_lang_early)
     except Exception:
@@ -6928,7 +6928,7 @@ Examples:
         raw_model = str(args.model).strip()
         if "/" in raw_model and not raw_model.startswith("http"):
             provider_name, selected_model = raw_model.split("/", 1)
-            from apps.cli.providers.chat_routing import normalize_provider_name
+            from aria_code.apps.cli.providers.chat_routing import normalize_provider_name
 
             provider_name = normalize_provider_name(provider_name)
             config["local_provider"] = provider_name
@@ -7047,7 +7047,7 @@ Examples:
 # 而不是普通 import：market_cmds.py 那个 mixin 用裸名字调 _football_standings(...)，
 # 靠的是 _rebind_mixin_globals 把它的 __globals__ 指向本模块；同时这些函数自身也
 # 依赖本模块的 console。重新绑定后两边才都能解析。与 tool_executor 同一套机制。
-import apps.cli.football_reports as _football_reports_module
+import aria_code.apps.cli.football_reports as _football_reports_module
 _rebind_module_function_globals(_football_reports_module, _football_reports_module.__all__)
 
 

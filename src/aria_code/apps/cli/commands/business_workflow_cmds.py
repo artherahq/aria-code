@@ -305,14 +305,14 @@ class BusinessWorkflowCommandsMixin:
 
     async def _call_realty_agent(self, agent_name: str, project_id: str, input_data: dict):
         try:
-            from agents.registry import get_registry
+            from aria_code.agents.registry import get_registry
             cls = get_registry().get(agent_name)
             if not cls:
                 _p(f"Agent '{agent_name}' 未注册", "error")
                 return None
             llm = None
             try:
-                from providers.llm.registry import list_available_providers, get_provider
+                from aria_code.providers.llm.registry import list_available_providers, get_provider
                 avail = [p for p in list_available_providers() if p.get("available")]
                 if avail:
                     llm = get_provider(avail[0]["name"])

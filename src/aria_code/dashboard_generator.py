@@ -415,7 +415,7 @@ def generate(
         "full": "FULL TERMINAL — PORTFOLIO + MARKET + ALERTS + FILES",
     }.get(mode, "FULL TERMINAL")
 
-    from apps.cli.prompts.ui import get_ui_css_base
+    from aria_code.apps.cli.prompts.ui import get_ui_css_base
     css = get_ui_css_base()
 
     html = f"""<!DOCTYPE html>

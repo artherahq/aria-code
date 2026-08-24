@@ -39,7 +39,7 @@ def _series(n):
 
 @pytest.fixture
 def _patch_mdc(monkeypatch):
-    import apps.cli.tools.market_tools as mt
+    import aria_code.apps.cli.tools.market_tools as mt
 
     def _install(fake):
         # The tool now routes through DataService; wrap the fake MDC in a real
@@ -53,7 +53,7 @@ def _patch_mdc(monkeypatch):
 
 
 def test_history_returns_compact_summary(_patch_mdc):
-    from apps.cli.tools.market_tools import tool_get_market_history
+    from aria_code.apps.cli.tools.market_tools import tool_get_market_history
     _patch_mdc(_FakeMDC(_series(252)))
 
     r = tool_get_market_history({"symbol": "600519", "days": 252})
@@ -71,7 +71,7 @@ def test_history_returns_compact_summary(_patch_mdc):
 
 
 def test_history_short_series_recent_capped_to_length(_patch_mdc):
-    from apps.cli.tools.market_tools import tool_get_market_history
+    from aria_code.apps.cli.tools.market_tools import tool_get_market_history
     _patch_mdc(_FakeMDC(_series(8)))
 
     r = tool_get_market_history({"symbol": "AAPL", "days": 30})
@@ -85,7 +85,7 @@ def test_history_short_series_recent_capped_to_length(_patch_mdc):
 
 
 def test_history_propagates_source_failure(_patch_mdc):
-    from apps.cli.tools.market_tools import tool_get_market_history
+    from aria_code.apps.cli.tools.market_tools import tool_get_market_history
     _patch_mdc(_FakeMDC([], success=False))
 
     r = tool_get_market_history({"symbol": "600519"})
@@ -96,7 +96,7 @@ def test_history_propagates_source_failure(_patch_mdc):
 
 
 def test_history_requires_symbol():
-    from apps.cli.tools.market_tools import tool_get_market_history
+    from aria_code.apps.cli.tools.market_tools import tool_get_market_history
     r = tool_get_market_history({"symbol": "   "})
     assert r["success"] is False
     assert "symbol" in r["error"].lower()
@@ -105,7 +105,7 @@ def test_history_requires_symbol():
 def test_history_payload_stays_small(_patch_mdc):
     """Even for a huge lookback, the serialized payload must stay compact."""
     import json
-    from apps.cli.tools.market_tools import tool_get_market_history
+    from aria_code.apps.cli.tools.market_tools import tool_get_market_history
     _patch_mdc(_FakeMDC(_series(1000)))
 
     r = tool_get_market_history({"symbol": "600519", "days": 1000})
@@ -119,14 +119,14 @@ def test_history_payload_stays_small(_patch_mdc):
 def _render(result):
     """Render to a string via a rich Console with recording on."""
     from rich.console import Console
-    from ui.render.finance import render_finance_result
+    from aria_code.ui.render.finance import render_finance_result
     con = Console(record=True, width=80)
     render_finance_result("get_market_history", result, console=con, has_rich=True)
     return con.export_text()
 
 
 def test_renderer_registered_as_finance_tool():
-    from ui.render.output import FINANCE_TOOL_NAMES
+    from aria_code.ui.render.output import FINANCE_TOOL_NAMES
     assert "get_market_history" in FINANCE_TOOL_NAMES
 
 

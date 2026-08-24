@@ -98,7 +98,7 @@ def _fetch_report_data_sync(symbol: str) -> Tuple[Any, Any, Dict[str, Any]]:
         }
 
     try:
-        from packages.aria_services.data import DataService
+        from aria_code.packages.aria_services.data import DataService
         bundle = DataService().bundle(symbol, history_days=370, technical_days=120)
 
         hist = bundle.history

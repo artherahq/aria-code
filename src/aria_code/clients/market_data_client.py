@@ -285,7 +285,7 @@ class MarketDataClient:
         """
         if self._ts_source is _UNSET:
             try:
-                from datasources.sources.tushare_source import TushareSource
+                from aria_code.datasources.sources.tushare_source import TushareSource
                 src = TushareSource()
                 self._ts_source = src if src.is_configured() else None
             except Exception as e:

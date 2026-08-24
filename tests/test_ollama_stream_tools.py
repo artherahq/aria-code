@@ -16,7 +16,7 @@ def test_tool_capable_turn_never_uses_prose_response_cache():
 
 
 def test_tool_protocol_sanitizer_removes_brtc_tail_and_local_path():
-    from apps.cli.message_processing import strip_tool_call_tags
+    from aria_code.apps.cli.message_processing import strip_tool_call_tags
 
     text = (
         "行情已获取，正在计算指标。?brtc "
@@ -28,7 +28,7 @@ def test_tool_protocol_sanitizer_removes_brtc_tail_and_local_path():
 
 
 def test_tool_protocol_sanitizer_removes_nested_bare_json_call():
-    from apps.cli.message_processing import strip_tool_call_tags
+    from aria_code.apps.cli.message_processing import strip_tool_call_tags
 
     text = (
         "结果如下： "

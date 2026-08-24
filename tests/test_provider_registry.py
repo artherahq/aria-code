@@ -25,7 +25,7 @@ if _CLI_DIR not in sys.path:
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 from conftest import make_providers_file
 
-import providers.llm.registry as _reg
+import aria_code.providers.llm.registry as _reg
 from aria_code.providers.llm.registry import (
     _DEFAULT_FALLBACK_CHAIN,
     _PROVIDER_CLASSES,
@@ -223,15 +223,15 @@ class TestNewProvidersRegistered(unittest.TestCase):
         self.assertIn("zhipu", _PROVIDER_CLASSES)
 
     def test_siliconflow_base_url(self):
-        from providers.llm.openai_compat import SiliconFlowProvider
+        from aria_code.providers.llm.openai_compat import SiliconFlowProvider
         self.assertIn("siliconflow.cn", SiliconFlowProvider.DEFAULT_BASE_URL)
 
     def test_moonshot_base_url(self):
-        from providers.llm.openai_compat import MoonshotProvider
+        from aria_code.providers.llm.openai_compat import MoonshotProvider
         self.assertIn("moonshot.cn", MoonshotProvider.DEFAULT_BASE_URL)
 
     def test_zhipu_base_url(self):
-        from providers.llm.openai_compat import ZhiPuProvider
+        from aria_code.providers.llm.openai_compat import ZhiPuProvider
         self.assertIn("bigmodel.cn", ZhiPuProvider.DEFAULT_BASE_URL)
 
     def test_siliconflow_before_openai_in_fallback(self):
@@ -244,7 +244,7 @@ class TestNewProvidersRegistered(unittest.TestCase):
 
     def test_deepseek_first_in_cloud_chain(self):
         """DeepSeek 应是 fallback 链里第一个云端 provider。"""
-        from providers.llm.registry import _PROVIDER_CLASSES
+        from aria_code.providers.llm.registry import _PROVIDER_CLASSES
         cloud_names = [
             name for name, _, _ in _DEFAULT_FALLBACK_CHAIN
             if not _PROVIDER_CLASSES[name].local

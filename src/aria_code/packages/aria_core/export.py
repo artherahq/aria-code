@@ -98,7 +98,7 @@ def build_session_diagnostic_bundle(
         provider_rows = list(provider_health)
         bundle["provider_health"] = provider_rows
         try:
-            from packages.aria_services.provider_health import summarize_provider_health
+            from aria_code.packages.aria_services.provider_health import summarize_provider_health
 
             bundle["provider_health_summary"] = summarize_provider_health(provider_rows).to_dict()
         except Exception:
@@ -133,7 +133,7 @@ def build_session_diagnostic_bundle(
         except Exception:
             pass
     try:
-        from packages.aria_core.architecture import architecture_contract
+        from aria_code.packages.aria_core.architecture import architecture_contract
 
         bundle["architecture"] = architecture_contract()
     except Exception:

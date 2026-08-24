@@ -139,7 +139,7 @@ def prediction_freshness(result: dict, today: date | None = None) -> dict:
 
 def build_prediction_service(config: dict):
     """Create the platform service with a stable, user-visible report location."""
-    from packages.quant_engine.services.daily_ashare_prediction_service import DailyASharePredictionService
+    from aria_code.packages.quant_engine.services.daily_ashare_prediction_service import DailyASharePredictionService
 
     service = DailyASharePredictionService()
     configured = str(config.get("ashare_prediction_dir") or os.getenv("ARTHERA_DAILY_PREDICTION_DIR") or "").strip()

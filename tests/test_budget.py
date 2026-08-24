@@ -107,7 +107,7 @@ def test_summary_calls_out_all_local_sessions():
 
 def test_agent_options_default_has_no_budget():
     """不传 budget 时必须与既有行为完全一致——这是能安全上线的前提。"""
-    from runtime.agent_loop import AgentOptions
+    from aria_code.runtime.agent_loop import AgentOptions
     assert AgentOptions().budget is None
 
 

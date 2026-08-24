@@ -4,7 +4,7 @@
 import re as _re_sym
 
 try:
-    from apps.cli.market_universe import (
+    from aria_code.apps.cli.market_universe import (
         looks_like_unresolved_market_name as _looks_like_unresolved_market_name,
         resolve_market_mentions as _resolve_market_mentions,
         resolve_market_symbol as _resolve_market_symbol,

@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-import brokers.config as config_mod
+import aria_code.brokers.config as config_mod
 from aria_code.brokers.config import (
     add_broker_config,
     is_chat_confirm_enabled,
@@ -85,7 +85,7 @@ async def test_allow_chat_confirm_requires_exact_broker_id_not_yes(monkeypatch, 
     add_broker_config({"id": "ths1", "type": "easytrader", "label": "同花顺"})
 
     import aria_cli
-    from apps.cli.commands import broker_cmds
+    from aria_code.apps.cli.commands import broker_cmds
 
     fake_console = _FakeConsole(answer="yes")
     monkeypatch.setattr(aria_cli, "console", fake_console, raising=False)
@@ -112,7 +112,7 @@ async def test_allow_chat_confirm_succeeds_with_exact_broker_id(monkeypatch, tmp
     add_broker_config({"id": "ths1", "type": "easytrader", "label": "同花顺"})
 
     import aria_cli
-    from apps.cli.commands import broker_cmds
+    from aria_code.apps.cli.commands import broker_cmds
 
     fake_console = _FakeConsole(answer="ths1")
     monkeypatch.setattr(aria_cli, "console", fake_console, raising=False)
@@ -140,7 +140,7 @@ async def test_disallow_chat_confirm_turns_it_back_off(monkeypatch, tmp_path):
     set_chat_confirm_enabled("ths1", True)
 
     import aria_cli
-    from apps.cli.commands import broker_cmds
+    from aria_code.apps.cli.commands import broker_cmds
 
     fake_console = _FakeConsole(answer="")
     monkeypatch.setattr(aria_cli, "console", fake_console, raising=False)

@@ -65,8 +65,8 @@ async def analyze_alert_via_gateway(
         # of the default Ollama path must import aria_cli first — a one-time
         # ~1s cost the long-lived daemon amortizes.
         import aria_cli  # noqa: F401  (side effect: binds stream_ollama globals)
-        from apps.cli.providers.runtime_bridge import build_tool_executor, make_provider_fn
-        from runtime.gateway import run_turn as run_turn_fn_impl
+        from aria_code.apps.cli.providers.runtime_bridge import build_tool_executor, make_provider_fn
+        from aria_code.runtime.gateway import run_turn as run_turn_fn_impl
 
         provider_fn = make_provider_fn(
             model=str(config.get("model", "qwen2.5:7b")),

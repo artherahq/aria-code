@@ -1,7 +1,7 @@
 """GitHub App authentication — generates installation tokens for Aria Code[bot].
 
 Usage:
-    from apps.cli.github_app_auth import get_installation_token, get_aria_git_url
+    from aria_code.apps.cli.github_app_auth import get_installation_token, get_aria_git_url
 
     token = get_installation_token()          # raises if not configured
     url   = get_aria_git_url("artherahq/aria-code", token)

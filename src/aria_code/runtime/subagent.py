@@ -231,7 +231,7 @@ async def _run_background(task: SubagentTask) -> None:
     _persist(task)
     try:
         if task.mode == "workspace-write" and task.isolation == "worktree":
-            from apps.cli.config_paths import resolve_config_dir
+            from aria_code.apps.cli.config_paths import resolve_config_dir
             from .worktrees import WorktreeManager
 
             manager = WorktreeManager(resolve_config_dir() / "worktrees")
@@ -397,7 +397,7 @@ def apply_task_worktree(task_id: str, *, cleanup: bool = True) -> dict:
         return {"success": False, "error": "Task has no isolated worktree changes"}
     try:
         from .worktrees import WorktreeManager
-        from apps.cli.config_paths import resolve_config_dir
+        from aria_code.apps.cli.config_paths import resolve_config_dir
 
         manager = WorktreeManager(resolve_config_dir() / "worktrees")
         tracked, untracked = manager.changed_paths(task.worktree_spec)

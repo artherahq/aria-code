@@ -29,7 +29,7 @@ def build_tool_executor(
     execution_context: Optional[Callable[[], dict]] = None,
 ):
     """Wrap the CLI's LOCAL_TOOLS registry for run_agent."""
-    from runtime.tool_executor import ToolExecutor
+    from aria_code.runtime.tool_executor import ToolExecutor
     return ToolExecutor(
         local_tools,
         config=config or {},
@@ -102,8 +102,8 @@ def make_provider_fn(
     it: cloud via ``user_context['system_role_override']``, Ollama via the
     provider's ``system_override`` argument.
     """
-    from apps.cli.providers.base import AriaSSEProvider, ConfiguredProvider, OllamaProvider
-    from packages.aria_sdk.streaming import stream_provider_result
+    from aria_code.apps.cli.providers.base import AriaSSEProvider, ConfiguredProvider, OllamaProvider
+    from aria_code.packages.aria_sdk.streaming import stream_provider_result
 
     _cloud_uctx = dict(user_context or {})
     if system_override:
@@ -191,7 +191,7 @@ async def run_chat_via_runtime(
     exposes the gateway result so terminal adapters can preserve provider and
     usage metadata during final rendering.
     """
-    from runtime.gateway import run_turn
+    from aria_code.runtime.gateway import run_turn
 
     provider_fn = make_provider_fn(
         model=model, config=config, api_url=api_url, ollama_url=ollama_url,

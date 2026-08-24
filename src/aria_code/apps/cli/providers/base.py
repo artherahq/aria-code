@@ -80,7 +80,7 @@ def _resolve_ollama_stream():
         rebound = getattr(module, "stream_ollama", None) if module else None
         if callable(rebound):
             return rebound
-    from apps.cli.providers.llm.ollama_stream import stream_ollama
+    from aria_code.apps.cli.providers.llm.ollama_stream import stream_ollama
 
     return stream_ollama
 
@@ -249,7 +249,7 @@ class AriaSSEProvider:
         *,
         cancel_event: Optional[asyncio.Event] = None,
     ) -> AsyncGenerator[LLMEvent, None]:
-        from apps.cli.providers.llm.sse_stream import stream_chat
+        from aria_code.apps.cli.providers.llm.sse_stream import stream_chat
 
         history = [m for m in messages if not (m.get("role") == "user" and m is messages[-1])]
         prompt = messages[-1].get("content", "") if messages else ""
@@ -335,7 +335,7 @@ class ConfiguredProvider:
     ) -> None:
         self.config = dict(config or {})
         self.model = model
-        from apps.cli.providers.chat_routing import normalize_provider_name
+        from aria_code.apps.cli.providers.chat_routing import normalize_provider_name
 
         self.backend = normalize_provider_name(
             self.config.get("local_provider") or "ollama"
@@ -365,7 +365,7 @@ class ConfiguredProvider:
         prepared = self._messages(messages)
         
         if self.backend in ("vertexai", "vertex-ai", "google-genai") or (self.backend in ("google", "gemini") and self.config.get("use_vertexai", True)):
-            from apps.cli.providers.vertexai_stream import VertexAIProvider
+            from aria_code.apps.cli.providers.vertexai_stream import VertexAIProvider
             provider = VertexAIProvider(
                 model=self.model,
                 config=self.config,
@@ -382,7 +382,7 @@ class ConfiguredProvider:
             cfg["model"] = self.model
             if self.backend in self.GENERIC_OPENAI_BACKENDS:
                 import os
-                from providers.llm.registry import _load_provider_cfg_from_file
+                from aria_code.providers.llm.registry import _load_provider_cfg_from_file
 
                 file_cfg = _load_provider_cfg_from_file(self.backend)
                 api_key = (
@@ -421,8 +421,8 @@ class ConfiguredProvider:
             source = self.backend
             event_stream = provider.stream(prepared, tools=tools, cancel_event=cancel_event)
         else:
-            from providers.llm.base import Message
-            from providers.llm.registry import get_provider
+            from aria_code.providers.llm.base import Message
+            from aria_code.providers.llm.registry import get_provider
 
             try:
                 provider = get_provider(f"{self.backend}/{self.model}")

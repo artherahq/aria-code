@@ -13,8 +13,8 @@ agents/realty — 经营权共创平台 AI Agent 模块
   - 退出清算方案生成
 
 用法:
-    from agents.realty import AssetDiagnosisAgent, RevenueShareAgent
-    from agents.realty import REALTY_TEAM  # 默认 team 名称列表
+    from aria_code.agents.realty import AssetDiagnosisAgent, RevenueShareAgent
+    from aria_code.agents.realty import REALTY_TEAM  # 默认 team 名称列表
 """
 
 from .asset_diagnosis  import AssetDiagnosisAgent

@@ -113,17 +113,17 @@ class TestModelCapability:
 
     def test_siliconflow_provider_not_local(self):
         """SiliconFlowProvider 是云端 provider，local 应为 False。"""
-        from providers.llm.openai_compat import SiliconFlowProvider
+        from aria_code.providers.llm.openai_compat import SiliconFlowProvider
         assert SiliconFlowProvider.local is False
 
     def test_deepseek_provider_supports_thinking(self):
         """DeepSeekProvider 支持 thinking（DeepSeek-R1）。"""
-        from providers.llm.openai_compat import DeepSeekProvider
+        from aria_code.providers.llm.openai_compat import DeepSeekProvider
         assert DeepSeekProvider.supports_thinking is True
 
     def test_new_providers_have_correct_base_urls(self):
         """三个国内 provider 的 DEFAULT_BASE_URL 指向正确域名。"""
-        from providers.llm.openai_compat import (
+        from aria_code.providers.llm.openai_compat import (
             SiliconFlowProvider, MoonshotProvider, ZhiPuProvider,
         )
         assert "siliconflow.cn" in SiliconFlowProvider.DEFAULT_BASE_URL

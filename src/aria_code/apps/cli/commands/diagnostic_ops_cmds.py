@@ -119,7 +119,7 @@ class DiagnosticOpsCommandsMixin:
     def cmd_architecture(self, args: str):
         """显示分层架构契约(各层状态 + 每层下一步)。用法: /architecture [--gaps]"""
         try:
-            from packages.aria_core import (
+            from aria_code.packages.aria_core import (
                 list_architecture_layers, architecture_status_counts)
         except Exception as exc:  # pragma: no cover - import guard
             msg = f"架构契约不可用: {exc}"
@@ -161,7 +161,7 @@ class DiagnosticOpsCommandsMixin:
     def cmd_accuracy(self, args: str):
         res = self.terminal._verify_predictions(min_age_hours=24.0)
         try:
-            from apps.cli.prediction_feedback import PredictionTracker
+            from aria_code.apps.cli.prediction_feedback import PredictionTracker
             acc = PredictionTracker(_get_CONFIG_DIR()).accuracy()
         except Exception:
             acc = {}
@@ -309,7 +309,7 @@ class DiagnosticOpsCommandsMixin:
 
             _ctx_stats = None
             try:
-                from packages.aria_services.context import context_health_snapshot
+                from aria_code.packages.aria_services.context import context_health_snapshot
                 _mc = get_model_cfg(self.terminal.config.get("model", "qwen2.5:7b"))
                 _ctx_stats = context_health_snapshot(
                     self.terminal.conversation,
@@ -500,7 +500,7 @@ class DiagnosticOpsCommandsMixin:
         import shlex as _shlex
         import subprocess as _sp
         import sys as _sys
-        from apps.cli.preflight import (
+        from aria_code.apps.cli.preflight import (
             build_full_dependency_report,
             build_intent_preflight,
             build_install_plan,
@@ -738,7 +738,7 @@ class DiagnosticOpsCommandsMixin:
             return
 
         try:
-            from datasources.router import _SOURCE_REGISTRY, DataRouter
+            from aria_code.datasources.router import _SOURCE_REGISTRY, DataRouter
             router = DataRouter()
         except ImportError:
             _print_error("datasources 模块未找到")
@@ -748,7 +748,7 @@ class DiagnosticOpsCommandsMixin:
             from rich.markup import escape
             from rich.table import Table
             from rich import box
-            from ui.render.responsive import StackedRecord, render_stacked_records, structured_layout
+            from aria_code.ui.render.responsive import StackedRecord, render_stacked_records, structured_layout
 
             _DESC = {
                 "yfinance": "Yahoo Finance (免费)",

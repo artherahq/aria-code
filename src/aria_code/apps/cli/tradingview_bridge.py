@@ -259,8 +259,8 @@ def _ensure_tradingview_broker(broker_id: str | None = None) -> Any:
     If no broker is configured, create a local paper account. This keeps
     webhooks useful while never defaulting to live execution.
     """
-    from brokers.config import add_broker_config, get_broker_config, get_default_broker_config, set_default_broker
-    from brokers.registry import BrokerRegistry
+    from aria_code.brokers.config import add_broker_config, get_broker_config, get_default_broker_config, set_default_broker
+    from aria_code.brokers.registry import BrokerRegistry
 
     selected_id = str(broker_id or "").strip()
     if not selected_id:
@@ -358,7 +358,7 @@ def build_tradingview_order_preview(
             "broker_label": getattr(broker, "label", ""),
         }
 
-    from brokers import OrderIntent, build_order_preview
+    from aria_code.brokers import OrderIntent, build_order_preview
 
     preview = build_order_preview(
         broker,

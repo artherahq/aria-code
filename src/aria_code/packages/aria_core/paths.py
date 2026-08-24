@@ -20,7 +20,7 @@
     ARIA_HOME 环境变量  >  已存在的 ~/.arthera(老用户，不迁移)  >  ~/.aria-code
 
 放在 packages/aria_core 而不是 apps/cli，是因为调用方横跨 runtime/、brokers/、
-packages/、datasources/、tools/ —— 让这些层反向 import apps/cli 是分层倒置。
+packages/、datasources/、tools/ —— 让这些层反向 import aria_code.apps/cli 是分层倒置。
 本模块只依赖 stdlib，任何层都能安全引入。
 
 ⚠️ 对既有用户零影响：只要 ~/.arthera 存在，aria_home() 就返回它，行为与硬编码

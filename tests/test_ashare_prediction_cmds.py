@@ -78,7 +78,7 @@ def test_prediction_freshness_marks_old_report_as_not_current():
 
 @requires_platform
 def test_quant_engine_facade_exposes_private_services_when_platform_is_present():
-    from packages.quant_engine.services.daily_ashare_prediction_service import DailyASharePredictionService
+    from aria_code.packages.quant_engine.services.daily_ashare_prediction_service import DailyASharePredictionService
 
     assert DailyASharePredictionService.__name__ == "DailyASharePredictionService"
 

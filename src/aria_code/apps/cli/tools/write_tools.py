@@ -81,7 +81,7 @@ def _lsp_autocheck(path: "pathlib.Path") -> "tuple[str | None, list]":
     except Exception:
         return None, []
     try:
-        from runtime.lsp import server_for, get_diagnostics
+        from aria_code.runtime.lsp import server_for, get_diagnostics
         if not server_for(path):
             return None, []
         diags = get_diagnostics(path, timeout=6.0)
@@ -143,7 +143,7 @@ def _record_checkpoint(change, params: dict, *, existed_before: bool, before_mod
     if not run_id and not session_id:
         return None, None
     try:
-        from runtime.checkpoints import CheckpointStore
+        from aria_code.runtime.checkpoints import CheckpointStore
         checkpoint = CheckpointStore().record_change(
             path=change.path,
             before_content=change.before_content,

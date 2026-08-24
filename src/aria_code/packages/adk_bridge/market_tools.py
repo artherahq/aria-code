@@ -99,7 +99,7 @@ class MarketResearchTools:
         names, or raw provider exceptions.
         """
         try:
-            from packages.aria_services.provider_health import GLOBAL_PROVIDER_HEALTH
+            from aria_code.packages.aria_services.provider_health import GLOBAL_PROVIDER_HEALTH
 
             public_status = GLOBAL_PROVIDER_HEALTH.public_status("market_data")
             summary = GLOBAL_PROVIDER_HEALTH.summary()

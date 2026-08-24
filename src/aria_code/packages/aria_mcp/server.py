@@ -432,8 +432,8 @@ _WRITE_SAFE = {
 # ---------------------------------------------------------------------------
 
 async def _call_market_quote(args: Dict[str, Any]) -> Dict[str, Any]:
-    from runtime.tool_executor import ToolExecutor
-    from apps.cli.tools.market_tools import tool_get_market_data
+    from aria_code.runtime.tool_executor import ToolExecutor
+    from aria_code.apps.cli.tools.market_tools import tool_get_market_data
 
     executor = ToolExecutor({"get_market_data": (tool_get_market_data, "quote + technicals")})
     return await executor.execute("get_market_data", {"symbol": args.get("symbol", "")})
@@ -442,8 +442,8 @@ async def _call_market_quote(args: Dict[str, Any]) -> Dict[str, Any]:
 async def _call_agent_team(args: Dict[str, Any]) -> Dict[str, Any]:
     from dataclasses import asdict
 
-    from agents.team import run_team
-    from datasources.router import get_router
+    from aria_code.agents.team import run_team
+    from aria_code.datasources.router import get_router
 
     symbol = str(args.get("symbol", "")).strip()
     if not symbol:
@@ -485,7 +485,7 @@ def _skill_summary(skill: Any) -> Dict[str, Any]:
 
 
 async def _call_skill_list(args: Dict[str, Any]) -> Dict[str, Any]:
-    from packages.aria_skills.loader import discover_external_skills, select_external_skills
+    from aria_code.packages.aria_skills.loader import discover_external_skills, select_external_skills
 
     query = str(args.get("query", "")).strip()
     try:
@@ -527,7 +527,7 @@ def _skill_reference_names(skill: Any) -> List[str]:
 
 
 async def _call_skill_get(args: Dict[str, Any]) -> Dict[str, Any]:
-    from packages.aria_skills.loader import discover_external_skills
+    from aria_code.packages.aria_skills.loader import discover_external_skills
 
     name = str(args.get("name", "")).strip()
     if not name:
@@ -584,7 +584,7 @@ async def _call_skill_get(args: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _get_broker(broker_id: str = ""):
-    from brokers.registry import get_registry
+    from aria_code.brokers.registry import get_registry
 
     reg = get_registry()
     if broker_id:
@@ -613,7 +613,7 @@ async def _call_broker_positions(args: Dict[str, Any]) -> Dict[str, Any]:
 
 
 async def _call_broker_list_previews(args: Dict[str, Any]) -> Dict[str, Any]:
-    from brokers.trading import list_order_previews
+    from aria_code.brokers.trading import list_order_previews
 
     limit = int(args.get("limit", 10) or 10)
     return {"success": True, "previews": list_order_previews(limit=limit)}
@@ -625,7 +625,7 @@ async def _call_broker_preview_order(args: Dict[str, Any]) -> Dict[str, Any]:
     # which has its own two-gate check. See module docstring.
     import asyncio
 
-    from brokers.trading import OrderIntent, build_order_preview
+    from aria_code.brokers.trading import OrderIntent, build_order_preview
 
     symbol = str(args.get("symbol", "")).strip()
     side = str(args.get("side", "")).strip().lower()
@@ -665,8 +665,8 @@ async def _call_broker_confirm_order(args: Dict[str, Any]) -> Dict[str, Any]:
     # reached. See the module docstring for the full rationale.
     import asyncio
 
-    from brokers.config import is_chat_confirm_enabled
-    from brokers.trading import execute_order_preview
+    from aria_code.brokers.config import is_chat_confirm_enabled
+    from aria_code.brokers.trading import execute_order_preview
 
     preview_id = str(args.get("preview_id", "")).strip()
     if not preview_id:
@@ -1418,7 +1418,7 @@ def _build_tools() -> List[Dict[str, Any]]:
     _WRITE_SAFE is a deliberate, individually-justified code change, not a
     side effect of editing the exposure list.
     """
-    from packages.aria_mcp.bridge import default_exposures
+    from aria_code.packages.aria_mcp.bridge import default_exposures
 
     tools = []
     for exposure in default_exposures():

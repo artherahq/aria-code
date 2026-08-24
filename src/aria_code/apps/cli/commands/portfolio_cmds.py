@@ -390,7 +390,7 @@ class PortfolioCommandsMixin:
             data_bundle = None
             data_quality = {}
             try:
-                from packages.aria_services.data import DataService as _ReportDataService
+                from aria_code.packages.aria_services.data import DataService as _ReportDataService
                 data_bundle = await asyncio.get_event_loop().run_in_executor(
                     None,
                     lambda: _ReportDataService().bundle(symbol, history_days=370, technical_days=120),
@@ -546,7 +546,7 @@ class PortfolioCommandsMixin:
             return
 
         path = str(out_f)
-        from ui.render.output import display_path as _display_path
+        from aria_code.ui.render.output import display_path as _display_path
         path_label = _display_path(out_f, fallback="report")
         _file_kb = report_file_size_kb(out_f)
         # Check if all agents failed — show warning instead of false success
@@ -691,8 +691,8 @@ class PortfolioCommandsMixin:
         # 尝试使用新 PortfolioAgent
         _use_new = False
         try:
-            from agents.portfolio_agent import PortfolioAgent as _PA
-            from providers.llm.registry import get_provider as _get_prov, list_available_providers as _laps
+            from aria_code.agents.portfolio_agent import PortfolioAgent as _PA
+            from aria_code.providers.llm.registry import get_provider as _get_prov, list_available_providers as _laps
             _use_new = True
         except ImportError:
             pass
@@ -1000,9 +1000,9 @@ class PortfolioCommandsMixin:
 
         # /deep calibrate — score logged predictions against realised price (P2 loop)
         if args.strip().lower().startswith(("calibrate", "校准")):
-            from agents.deep.calibration_loop import (
+            from aria_code.agents.deep.calibration_loop import (
                 PredictionLog, evaluate_due, evaluate_from_ledger)
-            from agents.deep.quant_fusion import CalibrationStore
+            from aria_code.agents.deep.quant_fusion import CalibrationStore
             store, log = CalibrationStore(), PredictionLog()
             led_res = {"evaluated": 0, "hits": 0}
             try:  # actual realised P&L first — the strongest ground truth
@@ -1031,8 +1031,8 @@ class PortfolioCommandsMixin:
         _zh = sum(1 for c in args if '一' <= c <= '鿿')
         _lang = "zh" if _zh / max(len(args), 1) > 0.15 else "en"
 
-        from agents.deep.tiers import render_tier
-        from ui.render.team import render_agent_tree_root, render_agent_node
+        from aria_code.agents.deep.tiers import render_tier
+        from aria_code.ui.render.team import render_agent_tree_root, render_agent_node
 
         for sym in symbols:
             def _on_agent_done(name, result):
@@ -1077,7 +1077,7 @@ class PortfolioCommandsMixin:
 
             # P2 closed loop: log the verdict so /deep calibrate can score it later
             try:
-                from agents.deep.calibration_loop import PredictionLog
+                from aria_code.agents.deep.calibration_loop import PredictionLog
                 _p = _latest_close(sym)
                 if _p and result.final_signal:
                     PredictionLog().log(sym, result.final_signal,
@@ -1105,7 +1105,7 @@ class PortfolioCommandsMixin:
             _agent_count = len(agent_names)
 
             # ── Streaming nested agent tree (Claude Code-style) ──────────────
-            from ui.render.team import (
+            from aria_code.ui.render.team import (
                 render_agent_tree_root, render_agent_node,
                 render_agent_synthesis_leaf,
             )
@@ -1134,7 +1134,7 @@ class PortfolioCommandsMixin:
 
             try:
                 # Create a stream consumer for tool rendering and thinking animations
-                from apps.cli.runtime_consumer import TerminalRuntimeEventConsumer
+                from aria_code.apps.cli.runtime_consumer import TerminalRuntimeEventConsumer
                 consumer = TerminalRuntimeEventConsumer(
                     terminal=self.terminal,
                     console=self.context.console,
@@ -1191,8 +1191,8 @@ class PortfolioCommandsMixin:
 
                     # Synthesis in a _get_Panel() for visual separation
                     from rich import box as _rbox_team
-                    from ui.render.team import SIGNAL_COLORS as _SC, VERDICT_STYLE as _VS
-                    from apps.cli.commands.team import (
+                    from aria_code.ui.render.team import SIGNAL_COLORS as _SC, VERDICT_STYLE as _VS
+                    from aria_code.apps.cli.commands.team import (
                         build_team_terminal_summary as _team_terminal_summary,
                         clean_team_synthesis_text as _clean_team_synthesis,
                     )
@@ -1218,7 +1218,7 @@ class PortfolioCommandsMixin:
                     if _quality_notes:
                         print("  数据质量警告: " + "; ".join(_quality_notes[:3]))
                     print("\n  ── 综合结论 ──")
-                    from apps.cli.commands.team import (
+                    from aria_code.apps.cli.commands.team import (
                         build_team_terminal_summary as _team_terminal_summary,
                         clean_team_synthesis_text as _clean_team_synthesis,
                     )

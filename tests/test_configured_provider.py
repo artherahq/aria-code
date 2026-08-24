@@ -44,7 +44,7 @@ async def test_configured_provider_uses_non_ollama_local_runtime(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_configured_cloud_provider_normalizes_tool_schema(monkeypatch):
-    import providers.llm.registry as registry
+    import aria_code.providers.llm.registry as registry
 
     seen = {}
 

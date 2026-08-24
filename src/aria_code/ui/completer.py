@@ -7,7 +7,7 @@ Improvements over the original:
   - Results ranked: exact-prefix > fuzzy-command > description-fuzzy
   - Category tag shown in display_meta (市场 / 分析 / 量化 / 数据源 …)
 
-    from ui.completer import AriaPTCompleter, ARIA_PT_STYLE
+    from aria_code.ui.completer import AriaPTCompleter, ARIA_PT_STYLE
 """
 
 from __future__ import annotations
@@ -454,7 +454,7 @@ if HAS_PT:
 
     def _detect_theme() -> str:
         try:
-            from ui.input_box import detect_terminal_theme
+            from aria_code.ui.input_box import detect_terminal_theme
             return detect_terminal_theme()
         except Exception:
             return "dark"

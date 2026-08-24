@@ -33,7 +33,7 @@ class _YahooChartResponse:
 
 
 def test_yahoo_chart_fallback_returns_clean_ohlcv(monkeypatch):
-    import apps.cli.handlers.chart_handlers as chart_handlers
+    import aria_code.apps.cli.handlers.chart_handlers as chart_handlers
 
     class FakeRequests:
         @staticmethod
@@ -52,7 +52,7 @@ def test_yahoo_chart_fallback_returns_clean_ohlcv(monkeypatch):
 
 def test_normalise_history_frame_rejects_missing_close():
     import pandas as pd
-    import apps.cli.handlers.chart_handlers as chart_handlers
+    import aria_code.apps.cli.handlers.chart_handlers as chart_handlers
 
     hist = pd.DataFrame({"price": [1, 2, 3]})
 
@@ -61,7 +61,7 @@ def test_normalise_history_frame_rejects_missing_close():
 
 def test_ashare_chart_uses_akshare_when_yfinance_unavailable(monkeypatch, tmp_path):
     import pandas as pd
-    import apps.cli.handlers.chart_handlers as chart_handlers
+    import aria_code.apps.cli.handlers.chart_handlers as chart_handlers
 
     monkeypatch.setenv("ARIA_ARTIFACT_ROOT", str(tmp_path / "artifacts"))
     monkeypatch.setenv("ARIA_USER_OUTPUT_ROOT", str(tmp_path / "user-output"))
@@ -98,8 +98,8 @@ def test_ashare_chart_uses_akshare_when_yfinance_unavailable(monkeypatch, tmp_pa
 
 def test_natural_language_ashare_chart_analysis_uses_akshare(monkeypatch, tmp_path):
     import pandas as pd
-    import apps.cli.handlers.chart_handlers as chart_handlers
-    from apps.cli.utils.market_detect import _extract_market_symbol, _is_stock_chart_analysis_request
+    import aria_code.apps.cli.handlers.chart_handlers as chart_handlers
+    from aria_code.apps.cli.utils.market_detect import _extract_market_symbol, _is_stock_chart_analysis_request
 
     monkeypatch.setenv("ARIA_ARTIFACT_ROOT", str(tmp_path / "artifacts"))
     monkeypatch.setenv("ARIA_USER_OUTPUT_ROOT", str(tmp_path / "user-output"))
@@ -138,7 +138,7 @@ def test_natural_language_ashare_chart_analysis_uses_akshare(monkeypatch, tmp_pa
 
 
 def test_ashare_chart_prefers_market_data_client(monkeypatch, tmp_path):
-    import apps.cli.handlers.chart_handlers as chart_handlers
+    import aria_code.apps.cli.handlers.chart_handlers as chart_handlers
 
     monkeypatch.setenv("ARIA_ARTIFACT_ROOT", str(tmp_path / "artifacts"))
     monkeypatch.setenv("ARIA_USER_OUTPUT_ROOT", str(tmp_path / "user-output"))

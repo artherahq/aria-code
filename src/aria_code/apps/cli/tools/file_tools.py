@@ -5,7 +5,7 @@ return a result dict. No console/HAS_RICH/write-policy state involved.
 
 They are registered in aria_cli.py's execute_aria_tool dispatch table via:
 
-    from apps.cli.tools.file_tools import tool_read_file, tool_list_files, ...
+    from aria_code.apps.cli.tools.file_tools import tool_read_file, tool_list_files, ...
 
     "read_file":   tool_read_file,
     "list_files":  tool_list_files,

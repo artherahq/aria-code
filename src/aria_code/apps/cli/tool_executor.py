@@ -93,31 +93,31 @@ def _tool_read_file(params: dict) -> dict:
     return _src_read_file(params)
 def _strip_markdown_fences(content: str) -> str:
     """Thin shim — implementation in apps/cli/tools/write_tools.py."""
-    from apps.cli.tools.write_tools import _strip_markdown_fences as _f
+    from aria_code.apps.cli.tools.write_tools import _strip_markdown_fences as _f
     return _f(content)
 def _auto_fix_python(content: str, path: str) -> str:
     """Thin shim — implementation in apps/cli/tools/write_tools.py."""
-    from apps.cli.tools.write_tools import _auto_fix_python as _f
+    from aria_code.apps.cli.tools.write_tools import _auto_fix_python as _f
     return _f(content, path)
 def _write_policy_confirm(p: pathlib.Path, content: str, existed: bool) -> tuple:
     """Thin shim — implementation in apps/cli/tools/write_tools.py."""
-    from apps.cli.tools.write_tools import _write_policy_confirm as _f
+    from aria_code.apps.cli.tools.write_tools import _write_policy_confirm as _f
     return _f(p, content, existed)
 def _tool_write_file(params: dict) -> dict:
     """Thin shim — implementation in apps/cli/tools/write_tools.py."""
-    from apps.cli.tools.write_tools import tool_write_file as _f
+    from aria_code.apps.cli.tools.write_tools import tool_write_file as _f
     return _f(params)
 def _tool_edit_file(params: dict) -> dict:
     """Thin shim — implementation in apps/cli/tools/write_tools.py."""
-    from apps.cli.tools.write_tools import tool_edit_file as _f
+    from aria_code.apps.cli.tools.write_tools import tool_edit_file as _f
     return _f(params)
 def _tool_multi_edit(params: dict) -> dict:
     """Thin shim — implementation in apps/cli/tools/write_tools.py."""
-    from apps.cli.tools.write_tools import tool_multi_edit as _f
+    from aria_code.apps.cli.tools.write_tools import tool_multi_edit as _f
     return _f(params)
 def _tool_update_todos(params: dict) -> dict:
     """Thin shim — implementation in apps/cli/todo_tracker.py."""
-    from apps.cli.todo_tracker import update_todos as _f
+    from aria_code.apps.cli.todo_tracker import update_todos as _f
     return _f(params)
 def _tool_list_files(params: dict) -> dict:
     """Thin shim — implementation in apps/cli/tools/file_tools.py."""
@@ -151,7 +151,7 @@ def _tool_get_market_data(params: dict) -> dict:
 def _tool_get_market_history(params: dict) -> dict:
     return _src_get_market_history(params)
 def _todo_schema():
-    from apps.cli.todo_tracker import UPDATE_TODOS_SCHEMA
+    from aria_code.apps.cli.todo_tracker import UPDATE_TODOS_SCHEMA
     return UPDATE_TODOS_SCHEMA
 def _wrap_bare_schemas(bare: list) -> list:
     """Convert Anthropic-style {name, description, parameters} schemas into the
@@ -401,7 +401,7 @@ def _confirm_tool_execution_decision(tool_name: str, params: dict,
 
     # ── Pre-flight for run_command ────────────────────────────────────────────
     if tool_name == "run_command":
-        from safety import classify_command_risk
+        from aria_code.safety import classify_command_risk
         cmd = params.get("command", "")
         if isinstance(cmd, list):
             import shlex as _shlex_tmp

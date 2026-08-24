@@ -83,19 +83,19 @@ class WorkspaceCommandsMixin:
     async def cmd_packages(self, args: str):
         """Show Aria Code package facades and Arthera package bridge status."""
         try:
-            from packages.aria_agents import list_agent_manifests
-            from packages.aria_core import (
+            from aria_code.packages.aria_agents import list_agent_manifests
+            from aria_code.packages.aria_core import (
                 build_package_manifest,
                 list_architecture_layers,
                 required_architecture_layer_names,
                 write_package_manifest,
             )
-            from packages.aria_infra import (
+            from aria_code.packages.aria_infra import (
                 aria_code_identity,
                 build_package_doctor_report,
                 discover_arthera_packages,
             )
-            from packages.aria_mcp import (
+            from aria_code.packages.aria_mcp import (
                 arthera_quant_engine_server_config,
                 default_exposures,
                 load_mcp_config,
@@ -104,14 +104,14 @@ class WorkspaceCommandsMixin:
                 mcp_tools_to_specs,
                 write_mcp_config,
             )
-            from packages.aria_services import (
+            from aria_code.packages.aria_services import (
                 list_service_specs,
                 list_service_usage_specs,
                 required_service_names,
             )
-            from packages.aria_services.provider_health import GLOBAL_PROVIDER_HEALTH
-            from packages.aria_skills import builtin_skill_specs
-            from packages.aria_tools import build_registry_from_legacy
+            from aria_code.packages.aria_services.provider_health import GLOBAL_PROVIDER_HEALTH
+            from aria_code.packages.aria_skills import builtin_skill_specs
+            from aria_code.packages.aria_tools import build_registry_from_legacy
         except Exception as exc:
             _print_error(f"packages facade unavailable: {exc}")
             return
@@ -426,7 +426,7 @@ class WorkspaceCommandsMixin:
 
             self.context.console.print()
             self.context.console.print("[bold]Arthera Packages[/bold]")
-            from ui.render.output import display_path as _display_path
+            from aria_code.ui.render.output import display_path as _display_path
             if arthera.available:
                 self.context.console.print(f"  [green]found[/green] [dim]{_display_path(arthera.root, fallback='package root')}[/dim]")
                 for name, path in sorted(arthera.packages.items()):
@@ -968,7 +968,7 @@ class WorkspaceCommandsMixin:
                 print(f"✅ 创建: {target_dir}"); [print(f"  {p}") for p in created]
             # Optionally generate ARIA.md inside the new project
             try:
-                from apps.cli.project_aria import build_project_aria_md
+                from aria_code.apps.cli.project_aria import build_project_aria_md
                 _aria_tgt = target_dir / "ARIA.md"
                 if not _aria_tgt.exists():
                     _aria_tgt.write_text(

@@ -104,7 +104,7 @@ class WorkflowCommandsMixin:
         if sub == "list":
             if _get__HAS_JSON_HOOKS():
                 try:
-                    from apps.cli.hooks import list_hooks as _list_json_hooks
+                    from aria_code.apps.cli.hooks import list_hooks as _list_json_hooks
                     _json_rows = _list_json_hooks()
                     if _json_rows:
                         if self.context.has_rich:
@@ -151,7 +151,7 @@ class WorkflowCommandsMixin:
         elif sub == "edit":
             if not rest:
                 if _get__HAS_JSON_HOOKS():
-                    from apps.cli.hooks import hooks_file_path, create_example_hooks
+                    from aria_code.apps.cli.hooks import hooks_file_path, create_example_hooks
                     _hpath = hooks_file_path("global")
                     create_example_hooks(_hpath)
                     editor = os.getenv("EDITOR", "nano")
@@ -238,7 +238,7 @@ class WorkflowCommandsMixin:
 
     def cmd_rewind(self, args: str):
         """Restore code checkpoints, conversation history, or both."""
-        from runtime.checkpoints import (
+        from aria_code.runtime.checkpoints import (
             CheckpointConflictError,
             CheckpointNotFoundError,
             CheckpointStore,
@@ -456,7 +456,7 @@ class WorkflowCommandsMixin:
         # receives it as evidence and must not pretend it accessed anything
         # beyond the supplied file or diff.
         try:
-            from agents.code_review import CodeReviewAgent
+            from aria_code.agents.code_review import CodeReviewAgent
 
             findings = CodeReviewAgent.review_source(
                 review_source,

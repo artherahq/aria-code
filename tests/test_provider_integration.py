@@ -22,7 +22,7 @@ _CLI_DIR = str(pathlib.Path(__file__).parents[1])
 if _CLI_DIR not in sys.path:
     sys.path.insert(0, _CLI_DIR)
 
-import providers.llm.registry as _reg
+import aria_code.providers.llm.registry as _reg
 from aria_code.providers.llm.base import Message, ProviderConfig
 from aria_code.providers.llm.openai_compat import DeepSeekProvider, SiliconFlowProvider
 from aria_code.providers.llm.registry import _try_provider, stream_cloud_fallback

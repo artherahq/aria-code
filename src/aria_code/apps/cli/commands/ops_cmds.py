@@ -100,7 +100,7 @@ class OpsCommandsMixin:
         """Show CLI service tiers and core workflows."""
         provider_summary = None
         try:
-            from packages.aria_services.provider_health import GLOBAL_PROVIDER_HEALTH
+            from aria_code.packages.aria_services.provider_health import GLOBAL_PROVIDER_HEALTH
             provider_summary = GLOBAL_PROVIDER_HEALTH.summary()
         except Exception:
             provider_summary = None
@@ -492,7 +492,7 @@ class OpsCommandsMixin:
         /lsp <file>         — run diagnostics (errors/warnings) on a file
         """
         try:
-            from runtime.lsp import available_servers, server_for, get_diagnostics
+            from aria_code.runtime.lsp import available_servers, server_for, get_diagnostics
         except ImportError as _e:
             self.context.console.print(f"[red]runtime.lsp not available: {_e}[/red]") if self.context.has_rich else print(f"Error: {_e}")
             return
@@ -588,7 +588,7 @@ class OpsCommandsMixin:
         # _rebind_mixin_globals(), so module-level names from this file (Path and
         # the _build_*/_detect_user_shell helpers) must be imported locally.
         from pathlib import Path
-        from apps.cli.commands.ops_cmds import (
+        from aria_code.apps.cli.commands.ops_cmds import (
             _build_bash_completion, _build_zsh_completion, _detect_user_shell,
         )
 
@@ -596,7 +596,7 @@ class OpsCommandsMixin:
 
         # Build sorted slash command list from VISIBLE_SLASH_COMMANDS
         try:
-            from apps.cli.commands.catalog import VISIBLE_SLASH_COMMANDS
+            from aria_code.apps.cli.commands.catalog import VISIBLE_SLASH_COMMANDS
             cmds = sorted(VISIBLE_SLASH_COMMANDS)
         except ImportError:
             cmds = ["/help", "/model", "/config", "/recall", "/permissions", "/deep", "/quote"]

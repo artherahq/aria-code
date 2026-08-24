@@ -156,7 +156,7 @@ def test_standalone_checkpoint_can_be_restored_as_latest(stores, tmp_path):
 
 def test_edit_tool_records_checkpoint_when_session_context_is_present(tmp_path, monkeypatch):
     monkeypatch.setenv("ARIA_HOME", str(tmp_path / "aria-home"))
-    from apps.cli.tools.write_tools import tool_edit_file
+    from aria_code.apps.cli.tools.write_tools import tool_edit_file
 
     target = tmp_path / "tool_edit.py"
     target.write_text("value = 1\nprint(value)\n", encoding="utf-8")

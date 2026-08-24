@@ -86,7 +86,7 @@ def _installed_catalog_skills():
     reason="no external skill catalog installed (set ARIA_SKILLS_PATH)",
 )
 def test_installed_catalog_declares_only_real_agents():
-    from agents.registry import get_registry
+    from aria_code.agents.registry import get_registry
 
     known = {row.get("name") for row in get_registry().list()}
     assert known, "agent registry is empty — cannot validate skill bindings"

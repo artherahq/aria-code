@@ -44,7 +44,7 @@ def _provider_for_test(request: pytest.FixtureRequest) -> str | None:
 
 async def _call_provider(provider_name: str, prompt: str) -> dict:
     """用指定 provider 发起一次 stream_cloud_fallback 调用，返回结果 dict。"""
-    from providers.llm.registry import _load_provider_cfg_from_file
+    from aria_code.providers.llm.registry import _load_provider_cfg_from_file
     from unittest.mock import patch
 
     # 仅让指定 provider 有 key（避免其他 provider 干扰顺序）

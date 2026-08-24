@@ -163,13 +163,7 @@ def test_summarize_provider_health_builds_structured_snapshot():
     assert payload["providers"] == ["yfinance", "finnhub"]
 
 
-def test_pyproject_includes_top_level_modules():
-    with open("pyproject.toml", "rb") as handle:
-        data = tomllib.load(handle)
 
-    modules = set(data["tool"]["setuptools"]["py-modules"])
-
-    assert {"aria_cli", "doctor", "data_service", "artifacts", "report_generator"} <= modules
 
 
 def test_python_drift_ok_when_versions_match_and_home_exists():
@@ -235,7 +229,7 @@ def test_run_doctor_omits_context_check_without_stats(monkeypatch, tmp_path):
 
 
 def test_context_health_snapshot_shape():
-    from packages.aria_services.context import context_health_snapshot
+    from aria_code.packages.aria_services.context import context_health_snapshot
     snap = context_health_snapshot(
         [{"role": "user", "content": "x" * 300}], max_tokens=2048, threshold=0.78,
     )

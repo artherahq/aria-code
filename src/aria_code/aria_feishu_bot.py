@@ -678,7 +678,7 @@ async def _query_aria_direct(text: str, timeout: int = 90) -> str:
     try:
         import sys as _sys
         _sys.path.insert(0, str(_ARIA_CODE_DIR))
-        from providers.llm.registry import stream_cloud_fallback
+        from aria_code.providers.llm.registry import stream_cloud_fallback
         import asyncio as _aio
 
         collected: list[str] = []

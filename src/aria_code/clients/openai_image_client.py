@@ -62,7 +62,7 @@ def estimate_cost(size: str = "1024x1536", quality: str = "high") -> Dict[str, A
 
 
 def _providers_path() -> Path:
-    from apps.cli.config_paths import resolve_paths
+    from aria_code.apps.cli.config_paths import resolve_paths
     return resolve_paths().providers_file
 
 

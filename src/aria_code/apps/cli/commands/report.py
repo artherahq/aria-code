@@ -118,8 +118,8 @@ async def update_report_index(report_dir: Path) -> Path | None:
 
 def build_report_llm_provider(config: dict[str, Any]) -> Any:
     try:
-        from providers.llm.base import ProviderConfig
-        from providers.llm.ollama import OllamaProvider
+        from aria_code.providers.llm.base import ProviderConfig
+        from aria_code.providers.llm.ollama import OllamaProvider
 
         model = config.get("model", "qwen2.5:7b")
         url = config.get("ollama_url", "http://localhost:11434")
@@ -137,8 +137,8 @@ async def run_report_agents(
     on_agent_done: Any = None,
     on_synthesis_start: Any = None,
 ) -> Any:
-    from agents.team import run_team
-    from datasources.router import get_router
+    from aria_code.agents.team import run_team
+    from aria_code.datasources.router import get_router
 
     agent_names = report_agent_names(report_type)
     llm_provider = build_report_llm_provider(config)

@@ -246,8 +246,8 @@ def test_console_script_points_to_apps_cli_entrypoint():
     with open("pyproject.toml", "rb") as handle:
         data = tomllib.load(handle)
 
-    assert data["project"]["scripts"]["aria-code"] == "apps.cli.main:main"
-    assert "apps*" in data["tool"]["setuptools"]["packages"]["find"]["include"]
+    assert data["project"]["scripts"]["aria-code"] == "aria_code.apps.cli.main:main"
+    assert "aria_code*" in data["tool"]["setuptools"]["packages"]["find"]["include"]
 
 
 def test_market_slash_commands_are_registered_for_interactive_routing():
@@ -645,8 +645,8 @@ async def test_report_pdf_and_index_helpers_delegate_to_generator(monkeypatch, t
 
 @pytest.mark.asyncio
 async def test_generate_html_report_runs_team_and_generator(monkeypatch, tmp_path):
-    import agents.team
-    import datasources.router
+    import aria_code.agents.team
+    import aria_code.datasources.router
     import report_generator
 
     calls = {}
@@ -691,9 +691,9 @@ async def test_generate_html_report_runs_team_and_generator(monkeypatch, tmp_pat
 
 @pytest.mark.asyncio
 async def test_run_team_analysis_captures_noisy_output_and_sanitizes(monkeypatch):
-    import agents.team
-    import apps.cli.commands.team as team_module
-    import datasources.router
+    import aria_code.agents.team
+    import aria_code.apps.cli.commands.team as team_module
+    import aria_code.datasources.router
 
     calls = {}
     team_result = SimpleNamespace(final_signal="BUY", results=[])
@@ -743,8 +743,8 @@ async def test_run_team_analysis_captures_noisy_output_and_sanitizes(monkeypatch
 
 
 def test_team_report_builder_and_save_write_quality_metadata(monkeypatch, tmp_path):
-    from agents.base import AgentResult
-    from agents.team import TeamResult
+    from aria_code.agents.base import AgentResult
+    from aria_code.agents.team import TeamResult
 
     monkeypatch.setenv("ARIA_ARTIFACT_ROOT", str(tmp_path / "project-artifacts"))
     monkeypatch.setenv("ARIA_USER_OUTPUT_ROOT", str(tmp_path / "user-output"))
@@ -989,7 +989,7 @@ def test_save_markdown_report_writes_artifact_metadata(monkeypatch, tmp_path):
 
 @pytest.mark.asyncio
 async def test_build_analyze_context_uses_data_service_boundary(monkeypatch):
-    import packages.aria_services.data as service_data
+    import aria_code.packages.aria_services.data as service_data
 
     class _Bundle:
         quote = {"success": True, "price": 101.2, "change_pct": -1.5, "name": "Apple"}

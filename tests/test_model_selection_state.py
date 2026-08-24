@@ -1,6 +1,6 @@
 import pytest
 
-import apps.cli.commands.model_cmds as model_cmds
+import aria_code.apps.cli.commands.model_cmds as model_cmds
 
 
 class _Terminal:
@@ -16,7 +16,7 @@ class _Terminal:
 class _Commands(model_cmds.ModelCommandsMixin):
     def __init__(self):
         self.terminal = _Terminal()
-        from apps.cli.context import AriaContext
+        from aria_code.apps.cli.context import AriaContext
         self.context = AriaContext(console=None, config=self.terminal.config, save_config_cb=lambda c: None, load_config_cb=lambda: {})
 
 

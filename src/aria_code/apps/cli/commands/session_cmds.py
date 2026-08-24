@@ -175,7 +175,7 @@ class SessionCommandsMixin:
             context_health = None
             if fmt == "bundle":
                 try:
-                    from packages.aria_services.provider_health import GLOBAL_PROVIDER_HEALTH
+                    from aria_code.packages.aria_services.provider_health import GLOBAL_PROVIDER_HEALTH
                     provider_health = GLOBAL_PROVIDER_HEALTH.snapshot()
                 except Exception:
                     provider_health = []
@@ -192,7 +192,7 @@ class SessionCommandsMixin:
                 except Exception:
                     mcp_status = None
                 try:
-                    from packages.aria_services.context import context_health_snapshot
+                    from aria_code.packages.aria_services.context import context_health_snapshot
                     _mc = get_model_cfg(self.terminal.config.get("model", "qwen2.5:7b"))
                     context_health = context_health_snapshot(
                         self.terminal.conversation,

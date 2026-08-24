@@ -28,7 +28,7 @@ def resolve_config_dir() -> Path:
     新用户的 config 落在 ~/.aria-code 而凭证落在 ~/.arthera。这里保留函数名做
     兼容，逻辑不再各自维护一份。
     """
-    from packages.aria_core.paths import aria_home
+    from aria_code.packages.aria_core.paths import aria_home
 
     return aria_home()
 

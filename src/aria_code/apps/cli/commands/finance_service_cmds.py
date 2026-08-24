@@ -34,7 +34,7 @@ from typing import Dict, Any, Optional
 class FinanceServiceCommandsMixin:
     def cmd_markets(self, args: str):
         """Show the applicable finance-service contract for a market/query."""
-        from apps.cli.finance_service_catalog import market_service_summary
+        from aria_code.apps.cli.finance_service_catalog import market_service_summary
 
         summary = market_service_summary(args)
         selected = summary["selected"]

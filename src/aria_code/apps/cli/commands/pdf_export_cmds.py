@@ -67,7 +67,7 @@ class PdfExportCommandsMixin:
         # 同样会失联（原因同上面 staticmethod 那条注释），局部 import 绑定到
         # 函数自己的局部命名空间，不受影响。
         from pathlib import Path
-        from apps.cli.pdf_report import PARSERS, THEMES, render_document
+        from aria_code.apps.cli.pdf_report import PARSERS, THEMES, render_document
         from artifacts import user_generated_dir
 
         opts = self._parse_export_pdf_args(args.strip())

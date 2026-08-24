@@ -121,7 +121,7 @@ _TOOL_MENU = {
 
 async def _collect_llm(llm, system: str, user: str, max_tokens: int = 120) -> str:
     try:
-        from providers.llm.base import Message
+        from aria_code.providers.llm.base import Message
     except Exception:
         return ""
     msgs = [Message(role="system", content=system), Message(role="user", content=user)]

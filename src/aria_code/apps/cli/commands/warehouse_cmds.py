@@ -46,8 +46,8 @@ class WarehouseCommandsMixin:
             self.context.console.print(f"[yellow]{message}[/yellow]") if self.context.has_rich else print(message)
             return
 
-        from agents.warehouse.workflow import run_warehouse_analysis
-        from clients.warehouse_erp_client import WarehouseERPConfigurationError, WarehouseERPRequestError
+        from aria_code.agents.warehouse.workflow import run_warehouse_analysis
+        from aria_code.clients.warehouse_erp_client import WarehouseERPConfigurationError, WarehouseERPRequestError
 
         try:
             result, snapshot = await run_warehouse_analysis(identifiers[0])

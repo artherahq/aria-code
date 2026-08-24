@@ -45,7 +45,7 @@ def discovery_path() -> Path:
     in its artifact preview panel) cannot guess it. This file is the
     handshake: written on start, removed on stop.
     """
-    from brokers.config import BROKERS_CONFIG_PATH  # same ~/.aria-code|.arthera home
+    from aria_code.brokers.config import BROKERS_CONFIG_PATH  # same ~/.aria-code|.arthera home
 
     return BROKERS_CONFIG_PATH.parent / "canvas.json"
 

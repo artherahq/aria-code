@@ -1,6 +1,6 @@
 """Arrow-key selector and async wrapper used by model/skill picker dialogs.
 
-    from ui.picker import arrow_select, run_picker_in_thread
+    from aria_code.ui.picker import arrow_select, run_picker_in_thread
 """
 
 from __future__ import annotations

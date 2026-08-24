@@ -266,7 +266,7 @@ class BaseAgent(ABC):
                                 "name": match.group(1),
                                 "args": args_dict
                             })
-                        except:
+                        except Exception:
                             pass
 
             if not tool_calls:

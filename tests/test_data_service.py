@@ -145,7 +145,7 @@ def test_quote_marks_old_payload_as_stale():
 
 
 def test_package_data_facade_exports_service_types():
-    from packages.aria_services.data import DataBundle, DataService as PackageDataService, DataServiceResult
+    from aria_code.packages.aria_services.data import DataBundle, DataService as PackageDataService, DataServiceResult
 
     assert PackageDataService is DataService
     assert DataBundle.__name__ == "DataBundle"

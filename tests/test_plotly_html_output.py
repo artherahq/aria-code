@@ -24,7 +24,7 @@ def _sample_frame(rows: int = 30) -> pd.DataFrame:
 
 
 def test_stock_chart_html_uses_inline_plotly_js(monkeypatch, tmp_path):
-    from apps.cli.handlers.chart_handlers import handle_stock_chart_analysis_direct
+    from aria_code.apps.cli.handlers.chart_handlers import handle_stock_chart_analysis_direct
 
     class FakeTicker:
         def __init__(self, symbol):

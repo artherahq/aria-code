@@ -4,7 +4,7 @@ import unittest
 from rich import box
 from rich.console import Console
 
-import ui.robot as robot
+import aria_code.ui.robot as robot
 from aria_code.ui.banner import render_full_banner
 from aria_code.ui.robot import ROBOT_ROW_COUNT, RobotState, get_robot_row, get_status_dot, set_robot_state
 

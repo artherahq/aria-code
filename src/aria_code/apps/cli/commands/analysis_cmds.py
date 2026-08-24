@@ -224,7 +224,7 @@ class AnalysisCommandsMixin:
         try:
             spot = r.get("current_price") or r.get("spot_price")
             if spot and spot > 0:
-                from packages.quant_engine.stochastic.options_pricing import OptionSpec, black_scholes
+                from aria_code.packages.quant_engine.stochastic.options_pricing import OptionSpec, black_scholes
                 T = 30 / 365
                 r_f = 0.05
                 chain = r.get("calls", []) or r.get("chain", []) or []
