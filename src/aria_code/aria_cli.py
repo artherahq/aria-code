@@ -194,6 +194,7 @@ from aria_code.ui.render.finance import (
 )
 from aria_code.apps.cli.direct import dispatch_direct_command, is_watchable_direct_command
 from aria_code.apps.cli.tools.system_tools import (
+    tool_ask_user    as _src_ask_user,
     tool_run_command as _src_run_command,
     tool_web_fetch   as _src_web_fetch,
     tool_github      as _src_github,
@@ -203,6 +204,10 @@ from aria_code.apps.cli.tools.notebook_tools import (
     tool_notebook_read as _src_notebook_read,
     tool_notebook_edit as _src_notebook_edit,
 )
+
+from aria_code.apps.cli.tools.file_tools import tool_lsp_hover as _tool_lsp_hover
+from aria_code.apps.cli.tools.file_tools import tool_lsp_definition as _tool_lsp_definition
+from aria_code.apps.cli.tools.file_tools import tool_lsp_references as _tool_lsp_references
 from aria_code.apps.cli.tools.file_tools import (
     tool_read_file   as _src_read_file,
     tool_list_files  as _src_list_files,
@@ -1125,7 +1130,7 @@ def _is_safe_path(resolved: pathlib.Path) -> bool:
     Blocks: /etc, /sys, /proc, /dev, and any path that resolves through a
     symlink to outside those roots (symlink traversal prevention).
     """
-    return WorkspaceSecurity().is_safe_path(resolved)
+    return WorkspaceSecurity(cwd=__import__('os').getcwd(), allow_home=False).is_safe_path(resolved)
 
 
 from aria_code.apps.cli.tool_executor import *
@@ -1182,6 +1187,10 @@ LOCAL_TOOLS = {
     "search_code":    (_tool_search_code,    "Search for patterns in code (grep)"),
     "search":         (_tool_search_code,    "Search for patterns in code (alias for search_code)"),
     "run_command":    (_tool_run_command,    "Execute a shell command"),
+    "ask_user":       (_src_ask_user,        "Ask the user for clarification"),
+    "lsp_hover":      (_tool_lsp_hover,      "Get hover documentation/type signature (LSP)"),
+    "lsp_definition": (_tool_lsp_definition, "Find definition (LSP)"),
+    "lsp_references": (_tool_lsp_references, "Find references (LSP)"),
     # ── Extended tools (Claude Code parity) ─────────────────────────────────
     "web_fetch":      (_tool_web_fetch,      "Fetch a URL and return page text"),
     "github":         (_tool_github,         "GitHub API/CLI: PRs, issues, diffs, search, git_status, commit_and_push (commits as Aria bot)"),

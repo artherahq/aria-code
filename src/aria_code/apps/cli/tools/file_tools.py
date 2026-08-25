@@ -1,6 +1,6 @@
 """Stateless file / code search tools — thin wrappers around WorkspaceFiles.
 
-These functions are pure: they take a params dict, call WorkspaceFiles(), and
+These functions are pure: they take a params dict, call _get_workspace_files(), and
 return a result dict. No console/HAS_RICH/write-policy state involved.
 
 They are registered in aria_cli.py's execute_aria_tool dispatch table via:
@@ -25,6 +25,14 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from aria_code.workspace import WorkspaceFiles  # noqa: E402
+from aria_code.workspace.files import WorkspaceSecurity
+import os
+
+def _get_workspace_files():
+    # Force restrict to current directory for local CLI code agent
+    security = WorkspaceSecurity(cwd=os.getcwd(), allow_home=False)
+    return WorkspaceFiles(security=security)
+
 
 
 def tool_read_file(params: dict) -> dict:
@@ -37,7 +45,7 @@ def tool_read_file(params: dict) -> dict:
         limit  = int(params.get("limit",  0) or 0)
         if not offset and not limit:
             limit = 160
-        result = WorkspaceFiles().read_file(path, offset=offset, limit=limit)
+        result = _get_workspace_files().read_file(path, offset=offset, limit=limit)
         content = result.content
         if limit and result.lines >= limit and "use offset/limit to read more" not in content:
             content += "\n... [default read limit applied — use offset/limit to read more]"
@@ -55,7 +63,7 @@ def tool_list_files(params: dict) -> dict:
     path    = params.get("path", ".")
     pattern = params.get("pattern", "*")
     try:
-        data = WorkspaceFiles().list_files(path, pattern)
+        data = _get_workspace_files().list_files(path, pattern)
         return {"success": True, "data": {
             "path":    data["path"],
             "pattern": data["pattern"],
@@ -74,7 +82,7 @@ def tool_search_code(params: dict) -> dict:
     if not pattern:
         return {"success": False, "error": "Missing 'pattern' parameter"}
     try:
-        data = WorkspaceFiles().search_code(pattern, path, file_glob)
+        data = _get_workspace_files().search_code(pattern, path, file_glob)
         return {"success": True, "data": {
             "pattern": data["pattern"],
             "path":    data["path"],
@@ -108,5 +116,53 @@ def tool_glob(params: dict) -> dict:
             "count":   len(results),
             "files":   results,
         }}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+def tool_lsp_hover(params: dict) -> dict:
+    """Get hover documentation (LSP) for a symbol at a specific line and column."""
+    path = params.get("path", "")
+    line = params.get("line", 1)
+    col = params.get("col", 1)
+    if not path:
+        return {"success": False, "error": "Missing 'path' parameter"}
+    try:
+        from aria_code.runtime.lsp import get_hover
+        res = get_hover(path, int(line), int(col))
+        if not res:
+            return {"success": False, "error": f"No hover info available at {path}:{line}:{col} (Is the language server installed?)"}
+        return {"success": True, "data": {"hover": res}}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+def tool_lsp_definition(params: dict) -> dict:
+    """Get definition locations (LSP) for a symbol at a specific line and column."""
+    path = params.get("path", "")
+    line = params.get("line", 1)
+    col = params.get("col", 1)
+    if not path:
+        return {"success": False, "error": "Missing 'path' parameter"}
+    try:
+        from aria_code.runtime.lsp import get_definition
+        res = get_definition(path, int(line), int(col))
+        if not res:
+            return {"success": False, "error": f"No definitions found at {path}:{line}:{col} (Is the language server installed?)"}
+        return {"success": True, "data": {"definitions": res}}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+def tool_lsp_references(params: dict) -> dict:
+    """Get all references (LSP) for a symbol at a specific line and column."""
+    path = params.get("path", "")
+    line = params.get("line", 1)
+    col = params.get("col", 1)
+    if not path:
+        return {"success": False, "error": "Missing 'path' parameter"}
+    try:
+        from aria_code.runtime.lsp import get_references
+        res = get_references(path, int(line), int(col))
+        if not res:
+            return {"success": False, "error": f"No references found at {path}:{line}:{col} (Is the language server installed?)"}
+        return {"success": True, "data": {"references": res}}
     except Exception as e:
         return {"success": False, "error": str(e)}

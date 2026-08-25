@@ -15,7 +15,7 @@ import stat as _stat
 
 def _ac():
     """Return the aria_cli module (already loaded, never reimported from scratch)."""
-    import aria_cli
+    from aria_code import aria_cli
     return aria_cli
 
 
@@ -411,7 +411,7 @@ def tool_write_file(params: dict) -> dict:
     try:
         raw_path = pathlib.Path(path).expanduser()
         if not raw_path.is_absolute():
-            from artifacts import user_generated_dir
+            from aria_code.artifacts import user_generated_dir
             raw_path = user_generated_dir() / raw_path
         p = raw_path.resolve()
         if not _is_safe(p):
@@ -420,7 +420,7 @@ def tool_write_file(params: dict) -> dict:
         existed = p.exists()
         desktop = pathlib.Path.home() / "Desktop"
         import tempfile as _tf
-        from artifacts import user_output_root
+        from aria_code.artifacts import user_output_root
         user_root = user_output_root().resolve()
         _auto_trusted_prefixes = (
             str(desktop),
@@ -541,7 +541,7 @@ def tool_write_file(params: dict) -> dict:
             "user_message":   f"文件已保存到: {p}  打开所在目录: {_reveal_hint}",
         }
         try:
-            from artifacts import register_existing_artifact
+            from aria_code.artifacts import register_existing_artifact
 
             artifact = register_existing_artifact(
                 p,
@@ -563,6 +563,20 @@ def tool_write_file(params: dict) -> dict:
         if _syntax_warn:
             _wdata["syntax_check"] = "failed"
             return {"success": True, "data": _wdata, "warning": _syntax_warn}
+
+
+        try:
+            from aria_code.workspace.verify import VerificationPlanner
+            import os
+            planner = VerificationPlanner(root=os.getcwd())
+            plan = planner.infer([str(p)])
+            if plan.commands:
+                _out_dict = _wdata if "_wdata" in locals() else _data
+                _out_dict["suggested_verification"] = f"Verification recommended ({plan.reason}): run `{' && '.join(plan.commands)}`"
+                if locals().get("has_rich", locals().get("_has_rich2")) and locals().get("console", locals().get("_console2")):
+                    locals().get("console", locals().get("_console2")).print(f"  [cyan]✓ 推荐验证命令: {' && '.join(plan.commands)}[/cyan]")
+        except Exception as _vp_exc:
+            pass
 
         _lsp_warn, _lsp_diags = _lsp_autocheck(p)
         if _lsp_warn:
@@ -666,6 +680,20 @@ def tool_edit_file(params: dict) -> dict:
             return {"success": True, "data": _data, "warning": _syntax_warn}
 
         # Opt-in LSP diagnostics (catches what the syntax check can't)
+
+        try:
+            from aria_code.workspace.verify import VerificationPlanner
+            import os
+            planner = VerificationPlanner(root=os.getcwd())
+            plan = planner.infer([str(p)])
+            if plan.commands:
+                _out_dict = _wdata if "_wdata" in locals() else _data
+                _out_dict["suggested_verification"] = f"Verification recommended ({plan.reason}): run `{' && '.join(plan.commands)}`"
+                if locals().get("has_rich", locals().get("_has_rich2")) and locals().get("console", locals().get("_console2")):
+                    locals().get("console", locals().get("_console2")).print(f"  [cyan]✓ 推荐验证命令: {' && '.join(plan.commands)}[/cyan]")
+        except Exception as _vp_exc:
+            pass
+
         _lsp_warn, _lsp_diags = _lsp_autocheck(p)
         if _lsp_warn:
             _print_lsp_diags(_lsp_diags, console, has_rich)
@@ -784,6 +812,20 @@ def tool_multi_edit(params: dict) -> dict:
         if _syntax_warn:
             _data["syntax_check"] = "failed"
             return {"success": True, "data": _data, "warning": _syntax_warn}
+
+
+        try:
+            from aria_code.workspace.verify import VerificationPlanner
+            import os
+            planner = VerificationPlanner(root=os.getcwd())
+            plan = planner.infer([str(p)])
+            if plan.commands:
+                _out_dict = _wdata if "_wdata" in locals() else _data
+                _out_dict["suggested_verification"] = f"Verification recommended ({plan.reason}): run `{' && '.join(plan.commands)}`"
+                if locals().get("has_rich", locals().get("_has_rich2")) and locals().get("console", locals().get("_console2")):
+                    locals().get("console", locals().get("_console2")).print(f"  [cyan]✓ 推荐验证命令: {' && '.join(plan.commands)}[/cyan]")
+        except Exception as _vp_exc:
+            pass
 
         _lsp_warn, _lsp_diags = _lsp_autocheck(p)
         if _lsp_warn:

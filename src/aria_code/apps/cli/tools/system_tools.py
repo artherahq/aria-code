@@ -35,7 +35,7 @@ def _persist_command_output(command: str, stdout: str, stderr: str, returncode: 
     ):
         return {}
     try:
-        from artifacts import create_artifact, write_artifact_metadata
+        from aria_code.artifacts import create_artifact, write_artifact_metadata
 
         record = create_artifact(
             "command-output",
@@ -695,3 +695,27 @@ def tool_github(
             "git_status, commit_and_push"
         ),
     }
+
+
+def tool_ask_user(params: dict, *, console=None, has_rich: bool = True) -> dict:
+    """Pause execution and ask the user for clarification or a decision."""
+    question = params.get("question", "")
+    if not question:
+        return {"success": False, "error": "Missing 'question' parameter"}
+    
+    if has_rich and console is not None:
+        from rich.prompt import Prompt
+        console.print(f"\n[bold magenta]🤔 Agent needs clarification:[/bold magenta] {question}")
+        try:
+            answer = Prompt.ask("[cyan]Your answer[/cyan]")
+        except (KeyboardInterrupt, EOFError):
+            return {"success": False, "error": "User cancelled the input."}
+    else:
+        print(f"\nAgent needs clarification: {question}")
+        try:
+            answer = input("Your answer: ")
+        except (KeyboardInterrupt, EOFError):
+            return {"success": False, "error": "User cancelled the input."}
+            
+    return {"success": True, "data": {"user_answer": answer}}
+

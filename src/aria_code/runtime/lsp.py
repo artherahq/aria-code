@@ -344,3 +344,141 @@ LSP_SCHEMAS = [
         },
     },
 ]
+
+def _lsp_query(path: str, method: str, params: dict, timeout: float = 6.0) -> dict | None:
+    resolved = server_for(path)
+    if not resolved: return None
+    cmd, lang_id = resolved
+    p = Path(path).expanduser().resolve()
+    try: text_content = p.read_text(errors="replace")
+    except Exception: return None
+    try:
+        proc = subprocess.Popen(
+            cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, cwd=str(p.parent)
+        )
+    except Exception: return None
+
+    msg_queue = queue.Queue()
+    def _reader():
+        try:
+            while True:
+                m = _read_message(proc.stdout)
+                if not m: break
+                msg_queue.put(m)
+        except Exception: pass
+    t = threading.Thread(target=_reader, daemon=True)
+    t.start()
+
+    def _send(m):
+        try:
+            proc.stdin.write(_encode(m))
+            proc.stdin.flush()
+        except Exception: pass
+
+    def _cleanup():
+        try:
+            _send({"jsonrpc": "2.0", "id": 99, "method": "shutdown", "params": None})
+            _send({"jsonrpc": "2.0", "method": "exit"})
+        except Exception: pass
+        try: proc.terminate(); proc.wait(1.0)
+        except Exception: pass
+
+    file_uri = p.as_uri()
+    deadline = time.time() + timeout
+    _send({
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {
+            "processId": os.getpid(),
+            "rootUri": p.parent.as_uri(),
+            "capabilities": {}
+        }
+    })
+
+    initialized = False
+    while time.time() < deadline:
+        try:
+            m = msg_queue.get(timeout=0.2)
+            if m.get("id") == 1 and "result" in m:
+                initialized = True
+                break
+        except queue.Empty:
+            if proc.poll() is not None:
+                _cleanup()
+                return None
+
+    if not initialized:
+        _cleanup()
+        return None
+
+    _send({"jsonrpc": "2.0", "method": "initialized", "params": {}})
+    _send({
+        "jsonrpc": "2.0", "method": "textDocument/didOpen",
+        "params": {"textDocument": {"uri": file_uri, "languageId": lang_id, "version": 1, "text": text_content}}
+    })
+
+    req_id = 2
+    params["textDocument"] = {"uri": file_uri}
+    _send({"jsonrpc": "2.0", "id": req_id, "method": method, "params": params})
+
+    result = None
+    while time.time() < deadline:
+        try:
+            m = msg_queue.get(timeout=0.2)
+            if m.get("id") == req_id:
+                if "result" in m:
+                    result = m["result"]
+                break
+        except queue.Empty:
+            if proc.poll() is not None:
+                break
+
+    _cleanup()
+    return result
+
+
+def get_hover(path: str, line: int, col: int) -> str | None:
+    res = _lsp_query(path, "textDocument/hover", {"position": {"line": line - 1, "character": col - 1}})
+    if not res or not res.get("contents"):
+        return None
+    contents = res["contents"]
+    if isinstance(contents, dict) and "value" in contents:
+        return contents["value"]
+    if isinstance(contents, list):
+        return "\n".join(c.get("value", c) if isinstance(c, dict) else c for c in contents)
+    return str(contents)
+
+
+def get_definition(path: str, line: int, col: int) -> list[dict]:
+    res = _lsp_query(path, "textDocument/definition", {"position": {"line": line - 1, "character": col - 1}})
+    if not res: return []
+    if isinstance(res, dict): res = [res]
+    out = []
+    for loc in res:
+        uri = loc.get("uri") or loc.get("targetUri")
+        if not uri: continue
+        rng = loc.get("range") or loc.get("targetRange") or {}
+        st = rng.get("start", {})
+        if str(uri).startswith("file://"):
+            from urllib.parse import unquote
+            file_path = unquote(str(uri)[7:])
+            out.append({"path": file_path, "line": st.get("line", 0) + 1, "col": st.get("character", 0) + 1})
+    return out
+
+
+def get_references(path: str, line: int, col: int) -> list[dict]:
+    res = _lsp_query(path, "textDocument/references", {
+        "position": {"line": line - 1, "character": col - 1},
+        "context": {"includeDeclaration": True}
+    })
+    if not res: return []
+    out = []
+    for loc in res:
+        uri = loc.get("uri")
+        if not uri: continue
+        rng = loc.get("range", {})
+        st = rng.get("start", {})
+        if str(uri).startswith("file://"):
+            from urllib.parse import unquote
+            file_path = unquote(str(uri)[7:])
+            out.append({"path": file_path, "line": st.get("line", 0) + 1, "col": st.get("character", 0) + 1})
+    return out
