@@ -6514,6 +6514,34 @@ class ArtheraTerminal:
                 if not user_input:
                     continue
 
+                # -- Auto-hydrate path context (Claude Code parity) --
+                import os, pathlib
+                _potential_paths = [word for word in user_input.split() if "/" in word or "\\" in word]
+                _hydrated_files = []
+                for p in _potential_paths:
+                    try:
+                        p_obj = pathlib.Path(p).expanduser().resolve()
+                        if p_obj.exists():
+                            if p_obj.is_dir():
+                                # Temporarily change directory to the dragged project!
+                                os.chdir(p_obj)
+                                self.config["cwd"] = str(p_obj)
+                                user_input += f"\n\n[System Note: The current working directory has been automatically changed to {p_obj}. You MUST use `list_files` or `search_code` to explore this directory before answering.]"
+                            elif p_obj.is_file():
+                                _hydrated_files.append(p_obj)
+                    except Exception:
+                        pass
+                
+                if _hydrated_files:
+                    _context = "\n\n[System Note: The user mentioned the following local files. Here are their contents for context:]\n"
+                    for f in _hydrated_files:
+                        try:
+                            _content = f.read_text()[:15000] # Hydrate up to 15k chars
+                            _context += f"\n--- {f} ---\n{_content}\n"
+                        except Exception:
+                            pass
+                    user_input += _context
+
                 # ── Session recap: show summary if away for 3+ minutes ─────────
                 import time as _time
                 _now = _time.time()
