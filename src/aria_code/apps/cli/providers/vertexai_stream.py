@@ -30,7 +30,13 @@ class VertexAIProvider(LLMProvider):
     def _get_client(self):
         if self._client is None:
             from google import genai
-            self._client = genai.Client(vertexai=True)
+            is_vertex = self.config.get("use_vertexai", True)
+            api_key = self.config.get("api_key") or self.config.get("gemini_key")
+            
+            if is_vertex:
+                self._client = genai.Client(vertexai=True)
+            else:
+                self._client = genai.Client(api_key=api_key)
         return self._client
         
     def _messages_to_contents(self, messages: list):
@@ -74,42 +80,51 @@ class VertexAIProvider(LLMProvider):
                 
         return contents, system_instruction
 
+    def _schema_from_dict(self, d: dict, types):
+        if not d:
+            return None
+        t = d.get("type", "string").upper()
+        if t == "ARRAY":
+            items = d.get("items", {})
+            return types.Schema(
+                type="ARRAY",
+                description=d.get("description", ""),
+                items=self._schema_from_dict(items, types) if items else types.Schema(type="STRING")
+            )
+        elif t == "OBJECT":
+            props = d.get("properties", {})
+            req = d.get("required", [])
+            schema_props = {k: self._schema_from_dict(v, types) for k, v in props.items()}
+            return types.Schema(
+                type="OBJECT",
+                description=d.get("description", ""),
+                properties=schema_props if schema_props else None,
+                required=req if req else None
+            )
+        else:
+            return types.Schema(
+                type=t,
+                description=d.get("description", "")
+            )
+
     def _tools_to_genai(self, tools: list):
         if not tools:
             return None
-        
         from google.genai import types
-        
         genai_tools = []
         for tool in tools:
-            # Assume tool is a dict adhering to OpenAI JSON schema
             func = tool.get("function", tool)
             name = func.get("name")
             desc = func.get("description", "")
             
-            # Map parameters
+            # Map parameters recursively
             params = func.get("parameters", {})
-            properties = params.get("properties", {})
-            required = params.get("required", [])
+            schema = self._schema_from_dict(params, types) if params else None
             
-            schema_props = {}
-            for k, v in properties.items():
-                prop_type = v.get("type", "string").upper()
-                if prop_type == "ARRAY":
-                    prop_type = "ARRAY"
-                schema_props[k] = types.Schema(
-                    type=prop_type,
-                    description=v.get("description", ""),
-                )
-                
             tool_declaration = types.FunctionDeclaration(
                 name=name,
                 description=desc,
-                parameters=types.Schema(
-                    type="OBJECT",
-                    properties=schema_props,
-                    required=required
-                ) if properties else None
+                parameters=schema
             )
             genai_tools.append(types.Tool(function_declarations=[tool_declaration]))
             

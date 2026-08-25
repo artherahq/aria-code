@@ -376,7 +376,7 @@ class ConfiguredProvider:
             return
 
         if self.backend in self.LOCAL_OPENAI_BACKENDS | self.GENERIC_OPENAI_BACKENDS:
-            from local_llm_provider import LocalLLMProvider
+            from aria_code.local_llm_provider import LocalLLMProvider
 
             cfg = dict(self.config)
             cfg["model"] = self.model
