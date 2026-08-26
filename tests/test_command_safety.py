@@ -10,8 +10,18 @@ class CommandSafetyTests(unittest.TestCase):
         self.assertEqual(normalize_command("pip install rich"), "pip3 install rich")
 
     def test_safe_policy_blocks_non_low_risk(self):
-        decision = evaluate_command_policy("pytest -q", "safe")
+        # Uses a plain script run rather than `pytest -q`: verification
+        # commands are deliberately exempt under safe (see
+        # tests/test_verification_policy.py) because an agent that cannot run
+        # the tests cannot check its own work. The rule this asserts —
+        # medium risk is blocked under safe — is unchanged.
+        decision = evaluate_command_policy("python3 script.py", "safe")
         self.assertFalse(decision.allowed)
+        self.assertEqual(decision.risk, "medium")
+
+    def test_safe_policy_still_allows_verification(self):
+        decision = evaluate_command_policy("pytest -q", "safe")
+        self.assertTrue(decision.allowed)
         self.assertEqual(decision.risk, "medium")
 
     def test_balanced_policy_allows_medium_risk(self):
