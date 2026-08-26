@@ -203,6 +203,25 @@ def make_provider_fn(
     if system_override:
         _cloud_uctx["system_role_override"] = system_override
 
+    def _system_for(prompt: str) -> str:
+        """The rules this turn runs under, for the non-Ollama providers.
+
+        ollama_stream assembles its own (with prefetched data and sized
+        project context); everything else used to get nothing at all, so a
+        cloud model was never told the tool discipline. Built per message
+        because the right prompt depends on what was asked.
+        """
+        try:
+            from aria_code.apps.cli.prompts.select import build_turn_system_prompt
+
+            return build_turn_system_prompt(
+                prompt,
+                override=system_override,
+                project_context=str(project_context or ""),
+            )
+        except Exception:
+            return system_override or ""
+
     async def _provider_fn(prompt, history, *, on_token=None, on_thinking=None,
                            on_tool_call=None, on_tool_result=None, on_status=None,
                            cancel_event=None):
@@ -230,7 +249,7 @@ def make_provider_fn(
             selected = (
                 OllamaProvider(ollama_url, model, system_override=system_override)
                 if route == "ollama" else
-                ConfiguredProvider(config, model, system_override=system_override)
+                ConfiguredProvider(config, model, system_override=_system_for(prompt))
             )
             return await _stream(
                 selected,

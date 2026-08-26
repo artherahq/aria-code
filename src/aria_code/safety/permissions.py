@@ -238,6 +238,30 @@ def evaluate_command_policy(
             requires_approval=selected_policy == "balanced",
             network=network,
         )
+    # Verification is the one class of command the agent must be able to run
+    # under the default policy. `safe` blocked pytest, py_compile, npm test and
+    # tsc --noEmit, so the loop could write a fix and then had no way to find
+    # out whether it worked — and the model said so out loud: "由于安全策略的
+    # 限制，我无法执行 pytest ... 但我相信测试应该能够通过". An agent that
+    # cannot check its own work is guessing, and the whole acceptance gate rests
+    # on being able to run exactly these commands.
+    #
+    # The exposure is small and bounded by what `is_verification_command`
+    # matches: test and type-check runners, anchored at the start of the
+    # command. It stays subject to read-only mode and to the network rule
+    # above, and `high` risk was already rejected before this point — so a
+    # command like `pytest && rm -rf /` never reaches here.
+    if selected_policy == "safe" and risk != "low" and is_verification_command(normalized):
+        return PolicyDecision(
+            allowed=True,
+            normalized_command=normalized,
+            policy=selected_policy,
+            risk=risk,
+            reason="",
+            requires_approval=False,
+            network=network,
+        )
+
     if selected_policy == "safe" and risk != "low":
         extra = ""
         norm_low = normalized.lower()
