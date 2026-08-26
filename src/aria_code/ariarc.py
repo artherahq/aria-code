@@ -45,7 +45,17 @@ parent directories (walks up to filesystem root, stops at $HOME).
       ],
 
       // Disable AI from proposing certain file patterns (safety)
-      "write_deny_patterns": ["*.env", "config/secrets.*", "**/credentials*"]
+      "write_deny_patterns": ["*.env", "config/secrets.*", "**/credentials*"],
+
+      // What "correct" means here, per domain. The acceptance gate runs these
+      // after Aria changes files and refuses to call the turn done while they
+      // are red. "default" applies to every turn; a pack name applies only when
+      // that pack recognises something concrete in the user's message.
+      "acceptance": {
+        "default":   ["python3 -m pytest -q"],
+        "logistics": ["python3 scripts/reconcile_waybills.py"],
+        "payments":  ["python3 scripts/verify_stripe_sync.py"]
+      }
     }
 """
 
@@ -91,6 +101,7 @@ ARIARC_DEFAULTS: Dict[str, Any] = {
     "commands":          {},
     "auto_context":      [],
     "write_deny_patterns": ["*.env", "**/.env*", "**/secrets.*", "**/credentials*"],
+    "acceptance":        {},
 }
 
 
@@ -153,6 +164,8 @@ class AriaRC:
         self.commands:       Dict[str, str] = cfg.get("commands", {})
         self.auto_context:   List[str]      = list(cfg.get("auto_context", []))
         self.write_deny_patterns: List[str] = list(cfg.get("write_deny_patterns", []))
+        _acceptance = cfg.get("acceptance", {})
+        self.acceptance: Dict[str, Any] = _acceptance if isinstance(_acceptance, dict) else {}
 
     # ── class methods ──────────────────────────────────────────────────────
 
