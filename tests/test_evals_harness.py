@@ -5,6 +5,7 @@ It is that a task which cannot measure anything says so, loudly, instead of
 inflating the number.
 """
 
+import pathlib
 import textwrap
 import unittest
 from pathlib import Path
@@ -514,3 +515,78 @@ class SolverTimeoutTests(HarnessBase):
             return _TimedOut(600)
 
         self.assertEqual(self._run(self._task(), slow_but_correct).outcome, PASS)
+
+
+class ScratchCleanupTests(HarnessBase):
+    """Every exit path must remove the temp directory it created.
+
+    The cleanup used to sit below the setup checks, so a missing fixture or a
+    missing dependency leaked one directory each — and the tests below exercise
+    both deliberately, so a full test run leaked two every time. 57 had piled
+    up in $TMPDIR before anyone looked. Too small to feel, never self-correcting.
+    """
+
+    def _tmp_eval_dirs(self):
+        import tempfile
+
+        return set(pathlib.Path(tempfile.gettempdir()).glob("aria-eval-*"))
+
+    def _assert_leaves_nothing(self, task, solver):
+        before = self._tmp_eval_dirs()
+        self._run(task, solver)
+        self.assertEqual(
+            self._tmp_eval_dirs() - before, set(),
+            "run_task leaked a scratch directory",
+        )
+
+    def test_the_happy_path_cleans_up(self):
+        _fixture(self.fixtures, "broken", {"check.py": _GUARD})
+        self._assert_leaves_nothing(
+            self._task(),
+            lambda p, w: (w / "fixed.txt").write_text("x", encoding="utf-8"),
+        )
+
+    def test_a_missing_fixture_cleans_up(self):
+        self._assert_leaves_nothing(self._task(fixture="nope"), lambda p, w: None)
+
+    def test_a_missing_dependency_cleans_up(self):
+        _fixture(self.fixtures, "broken", {"check.py": _GUARD})
+        self._assert_leaves_nothing(
+            self._task(requires=("definitely_not_installed_xyz",)), lambda p, w: None
+        )
+
+    def test_a_crashing_solver_cleans_up(self):
+        _fixture(self.fixtures, "broken", {"check.py": _GUARD})
+
+        def boom(prompt, workspace):
+            raise RuntimeError("provider outage")
+
+        self._assert_leaves_nothing(self._task(), boom)
+
+    def test_an_explicit_scratch_root_is_left_alone(self):
+        # --scratch means the caller wants the workspaces afterwards.
+        _fixture(self.fixtures, "broken", {"check.py": _GUARD})
+        keep = self.root / "keep"
+        run_task(
+            self._task(), solver=lambda p, w: None,
+            fixtures_root=self.fixtures, scratch_root=keep,
+        )
+        self.assertTrue((keep / "t1").exists())
+
+
+class RunResidueTests(HarnessBase):
+    """Only the agent's work counts as a change."""
+
+    def test_check_residue_is_not_reported_as_the_agents_work(self):
+        # Running pytest writes .pytest_cache; reporting it makes every task
+        # look like it touched a dozen files and buries the edit that matters.
+        _fixture(self.fixtures, "broken", {"check.py": _GUARD})
+
+        def solver(prompt, workspace):
+            for noise in (".pytest_cache/v/cache/nodeids", "__pycache__/x.pyc", ".ruff_cache/y"):
+                path = workspace / noise
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("noise", encoding="utf-8")
+            (workspace / "fixed.txt").write_text("x", encoding="utf-8")
+
+        self.assertEqual(self._run(self._task(), solver).changed, ("fixed.txt",))

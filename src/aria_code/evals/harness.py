@@ -85,6 +85,12 @@ ERROR = "error"       # the harness or the solver blew up; not the agent's score
 _MAX_LOG_CHARS = 4000
 
 # Residue that must not travel from a fixture into a task workspace.
+# Directory names that hold build/run residue rather than source.
+_RUN_RESIDUE = frozenset({
+    ".git", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache",
+    ".tox", "node_modules", ".DS_Store",
+})
+
 _IGNORED_FIXTURE_ENTRIES = shutil.ignore_patterns(
     "__pycache__", "*.pyc", "*.pyo", ".pytest_cache", ".mypy_cache",
     ".ruff_cache", ".git", "node_modules", ".DS_Store",
@@ -331,7 +337,10 @@ def _snapshot(root: Path) -> dict[str, str]:
         if not path.is_file():
             continue
         rel = str(path.relative_to(root))
-        if rel.startswith((".git/", "__pycache__/")) or "/__pycache__/" in rel:
+        # Residue the *check* writes, not the agent's work. Reporting it makes
+        # every task look like it touched a dozen files and buries the one edit
+        # that matters.
+        if any(part in _RUN_RESIDUE for part in rel.replace("\\", "/").split("/")):
             continue
         try:
             out[rel] = hashlib.sha256(path.read_bytes()).hexdigest()
@@ -447,19 +456,28 @@ def run_task(
             seconds=time.time() - started, tags=task.tags, **kwargs,
         )
 
+    # Everything below runs inside this try so the scratch directory is removed
+    # on EVERY path, not just the happy one.
+    #
+    # It used to open after the setup checks, and the two error returns above
+    # it — a missing fixture, a missing dependency — leaked one temp directory
+    # each. That is once per error path per run, and the test suite exercises
+    # both deliberately, so a full test run leaked two directories every time.
+    # 57 of them had accumulated in $TMPDIR before anyone noticed, which is the
+    # shape of this class of bug: too small to be felt, never self-correcting.
     try:
-        workspace = _prepare_workspace(task, fixtures, scratch)
-    except Exception as exc:
-        return _result(ERROR, detail=f"workspace setup failed: {exc}")
+        try:
+            workspace = _prepare_workspace(task, fixtures, scratch)
+        except Exception as exc:
+            return _result(ERROR, detail=f"workspace setup failed: {exc}")
 
-    missing = _missing_modules(task.requires)
-    if missing:
-        return _result(
-            ERROR,
-            detail=f"environment is missing {', '.join(missing)} — the check cannot run",
-        )
+        missing = _missing_modules(task.requires)
+        if missing:
+            return _result(
+                ERROR,
+                detail=f"environment is missing {', '.join(missing)} — the check cannot run",
+            )
 
-    try:
         for command in task.setup:
             code, output = _run(command, workspace, task.timeout)
             if code != 0:
