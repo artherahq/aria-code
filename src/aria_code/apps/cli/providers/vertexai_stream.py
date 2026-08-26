@@ -13,6 +13,13 @@ from aria_code.apps.cli.providers.base import (
     LLMToolCall,
 )
 
+_MISSING_SDK_MESSAGE = (
+    "Gemini/Vertex AI 需要 google-genai，当前未安装。\n"
+    "  安装：pip install google-genai\n"
+    "  或改用其他模型：/model  （Ollama 本地模型无需额外依赖）"
+)
+
+
 class VertexAIProvider(LLMProvider):
     """Native Vertex AI provider using google-genai."""
     
@@ -137,15 +144,19 @@ class VertexAIProvider(LLMProvider):
         *,
         cancel_event: Optional[asyncio.Event] = None,
     ) -> AsyncGenerator[LLMEvent, None]:
-        from google.genai import types
-        from google.genai.errors import APIError
-        
+        # These imports must sit INSIDE the try. They were above it, so when
+        # google-genai was not installed they raised first and the handler
+        # below — the one that explains how to fix it — was unreachable. The
+        # user saw a bare "No module named 'google.genai'" and no way forward.
         try:
+            from google.genai import types
+            from google.genai.errors import APIError
+
             client = self._get_client()
         except ImportError:
             yield LLMDone(
                 response="", provider="vertexai", success=False,
-                error="google-genai package not found. Please pip install google-genai."
+                error=_MISSING_SDK_MESSAGE,
             )
             return
         except Exception as e:

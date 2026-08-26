@@ -17,93 +17,147 @@ import sys
 import os
 from typing import Dict, Any, Optional
 
+# Import path → the name you actually type after `pip install`. Namespace
+# packages make these differ, and guessing from the module name produces
+# advice that fails: `google.genai` is shipped as `google-genai`, so the
+# obvious `pip install google` installs an unrelated stub.
+_PIP_NAMES = {
+    "google.genai": "google-genai",
+    "google.generativeai": "google-generativeai",
+    "google.cloud": "google-cloud",
+    "anthropic": "anthropic",
+    "openai": "openai",
+    "mistralai": "mistralai",
+    "cohere": "cohere",
+    "yfinance": "yfinance",
+    "akshare": "akshare",
+    "ccxt": "ccxt",
+}
+
+
+def _pip_name(module: str) -> str:
+    """Best installable name for *module*, longest known prefix first."""
+    if module in _PIP_NAMES:
+        return _PIP_NAMES[module]
+    for known, package in sorted(_PIP_NAMES.items(), key=lambda kv: -len(kv[0])):
+        if module.startswith(known + "."):
+            return package
+    # Unknown: the top-level name is the best available guess, and it is right
+    # for the ordinary single-package case.
+    return module.split(".")[0].replace("_", "-")
+
+
+def _actionable(provider: str, error: str) -> str:
+    """Turn a probe failure into something the user can act on.
+
+    The picker used to show ``ollama_err[:40]``, which for the most common
+    failure produced ``[ollama: <urlopen error [Errno 61] Connection ref]`` —
+    a raw Python exception, truncated mid-word, naming neither the cause nor
+    the remedy. A connection refused on the local runtime port has exactly one
+    meaning and one fix, so say them.
+    """
+    text = str(error or "")
+    low = text.lower()
+    if "errno 61" in low or "connection refused" in low:
+        return "未运行 · 先执行 ollama serve" if provider == "ollama" else f"{provider} 未运行"
+    if "timed out" in low or "timeout" in low:
+        return "连接超时 · 检查服务地址与网络"
+    if "name or service not known" in low or "nodename nor servname" in low:
+        return "地址无法解析 · 检查 ollama_url 配置"
+    if "no module named" in low:
+        module = text.split("'")[1] if "'" in text else text.strip()
+        return f"缺少 {module} · pip install {_pip_name(module)}"
+    collapsed = " ".join(text.split())
+    return collapsed if len(collapsed) <= 48 else collapsed[:47] + "…"
+
+
 def detect_ollama_models_rich(*args, **kwargs):
-    from aria_cli import detect_ollama_models_rich as fn
+    from aria_code.aria_cli import detect_ollama_models_rich as fn
     return fn(*args, **kwargs)
 def _sync_write_policy(*args, **kwargs):
-    from aria_cli import _sync_write_policy as fn
+    from aria_code.aria_cli import _sync_write_policy as fn
     return fn(*args, **kwargs)
 def _load_providers_json(*args, **kwargs):
-    from aria_cli import _load_providers_json as fn
+    from aria_code.aria_cli import _load_providers_json as fn
     return fn(*args, **kwargs)
 def _get__PROVIDER_KEY_MAP():
-    from aria_cli import _PROVIDER_KEY_MAP as val
+    from aria_code.aria_cli import _PROVIDER_KEY_MAP as val
     return val
 def _get__LLM_SIGNUP_URLS():
-    from aria_cli import _LLM_SIGNUP_URLS as val
+    from aria_code.aria_cli import _LLM_SIGNUP_URLS as val
     return val
 def _get__PROVIDER_BASE_URLS():
-    from aria_cli import _PROVIDER_BASE_URLS as val
+    from aria_code.aria_cli import _PROVIDER_BASE_URLS as val
     return val
 def _get_ARIA_TOOLS():
-    from aria_cli import ARIA_TOOLS as val
+    from aria_code.aria_cli import ARIA_TOOLS as val
     return val
 def _get_THINKING_MODES():
-    from aria_cli import THINKING_MODES as val
+    from aria_code.aria_cli import THINKING_MODES as val
     return val
 def _get__PROVIDER_GUIDE():
-    from aria_cli import _PROVIDER_GUIDE as val
+    from aria_code.aria_cli import _PROVIDER_GUIDE as val
     return val
 def _get__DATA_KEY_MAP():
-    from aria_cli import _DATA_KEY_MAP as val
+    from aria_code.aria_cli import _DATA_KEY_MAP as val
     return val
 def _run_picker_in_thread(*args, **kwargs):
-    from aria_cli import _run_picker_in_thread as fn
+    from aria_code.aria_cli import _run_picker_in_thread as fn
     return fn(*args, **kwargs)
 def logger(*args, **kwargs):
-    from aria_cli import logger as fn
+    from aria_code.aria_cli import logger as fn
     return fn(*args, **kwargs)
 import pathlib
 def _get_MODEL_ALIASES():
-    from aria_cli import MODEL_ALIASES as val
+    from aria_code.aria_cli import MODEL_ALIASES as val
     return val
 def _save_providers_json(*args, **kwargs):
-    from aria_cli import _save_providers_json as fn
+    from aria_code.aria_cli import _save_providers_json as fn
     return fn(*args, **kwargs)
 def _test_api_key(*args, **kwargs):
-    from aria_cli import _test_api_key as fn
+    from aria_code.aria_cli import _test_api_key as fn
     return fn(*args, **kwargs)
 def _get_provider_key(*args, **kwargs):
-    from aria_cli import _get_provider_key as fn
+    from aria_code.aria_cli import _get_provider_key as fn
     return fn(*args, **kwargs)
 def _get__DATA_SIGNUP_URLS():
-    from aria_cli import _DATA_SIGNUP_URLS as val
+    from aria_code.aria_cli import _DATA_SIGNUP_URLS as val
     return val
 def _arrow_select(*args, **kwargs):
-    from aria_cli import _arrow_select as fn
+    from aria_code.aria_cli import _arrow_select as fn
     return fn(*args, **kwargs)
 def _get_SKILLS():
-    from aria_cli import SKILLS as val
+    from aria_code.aria_cli import SKILLS as val
     return val
 def _get_LOCAL_TOOLS():
-    from aria_cli import LOCAL_TOOLS as val
+    from aria_code.aria_cli import LOCAL_TOOLS as val
     return val
 def get_model_capability(*args, **kwargs):
-    from aria_cli import get_model_capability as fn
+    from aria_code.aria_cli import get_model_capability as fn
     return fn(*args, **kwargs)
 def _save_data_key(*args, **kwargs):
-    from aria_cli import _save_data_key as fn
+    from aria_code.aria_cli import _save_data_key as fn
     return fn(*args, **kwargs)
 def _get_MODELS():
-    from aria_cli import MODELS as val
+    from aria_code.aria_cli import MODELS as val
     return val
 def load_config(*args, **kwargs):
-    from aria_cli import load_config as fn
+    from aria_code.aria_cli import load_config as fn
     return fn(*args, **kwargs)
 def _null_ctx(*args, **kwargs):
-    from aria_cli import _null_ctx as fn
+    from aria_code.aria_cli import _null_ctx as fn
     return fn(*args, **kwargs)
 def _get__PROVIDER_DESC():
-    from aria_cli import _PROVIDER_DESC as val
+    from aria_code.aria_cli import _PROVIDER_DESC as val
     return val
 def _get_PROVIDERS_FILE():
-    from aria_cli import PROVIDERS_FILE as val
+    from aria_code.aria_cli import PROVIDERS_FILE as val
     return val
 def _get__HAS_MODEL_CAP():
-    from aria_cli import _HAS_MODEL_CAP as val
+    from aria_code.aria_cli import _HAS_MODEL_CAP as val
     return val
 def _load_data_keys(*args, **kwargs):
-    from aria_cli import _load_data_keys as fn
+    from aria_code.aria_cli import _load_data_keys as fn
     return fn(*args, **kwargs)
 
 import json
@@ -245,7 +299,7 @@ class ModelCommandsMixin:
         _sel_model = _i18n("select_model")
         _installed = _i18n("installed")
         if ollama_err:
-            _picker_title = f"{_sel_model}  [{current_provider}: {ollama_err[:40]}]"
+            _picker_title = f"{_sel_model}  [{current_provider}: {_actionable(current_provider, ollama_err)}]"
         else:
             n_local = sum(1 for m in rich_models if m.get("execution") != "remote")
             n_remote = len(rich_models) - n_local
@@ -420,7 +474,8 @@ class ModelCommandsMixin:
 
         if not any(model_id is not None for model_id in all_ids):
             message = (
-                f"{current_provider}: {ollama_err or 'no models available'}"
+                f"{current_provider}: "
+                f"{_actionable(current_provider, ollama_err) if ollama_err else 'no models available'}"
             )
             self.context.console.print(f"[yellow]{message}[/yellow]") if self.context.has_rich else print(message)
             return

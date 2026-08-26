@@ -92,6 +92,8 @@ def _print_result(result: TaskResult) -> None:
     if result.detail:
         line += f"  — {result.detail}"
     print(line)
+    if result.outcome == FAIL and result.changed:
+        print(f"      changed: {', '.join(result.changed)}")
     if result.outcome in (FAIL, INVALID, ERROR) and result.log:
         for log_line in result.log.splitlines()[-8:]:
             print(f"      {log_line}")

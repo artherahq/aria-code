@@ -359,3 +359,66 @@ class FixtureHygieneTests(HarnessBase):
         self.assertNotIn("__pycache__", seen["entries"])
         self.assertNotIn(".pytest_cache", seen["entries"])
         self.assertIn("check.py", seen["entries"])
+
+
+class ChangeTrackingTests(HarnessBase):
+    """A red check with no edits is a different failure from a wrong edit."""
+
+    def test_a_pass_records_what_was_touched(self):
+        _fixture(self.fixtures, "broken", {"check.py": _GUARD})
+        result = self._run(
+            self._task(),
+            lambda p, w: (w / "fixed.txt").write_text("x", encoding="utf-8"),
+        )
+        self.assertEqual(result.outcome, PASS)
+        self.assertIn("fixed.txt", result.changed)
+
+    def test_a_failure_after_real_edits_lists_them(self):
+        _fixture(self.fixtures, "broken", {"check.py": _GUARD, "app.py": "x = 1\n"})
+        result = self._run(
+            self._task(),
+            lambda p, w: (w / "app.py").write_text("x = 2\n", encoding="utf-8"),
+        )
+        self.assertEqual(result.outcome, FAIL)
+        self.assertEqual(result.changed, ("app.py",))
+        self.assertNotIn("changed nothing", result.detail)
+
+    def test_a_failure_with_no_edits_says_so(self):
+        # The distinction that matters: this one means the agent never
+        # engaged, and calls for a completely different investigation from a
+        # failure where it engaged and got the answer wrong.
+        _fixture(self.fixtures, "broken", {"check.py": _GUARD})
+        result = self._run(self._task(), lambda p, w: None)
+        self.assertEqual(result.outcome, FAIL)
+        self.assertEqual(result.changed, ())
+        self.assertIn("changed nothing", result.detail)
+
+    def test_deletions_count_as_changes(self):
+        _fixture(self.fixtures, "broken", {"check.py": _GUARD, "doomed.py": "x = 1\n"})
+        result = self._run(self._task(), lambda p, w: (w / "doomed.py").unlink())
+        self.assertIn("doomed.py", result.changed)
+
+    def test_bytecode_written_during_the_run_is_not_reported_as_a_change(self):
+        # Running the check compiles the fixture; that residue is not the
+        # agent's work and would appear on every single task.
+        _fixture(self.fixtures, "broken", {"check.py": _GUARD})
+
+        def solver(prompt, workspace):
+            cache = workspace / "__pycache__"
+            cache.mkdir(exist_ok=True)
+            (cache / "check.cpython-312.pyc").write_bytes(b"\x00")
+
+        result = self._run(self._task(), solver)
+        self.assertEqual(result.changed, ())
+
+    def test_changed_appears_in_the_json_report(self):
+        import json
+
+        _fixture(self.fixtures, "broken", {"check.py": _GUARD})
+        suite = run_suite(
+            [self._task()],
+            solver=lambda p, w: (w / "fixed.txt").write_text("x", encoding="utf-8"),
+            fixtures_root=self.fixtures, name="s",
+        )
+        data = json.loads(write_report(suite, self.root / "r.json").read_text(encoding="utf-8"))
+        self.assertIn("fixed.txt", data["results"][0]["changed"])
