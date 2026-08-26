@@ -56,10 +56,37 @@ def disable_broken_proxy(timeout: float = 1.5) -> None:
             os.environ.pop(name, None)
 
 
+def use_system_trust_store() -> bool:
+    """Verify TLS against the OS trust store instead of certifi's bundle.
+
+    Corporate and local TLS-intercepting proxies present their own CA. That CA
+    is installed in the system keychain — which is why ``curl`` works on such a
+    machine — but Python verifies against certifi, which has never heard of it,
+    so every HTTPS call fails with CERTIFICATE_VERIFY_FAILED.
+
+    This was not hypothetical: on a machine behind an intercepting proxy,
+    ``oauth2.googleapis.com`` failed 5 times out of 5 from Python and returned
+    404 from curl, so roughly a third of Vertex turns died fetching an OAuth
+    token. Trusting the OS store fixed it without disabling verification —
+    which is the tempting wrong fix, and would accept any certificate at all.
+
+    Returns whether the injection happened, and never raises: an environment
+    without ``truststore`` keeps certifi's behaviour exactly as before.
+    """
+    try:
+        import truststore
+
+        truststore.inject_into_ssl()
+        return True
+    except Exception:
+        return False
+
+
 def initialize_cli_environment() -> None:
     os.environ.setdefault("TQDM_DISABLE", "1")
     load_aria_env()
     disable_broken_proxy()
+    use_system_trust_store()
 
 
 # The model used when nothing has been configured yet.

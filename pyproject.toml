@@ -37,6 +37,10 @@ classifiers = [
 # parsers, the SQL engine and chart renderer are optional extras below — the
 # code already lazy-imports them and degrades gracefully when absent.
 dependencies = [
+    # Verify TLS against the OS trust store. Machines behind a
+    # TLS-intercepting proxy install that proxy's CA in the system keychain,
+    # not in certifi, so without this every HTTPS call fails there.
+    "truststore>=0.9; python_version >= '3.10'",
     # CLI runtime
     "aiohttp>=3.9.0",
     "rich>=13.7.0",
