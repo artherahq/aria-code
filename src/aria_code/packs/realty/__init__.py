@@ -24,10 +24,12 @@ from aria_code.packs.base import BaseDomainPack, EntityMatch, PackActivation
 
 PACK_NAME = "realty"
 
-REALTY_TOOLS = (
-    "get_house_price_index",
-    "get_re_investment",
-)
+# Empty on purpose. get_house_price_index/get_re_investment exist as functions
+# in realty_data_tools but have no register_* wrapper, so they are not in
+# LOCAL_TOOLS. Naming them here told the model about a capability it does not
+# have, which costs a wasted round and a confusing "unknown tool" error.
+# The pack still contributes its handler and its prompt guidance.
+REALTY_TOOLS: tuple[str, ...] = ()
 
 _RESOLVED = 0.95
 _CITY_ONLY = 0.3
@@ -147,9 +149,14 @@ class RealtyPack(BaseDomainPack):
 
     def prompt_fragment(self, activation: PackActivation) -> str:
         cities = ", ".join(sorted({e.value for e in activation.entities}))
+        # No tool instruction here: this pack exposes none. The price index is
+        # fetched by the deterministic handler above, so if the model is the one
+        # answering, it has no data source and must say so rather than produce
+        # a plausible number.
         return (
             f"房地产市场已识别：{cities}。\n"
-            "用工具取回的价格指数与投资数据回答，不要凭记忆给出房价或涨跌幅；"
+            "你没有房价数据工具。除非上文已给出取回的数据，否则不要给出具体房价、"
+            "涨跌幅或指数值——说明数据不可得，并建议用 /realty 命令获取；"
             "标注统计口径（新房/二手房、环比/同比）与数据时间；输出不构成投资建议。"
         )
 

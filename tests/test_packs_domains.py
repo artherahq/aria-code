@@ -394,3 +394,87 @@ class SelfGatedHandlerTests(unittest.TestCase):
                           deterministic.handle_strategy_advice)
         finally:
             deterministic.handle_strategy_advice = original
+
+
+class DeclaredToolsExistTests(unittest.TestCase):
+    """A pack must not name a tool the model cannot call.
+
+    Declaring one costs a wasted round and an "unknown tool" error, and the
+    model has no way to tell the difference between a capability that is
+    missing and one it used wrongly.
+    """
+
+    def test_every_declared_tool_is_registered(self):
+        import aria_code.aria_cli as cli
+
+        registered = set(cli.LOCAL_TOOLS)
+        reset_builtin_packs()
+        load_builtin_packs()
+        self.addCleanup(reset_builtin_packs)
+
+        for pack in registered_packs():
+            for name in pack.tool_names() or ():
+                with self.subTest(pack=pack.name, tool=name):
+                    self.assertIn(name, registered)
+
+    def test_every_registered_handler_has_a_visible_schema(self):
+        # A handler with no schema is registered, callable, and invisible —
+        # exactly how three enterprise tools went missing when the schema
+        # deduplicator dropped anything not in OpenAI wrapper form.
+        import aria_code.aria_cli as cli
+
+        described = {
+            (s.get("function") or s).get("name")
+            for s in cli.LOCAL_TOOL_SCHEMAS
+        }
+        for name in ("analyze_logistics_data", "analyze_stripe_data",
+                     "analyze_financial_statements"):
+            with self.subTest(tool=name):
+                self.assertIn(name, cli.LOCAL_TOOLS)
+                self.assertIn(name, described)
+
+
+class SchemaShapeTests(unittest.TestCase):
+    """One shape reaches the providers, whatever shape was registered."""
+
+    def test_every_schema_uses_the_openai_envelope(self):
+        # Bare {name, description, parameters} is what several register_*
+        # helpers emit. Ollama and the OpenAI-compatible providers reject it,
+        # and consumers that assume the envelope break on it.
+        import aria_code.aria_cli as cli
+
+        for schema in cli.LOCAL_TOOL_SCHEMAS:
+            with self.subTest(schema=str(schema)[:60]):
+                self.assertIn("function", schema)
+                self.assertTrue(schema["function"].get("name"))
+
+    def test_dedup_normalises_a_bare_schema(self):
+        import aria_code.aria_cli as cli
+        from aria_code.apps.cli.tool_executor import _dedup_tool_schemas
+
+        original = list(cli.LOCAL_TOOL_SCHEMAS)
+        try:
+            cli.LOCAL_TOOL_SCHEMAS.append(
+                {"name": "probe_tool", "description": "d", "parameters": {}}
+            )
+            _dedup_tool_schemas()
+            match = [
+                s for s in cli.LOCAL_TOOL_SCHEMAS
+                if s.get("function", {}).get("name") == "probe_tool"
+            ]
+            self.assertEqual(len(match), 1)
+            self.assertEqual(match[0]["type"], "function")
+        finally:
+            cli.LOCAL_TOOL_SCHEMAS[:] = original
+
+    def test_a_nameless_schema_is_dropped(self):
+        import aria_code.aria_cli as cli
+        from aria_code.apps.cli.tool_executor import _dedup_tool_schemas
+
+        original = list(cli.LOCAL_TOOL_SCHEMAS)
+        try:
+            cli.LOCAL_TOOL_SCHEMAS.append({"description": "no name at all"})
+            _dedup_tool_schemas()
+            self.assertEqual(len(cli.LOCAL_TOOL_SCHEMAS), len(original))
+        finally:
+            cli.LOCAL_TOOL_SCHEMAS[:] = original

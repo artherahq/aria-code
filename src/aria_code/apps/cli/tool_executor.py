@@ -81,12 +81,12 @@ from aria_code.apps.cli.tools.market_tools import (
 
 
 def _g(name):
-    import aria_cli
+    from aria_code import aria_cli
     return getattr(aria_cli, name)
 
 def _tool_analyze_file(params: dict) -> dict:
     """Parse & analyse a local document/image (pdf/docx/xlsx/csv/image/…)."""
-    from file_analysis_tools import tool_analyze_file as _f
+    from aria_code.file_analysis_tools import tool_analyze_file as _f
     return _f(params)
 def _tool_read_file(params: dict) -> dict:
     """Thin shim — implementation in apps/cli/tools/file_tools.py."""
@@ -174,14 +174,31 @@ def _dedup_tool_schemas() -> None:
     Some tools (e.g. web_fetch, get_market_data) are declared both by the
     finance-tools registry and the static schema block. The static block runs
     after and carries the richer description, so keeping the last copy wins.
+
+    Schemas arrive in two shapes: the OpenAI-style ``{"type": "function",
+    "function": {...}}`` wrapper and the bare ``{"name", "description",
+    "parameters"}`` form that several register_* helpers emit. Reading only
+    the wrapped shape gave a bare schema an empty name, and the ``if name``
+    guard then dropped it — silently, and only from the schema list, so the
+    handler stayed in LOCAL_TOOLS while the model was never told the tool
+    existed. analyze_logistics_data, analyze_stripe_data and
+    analyze_financial_statements were all unreachable this way: registered,
+    callable, and invisible.
+
+    It also normalises, which is why it reads both shapes and writes one.
+    Leaving the bare form in the list sends Ollama and the OpenAI-compatible
+    providers a schema they reject, and forces every consumer to handle two
+    shapes — one test already assumed the wrapper and broke on the other.
     """
-    seen: dict = {}
+    kept: dict = {}
     for schema in _g("LOCAL_TOOL_SCHEMAS"):
-        name = schema.get("function", {}).get("name", "")
-        if name:
-            seen[name] = schema  # later overwrites earlier
-    if len(seen) != len(_g("LOCAL_TOOL_SCHEMAS")):
-        _g("LOCAL_TOOL_SCHEMAS")[:] = list(seen.values())
+        name = (schema.get("function") or schema).get("name", "")
+        if not name:
+            continue  # malformed: nothing can call it, nothing can describe it
+        kept[name] = schema if "function" in schema else {
+            "type": "function", "function": schema,
+        }
+    _g("LOCAL_TOOL_SCHEMAS")[:] = list(kept.values())
 def _show_edit_preview(params: dict):
     """Show a diff preview for edit_file (Claude Code style, Panel-boxed)."""
     if _g("_ARIA_BOT_MODE"):
@@ -564,7 +581,51 @@ async def execute_aria_tool(base_url: str, tool_name: str, params: dict,
         if attempt < max_retries:
             await asyncio.sleep(1 * (attempt + 1))  # 1s, 2s backoff
     return {"success": False, "error": f"Failed after {max_retries + 1} attempts: {last_error}"}
-def _format_tool_summary(tool_name: str, result: dict) -> str:
+# Hard ceiling on one tool result fed back into the model, in characters.
+# Individual branches below apply their own caps, but several produced
+# unbounded text, and nothing capped the total: a turn could inject tens of
+# thousands of characters of tool output into the context with no limit.
+DEFAULT_TOOL_RESULT_CHAR_LIMIT = 4000
+
+# Never truncate below this, or a "summary" degrades into an unusable stub.
+MIN_TOOL_RESULT_CHAR_LIMIT = 400
+
+
+def truncate_tool_summary(summary: str, limit: int = DEFAULT_TOOL_RESULT_CHAR_LIMIT) -> str:
+    """Clip a tool summary to *limit* characters, saying so explicitly.
+
+    The marker matters: silently dropping the tail makes a model treat a
+    partial result as complete.  Head and tail are both kept because the useful
+    signal in command output and file content sits at the two ends — an error
+    traceback ends at the bottom, a file's structure shows at the top.
+    """
+    text = summary if isinstance(summary, str) else str(summary)
+    limit = max(int(limit or 0), MIN_TOOL_RESULT_CHAR_LIMIT)
+    if len(text) <= limit:
+        return text
+    marker_for = (
+        lambda n: f"\n\n… [{n} characters truncated to fit the context budget] …\n\n"
+    )
+    # The marker counts against the budget, so the returned text never exceeds
+    # *limit* — a cap that its own notice can overshoot is not a cap.
+    budget = max(limit - len(marker_for(len(text))), MIN_TOOL_RESULT_CHAR_LIMIT // 2)
+    head = int(budget * 0.7)
+    tail = budget - head
+    kept = text[:head] + (text[-tail:] if tail > 0 else "")
+    return text[:head] + marker_for(len(text) - len(kept)) + (text[-tail:] if tail > 0 else "")
+
+
+def _format_tool_summary(
+    tool_name: str,
+    result: dict,
+    *,
+    char_limit: int = DEFAULT_TOOL_RESULT_CHAR_LIMIT,
+) -> str:
+    """Format a tool result into a concise, length-bounded follow-up summary."""
+    return truncate_tool_summary(_format_tool_summary_raw(tool_name, result), char_limit)
+
+
+def _format_tool_summary_raw(tool_name: str, result: dict) -> str:
     """Format tool result into a concise summary for AI follow-up context."""
     if not result.get("success"):
         return f"Error: {_g('_clean_tool_error_message')(result.get('error', 'failed'))}"
@@ -681,7 +742,7 @@ def _format_tool_summary(tool_name: str, result: dict) -> str:
                 out += "\n\nHINT: Script failed. Use read_file to inspect the code, find the error, edit_file to fix it, then run_command to retry. Do NOT give up."
         else:
             # Script succeeded — auto-verify and auto-open output files.
-            from artifacts import user_generated_dir as _aria_user_generated_dir
+            from aria_code.artifacts import user_generated_dir as _aria_user_generated_dir
             output_dir = _aria_user_generated_dir()
             try:
                 recent_files = []
@@ -749,4 +810,4 @@ def _format_tool_summary(tool_name: str, result: dict) -> str:
     # Remote tools — JSON summary
     return json.dumps(data, ensure_ascii=False)[:2000]
 
-__all__ = ['_g', '_tool_analyze_file', '_tool_read_file', '_strip_markdown_fences', '_auto_fix_python', '_write_policy_confirm', '_tool_write_file', '_tool_edit_file', '_tool_multi_edit', '_tool_update_todos', '_tool_list_files', '_tool_search_code', '_tool_run_command', '_tool_web_fetch', '_tool_github', '_tool_glob', '_tool_notebook_read', '_tool_notebook_edit', '_tool_broker_query', '_tool_broker_order', '_tool_get_market_data', '_tool_get_market_history', '_todo_schema', '_wrap_bare_schemas', '_dedup_tool_schemas', '_show_edit_preview', '_show_multi_edit_preview', '_show_write_preview', '_apply_tool_approval', '_confirm_tool_execution_decision', 'execute_aria_tool', '_format_tool_summary']
+__all__ = ['_g', '_tool_analyze_file', '_tool_read_file', '_strip_markdown_fences', '_auto_fix_python', '_write_policy_confirm', '_tool_write_file', '_tool_edit_file', '_tool_multi_edit', '_tool_update_todos', '_tool_list_files', '_tool_search_code', '_tool_run_command', '_tool_web_fetch', '_tool_github', '_tool_glob', '_tool_notebook_read', '_tool_notebook_edit', '_tool_broker_query', '_tool_broker_order', '_tool_get_market_data', '_tool_get_market_history', '_todo_schema', '_wrap_bare_schemas', '_dedup_tool_schemas', '_show_edit_preview', '_show_multi_edit_preview', '_show_write_preview', '_apply_tool_approval', '_confirm_tool_execution_decision', 'execute_aria_tool', '_format_tool_summary', '_format_tool_summary_raw', 'truncate_tool_summary', 'DEFAULT_TOOL_RESULT_CHAR_LIMIT', 'MIN_TOOL_RESULT_CHAR_LIMIT']

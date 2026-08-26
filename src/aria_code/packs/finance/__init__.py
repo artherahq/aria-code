@@ -29,7 +29,7 @@ FINANCE_TOOLS = (
     "get_market_history",
     "analyze_news",
     "broker_query",
-    "run_backtest",
+    "backtest_strategy",
 )
 
 # A bare uppercase run merely *looks* like a ticker — "EMS", "ESB", and "MDB"
