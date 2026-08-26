@@ -281,6 +281,19 @@ class AriaSSEProvider:
             yield event
 
 
+def _opt_in(config: dict, key: str, default: bool = True) -> bool:
+    """Read a tri-state boolean setting where "unset" means *default*.
+
+    ``config.get(key, default)`` is the wrong tool here and produced a real
+    failure: a config holding ``"use_vertexai": null`` returns None — the
+    stored value, not the default — so a Google model silently opted out of
+    Vertex and went down the OpenAI-compatible path instead. Settings that are
+    written as null by a config round-trip have to mean "not configured".
+    """
+    value = config.get(key)
+    return default if value is None else bool(value)
+
+
 class ConfiguredProvider:
     """Adapter for the provider selected by ``/model provider/model``.
 
@@ -364,7 +377,9 @@ class ConfiguredProvider:
     ) -> AsyncGenerator[LLMEvent, None]:
         prepared = self._messages(messages)
         
-        if self.backend in ("vertexai", "vertex-ai", "google-genai") or (self.backend in ("google", "gemini") and self.config.get("use_vertexai", True)):
+        if self.backend in ("vertexai", "vertex-ai", "google-genai") or (
+            self.backend in ("google", "gemini") and _opt_in(self.config, "use_vertexai")
+        ):
             from aria_code.apps.cli.providers.vertexai_stream import VertexAIProvider
             provider = VertexAIProvider(
                 model=self.model,
