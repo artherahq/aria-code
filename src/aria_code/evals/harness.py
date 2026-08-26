@@ -147,6 +147,12 @@ class TaskResult:
     detail: str = ""
     log: str = ""
     tags: tuple[str, ...] = ()
+    # What the agent actually touched. A red check with an empty list is a
+    # different failure from a red check after real edits: the first says the
+    # agent never engaged, the second says it engaged and got it wrong. Without
+    # this the two are indistinguishable in a report, and they call for
+    # opposite investigations.
+    changed: tuple[str, ...] = ()
 
     @property
     def counted(self) -> bool:
@@ -161,6 +167,7 @@ class TaskResult:
             "exit_code": self.exit_code,
             "detail": self.detail,
             "tags": list(self.tags),
+            "changed": list(self.changed),
         }
 
 
@@ -292,6 +299,33 @@ def _missing_modules(names: Iterable[str]) -> list[str]:
     return missing
 
 
+def _snapshot(root: Path) -> dict[str, str]:
+    """Content digests for every file in *root*, keyed by relative path."""
+    import hashlib
+
+    out: dict[str, str] = {}
+    for path in sorted(root.rglob("*")):
+        if not path.is_file():
+            continue
+        rel = str(path.relative_to(root))
+        if rel.startswith((".git/", "__pycache__/")) or "/__pycache__/" in rel:
+            continue
+        try:
+            out[rel] = hashlib.sha256(path.read_bytes()).hexdigest()
+        except OSError:
+            continue
+    return out
+
+
+def _changed_paths(before: dict[str, str], after: dict[str, str]) -> tuple[str, ...]:
+    """Files the agent created, edited, or deleted."""
+    touched = [
+        rel for rel in sorted(set(before) | set(after))
+        if before.get(rel) != after.get(rel)
+    ]
+    return tuple(touched)
+
+
 def _solver_failure(outcome: Any) -> Optional[tuple[int, str]]:
     """``(exit_code, log)`` when the solver reports it did not complete.
 
@@ -421,6 +455,7 @@ def run_task(
             )
 
         # ── the agent's turn ──────────────────────────────────────────────
+        before = _snapshot(workspace)
         try:
             outcome = solver(task.prompt, workspace)
         except Exception as exc:
@@ -433,9 +468,11 @@ def run_task(
         # is the source of truth and the solver's exit code is not. A run that
         # edited the file correctly and then exited 1 on an empty final message
         # is a PASS: the work is on disk and the tests are green.
+        changed = _changed_paths(before, _snapshot(workspace))
+
         after_code, after_log = _run(task.verify, workspace, task.timeout)
         if after_code == 0:
-            return _result(PASS, exit_code=0)
+            return _result(PASS, exit_code=0, changed=changed)
 
         # Red — now the solver's status decides who is to blame. A subprocess
         # that died in seconds on a provider outage or a crash never gave the
@@ -448,13 +485,15 @@ def run_task(
             return _result(
                 ERROR, exit_code=code,
                 detail=f"the agent did not complete (exit {code}); check still red",
-                log=_trim(log),
+                log=_trim(log), changed=changed,
             )
 
+        detail = f"`{task.verify}` exited {after_code}"
+        if not changed:
+            detail += " — the agent changed nothing"
         return _result(
-            FAIL, exit_code=after_code,
-            detail=f"`{task.verify}` exited {after_code}",
-            log=_trim(after_log),
+            FAIL, exit_code=after_code, detail=detail,
+            log=_trim(after_log), changed=changed,
         )
     finally:
         if not keep_workspace and scratch_root is None:
