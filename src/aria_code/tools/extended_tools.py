@@ -1,13 +1,26 @@
-"""
-tools/extended_tools.py — Extended Enterprise & Trading Connector Tools
-========================================================================
-Implements:
-1. tool_send_slack_notification (ChatOps & approval alerts)
-2. tool_push_feishu_card (Interactive Bitable & card notifications)
-3. tool_parse_tradingview_alert (Webhook ingestion for automated strategy triggers)
-4. tool_get_quickbooks_pnl (P&L reconciliation, cash runway & burn rate)
-5. tool_get_shopify_store_analytics (GMV, order fulfillment & ROAS)
-6. tool_query_snowflake_data (Direct SQL lakehouse queries)
+"""Enterprise connector tools — SHAPES ONLY, not implementations.
+
+Read this before using anything here.
+=====================================
+None of these functions contact the service they name. Every one returns a
+hardcoded payload: ``tool_send_slack_notification`` reports
+``"Successfully posted to Slack channel"`` with an invented timestamp and
+permalink without opening a socket, and the QuickBooks, Shopify and Snowflake
+tools return fabricated figures in the same way.
+
+They define the intended request/response shape for six integrations that have
+not been built. That is a legitimate thing to have; what is not legitimate is
+letting a model call one and report the fabricated result to a user as fact —
+"I posted the alert to #trading-desk" when nothing was sent, or a cash-runway
+number invented out of nothing.
+
+So ``register_extended_tools`` wraps each one in a guard that refuses to run
+and says why. The shapes stay here as the specification for whoever implements
+them; ``ARIA_ALLOW_STUB_TOOLS=1`` returns the canned payloads for tests and
+demos, and names itself in the result so the caller cannot mistake it for real.
+
+Implementing one means replacing the body with a real client call and dropping
+it from ``_STUB_TOOLS``.
 """
 
 from __future__ import annotations
@@ -156,9 +169,56 @@ def tool_query_snowflake_data(params: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+# name → the service it would need, for the message the guard returns.
+_STUB_TOOLS = {
+    "send_slack_notification": "Slack (bot token + channel)",
+    "push_feishu_card": "Feishu/Lark (app credentials + webhook)",
+    "parse_tradingview_alert": "TradingView webhook receiver",
+    "get_quickbooks_pnl": "QuickBooks Online API (OAuth)",
+    "get_shopify_store_analytics": "Shopify Admin API (store + token)",
+    "query_snowflake_data": "Snowflake (account, warehouse, credentials)",
+}
+
+
+def stub_guard(name: str, service: str, handler):
+    """Wrap a shape-only tool so it reports its status instead of inventing one.
+
+    Returning fabricated success is the one behaviour that must not survive:
+    the model relays it as fact, and the user is told a message was sent or a
+    figure was read when neither happened.
+    """
+    import os
+
+    def _guarded(params: Dict[str, Any]) -> Dict[str, Any]:
+        if os.getenv("ARIA_ALLOW_STUB_TOOLS", "").strip() in ("1", "true", "yes"):
+            result = dict(handler(params) or {})
+            result["stub"] = True
+            result["warning"] = f"{name} returned canned data; {service} is not connected."
+            return result
+        return {
+            "success": False,
+            "error": (
+                f"{name} is not implemented — it is a shape-only stub. "
+                f"Connecting it requires {service}. "
+                f"Do not report its result as if the action happened."
+            ),
+            "stub": True,
+        }
+
+    _guarded.__name__ = getattr(handler, "__name__", name)
+    _guarded.__doc__ = getattr(handler, "__doc__", "")
+    return _guarded
+
+
 def register_extended_tools(registry_or_dict: Any) -> None:
-    """Register extended tools in aria tool collection."""
-    tools = {
+    """Register the extended connector stubs, guarded.
+
+    Registered as ``(handler, description)`` pairs: bare functions were being
+    stored here, and ToolExecutor indexes ``local_tools[name][0]``, so calling
+    any of these raised ``TypeError: 'function' object is not subscriptable``.
+    They were unreachable in practice only because none of them had a schema.
+    """
+    handlers = {
         "send_slack_notification": tool_send_slack_notification,
         "push_feishu_card": tool_push_feishu_card,
         "parse_tradingview_alert": tool_parse_tradingview_alert,
@@ -166,8 +226,15 @@ def register_extended_tools(registry_or_dict: Any) -> None:
         "get_shopify_store_analytics": tool_get_shopify_store_analytics,
         "query_snowflake_data": tool_query_snowflake_data,
     }
+    tools = {
+        name: (
+            stub_guard(name, _STUB_TOOLS[name], handler),
+            f"[not implemented] {name} — needs {_STUB_TOOLS[name]}",
+        )
+        for name, handler in handlers.items()
+    }
     if hasattr(registry_or_dict, "register"):
-        for name, fn in tools.items():
-            registry_or_dict.register(name, fn)
+        for name, entry in tools.items():
+            registry_or_dict.register(name, entry[0])
     elif isinstance(registry_or_dict, dict):
         registry_or_dict.update(tools)

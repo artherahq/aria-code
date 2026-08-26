@@ -114,14 +114,79 @@ def tool_generate_code_diff(params: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def register_code_audit_tools(registry_or_dict: Any) -> None:
-    """Register code audit tools into aria tool collection."""
+CODE_AUDIT_TOOL_SCHEMAS: List[Dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "audit_code_diagnostics",
+            "description": (
+                "Statically analyse a snippet of source and report issues: syntax errors, "
+                "bare excepts, mutable default arguments, and lookahead bias in "
+                "backtest code (using future bars to make a past decision). Takes the code "
+                "as a string, so use it on a proposed change before writing it; use "
+                "lsp_diagnostics for a file already on disk."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "code": {"type": "string", "description": "Source code to audit"},
+                    "language": {
+                        "type": "string",
+                        "description": "python | typescript | javascript",
+                    },
+                },
+                "required": ["code"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "generate_code_diff",
+            "description": (
+                "Produce a structured line-by-line diff between two versions of a file, "
+                "with per-line added/removed markers and a summary count. Use it to show "
+                "the user exactly what a proposed change does before applying it."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "original": {"type": "string", "description": "Original source"},
+                    "modified": {"type": "string", "description": "Modified source"},
+                    "file_path": {"type": "string", "description": "Path shown in the diff header"},
+                },
+                "required": ["original", "modified"],
+            },
+        },
+    },
+]
+
+
+def register_code_audit_tools(registry_or_dict: Any, schema_registry: Any = None) -> None:
+    """Register the code-audit tools, with the schemas that make them usable.
+
+    These are real implementations — ast-based analysis and a line differ — that
+    had no schema and so were never offered to the model: registered, callable,
+    and invisible. They were also stored as bare functions, while ToolExecutor
+    indexes ``local_tools[name][0]``, so a call would have raised TypeError.
+    """
     tools = {
-        "audit_code_diagnostics": tool_audit_code_diagnostics,
-        "generate_code_diff": tool_generate_code_diff,
+        "audit_code_diagnostics": (
+            tool_audit_code_diagnostics,
+            "Static analysis of a code string: syntax, risky patterns, lookahead bias",
+        ),
+        "generate_code_diff": (
+            tool_generate_code_diff,
+            "Structured line-by-line diff between two versions of a file",
+        ),
     }
     if hasattr(registry_or_dict, "register"):
-        for name, fn in tools.items():
-            registry_or_dict.register(name, fn)
+        for name, entry in tools.items():
+            registry_or_dict.register(name, entry[0])
     elif isinstance(registry_or_dict, dict):
         registry_or_dict.update(tools)
+    if isinstance(schema_registry, list):
+        described = {(x.get("function") or x).get("name") for x in schema_registry}
+        for schema in CODE_AUDIT_TOOL_SCHEMAS:
+            if schema["function"]["name"] not in described:
+                schema_registry.append(schema)

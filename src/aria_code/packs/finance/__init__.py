@@ -24,13 +24,39 @@ PACK_NAME = "finance"
 # Tools this pack owns.  Exposed to the model only while the pack is active, so
 # a code session is not offered a quote tool it can misfire (which is how a
 # repository question became a MongoDB stock lookup).
-FINANCE_TOOLS = (
+# The tools this pack owns, derived from the registries that register them
+# rather than hand-listed. A hand-written tuple drifts the moment a tool is
+# added or renamed, and both failure directions are silent: a tool left out
+# stays exposed on every turn, and a tool named wrongly promises a capability
+# that does not exist (this list said "run_backtest"; the registered name is
+# "backtest_strategy").
+_EXTRA_FINANCE_TOOLS = (
+    # Registered by the static schema block and the broker/market modules
+    # rather than by LOCAL_FINANCE_TOOL_REGISTRY.
     "get_market_data",
     "get_market_history",
-    "analyze_news",
     "broker_query",
-    "backtest_strategy",
+    "broker_order",
+    "get_broker_portfolio",
+    "analyze_news",
 )
+
+
+def _finance_tool_names() -> tuple[str, ...]:
+    names: list[str] = []
+    try:
+        from aria_code.tools.local_finance_tools import LOCAL_FINANCE_TOOL_REGISTRY
+
+        names.extend(LOCAL_FINANCE_TOOL_REGISTRY)
+    except Exception:
+        pass
+    for name in _EXTRA_FINANCE_TOOLS:
+        if name not in names:
+            names.append(name)
+    return tuple(names)
+
+
+FINANCE_TOOLS = _finance_tool_names()
 
 # A bare uppercase run merely *looks* like a ticker — "EMS", "ESB", and "MDB"
 # all appeared in an architecture diagram in the incident that motivated this

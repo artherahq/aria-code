@@ -2253,6 +2253,32 @@ LOCAL_FINANCE_TOOL_SCHEMAS = [
             },
         },
     },
+    # ── get_funding_rates_compare ─────────────────────────────────────────────
+    # The handler has been in LOCAL_FINANCE_TOOL_REGISTRY all along with no
+    # schema beside it, so it was registered, callable, and invisible: the
+    # model was never told it exists.
+    {
+        "type": "function",
+        "function": {
+            "name": "get_funding_rates_compare",
+            "description": (
+                "Compare perpetual funding rates for the same assets across Binance, OKX "
+                "and Bybit in one call. Use this to spot cross-exchange arbitrage: a spread "
+                "wider than about 0.02% between venues is worth attention. Requires ccxt."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "symbols": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Perpetual pairs, e.g. [\"BTC/USDT\", \"ETH/USDT\"]. Defaults to BTC, ETH and SOL.",
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
     # ── walk_forward_backtest ─────────────────────────────────────────────────
     {
         "type": "function",
