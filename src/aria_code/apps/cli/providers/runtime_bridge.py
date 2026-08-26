@@ -37,6 +37,56 @@ def build_tool_executor(
     )
 
 
+# Modes in which nothing can be written, so nothing can need verifying.
+_READ_ONLY_MODES = frozenset({"read-only", "readonly", "read_only", "plan"})
+
+
+def build_acceptance_gate(executor, config: Optional[dict] = None):
+    """The CLI's acceptance gate, or ``None`` when this session shouldn't have one.
+
+    The gate runs its checks through the session's own ``run_command`` tool
+    rather than spawning subprocesses itself, so the workspace sandbox, the
+    command policy and the trace all apply to a verification run exactly as
+    they apply to a command the model asked for.
+
+    ``user_approved`` is set because the commands are the *planner's*, not the
+    model's or the user's prose — the same inferred plan ``/verify`` already
+    runs on request. Anything else would put an approval prompt between the
+    model finishing and the check that tells us whether it finished correctly,
+    which is the one place a prompt cannot help.
+    """
+    cfg = config or {}
+    if not cfg.get("acceptance_gate", True):
+        return None
+    mode = str(cfg.get("permission_mode", "workspace-write") or "")
+    if mode in _READ_ONLY_MODES:
+        return None
+    if "run_command" not in getattr(executor, "local_tools", {}):
+        return None
+
+    import os
+    from aria_code.runtime.acceptance import AcceptanceGate
+
+    timeout = int(cfg.get("acceptance_timeout", 300) or 300)
+
+    def _runner(command: str) -> dict:
+        return executor.execute_local("run_command", {
+            "command": command,
+            "policy": "balanced",
+            "permission_mode": mode,
+            "network_enabled": bool(cfg.get("network_enabled", True)),
+            "user_approved": True,
+            "timeout": timeout,
+        })
+
+    return AcceptanceGate(
+        runner=_runner,
+        root=os.getcwd(),
+        max_attempts=int(cfg.get("acceptance_max_attempts", 2) or 2),
+        commands=tuple(cfg.get("acceptance_commands") or ()),
+    )
+
+
 async def run_with_fallback(
     route: str,
     *,
@@ -200,6 +250,7 @@ async def run_chat_via_runtime(
         system_override=system_override,
     )
     executor = build_tool_executor(local_tools, config, execution_context)
+    gate = build_acceptance_gate(executor, config)
 
     result = await run_turn(
         prompt, history,
@@ -214,5 +265,6 @@ async def run_chat_via_runtime(
         requires_evidence=requires_evidence,
         grounding_tools=grounding_tools,
         evidence_already_grounded=evidence_already_grounded,
+        acceptance=gate,
     )
     return result if return_result else result.text

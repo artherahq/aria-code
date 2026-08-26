@@ -1223,6 +1223,15 @@ except Exception as _exc:
     logger.debug("LSP tools init error: %s", _exc)
     LSP_SCHEMAS: list = []
 
+# ── Register repo-map tools (symbol index + symbol lookup) ────────────────────
+try:
+    from aria_code.runtime.repo_map import REPO_MAP_TOOLS, REPO_MAP_SCHEMAS
+    LOCAL_TOOLS.update(REPO_MAP_TOOLS)
+    logger.info("Registered %d repo-map tools", len(REPO_MAP_TOOLS))
+except Exception as _exc:
+    logger.debug("Repo-map tools init error: %s", _exc)
+    REPO_MAP_SCHEMAS: list = []
+
 # ── Register computer-use tools (browser automation + desktop control) ──────
 _HAS_COMPUTER_USE = False
 try:
@@ -1361,6 +1370,7 @@ if _HAS_COMPUTER_USE:
 # Make spawn_task / task_* and lsp_diagnostics visible to the model.
 LOCAL_TOOL_SCHEMAS.extend(_wrap_bare_schemas(SUBAGENT_SCHEMAS))
 LOCAL_TOOL_SCHEMAS.extend(_wrap_bare_schemas(LSP_SCHEMAS))
+LOCAL_TOOL_SCHEMAS.extend(_wrap_bare_schemas(REPO_MAP_SCHEMAS))
 
 
 

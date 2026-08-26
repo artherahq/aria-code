@@ -33,6 +33,20 @@ from .agent_loop import (
     run_serial_tool,
     split_tool_calls,
 )
+from .acceptance import (
+    AcceptanceGate,
+    AcceptanceReport,
+    CheckResult,
+    DEFAULT_MUTATING_TOOLS,
+    extract_mutated_paths,
+)
+from .repo_map import (
+    REPO_MAP_SCHEMAS,
+    REPO_MAP_TOOLS,
+    RepoMap,
+    Symbol,
+    extract_symbols,
+)
 from .gateway import TurnResult, run_turn
 from .approval import ApprovalDecision, apply_approval_decision
 from .events import RuntimeEvent, RuntimeTrace, ToolCallRecord, TurnResultRecord
@@ -70,6 +84,16 @@ from .subagent import (
 )
 
 __all__ = [
+    "REPO_MAP_SCHEMAS",
+    "REPO_MAP_TOOLS",
+    "RepoMap",
+    "Symbol",
+    "extract_symbols",
+    "AcceptanceGate",
+    "AcceptanceReport",
+    "CheckResult",
+    "DEFAULT_MUTATING_TOOLS",
+    "extract_mutated_paths",
     "AgentErrorPresentation",
     "AgentEvent",
     "AgentEventCancelled",
