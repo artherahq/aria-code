@@ -119,9 +119,19 @@ class VertexAIProvider(LLMProvider):
             return None
         from google.genai import types
         genai_tools = []
+        # Vertex rejects the entire request when two declarations share a name
+        # ("Duplicate function declaration found: web_fetch"), where
+        # OpenAI-compatible backends just take the last one. The registries
+        # upstream should not produce duplicates, but this is the boundary
+        # where a duplicate becomes a hard 400 for the whole turn, so it is
+        # also the boundary that has to be certain.
+        seen: set = set()
         for tool in tools:
             func = tool.get("function", tool)
             name = func.get("name")
+            if not name or name in seen:
+                continue
+            seen.add(name)
             desc = func.get("description", "")
             
             # Map parameters recursively

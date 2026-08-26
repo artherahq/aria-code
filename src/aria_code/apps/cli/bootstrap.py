@@ -62,6 +62,18 @@ def initialize_cli_environment() -> None:
     disable_broken_proxy()
 
 
+# The model used when nothing has been configured yet.
+#
+# This exists so there is ONE place that answers "which model by default".
+# Call sites used to spell their own fallback — `config.get("model",
+# "qwen2.5:7b")`, ten times over — which quietly made Ollama the answer
+# whenever a config key was missing, no matter what the user had chosen.
+# Provider configuration is the user's to make (that is what `/model` and
+# `.ariarc` are for); the code's job is to have a sane default and then get
+# out of the way.
+DEFAULT_MODEL = os.getenv("ARIA_DEFAULT_MODEL", "google/gemini-2.5-pro")
+
+
 def default_config() -> dict:
     return {
         "api_url": os.getenv(
@@ -70,9 +82,12 @@ def default_config() -> dict:
         ),
         "local_url": "http://localhost:8000",
         "ollama_url": os.getenv("OLLAMA_URL", "http://localhost:11434"),
+        # Which backend serves a bare, unprefixed model name. Only consulted
+        # for names that do not name their own provider ("qwen2.5:7b"); a
+        # prefixed id like "google/gemini-2.5-pro" always wins.
         "local_provider": os.getenv("ARIA_LLM_PROVIDER", "ollama"),
         "provider_fallback": "configured",
-        "model": "qwen2.5-coder:1.5b",
+        "model": DEFAULT_MODEL,
         "thinking_mode": "auto",
         "watchlist": ["AAPL", "MSFT", "GOOGL", "TSLA", "NVDA"],
         "auth_token": None,

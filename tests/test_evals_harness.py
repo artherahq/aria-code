@@ -422,3 +422,67 @@ class ChangeTrackingTests(HarnessBase):
         )
         data = json.loads(write_report(suite, self.root / "r.json").read_text(encoding="utf-8"))
         self.assertIn("fixed.txt", data["results"][0]["changed"])
+
+
+class ProtectedFileTests(HarnessBase):
+    """Editing the check is not solving the task."""
+
+    def test_editing_a_test_file_fails_even_when_the_check_goes_green(self):
+        # The failure this exists for, seen in a real run: the agent edited
+        # test_settlement.py instead of the module under test. Without this the
+        # suite scores a PASS and the number is a lie.
+        _fixture(self.fixtures, "broken", {
+            "check.py": _GUARD,
+            "test_thing.py": "def test_x():\n    assert False\n",
+        })
+
+        def cheat(prompt, workspace):
+            (workspace / "test_thing.py").write_text("def test_x():\n    pass\n", encoding="utf-8")
+            (workspace / "fixed.txt").write_text("x", encoding="utf-8")  # check would pass
+
+        result = self._run(self._task(), cheat)
+        self.assertEqual(result.outcome, FAIL)
+        self.assertIn("protected", result.detail)
+        self.assertIn("test_thing.py", result.detail)
+
+    def test_editing_the_source_is_untouched_by_the_rule(self):
+        _fixture(self.fixtures, "broken", {
+            "check.py": _GUARD,
+            "test_thing.py": "def test_x():\n    pass\n",
+        })
+        result = self._run(
+            self._task(),
+            lambda p, w: (w / "fixed.txt").write_text("x", encoding="utf-8"),
+        )
+        self.assertEqual(result.outcome, PASS)
+
+    def test_a_task_may_declare_its_own_protected_set(self):
+        _fixture(self.fixtures, "broken", {"check.py": _GUARD, "rates.csv": "a,1\n"})
+        result = self._run(
+            self._task(protect=("*.csv",)),
+            lambda p, w: ((w / "rates.csv").write_text("a,999\n", encoding="utf-8"),
+                          (w / "fixed.txt").write_text("x", encoding="utf-8")),
+        )
+        self.assertEqual(result.outcome, FAIL)
+        self.assertIn("rates.csv", result.detail)
+
+    def test_protection_can_be_switched_off_for_a_task_that_needs_it(self):
+        _fixture(self.fixtures, "broken", {"check.py": _GUARD, "test_thing.py": "x = 1\n"})
+        result = self._run(
+            self._task(protect=()),
+            lambda p, w: ((w / "test_thing.py").write_text("x = 2\n", encoding="utf-8"),
+                          (w / "fixed.txt").write_text("x", encoding="utf-8")),
+        )
+        self.assertEqual(result.outcome, PASS)
+
+    def test_nested_test_directories_are_protected_too(self):
+        _fixture(self.fixtures, "broken", {
+            "check.py": _GUARD,
+            "tests/test_deep.py": "def test_x():\n    pass\n",
+        })
+        result = self._run(
+            self._task(),
+            lambda p, w: ((w / "tests" / "test_deep.py").write_text("# gone\n", encoding="utf-8"),
+                          (w / "fixed.txt").write_text("x", encoding="utf-8")),
+        )
+        self.assertEqual(result.outcome, FAIL)

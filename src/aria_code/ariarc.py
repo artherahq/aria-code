@@ -44,6 +44,13 @@ parent directories (walks up to filesystem root, stops at $HOME).
         "packages/quant_engine/analysis/signal_pipeline.py"
       ],
 
+      // Which model this project runs on. Pins the backend for everyone who
+      // opens the repo, so it does not depend on each developer's global
+      // config. An explicit /model during a session still wins.
+      "model":      "google/gemini-2.5-pro",
+      "provider":   "google",
+      "max_rounds": 40,
+
       // Disable AI from proposing certain file patterns (safety)
       "write_deny_patterns": ["*.env", "config/secrets.*", "**/credentials*"],
 
@@ -102,6 +109,13 @@ ARIARC_DEFAULTS: Dict[str, Any] = {
     "auto_context":      [],
     "write_deny_patterns": ["*.env", "**/.env*", "**/secrets.*", "**/credentials*"],
     "acceptance":        {},
+    # Which model this project runs on. A project that is standardised on one
+    # backend should be able to say so in the file it already keeps under
+    # version control, rather than every developer configuring it by hand and
+    # rather than the code hardcoding a default that suits one of them.
+    "model":             None,
+    "provider":          None,
+    "max_rounds":        None,
 }
 
 
@@ -166,6 +180,10 @@ class AriaRC:
         self.write_deny_patterns: List[str] = list(cfg.get("write_deny_patterns", []))
         _acceptance = cfg.get("acceptance", {})
         self.acceptance: Dict[str, Any] = _acceptance if isinstance(_acceptance, dict) else {}
+        self.model:      Optional[str] = cfg.get("model") or None
+        self.provider:   Optional[str] = cfg.get("provider") or None
+        _rounds = cfg.get("max_rounds")
+        self.max_rounds: Optional[int] = int(_rounds) if isinstance(_rounds, int) and _rounds > 0 else None
 
     # ── class methods ──────────────────────────────────────────────────────
 
@@ -327,6 +345,28 @@ class AriaRC:
 # ---------------------------------------------------------------------------
 
 _current_rc: Optional[AriaRC] = None
+
+
+def apply_to_config(config: Dict[str, Any], rc: Optional[AriaRC] = None) -> Dict[str, Any]:
+    """Overlay a project's ``.ariarc`` model settings onto *config*, in place.
+
+    Precedence is the point. The project file outranks the global default —
+    that is what makes "this repo runs on Vertex" true for everyone who opens
+    it — but it must not outrank a choice the user made in this session, or
+    ``/model`` would appear to do nothing in a repo that pins a model.
+    ``_model_pinned_by_session`` records that distinction for the UI.
+    """
+    arc = rc if rc is not None else get_ariarc()
+    if not arc.found:
+        return config
+    if arc.model and not config.get("_model_set_in_session"):
+        config["model"] = arc.model
+        config["_model_pinned_by_project"] = True
+    if arc.provider and not config.get("_model_set_in_session"):
+        config["local_provider"] = arc.provider
+    if arc.max_rounds:
+        config.setdefault("max_rounds", arc.max_rounds)
+    return config
 
 
 def get_ariarc(reload: bool = False) -> AriaRC:

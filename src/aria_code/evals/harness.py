@@ -114,6 +114,11 @@ class TaskSpec:
     # Importable modules the check needs. Missing ones make the task ERROR
     # rather than FAIL: an absent pytest is not a bug for the agent to fix.
     requires: tuple[str, ...] = ()
+    # Files the agent must not modify. Defaults to the tests, because the
+    # check IS the tests: an agent that edits them can turn any task green
+    # without doing the work, and the score would be indistinguishable from a
+    # real solve. Editing one is scored FAIL no matter what the check says.
+    protect: tuple[str, ...] = ("test_*.py", "*_test.py", "tests/**")
     # A task may legitimately start green when it is a regression guard: the
     # point is that the agent must not *break* it. Opting out is explicit so
     # that it is a decision someone made, not a fixture that quietly rotted.
@@ -134,6 +139,10 @@ class TaskSpec:
             tags=tuple(str(t) for t in (data.get("tags") or ())),
             setup=tuple(str(c) for c in (data.get("setup") or ())),
             requires=tuple(str(m) for m in (data.get("requires") or ())),
+            protect=(
+                tuple(str(g) for g in data["protect"])
+                if "protect" in data else cls.protect
+            ),
             allow_green_start=bool(data.get("allow_green_start", False)),
         )
 
@@ -297,6 +306,20 @@ def _missing_modules(names: Iterable[str]) -> list[str]:
         except (ImportError, ValueError):
             missing.append(name)
     return missing
+
+
+def _violates_protection(changed: Iterable[str], patterns: Iterable[str]) -> tuple[str, ...]:
+    """Protected files the agent modified."""
+    import fnmatch
+
+    globs = tuple(patterns)
+    hits: list[str] = []
+    for rel in changed:
+        name = rel.replace("\\", "/")
+        base = name.rsplit("/", 1)[-1]
+        if any(fnmatch.fnmatch(name, g) or fnmatch.fnmatch(base, g) for g in globs):
+            hits.append(rel)
+    return tuple(hits)
 
 
 def _snapshot(root: Path) -> dict[str, str]:
@@ -469,6 +492,18 @@ def run_task(
         # edited the file correctly and then exited 1 on an empty final message
         # is a PASS: the work is on disk and the tests are green.
         changed = _changed_paths(before, _snapshot(workspace))
+
+        # Checked before the verdict, and it overrides a green check. Observed
+        # in a real run: an agent edited test_settlement.py rather than the
+        # module under test. The suite would have called that a PASS and the
+        # number would have been a lie.
+        tampered = _violates_protection(changed, task.protect)
+        if tampered:
+            return _result(
+                FAIL,
+                detail=f"modified protected file(s): {', '.join(tampered)}",
+                changed=changed,
+            )
 
         after_code, after_log = _run(task.verify, workspace, task.timeout)
         if after_code == 0:
