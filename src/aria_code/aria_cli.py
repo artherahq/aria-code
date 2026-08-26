@@ -1352,7 +1352,13 @@ try:
     except ImportError:
         from aria_code.tools.extended_tools import register_extended_tools as _reg_ext
     _reg_ext(LOCAL_TOOLS)
-    logger.info("Registered extended enterprise tools (Slack, Feishu, TradingView, QuickBooks, Shopify, Snowflake)")
+    # Deliberately registered WITHOUT schemas: these six are shape-only stubs
+    # that fabricate success (see extended_tools' module docstring). Keeping
+    # them out of LOCAL_TOOL_SCHEMAS is what stops the model from calling one
+    # and reporting "posted to #trading-desk" when nothing was sent. They are
+    # registered at all so /tools can show what is stubbed and so the guard
+    # gives a real answer if something reaches them by name.
+    logger.info("Registered 6 enterprise connector stubs (not implemented; see extended_tools)")
 except Exception as _exc:
     logger.debug("Extended tools init error: %s", _exc)
 

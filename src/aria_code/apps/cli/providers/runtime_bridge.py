@@ -203,6 +203,15 @@ def make_provider_fn(
     if system_override:
         _cloud_uctx["system_role_override"] = system_override
 
+    def _scoped_tools(prompt: str) -> List[dict]:
+        """Tools this message may use: core always, domain only when claimed."""
+        try:
+            from aria_code.apps.cli.tool_scope import select_tool_schemas
+
+            return select_tool_schemas(tool_schemas, prompt)
+        except Exception:
+            return list(tool_schemas)
+
     def _system_for(prompt: str) -> str:
         """The rules this turn runs under, for the non-Ollama providers.
 
@@ -227,9 +236,15 @@ def make_provider_fn(
                            cancel_event=None):
         route = first_round_route(model, config, api_url)
 
+        # ollama_stream does its own intent-based selection; the other
+        # providers had none, so a coding turn reached Gemini carrying all 74
+        # tool schemas including 34 domain tools. Scoped per message because
+        # what a turn may call depends on what it asked.
+        _scoped = _scoped_tools(prompt)
+
         async def _stream(provider, _on_token):
             return await stream_provider_result(
-                provider, prompt, history, tools=tool_schemas,
+                provider, prompt, history, tools=_scoped,
                 cancel_event=cancel_event, on_token=_on_token, on_thinking=on_thinking,
                 on_tool_call=on_tool_call, on_tool_result=on_tool_result, on_status=on_status,
             )
