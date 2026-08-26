@@ -273,7 +273,42 @@ class PreviewSession:
         if not version.path.exists():
             return web.Response(status=404, text=f"Artifact file missing: {version.path}")
         content_type = mimetypes.guess_type(str(version.path))[0] or "application/octet-stream"
-        return web.Response(body=version.path.read_bytes(), content_type=content_type)
+        return web.Response(
+            body=version.path.read_bytes(),
+            content_type=content_type,
+            headers=_ARTIFACT_HEADERS,
+        )
+
+
+# Sent with every artifact response. The iframe sandbox already gives the
+# document an opaque origin; this is the second half — it stops the page from
+# reaching the network at all.
+#
+# `connect-src 'none'` is the important line: without it, model-generated
+# JavaScript in an artifact can POST the contents of the page (which may hold
+# whatever data the agent just analysed) to any host on the internet, and an
+# opaque origin does nothing to prevent that. Google Fonts is the one exception
+# because a dashboard that silently loses its typeface looks broken rather than
+# secured; nothing else is reachable.
+_ARTIFACT_HEADERS = {
+    "Content-Security-Policy": "; ".join((
+        "default-src 'none'",
+        "script-src 'unsafe-inline' 'unsafe-eval'",
+        "style-src 'unsafe-inline' https://fonts.googleapis.com",
+        "font-src https://fonts.gstatic.com data:",
+        "img-src data: blob:",
+        "media-src data: blob:",
+        "connect-src 'none'",
+        "form-action 'none'",
+        "base-uri 'none'",
+        "frame-ancestors 'self'",
+    )),
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+    # A generated report is a snapshot of one moment; a cached copy shown after
+    # the next version lands is worse than no preview.
+    "Cache-Control": "no-store",
+}
 
 
 def _kind_for_suffix(suffix: str) -> str:
@@ -377,7 +412,12 @@ function render() {
   if (version.kind === 'image') {
     main.innerHTML = '<img src="' + url + '">';
   } else {
-    main.innerHTML = '<iframe src="' + url + '" sandbox="allow-scripts allow-same-origin"></iframe>';
+    // allow-scripts WITHOUT allow-same-origin. The two together are not
+    // additive — they cancel the sandbox: the framed document would run in
+    // this page's origin and could read /state, open /events, and reach the
+    // parent DOM. Artifact HTML is model-generated, so it gets an opaque
+    // origin and nothing else.
+    main.innerHTML = '<iframe src="' + url + '" sandbox="allow-scripts"></iframe>';
   }
 }
 

@@ -1232,6 +1232,15 @@ except Exception as _exc:
     logger.debug("Repo-map tools init error: %s", _exc)
     REPO_MAP_SCHEMAS: list = []
 
+# ── Register artifact publishing (model-facing canvas tool) ───────────────────
+try:
+    from aria_code.tools.artifact_tools import ARTIFACT_TOOLS, ARTIFACT_TOOL_SCHEMAS
+    LOCAL_TOOLS.update(ARTIFACT_TOOLS)
+    logger.info("Registered %d artifact tools", len(ARTIFACT_TOOLS))
+except Exception as _exc:
+    logger.debug("Artifact tools init error: %s", _exc)
+    ARTIFACT_TOOL_SCHEMAS: list = []
+
 # ── Register computer-use tools (browser automation + desktop control) ──────
 _HAS_COMPUTER_USE = False
 try:
@@ -1371,6 +1380,7 @@ if _HAS_COMPUTER_USE:
 LOCAL_TOOL_SCHEMAS.extend(_wrap_bare_schemas(SUBAGENT_SCHEMAS))
 LOCAL_TOOL_SCHEMAS.extend(_wrap_bare_schemas(LSP_SCHEMAS))
 LOCAL_TOOL_SCHEMAS.extend(_wrap_bare_schemas(REPO_MAP_SCHEMAS))
+LOCAL_TOOL_SCHEMAS.extend(_wrap_bare_schemas(ARTIFACT_TOOL_SCHEMAS))
 
 
 

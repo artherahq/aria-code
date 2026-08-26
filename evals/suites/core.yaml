@@ -1,0 +1,40 @@
+suite: core
+# Every task must start red. The harness checks that before the agent runs and
+# reports a task that starts green as INVALID rather than counting it as a pass
+# — a suite that quietly accumulates already-passing tasks reports a rising
+# score while measuring less and less.
+tasks:
+  - id: fix-failing-test
+    prompt: "这个项目的测试挂了，找出原因并修好。不要修改测试文件。"
+    fixture: fix_failing_test
+    verify: "{python} -m pytest -q"
+    requires: [pytest]
+    tags: [software, python, easy]
+
+  - id: off-by-one
+    prompt: "page_count 在最后一页不满的时候算错了，而且 per_page 为 0 时没有拒绝。修好 paginate.py，不要改测试。"
+    fixture: off_by_one
+    verify: "{python} -m pytest -q"
+    requires: [pytest]
+    tags: [software, python]
+
+  - id: missing-arg-validation
+    prompt: "transfer() 缺少输入校验：透支、负数金额、未知账户都应该被拒绝，而且不能修改传入的 balances。按测试的要求补齐 transfer.py。"
+    fixture: missing_arg_validation
+    verify: "{python} -m pytest -q"
+    requires: [pytest]
+    tags: [software, python]
+
+  - id: reconcile-waybills
+    prompt: "承运商对账脚本漏算了燃油附加费，导致把正常计费的运单也报成异常。按 test_reconcile.py 里写明的合同计费规则修好 reconcile.py。"
+    fixture: reconcile_waybills
+    verify: "{python} -m pytest -q"
+    requires: [pytest]
+    tags: [logistics, reconciliation]
+
+  - id: stripe-refund-validation
+    prompt: "net_settlement() 会接受任何退款记录，包括不属于本期的收款和超过原收款金额的退款。按测试补上校验。"
+    fixture: stripe_refund_totals
+    verify: "{python} -m pytest -q"
+    requires: [pytest]
+    tags: [payments, finance]
