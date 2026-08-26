@@ -291,3 +291,71 @@ class ShippedSuiteTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RepeatAggregationTests(HarnessBase):
+    """A single sample is not a score."""
+
+    def _flaky_suite(self, pass_on):
+        _fixture(self.fixtures, "broken", {"check.py": _GUARD})
+        attempts = {"n": 0}
+
+        def solver(prompt, workspace):
+            attempts["n"] += 1
+            if attempts["n"] in pass_on:
+                (workspace / "fixed.txt").write_text("x", encoding="utf-8")
+
+        return [self._task(id="flaky")], solver
+
+    def test_merge_folds_a_second_run_into_the_first(self):
+        tasks, solver = self._flaky_suite(pass_on={1})
+        first = run_suite(tasks, solver=solver, fixtures_root=self.fixtures, name="s")
+        second = run_suite(tasks, solver=solver, fixtures_root=self.fixtures, name="s")
+        first.merge(second)
+
+        self.assertEqual(len(first.results), 2)
+        self.assertEqual(first.per_task()["flaky"], {
+            "passed": 1, "attempts": 2, "outcomes": [PASS, FAIL],
+        })
+
+    def test_pass_rate_across_repeats_is_passes_over_attempts(self):
+        tasks, solver = self._flaky_suite(pass_on={1, 3})
+        merged = run_suite(tasks, solver=solver, fixtures_root=self.fixtures, name="s")
+        for _ in range(3):
+            merged.merge(run_suite(tasks, solver=solver, fixtures_root=self.fixtures, name="s"))
+
+        self.assertEqual(merged.scored, 4)
+        self.assertEqual(merged.passed, 2)
+        self.assertAlmostEqual(merged.pass_rate, 0.5)
+
+    def test_per_task_appears_in_the_json_report(self):
+        import json
+
+        tasks, solver = self._flaky_suite(pass_on={1})
+        suite = run_suite(tasks, solver=solver, fixtures_root=self.fixtures, name="s")
+        data = json.loads(write_report(suite, self.root / "r.json").read_text(encoding="utf-8"))
+        self.assertIn("flaky", data["per_task"])
+
+
+class FixtureHygieneTests(HarnessBase):
+    """Build residue must not travel into a task workspace."""
+
+    def test_pycache_is_not_copied_into_the_workspace(self):
+        # A __pycache__ left by running the fixture in place holds bytecode for
+        # the *broken* source, and Python will import it — so a task could
+        # score red after a correct fix.
+        source = _fixture(self.fixtures, "broken", {"check.py": _GUARD})
+        (source / "__pycache__").mkdir()
+        (source / "__pycache__" / "stale.pyc").write_bytes(b"\x00")
+        (source / ".pytest_cache").mkdir()
+
+        seen = {}
+
+        def solver(prompt, workspace):
+            seen["entries"] = {p.name for p in workspace.iterdir()}
+            (workspace / "fixed.txt").write_text("x", encoding="utf-8")
+
+        self._run(self._task(), solver)
+        self.assertNotIn("__pycache__", seen["entries"])
+        self.assertNotIn(".pytest_cache", seen["entries"])
+        self.assertIn("check.py", seen["entries"])

@@ -81,13 +81,49 @@ python3 -m aria_code.evals.runner evals/suites/core.yaml --report out/score.json
 # 只跑某个行业
 python3 -m aria_code.evals.runner evals/suites/core.yaml --tag logistics
 
-# 不用模型：只跑预检，确认套件还在量东西
+# 重复 3 次，pass@1 = passes/attempts
+python3 -m aria_code.evals.runner evals/suites/core.yaml --repeat 3 --local --model gpt-oss:120b-cloud
+
+# 不用模型：只跑预检，确认套件还在量东西（已接进 CI 的 eval-preflight job）
 python3 -m aria_code.evals.runner evals/suites/core.yaml --check
 ```
 
 `--check` 是最值得放进 CI 的那个。它跑每个任务的预检，不需要模型、不需要 API key、
 几秒钟出结果，回答的是「这个套件还在量东西吗」。一个漂移成绿色的 fixture 是一次
 静默的记分牌注水，`--check` 在造成它的那个 commit 上抓住它，而不是一个月以后。
+
+## 第一个基线（以及它暴露的两个 bug）
+
+第一次真跑，5 个任务全 0，而且 12–43 秒就结束了。**这个 0 不是模型的分数，是两个产品 bug。**
+
+**bug 1：headless `-p` 根本不是 agentic 的。** `run_prompt` 直接调
+`stream_provider_result` —— 一轮 provider 调用，工具 schema 发出去了但没有任何东西执行
+返回的调用，之后只对 `tool_calls_pending` 做一次尽力而为的遍历，而模型永远看不到结果。
+没有多轮、没有工具结果回灌、没有 loop guard、没有验收闸门。所有非交互用户 ——
+CI、管道、这个 eval harness —— 拿到的是一句闲聊，而 REPL 会把活干完。
+现在 `-p` 走和 REPL 完全相同的 `run_chat_via_runtime`。
+
+**bug 2：意图分类把「测试挂了，修好」判成 `general`。** 而 `general` 的 system prompt
+不会告诉模型去动手。所以一个工具齐全的 7B 模型只是反过来问「能提供更多细节吗」，
+什么都没改。信号表里有 `重构`、`pytest`、`traceback`，但没有一个人**真正报 bug 时写的句子**。
+补上之后的取向是刻意的：**不确定时应该向「有能力」的方向失败** ——
+把「测试一下这个想法」送进 coding 路径的代价是一段更长的 system prompt；
+把「测试挂了，修好」送进 general 的代价是整个任务，而且没有声音。
+
+修完两个 bug 后的基线（`gpt-oss:120b-cloud`，本地 Ollama 路由，3 次重复）：
+
+```
+core: 6/15 (40%)
+    fix-failing-test             3/3
+    stripe-refund-validation     3/3
+    missing-arg-validation       0/3
+    off-by-one                   0/3
+    reconcile-waybills           0/3
+```
+
+单次采样不是分数。第一次跑的时候 `reconcile-waybills` 单独跑通过、在套件里失败 ——
+所以有了 `--repeat N`，pass@1 报成 passes/attempts，并且**逐任务**打印：
+一个 2/3 的任务和两个分别 1/1、1/2 的任务是完全不同的工程问题，聚合数字会把这个藏起来。
 
 ## 当前套件
 

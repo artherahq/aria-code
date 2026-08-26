@@ -133,3 +133,31 @@ jobs:
 
       - name: Scan repository and history for secrets
         run: gitleaks detect --source . --redact --verbose --exit-code 1
+
+  eval-preflight:
+    name: Eval suites still measure something
+    runs-on: ubuntu-latest
+    # 不需要模型、不需要 API key、几秒钟。它只回答一个问题：套件里的任务
+    # 还都是「一开始是红的」吗？
+    #
+    # 这道门禁的直接由来：一个漂移成绿色的 fixture 是一次**静默的记分牌注水** ——
+    # 套件会报出不断上升的通过率，同时量到的东西越来越少，而且这个故障恰恰
+    # 因为数字好看而不可见。跑一次 --check 的代价是每个任务一条命令，换来的是
+    # 在造成它的那个 commit 上抓住它，而不是一个月以后对着一个假的分数做决策。
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pytest pyyaml
+
+      - name: Every task must still start red
+        run: python -m aria_code.evals.runner evals/suites/core.yaml --check
