@@ -378,6 +378,15 @@ class CLIAcceptanceGateWiringTests(unittest.TestCase):
     def test_gate_runs_checks_through_the_sessions_run_command(self):
         from aria_code.apps.cli.providers.runtime_bridge import build_acceptance_gate
 
+        # The gate reads declared commands from the project's .ariarc, so a
+        # repo that declares its own (this one does) would otherwise supply
+        # them here and the stub planner would never be consulted.
+        import aria_code.packs.rules as rules
+
+        original = rules.acceptance_commands_for
+        rules.acceptance_commands_for = lambda name, rc=None: ()
+        self.addCleanup(setattr, rules, "acceptance_commands_for", original)
+
         seen = []
 
         def run_command(params):

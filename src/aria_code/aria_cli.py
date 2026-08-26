@@ -76,6 +76,7 @@ if TYPE_CHECKING:
 
 from aria_code.apps.cli.plotly_html import plotly_script_tag
 from aria_code.apps.cli.bootstrap import (
+    DEFAULT_MODEL,
     default_config,
     disable_broken_proxy as _disable_broken_proxy,
     initialize_cli_environment,
@@ -2863,7 +2864,7 @@ def _build_user_context(config: dict) -> Optional[dict]:
     else:
         ctx["market_status"] = "closed"
     # Active model name
-    model_id = config.get("model", "qwen2.5:7b")
+    model_id = config.get("model", DEFAULT_MODEL)
     mkey = resolve_model_key(model_id)
     minfo = MODELS.get(mkey, {})
     ctx["ai_model"] = minfo.get("name", model_id)
@@ -4530,7 +4531,7 @@ class ArtheraTerminal:
 
     def print_header(self):
         # Resolve current model info
-        current_id  = self.config.get("model", "qwen2.5:7b")
+        current_id  = self.config.get("model", DEFAULT_MODEL)
 
         # ── 模型自动配对（现实优先）─────────────────────────────────────────
         # 检测本机已安装的 Ollama 模型；若配置模型未安装，自动配对到最优
@@ -4721,7 +4722,7 @@ class ArtheraTerminal:
         )
 
     def _status_line(self) -> str:
-        current_id = self.config.get("model", "qwen2.5:7b")
+        current_id = self.config.get("model", DEFAULT_MODEL)
         # If Ollama switched to a different model, show the actual running model
         display_id = self._actual_model or current_id
         model_name = display_id  # fallback: raw model ID
@@ -5245,7 +5246,7 @@ class ArtheraTerminal:
                 return
             # Analysis query: fall through to LLM for deep commentary on the snapshot data
 
-        model = self.config.get("model", "qwen2.5:7b")
+        model = self.config.get("model", DEFAULT_MODEL)
         thinking_mode = self.config.get("thinking_mode", "auto")
         auth_token = self.config.get("auth_token")
         user_context = _build_user_context(self.config)
@@ -5256,7 +5257,7 @@ class ArtheraTerminal:
 
         # Context pressure warning — only once per session when > 85% full
         _est_tokens = sum(len(m.get("content", "")) for m in self.conversation) // 3
-        _max_ctx    = get_model_cfg(self.config.get("model", "qwen2.5:7b")).get("num_ctx", 16384)
+        _max_ctx    = get_model_cfg(self.config.get("model", DEFAULT_MODEL)).get("num_ctx", 16384)
         from aria_code.ui.render.output import print_context_warning as _pcw
         _pcw(_est_tokens, _max_ctx, console=console, has_rich=HAS_RICH,
              session_id=getattr(self, "session_id", ""))
@@ -5293,7 +5294,7 @@ class ArtheraTerminal:
                 _plan_result = await stream_provider_result(
                     OllamaProvider(
                         self.config.get("ollama_url", "http://localhost:11434"),
-                        self.config.get("model", "qwen2.5:7b"),
+                        self.config.get("model", DEFAULT_MODEL),
                         show_market_prefetch_status=False,
                     ),
                     _decomp_prompt,
@@ -5852,7 +5853,7 @@ class ArtheraTerminal:
             self._last_response = final_text   # for /copy
             _context_compacted_from_usage = False
 
-            _ctx_max = get_model_cfg(self.config.get("model", "qwen2.5:7b")).get("num_ctx", 16384)
+            _ctx_max = get_model_cfg(self.config.get("model", DEFAULT_MODEL)).get("num_ctx", 16384)
             if HAS_RICH:
                 from aria_code.ui.render.output import format_turn_footer as _format_turn_footer
                 _footer = _format_turn_footer(
@@ -5891,7 +5892,7 @@ class ArtheraTerminal:
                         try:
                             self.conversation = _compact_messages(
                                 self.conversation,
-                                model_key=self.config.get("model", "qwen2.5:7b"),
+                                model_key=self.config.get("model", DEFAULT_MODEL),
                             )
                         except Exception:
                             if len(self.conversation) > 10:
@@ -5958,7 +5959,7 @@ class ArtheraTerminal:
             # Auto-warn when context approaches the limit; auto-compact before
             # the prompt is already at the edge and tool traces become noisy.
             _est = sum(len(m.get("content", "")) for m in self.conversation) // 3
-            _max = get_model_cfg(self.config.get("model", "qwen2.5:7b")).get("num_ctx", 16384)
+            _max = get_model_cfg(self.config.get("model", DEFAULT_MODEL)).get("num_ctx", 16384)
             _pct = min(100, int(_est / _max * 100))
             if _pct >= 90 and not _context_compacted_from_usage:
                 # Auto-compact: silently summarise and truncate
@@ -6265,7 +6266,7 @@ class ArtheraTerminal:
             from aria_code.apps.cli.message_processing import context_compaction_decision
             decision = context_compaction_decision(
                 self.conversation,
-                model_key=self.config.get("model", "qwen2.5:7b"),
+                model_key=self.config.get("model", DEFAULT_MODEL),
                 extra_content=incoming_content,
                 threshold=threshold,
             )
@@ -6284,7 +6285,7 @@ class ArtheraTerminal:
                 self.conversation = _compact_messages(
                     self.conversation,
                     max_chars=max_chars,
-                    model_key=self.config.get("model", "qwen2.5:7b"),
+                    model_key=self.config.get("model", DEFAULT_MODEL),
                 )
             except Exception:
                 if len(self.conversation) > 10:
@@ -6293,7 +6294,7 @@ class ArtheraTerminal:
         try:
             new_decision = context_compaction_decision(
                 self.conversation,
-                model_key=self.config.get("model", "qwen2.5:7b"),
+                model_key=self.config.get("model", DEFAULT_MODEL),
                 extra_content=incoming_content,
                 threshold=threshold,
             )
@@ -6701,7 +6702,7 @@ class ArtheraTerminal:
     async def run_prompt(self, prompt: str, json_output: bool = False,
                          fmt: str = "table", output_file: str = None, quiet: bool = False):
         """Run a single prompt (non-interactive / pipe mode)."""
-        model = self.config.get("model", "qwen2.5:7b")
+        model = self.config.get("model", DEFAULT_MODEL)
         thinking_mode = self.config.get("thinking_mode", "auto")
         auth_token = self.config.get("auth_token")
         user_context = _build_user_context(self.config)

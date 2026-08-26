@@ -109,3 +109,56 @@ class ShimImportTests(unittest.TestCase):
             capture_output=True, text=True, check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr[-500:])
+
+
+class DuplicateDeclarationTests(unittest.TestCase):
+    """Vertex 400s on duplicate tool names where other backends shrug."""
+
+    def _provider(self):
+        from aria_code.apps.cli.providers.vertexai_stream import VertexAIProvider
+
+        return VertexAIProvider(model="gemini-2.5-pro", config={})
+
+    def _schema(self, name):
+        return {"type": "function", "function": {
+            "name": name, "description": "", "parameters": {"type": "object", "properties": {}}}}
+
+    def test_a_duplicate_name_is_declared_once(self):
+        tools = self._provider()._tools_to_genai(
+            [self._schema("web_fetch"), self._schema("read_file"), self._schema("web_fetch")]
+        )
+        names = [fd.name for t in tools for fd in (t.function_declarations or [])]
+        self.assertEqual(sorted(names), ["read_file", "web_fetch"])
+
+    def test_an_unnamed_schema_is_dropped_rather_than_sent(self):
+        tools = self._provider()._tools_to_genai([self._schema(""), self._schema("read_file")])
+        names = [fd.name for t in tools for fd in (t.function_declarations or [])]
+        self.assertEqual(names, ["read_file"])
+
+
+class McpSchemaRegistrationTests(unittest.TestCase):
+    """Re-registering MCP must not grow the schema list."""
+
+    def _registry_with_one_tool(self):
+        from aria_code.mcp_client import MCPToolRegistry
+
+        registry = MCPToolRegistry.__new__(MCPToolRegistry)
+        registry._servers = {}
+        registry._tool_map = {}
+        registry._event_loop = None
+
+        class _Server:
+            tools = [{"name": "search", "description": "d", "inputSchema": {"type": "object"}}]
+
+        registry._servers = {"demo": _Server()}
+        return registry
+
+    def test_registering_twice_leaves_one_schema_per_tool(self):
+        registry = self._registry_with_one_tool()
+        tools, schemas = {}, []
+        registry.register_into(tools, schemas, overwrite=True)
+        registry.register_into(tools, schemas, overwrite=True)
+
+        names = [(s.get("function") or s).get("name") for s in schemas]
+        self.assertEqual(len(names), len(set(names)), f"duplicate schemas: {names}")
+        self.assertEqual(names, ["mcp__demo__search"])
