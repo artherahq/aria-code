@@ -41,7 +41,51 @@ def build_tool_executor(
 _READ_ONLY_MODES = frozenset({"read-only", "readonly", "read_only", "plan"})
 
 
-def build_acceptance_gate(executor, config: Optional[dict] = None):
+def _declared_acceptance_commands(cfg: dict, message: str) -> tuple:
+    """What this workspace says "correct" means for this particular message.
+
+    Precedence, most specific first:
+
+      1. ``acceptance_commands`` in the session config — the user said it out
+         loud for this session, so nothing overrides it.
+      2. The active domain packs' commands. A pack contributes only when it
+         resolved a concrete entity from *this* message, so a declared
+         logistics check cannot fire on a payments question.
+      3. The workspace's ``acceptance.default`` from ``.ariarc``.
+
+    Nothing declared falls through to inference from the changed files, which
+    is the behaviour that existed before packs could speak here at all.
+    """
+    explicit = tuple(cfg.get("acceptance_commands") or ())
+    if explicit:
+        return explicit
+
+    commands: list = []
+    try:
+        from aria_code.packs import (
+            activate_packs,
+            active_acceptance_commands,
+            load_builtin_packs,
+        )
+
+        load_builtin_packs()
+        commands.extend(active_acceptance_commands(activate_packs(message or "")))
+    except Exception:
+        pass
+
+    try:
+        from aria_code.packs.rules import default_acceptance_commands
+
+        for command in default_acceptance_commands():
+            if command not in commands:
+                commands.append(command)
+    except Exception:
+        pass
+
+    return tuple(commands)
+
+
+def build_acceptance_gate(executor, config: Optional[dict] = None, message: str = ""):
     """The CLI's acceptance gate, or ``None`` when this session shouldn't have one.
 
     The gate runs its checks through the session's own ``run_command`` tool
@@ -83,7 +127,7 @@ def build_acceptance_gate(executor, config: Optional[dict] = None):
         runner=_runner,
         root=os.getcwd(),
         max_attempts=int(cfg.get("acceptance_max_attempts", 2) or 2),
-        commands=tuple(cfg.get("acceptance_commands") or ()),
+        commands=_declared_acceptance_commands(cfg, message),
     )
 
 
@@ -250,7 +294,7 @@ async def run_chat_via_runtime(
         system_override=system_override,
     )
     executor = build_tool_executor(local_tools, config, execution_context)
-    gate = build_acceptance_gate(executor, config)
+    gate = build_acceptance_gate(executor, config, prompt)
 
     result = await run_turn(
         prompt, history,

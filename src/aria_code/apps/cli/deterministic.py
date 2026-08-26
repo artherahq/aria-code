@@ -31,6 +31,26 @@ from aria_code.apps.cli.utils.market_detect import (
 BrokerRegistryFactory = Callable[[], Any]
 
 
+def _pack_handlers(message: str) -> tuple:
+    """Deterministic handlers contributed by the packs this message activates.
+
+    Falls back to the legacy finance handlers if the pack layer is unavailable,
+    so an import problem degrades to the previous behaviour rather than
+    silently dropping domain routing.
+    """
+    try:
+        from aria_code.packs import (
+            activate_packs,
+            active_handlers,
+            load_builtin_packs,
+        )
+
+        load_builtin_packs()
+        return active_handlers(activate_packs(message))
+    except Exception:
+        return (handle_strategy_advice, _handle_stock_chart_analysis)
+
+
 def _missing_broker_registry() -> None:
     return None
 
@@ -99,11 +119,19 @@ def run_deterministic_chain(
     if not config.model_has_tools:
         deterministic = _handle_broker_query(message, config)
 
-    for handler in (
-        handle_strategy_advice,
-        _handle_realty_query,
-        _handle_stock_chart_analysis,
-    ):
+    # Domain handlers run only for packs the message actually activated.  They
+    # used to run against every message: a question about this repository was
+    # walked through the strategy, realty and stock-chart handlers before the
+    # model saw it, which is how a code request came back as a stock quote.
+    # Activation is entity-gated, so a message that names no instrument never
+    # reaches the finance handlers at all.  See aria_code.packs.
+    #
+    # Realty was the last handler still running ungated here, and it moved
+    # behind the same gate in the realty pack: a message must name a city and
+    # a housing term, or name the national market outright. A property-domain
+    # word on its own ("物业", "地产") no longer reaches it, because that word
+    # also appears in the source of every property-management codebase.
+    for handler in _pack_handlers(message):
         if deterministic.get("success"):
             break
         deterministic = handler(message)
