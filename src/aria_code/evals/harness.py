@@ -84,6 +84,12 @@ ERROR = "error"       # the harness or the solver blew up; not the agent's score
 
 _MAX_LOG_CHARS = 4000
 
+# Residue that must not travel from a fixture into a task workspace.
+_IGNORED_FIXTURE_ENTRIES = shutil.ignore_patterns(
+    "__pycache__", "*.pyc", "*.pyo", ".pytest_cache", ".mypy_cache",
+    ".ruff_cache", ".git", "node_modules", ".DS_Store",
+)
+
 
 def _trim(text: str, limit: int = _MAX_LOG_CHARS) -> str:
     body = (text or "").strip()
@@ -221,8 +227,34 @@ class SuiteResult:
             "errored": self.errored,
             "scored": self.scored,
             "by_tag": self.by_tag(),
+            "per_task": self.per_task(),
             "results": [r.to_dict() for r in self.results],
         }
+
+    def merge(self, other: "SuiteResult") -> None:
+        """Fold another run of the same suite into this one."""
+        self.results.extend(other.results)
+
+    def per_task(self) -> dict:
+        """Passes over attempts for each task id, across every repeat.
+
+        A single sample is not a score. Observed on the first real run: one
+        task passed alone and failed in the same suite minutes later, from the
+        same model. Reporting 2/5 without saying how many attempts produced it
+        invites reading noise as a regression.
+        """
+        buckets: dict[str, list[TaskResult]] = {}
+        for result in self.results:
+            buckets.setdefault(result.task_id, []).append(result)
+        out = {}
+        for task_id, results in buckets.items():
+            scored = [r for r in results if r.counted]
+            out[task_id] = {
+                "passed": sum(1 for r in scored if r.outcome == PASS),
+                "attempts": len(scored),
+                "outcomes": [r.outcome for r in results],
+            }
+        return out
 
     def summary_line(self) -> str:
         parts = [f"{self.name}: {self.passed}/{self.scored} ({self.pass_rate:.0%})"]
@@ -305,7 +337,11 @@ def _prepare_workspace(task: TaskSpec, fixtures_root: Path, scratch: Path) -> Pa
         source = fixtures_root / task.fixture
         if not source.is_dir():
             raise FileNotFoundError(f"fixture not found: {source}")
-        shutil.copytree(source, workspace)
+        # Never copy build residue. A __pycache__ carried over from a run of
+        # the fixture in place holds bytecode for the *broken* source, and
+        # Python will happily import it — so a task could score red after a
+        # correct fix, or green before one.
+        shutil.copytree(source, workspace, ignore=_IGNORED_FIXTURE_ENTRIES)
     else:
         workspace.mkdir(parents=True)
     return workspace

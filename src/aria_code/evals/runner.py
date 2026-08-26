@@ -41,28 +41,46 @@ def check_only_solver(prompt: str, workspace: Path) -> None:
     return None
 
 
-def build_agent_solver(*, model: str = "", timeout: int = 900):
+def build_agent_solver(*, model: str = "", timeout: int = 900, local: bool = False):
     """Drive the real Aria agent over one task, in the task's own workspace.
 
     The agent is invoked as a subprocess in headless mode rather than in this
     process on purpose: a task that leaves the interpreter's cwd, module cache
     or event loop in a strange state then cannot contaminate the next task's
     score.
+
+    ``--dangerously-skip-permissions`` is not optional here, and it is safe for
+    the same reason the flag is dangerous everywhere else: the agent is pointed
+    at a throwaway copy of a fixture. Without it every write waits on an
+    approval prompt that no one is there to answer, so every task times out and
+    the suite scores zero for a reason that has nothing to do with the model.
     """
     import subprocess
 
     def _solve(prompt: str, workspace: Path):
-        command = [sys.executable, "-m", "aria_code.aria_cli", "-p", prompt]
+        command = [
+            sys.executable, "-m", "aria_code.aria_cli",
+            "-p", prompt,
+            "--dangerously-skip-permissions",
+            "--no-banner",
+        ]
         if model:
             command.extend(["--model", model])
-        return subprocess.run(
-            command,
-            cwd=str(workspace),
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-        )
+        if local:
+            command.append("--local")
+        try:
+            return subprocess.run(
+                command,
+                cwd=str(workspace),
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            # A hung turn is the agent failing this task, not the harness
+            # breaking: let the verify command deliver the verdict.
+            return None
 
     return _solve
 
@@ -87,6 +105,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--check", action="store_true",
                         help="run only the pre-flight: verify every task still starts red")
     parser.add_argument("--model", default="", help="model to pass to the agent")
+    parser.add_argument("--local", action="store_true",
+                        help="run the agent local-only (Ollama), skipping the cloud backend")
+    parser.add_argument("--solve-timeout", type=int, default=900,
+                        help="seconds to give the agent per task (default 900)")
+    parser.add_argument("--repeat", type=int, default=1, metavar="N",
+                        help="run the suite N times; pass@1 is then passes/attempts (default 1)")
     parser.add_argument("--report", default="", help="write the scoreboard to this JSON path")
     parser.add_argument("--keep", action="store_true", help="keep task workspaces for inspection")
     parser.add_argument("--scratch", default="", help="scratch root (implies --keep)")
@@ -107,23 +131,42 @@ def main(argv: list[str] | None = None) -> int:
         print(f"suite {name} has no tasks", file=sys.stderr)
         return 2
 
-    solver = check_only_solver if args.check else build_agent_solver(model=args.model)
+    solver = check_only_solver if args.check else build_agent_solver(
+        model=args.model, timeout=args.solve_timeout, local=args.local,
+    )
     mode = "pre-flight only" if args.check else f"agent{f' ({args.model})' if args.model else ''}"
     print(f"\n{name} — {len(tasks)} task(s), {mode}\n")
 
-    suite: SuiteResult = run_suite(
-        tasks,
-        solver=solver,
-        fixtures_root=fixtures,
-        name=name,
-        only=args.only,
-        tags=args.tag,
-        scratch_root=args.scratch or None,
-        keep_workspace=args.keep,
-        on_result=_print_result,
-    )
+    repeats = max(1, args.repeat)
+    suite: SuiteResult | None = None
+    for attempt in range(repeats):
+        if repeats > 1:
+            print(f"  — attempt {attempt + 1}/{repeats} —")
+        run = run_suite(
+            tasks,
+            solver=solver,
+            fixtures_root=fixtures,
+            name=name,
+            only=args.only,
+            tags=args.tag,
+            scratch_root=args.scratch or None,
+            keep_workspace=args.keep,
+            on_result=_print_result,
+        )
+        if suite is None:
+            suite = run
+        else:
+            suite.merge(run)
+    assert suite is not None
 
     print(f"\n{suite.summary_line()}")
+    if repeats > 1:
+        # Print the per-task record, because an aggregate hides the tasks that
+        # flip. A task at 2/3 is a different engineering problem from two tasks
+        # at 1/1 and 1/2.
+        for task_id, stats in sorted(suite.per_task().items()):
+            if stats["attempts"]:
+                print(f"    {task_id:<28} {stats['passed']}/{stats['attempts']}")
     by_tag = suite.by_tag()
     if by_tag and not args.check:
         for tag, stats in by_tag.items():
