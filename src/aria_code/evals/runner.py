@@ -32,6 +32,21 @@ from .harness import (
 _ICONS = {PASS: "✓", FAIL: "✗", INVALID: "⚠", ERROR: "!"}
 
 
+class _TimedOut:
+    """Marker: the agent was cut off before it could finish.
+
+    Carries a non-zero ``returncode`` so the harness's existing solver-failure
+    check classifies it as ERROR — excluded from the score — rather than as a
+    task the model failed.
+    """
+
+    returncode = 124
+
+    def __init__(self, seconds: int) -> None:
+        self.stderr = f"the agent was still working when the {seconds}s budget ran out"
+        self.stdout = ""
+
+
 def check_only_solver(prompt: str, workspace: Path) -> None:
     """A solver that does nothing, so only the pre-flight is exercised.
 
@@ -78,10 +93,16 @@ def build_agent_solver(*, model: str = "", timeout: int = 900, local: bool = Fal
                 check=False,
             )
         except subprocess.TimeoutExpired:
-            # A hung turn IS the agent failing this task — it had its time and
-            # produced nothing — so let the verify command deliver the verdict
-            # rather than reporting an ERROR that excludes it from the score.
-            return None
+            # A truncated run is not a measured failure.
+            #
+            # I first scored this as FAIL, reasoning "it had its time and
+            # produced nothing". That holds only when the budget is generous
+            # relative to how long the work takes. It was not: the same task
+            # completed in 78–146s alone and exceeded 600s inside a suite,
+            # where back-to-back turns contend and get throttled. Scoring that
+            # as FAIL blamed the model for the harness cutting it off — which
+            # is precisely the confusion PASS/FAIL vs ERROR exists to prevent.
+            return _TimedOut(timeout)
 
     return _solve
 
