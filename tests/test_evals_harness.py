@@ -486,3 +486,31 @@ class ProtectedFileTests(HarnessBase):
                           (w / "fixed.txt").write_text("x", encoding="utf-8")),
         )
         self.assertEqual(result.outcome, FAIL)
+
+
+class SolverTimeoutTests(HarnessBase):
+    """Being cut off is not the same as getting it wrong."""
+
+    def test_a_timed_out_agent_is_an_error_not_a_failure(self):
+        # Measured: the same task finished in 78-146s alone and exceeded 600s
+        # inside a suite, where back-to-back turns contend and get throttled.
+        # Scoring that FAIL blames the model for the harness cutting it off.
+        from aria_code.evals.runner import _TimedOut
+
+        _fixture(self.fixtures, "broken", {"check.py": _GUARD})
+        result = self._run(self._task(), lambda p, w: _TimedOut(600))
+        self.assertEqual(result.outcome, ERROR)
+        self.assertIn("600s", result.log)
+
+    def test_a_timeout_after_a_correct_fix_still_passes(self):
+        # The check is the source of truth: if the work landed before the
+        # budget ran out, it counts.
+        from aria_code.evals.runner import _TimedOut
+
+        _fixture(self.fixtures, "broken", {"check.py": _GUARD})
+
+        def slow_but_correct(prompt, workspace):
+            (workspace / "fixed.txt").write_text("x", encoding="utf-8")
+            return _TimedOut(600)
+
+        self.assertEqual(self._run(self._task(), slow_but_correct).outcome, PASS)
