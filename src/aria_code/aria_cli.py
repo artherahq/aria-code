@@ -6820,12 +6820,25 @@ class ArtheraTerminal:
                     ),
                     return_result=True,
                 )
+                _tools_used = list(getattr(_turn.final, "tools", []) or [])
+                # An empty closing message after the tools already ran is not a
+                # failed turn. The model did the work and then said nothing;
+                # exiting 1 there told a script the task failed while the edit
+                # sat finished on disk. Narrow on purpose — any other error,
+                # and a turn that ran no tools at all, still fails.
+                _empty_after_work = (
+                    _turn.error == "empty_response" and bool(_tools_used)
+                )
                 result = {
-                    "success": _turn.ok,
-                    "response": _turn.text,
-                    "error": _turn.error or "",
+                    "success": _turn.ok or _empty_after_work,
+                    "response": (
+                        _turn.text
+                        or (f"（模型未给出收尾说明。已执行的工具：{', '.join(_tools_used)}）"
+                            if _empty_after_work else "")
+                    ),
+                    "error": "" if _empty_after_work else (_turn.error or ""),
                     "provider": getattr(_turn.final, "provider", ""),
-                    "tools_used": list(getattr(_turn.final, "tools", []) or []),
+                    "tools_used": _tools_used,
                     "acceptance": getattr(_turn.final, "acceptance", None),
                 }
             finally:

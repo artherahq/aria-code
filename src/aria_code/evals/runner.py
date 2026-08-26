@@ -78,8 +78,9 @@ def build_agent_solver(*, model: str = "", timeout: int = 900, local: bool = Fal
                 check=False,
             )
         except subprocess.TimeoutExpired:
-            # A hung turn is the agent failing this task, not the harness
-            # breaking: let the verify command deliver the verdict.
+            # A hung turn IS the agent failing this task — it had its time and
+            # produced nothing — so let the verify command deliver the verdict
+            # rather than reporting an ERROR that excludes it from the score.
             return None
 
     return _solve

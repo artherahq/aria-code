@@ -292,6 +292,27 @@ def _missing_modules(names: Iterable[str]) -> list[str]:
     return missing
 
 
+def _solver_failure(outcome: Any) -> Optional[tuple[int, str]]:
+    """``(exit_code, log)`` when the solver reports it did not complete.
+
+    Duck-typed on ``returncode`` so a plain callable that returns nothing —
+    every in-process solver, and the check-only one — is unaffected, while a
+    ``subprocess.CompletedProcess`` from the real agent is inspected.
+    """
+    if outcome is None:
+        return None
+    code = getattr(outcome, "returncode", None)
+    if not isinstance(code, int) or code == 0:
+        return None
+    log = "\n".join(
+        part for part in (
+            str(getattr(outcome, "stderr", "") or ""),
+            str(getattr(outcome, "stdout", "") or ""),
+        ) if part.strip()
+    )
+    return code, log
+
+
 def _run(command: str, cwd: Path, timeout: int) -> tuple[int, str]:
     command = _resolve(command)
     try:
@@ -401,16 +422,35 @@ def run_task(
 
         # ── the agent's turn ──────────────────────────────────────────────
         try:
-            solver(task.prompt, workspace)
+            outcome = solver(task.prompt, workspace)
         except Exception as exc:
             # A solver crash is not the agent failing the task; scoring it as
             # a fail would blame the model for a harness or provider outage.
             return _result(ERROR, detail=f"solver raised: {exc}")
 
         # ── the score ─────────────────────────────────────────────────────
+        # The check runs no matter what the solver reported, because the check
+        # is the source of truth and the solver's exit code is not. A run that
+        # edited the file correctly and then exited 1 on an empty final message
+        # is a PASS: the work is on disk and the tests are green.
         after_code, after_log = _run(task.verify, workspace, task.timeout)
         if after_code == 0:
             return _result(PASS, exit_code=0)
+
+        # Red — now the solver's status decides who is to blame. A subprocess
+        # that died in seconds on a provider outage or a crash never gave the
+        # agent its turn, and scoring that as FAIL makes an infrastructure
+        # problem look like an incapable model. That is exactly the confusion
+        # this harness separates PASS/FAIL from ERROR to avoid.
+        failure = _solver_failure(outcome)
+        if failure is not None:
+            code, log = failure
+            return _result(
+                ERROR, exit_code=code,
+                detail=f"the agent did not complete (exit {code}); check still red",
+                log=_trim(log),
+            )
+
         return _result(
             FAIL, exit_code=after_code,
             detail=f"`{task.verify}` exited {after_code}",

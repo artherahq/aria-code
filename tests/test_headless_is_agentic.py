@@ -72,3 +72,26 @@ class DefectVocabularyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EmptyClosingMessageTests(unittest.TestCase):
+    """An empty final message after the tools ran is not a failed turn."""
+
+    def _source(self) -> str:
+        import aria_code.aria_cli as cli
+
+        return inspect.getsource(cli.ArtheraTerminal.run_prompt)
+
+    def test_empty_response_after_tool_use_is_not_an_error(self):
+        # Observed for real: the agent edited the file correctly, produced no
+        # closing text, and `-p` exited 1 — telling a script the task failed
+        # while the finished edit sat on disk.
+        source = self._source()
+        self.assertIn("_empty_after_work", source)
+        self.assertIn("empty_response", source)
+
+    def test_the_exception_is_narrow(self):
+        # It must require that tools actually ran; otherwise a genuinely empty
+        # turn would be laundered into a success.
+        source = self._source()
+        self.assertIn("bool(_tools_used)", source)
