@@ -343,3 +343,54 @@ class PackHandlerShapeTests(unittest.TestCase):
         # required keyword-only arguments.
         result = run_deterministic_chain("分析 $AAPL 的日线图", model_has_tools=True)
         self.assertIsInstance(result, dict)
+
+
+class SelfGatedHandlerTests(unittest.TestCase):
+    """Not every domain handler depends on an entity.
+
+    The entity gate exists to stop a handler that ANSWERS WITH DATA from firing
+    when no instrument was named. handle_strategy_advice answers with static
+    methodology text and fetches nothing, so gating it simply broke it: the
+    message it exists for names no ticker.
+    """
+
+    def test_a_methodology_question_still_reaches_its_handler(self):
+        from aria_code.apps.cli.deterministic import run_deterministic_chain
+
+        message = "如果我要写一个美股量化策略，你觉得要从几个角度去写"
+        self.assertEqual(activate_packs(message), ())   # no entity, no pack
+        result = run_deterministic_chain(message, model_has_tools=True)
+        self.assertTrue(result["success"])
+        self.assertEqual(result["tools_used"], ["strategy_advice"])
+
+    def test_software_uses_of_the_same_words_fall_through(self):
+        from aria_code.apps.cli.deterministic import run_deterministic_chain
+
+        for message in (
+            "帮我写一个缓存策略",
+            "数据库索引策略有什么建议",
+            "给我一些代码风格建议",
+            "根据以上分析和建议开始完善",
+        ):
+            with self.subTest(message=message):
+                self.assertFalse(
+                    run_deterministic_chain(message, model_has_tools=True)["success"]
+                )
+
+    def test_the_finance_pack_keeps_only_its_entity_dependent_handler(self):
+        from aria_code.packs.finance import FINANCE_PACK
+
+        self.assertEqual(len(FINANCE_PACK.handlers()), 1)
+
+    def test_the_handler_list_is_resolved_at_call_time(self):
+        # A module-level tuple of function objects ignores anything that
+        # replaces the attribute later, defeating monkeypatching silently.
+        import aria_code.apps.cli.deterministic as deterministic
+
+        original = deterministic.handle_strategy_advice
+        deterministic.handle_strategy_advice = lambda _m: {"success": False}
+        try:
+            self.assertIs(deterministic._self_gated_handlers()[0],
+                          deterministic.handle_strategy_advice)
+        finally:
+            deterministic.handle_strategy_advice = original

@@ -1127,11 +1127,20 @@ import difflib
 def _is_safe_path(resolved: pathlib.Path) -> bool:
     """Return True if the resolved path is inside an allowed root directory.
 
-    Allowed roots: home directory, /tmp, /var/folders (macOS temp).
+    Allowed roots: the working directory, the home directory, and the temp
+    dirs (/tmp, /var/folders on macOS).
     Blocks: /etc, /sys, /proc, /dev, and any path that resolves through a
     symlink to outside those roots (symlink traversal prevention).
+
+    ``allow_home`` is left unset so WorkspaceSecurity applies its documented
+    rule: local sessions get home and temp, and a remote worker confines
+    itself by setting ARIA_RUNTIME_SCOPE=remote (Dockerfile.review does).
+    Hardcoding False here applied the remote confinement to the local CLI,
+    which contradicted this docstring — and because the temp roots are only
+    added on the allow_home branch, it also blocked every write to /tmp and
+    /var/folders, so the CLI could not write to its own scratch space.
     """
-    return WorkspaceSecurity(cwd=__import__('os').getcwd(), allow_home=False).is_safe_path(resolved)
+    return WorkspaceSecurity(cwd=__import__('os').getcwd()).is_safe_path(resolved)
 
 
 from aria_code.apps.cli.tool_executor import *

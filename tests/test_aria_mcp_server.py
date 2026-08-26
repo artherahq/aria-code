@@ -285,12 +285,12 @@ async def test_indicator_chart_requires_symbol():
 @requires_charts
 async def test_indicator_chart_writes_artifact_on_success(monkeypatch, tmp_path):
     df = _fake_ohlcv_df()
-    import report_generator
+    from aria_code import report_generator
     monkeypatch.setattr(report_generator, "_fetch_report_data_sync", lambda symbol: (df, None, {}))
 
     fake_path = tmp_path / "out.png"
     with pytest.MonkeyPatch.context() as mp:
-        mp.setattr("artifacts.create_user_artifact", lambda *a, **kw: type("A", (), {"path": fake_path})())
+        mp.setattr("aria_code.artifacts.create_user_artifact", lambda *a, **kw: type("A", (), {"path": fake_path})())
         result = await _call_indicator_chart({"symbol": "aapl"})
     assert result["success"] is True
     assert result["path"] == str(fake_path)
@@ -318,12 +318,12 @@ async def test_comparison_chart_requires_at_least_two_symbols():
 @requires_charts
 async def test_comparison_chart_writes_artifact_on_success(monkeypatch, tmp_path):
     df = _fake_ohlcv_df()
-    import report_generator
+    from aria_code import report_generator
     monkeypatch.setattr(report_generator, "_fetch_report_data_sync", lambda symbol: (df, None, {}))
 
     fake_path = tmp_path / "out.png"
     with pytest.MonkeyPatch.context() as mp:
-        mp.setattr("artifacts.create_user_artifact", lambda *a, **kw: type("A", (), {"path": fake_path})())
+        mp.setattr("aria_code.artifacts.create_user_artifact", lambda *a, **kw: type("A", (), {"path": fake_path})())
         result = await _call_comparison_chart({"symbols": ["AAPL", "MSFT"]})
     assert result["success"] is True
     assert fake_path.exists()
@@ -353,7 +353,7 @@ async def test_allocation_chart_writes_artifact_on_success(monkeypatch, tmp_path
 
     fake_path = tmp_path / "out.png"
     with pytest.MonkeyPatch.context() as mp:
-        mp.setattr("artifacts.create_user_artifact", lambda *a, **kw: type("A", (), {"path": fake_path})())
+        mp.setattr("aria_code.artifacts.create_user_artifact", lambda *a, **kw: type("A", (), {"path": fake_path})())
         result = await _call_allocation_chart({})
     assert result["success"] is True
     assert fake_path.exists()
