@@ -110,20 +110,49 @@ CI、管道、这个 eval harness —— 拿到的是一句闲聊，而 REPL 会
 把「测试一下这个想法」送进 coding 路径的代价是一段更长的 system prompt；
 把「测试挂了，修好」送进 general 的代价是整个任务，而且没有声音。
 
-修完两个 bug 后的基线（`gpt-oss:120b-cloud`，本地 Ollama 路由，3 次重复）：
-
-```
-core: 6/15 (40%)
-    fix-failing-test             3/3
-    stripe-refund-validation     3/3
-    missing-arg-validation       0/3
-    off-by-one                   0/3
-    reconcile-waybills           0/3
-```
+修完两个 bug 后：**6/15 (40%)**。
 
 单次采样不是分数。第一次跑的时候 `reconcile-waybills` 单独跑通过、在套件里失败 ——
 所以有了 `--repeat N`，pass@1 报成 passes/attempts，并且**逐任务**打印：
 一个 2/3 的任务和两个分别 1/1、1/2 的任务是完全不同的工程问题，聚合数字会把这个藏起来。
+
+## 第二轮：40% → 87%，又是两个 bug
+
+40% 里那三个 0/3 的任务，单独跑全部通过。**同一个模型、同一个任务，单跑绿、套件里红 ——
+这个形状本身就说明问题不在模型。** 顺着查下去又是两个 bug，一个是我自己刚提交的。
+
+**bug 3：finance pack 返回了一个调不动的 handler。** `handle_stock_chart_analysis`
+有两个 keyword-only 的协作者，不能按 `handler(message)` 调用。确定性链是统一调用 handler 的，
+所以任何一条激活 finance 的消息都会在链里以 TypeError 崩掉整个进程。
+（这是我在上一个 commit 里把 handler 从 `deterministic.py` 搬进 pack 时丢掉的绑定 ——
+搬走了函数，没搬走它的参数。）
+
+**bug 4：agent 干完活之后，收尾说了一句空话，`-p` 就退出 1。**
+工具跑完了、文件改对了、测试是绿的，但模型没给收尾说明 → `empty_response` → 退出码 1 →
+脚本收到「任务失败」，而改好的代码就躺在磁盘上。现在这条例外很窄：
+**必须真的跑过工具**，否则一个真正空转的回合会被洗成成功。
+
+同时修正了我自己在这一步里的一个过度修正：一开始我让「solver 退出非 0」直接判 ERROR，
+但那样会让上面这种「干完活但退出 1」的情况被排除在分数之外。**verify 才是唯一的事实来源** ——
+检查无论如何都要跑，绿了就是 PASS；只有在检查是红的时候，solver 的退出码才用来区分
+「模型没做到」（FAIL）和「模型根本没轮上」（ERROR）。
+
+修完之后（`gpt-oss:120b-cloud`，本地 Ollama 路由，3 次重复）：
+
+```
+core: 13/15 (87%)
+    fix-failing-test             3/3
+    off-by-one                   3/3
+    reconcile-waybills           3/3
+    stripe-refund-validation     3/3
+    missing-arg-validation       1/3
+```
+
+**40% → 87%，一行模型代码都没改。** 全部四个 bug 都在管道里，而它们此前对所有
+非交互用户都是生效的 —— 没有这个套件，没有一个会被发现。
+
+剩下那个 1/3 是**真正的模型方差**：同一个任务它做到过，也失败过。
+这才是应该留在记分牌上的那种数字。
 
 ## 当前套件
 

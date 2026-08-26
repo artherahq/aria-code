@@ -163,7 +163,16 @@ class FinancePack(BaseDomainPack):
         return tuple(entities)
 
     def handlers(self) -> Sequence[object]:
-        """The deterministic handlers, now reachable only when active."""
+        """The deterministic handlers, now reachable only when active.
+
+        ``handle_stock_chart_analysis`` takes two keyword-only collaborators
+        and cannot be called as ``handler(message)``. Returning it bare made
+        every finance-activated turn die with a TypeError inside the
+        deterministic chain — the chain calls handlers uniformly, so a handler
+        that does not fit that shape is not a handler. Bound here, the way
+        ``deterministic._handle_stock_chart_analysis`` already bound it before
+        the pack layer took the call over.
+        """
         try:
             from aria_code.apps.cli.handlers.chart_handlers import (
                 handle_stock_chart_analysis,
@@ -171,9 +180,21 @@ class FinancePack(BaseDomainPack):
             from aria_code.apps.cli.handlers.strategy_advice import (
                 handle_strategy_advice,
             )
+            from aria_code.apps.cli.utils.market_detect import (
+                _extract_market_symbol,
+                _is_stock_chart_analysis_request,
+            )
         except Exception:
             return ()
-        return (handle_strategy_advice, handle_stock_chart_analysis)
+
+        def _chart(message: str) -> dict:
+            return handle_stock_chart_analysis(
+                message,
+                is_chart_request=_is_stock_chart_analysis_request,
+                extract_symbol=_extract_market_symbol,
+            )
+
+        return (handle_strategy_advice, _chart)
 
     def tool_names(self) -> Sequence[str]:
         return FINANCE_TOOLS

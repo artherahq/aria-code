@@ -313,3 +313,33 @@ class RealtyNationalMarketTests(unittest.TestCase):
 
         source = inspect.getsource(deterministic.run_deterministic_chain)
         self.assertNotIn("_handle_realty_query", source)
+
+
+class PackHandlerShapeTests(unittest.TestCase):
+    """Every handler a pack contributes must be callable as handler(message).
+
+    The deterministic chain calls them uniformly, so one that needs extra
+    collaborators is not a handler — it is a TypeError waiting for the first
+    message that activates its pack.
+    """
+
+    def setUp(self):
+        reset_builtin_packs()
+        load_builtin_packs()
+        self.addCleanup(reset_builtin_packs)
+
+    def test_every_builtin_handler_accepts_a_bare_message(self):
+        for pack in registered_packs():
+            for handler in pack.handlers() or ():
+                with self.subTest(pack=pack.name, handler=getattr(handler, "__name__", handler)):
+                    result = handler("分析 AAPL 的日线图")
+                    self.assertIsInstance(result, dict)
+                    self.assertIn("success", result)
+
+    def test_the_chain_survives_a_finance_activation(self):
+        from aria_code.apps.cli.deterministic import run_deterministic_chain
+
+        # Previously raised TypeError: handle_stock_chart_analysis() missing 2
+        # required keyword-only arguments.
+        result = run_deterministic_chain("分析 $AAPL 的日线图", model_has_tools=True)
+        self.assertIsInstance(result, dict)
