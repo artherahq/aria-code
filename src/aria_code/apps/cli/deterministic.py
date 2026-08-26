@@ -51,6 +51,21 @@ def _pack_handlers(message: str) -> tuple:
         return (handle_strategy_advice, _handle_stock_chart_analysis)
 
 
+# Names of the handlers that decide for themselves whether a message is theirs
+# and answer without fetching anything. They need no pack activation; see the
+# call site for why.
+#
+# Names rather than function objects, resolved at call time: a module-level
+# tuple of references captures whatever was imported and then ignores anything
+# that replaces the module attribute later, which silently defeats both
+# monkeypatching in tests and any runtime substitution.
+_SELF_GATED_HANDLER_NAMES = ("handle_strategy_advice",)
+
+
+def _self_gated_handlers() -> tuple:
+    return tuple(globals()[name] for name in _SELF_GATED_HANDLER_NAMES)
+
+
 def _missing_broker_registry() -> None:
     return None
 
@@ -132,6 +147,26 @@ def run_deterministic_chain(
     # word on its own ("物业", "地产") no longer reaches it, because that word
     # also appears in the source of every property-management codebase.
     for handler in _pack_handlers(message):
+        if deterministic.get("success"):
+            break
+        deterministic = handler(message)
+
+    # Self-gated handlers run without a pack activation, because they do not
+    # depend on one.
+    #
+    # The entity gate exists to stop a handler that ANSWERS WITH DATA from
+    # firing when no instrument was named — that is how a question about this
+    # repository came back as a MongoDB stock quote. handle_strategy_advice
+    # answers with static methodology text, names no instrument, and fetches
+    # nothing, so it carries none of that risk. Gating it anyway simply broke
+    # it: "如果我要写一个美股量化策略，你觉得要从几个角度去写" names no ticker,
+    # so no pack activated and the handler was unreachable.
+    #
+    # Its own gate is a three-way conjunction (strategy term AND advice term
+    # AND NOT execution term) that rejects every software-engineering use of
+    # 策略/建议 — "帮我写一个缓存策略", "数据库索引策略有什么建议",
+    # "给我一些代码风格建议" all fall through untouched.
+    for handler in _self_gated_handlers():
         if deterministic.get("success"):
             break
         deterministic = handler(message)

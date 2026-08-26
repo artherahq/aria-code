@@ -163,7 +163,7 @@ class FinancePack(BaseDomainPack):
         return tuple(entities)
 
     def handlers(self) -> Sequence[object]:
-        """The deterministic handlers, now reachable only when active.
+        """The entity-dependent handlers, reachable only when active.
 
         ``handle_stock_chart_analysis`` takes two keyword-only collaborators
         and cannot be called as ``handler(message)``. Returning it bare made
@@ -176,9 +176,6 @@ class FinancePack(BaseDomainPack):
         try:
             from aria_code.apps.cli.handlers.chart_handlers import (
                 handle_stock_chart_analysis,
-            )
-            from aria_code.apps.cli.handlers.strategy_advice import (
-                handle_strategy_advice,
             )
             from aria_code.apps.cli.utils.market_detect import (
                 _extract_market_symbol,
@@ -194,7 +191,9 @@ class FinancePack(BaseDomainPack):
                 extract_symbol=_extract_market_symbol,
             )
 
-        return (handle_strategy_advice, _chart)
+        # Only the chart handler. handle_strategy_advice does not belong
+        # behind the entity gate — see deterministic._SELF_GATED_HANDLERS.
+        return (_chart,)
 
     def tool_names(self) -> Sequence[str]:
         return FINANCE_TOOLS

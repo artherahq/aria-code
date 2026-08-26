@@ -29,8 +29,20 @@ from aria_code.workspace.files import WorkspaceSecurity
 import os
 
 def _get_workspace_files():
-    # Force restrict to current directory for local CLI code agent
-    security = WorkspaceSecurity(cwd=os.getcwd(), allow_home=False)
+    """Reads for the local CLI: cwd, home, and the temp dirs.
+
+    ``allow_home=False`` used to be hardcoded here to "force restrict to the
+    current directory". It does not do that. WorkspaceSecurity only appends the
+    temp roots on the allow_home branch, so the flag additionally removed /tmp
+    and /var/folders — and since Python's tempfile lives under /var/folders on
+    macOS, the CLI could write a file into its own scratch directory and then
+    be denied reading it back.
+
+    Confinement for remote workers is the same documented mechanism used
+    everywhere else: ARIA_RUNTIME_SCOPE=remote, which Dockerfile.review sets.
+    Leaving the flag unset here honours it without disabling the local paths.
+    """
+    security = WorkspaceSecurity(cwd=os.getcwd())
     return WorkspaceFiles(security=security)
 
 
