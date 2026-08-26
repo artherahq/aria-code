@@ -67,17 +67,40 @@ class VertexAIProvider(LLMProvider):
             genai_role = "user" if role == "user" else "model"
             
             if role == "tool":
-                # For tool results, role should be "user" with Part containing FunctionResponse
-                # Wait, google-genai role for function response is "user" or "tool"?
-                # Actually, role='user', part=FunctionResponse
-                tool_name = msg.get("name", "unknown")
-                part = types.Part.from_function_response(
-                    name=tool_name,
-                    response={"result": content_str}
-                )
-                contents.append(types.Content(role="user", parts=[part]))
+                # Rendered as text, not as a FunctionResponse part.
+                #
+                # Gemini only accepts a function_response that answers a
+                # function_call it can see in the preceding model turn, and the
+                # agent loop does not preserve those: it records the assistant
+                # turn as plain text. Sending an unanswered function_response
+                # made the conversation malformed, and Gemini replied with a
+                # single whitespace character and no tool call — the turn died
+                # as "empty_response" a round or two in, every time.
+                #
+                # The information is not lost by doing this: the loop already
+                # puts the same results in the follow-up user message that
+                # comes next, in a form written to be read.
+                tool_name = msg.get("name") or "tool"
+                text = f"[{tool_name}] {content_str}".strip()
+                if not text:
+                    continue
+                if contents and contents[-1].role == "user":
+                    contents[-1].parts.append(types.Part.from_text(text=text))
+                else:
+                    contents.append(types.Content(
+                        role="user", parts=[types.Part.from_text(text=text)]))
                 continue
                 
+            # An empty part is worse than no part. When a model answers a turn
+            # with nothing but a function call — which Gemini does routinely,
+            # and which the agent loop records as an assistant message whose
+            # text is "" — this used to send Content(role="model", parts=[""]).
+            # Gemini responds to that with a single whitespace character and no
+            # tool call, so the second round of every tool-using turn came back
+            # as "empty_response" and the task died after one step.
+            if not str(content_str or "").strip():
+                continue
+
             # Check if previous message has same role
             # (Gemini requires alternating roles: user, model, user, model)
             if contents and contents[-1].role == genai_role:

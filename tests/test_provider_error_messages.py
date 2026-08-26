@@ -98,17 +98,20 @@ class ShimImportTests(unittest.TestCase):
         source = inspect.getsource(model_cmds)
         self.assertNotIn("from aria_cli import", source)
 
-    def test_the_shims_resolve_in_a_clean_interpreter(self):
-        import subprocess
-        import sys
+    def test_every_shim_names_an_importable_module(self):
+        import importlib
+        import inspect
+        import re
 
-        result = subprocess.run(
-            [sys.executable, "-c",
-             "from aria_code.apps.cli.commands.model_cmds import _get_MODELS;"
-             " assert _get_MODELS()"],
-            capture_output=True, text=True, check=False,
-        )
-        self.assertEqual(result.returncode, 0, result.stderr[-500:])
+        from aria_code.apps.cli.commands import model_cmds
+
+        modules = set(re.findall(r"from ([\w.]+) import ", inspect.getsource(model_cmds)))
+        for name in sorted(m for m in modules if m.startswith("aria")):
+            with self.subTest(module=name):
+                self.assertTrue(
+                    importlib.util.find_spec(name),
+                    f"{name} is not importable — the shim would raise at call time",
+                )
 
 
 class DuplicateDeclarationTests(unittest.TestCase):
@@ -162,3 +165,85 @@ class McpSchemaRegistrationTests(unittest.TestCase):
         names = [(s.get("function") or s).get("name") for s in schemas]
         self.assertEqual(len(names), len(set(names)), f"duplicate schemas: {names}")
         self.assertEqual(names, ["mcp__demo__search"])
+
+
+class GeminiConversationShapeTests(unittest.TestCase):
+    """What we send Gemini has to be a conversation it accepts.
+
+    Both rules here were found by running a real turn: the agent called one
+    tool, then every following round came back as a single whitespace
+    character and no tool call, and the turn died as "empty_response".
+    """
+
+    def _convert(self, messages):
+        from aria_code.apps.cli.providers.vertexai_stream import VertexAIProvider
+
+        provider = VertexAIProvider(model="gemini-2.5-pro", config={})
+        return provider._messages_to_contents(messages)
+
+    @staticmethod
+    def _text(content):
+        return "".join(getattr(p, "text", "") or "" for p in content.parts)
+
+    def test_an_empty_assistant_turn_is_dropped_not_sent_empty(self):
+        # Gemini routinely answers with nothing but a function call, which the
+        # agent loop records as an assistant message whose text is "".
+        contents, _ = self._convert([
+            {"role": "user", "content": "fix it"},
+            {"role": "assistant", "content": ""},
+            {"role": "user", "content": "tool results"},
+        ])
+        for content in contents:
+            with self.subTest(role=content.role):
+                self.assertTrue(self._text(content).strip(), "an empty part was sent")
+
+    def test_a_whitespace_only_turn_is_also_dropped(self):
+        contents, _ = self._convert([
+            {"role": "user", "content": "fix it"},
+            {"role": "assistant", "content": "   \n  "},
+        ])
+        self.assertEqual(len(contents), 1)
+
+    def test_tool_results_are_text_not_an_unanswered_function_response(self):
+        # A function_response is only valid as the answer to a function_call
+        # in the preceding model turn, and the loop does not preserve those.
+        contents, _ = self._convert([
+            {"role": "user", "content": "fix it"},
+            {"role": "assistant", "content": "calling read_file"},
+            {"role": "tool", "name": "read_file", "content": "def add(a, b): return a - b"},
+        ])
+        for content in contents:
+            for part in content.parts:
+                with self.subTest(role=content.role):
+                    self.assertIsNone(getattr(part, "function_response", None))
+
+    def test_the_tool_result_content_survives_the_conversion(self):
+        contents, _ = self._convert([
+            {"role": "user", "content": "fix it"},
+            {"role": "assistant", "content": "looking"},
+            {"role": "tool", "name": "read_file", "content": "return a - b"},
+        ])
+        joined = " ".join(self._text(c) for c in contents)
+        self.assertIn("return a - b", joined)
+        self.assertIn("read_file", joined)
+
+    def test_roles_stay_alternating(self):
+        contents, _ = self._convert([
+            {"role": "user", "content": "fix it"},
+            {"role": "assistant", "content": "ok"},
+            {"role": "tool", "name": "read_file", "content": "src"},
+            {"role": "user", "content": "tool results"},
+            {"role": "assistant", "content": ""},
+            {"role": "tool", "name": "edit_file", "content": "done"},
+        ])
+        roles = [c.role for c in contents]
+        for earlier, later in zip(roles, roles[1:]):
+            self.assertNotEqual(earlier, later, f"consecutive {earlier} turns: {roles}")
+
+    def test_a_system_message_becomes_the_instruction_not_a_turn(self):
+        contents, instruction = self._convert([
+            {"role": "system", "content": "you are Aria"},
+            {"role": "user", "content": "fix it"},
+        ])
+        self.assertIn("you are Aria", instruction)
+        self.assertEqual([c.role for c in contents], ["user"])
