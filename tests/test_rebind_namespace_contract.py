@@ -35,7 +35,7 @@ BUILTINS = set(dir(builtins))
 
 def _rebound_mixin_names() -> set[str]:
     """从 aria_cli.py 源码里读出实际被重绑的 mixin 类名。"""
-    src = (REPO_ROOT / "aria_cli.py").read_text(encoding="utf-8")
+    src = (REPO_ROOT / "src" / "aria_code" / "aria_cli.py").read_text(encoding="utf-8")
     return {m.group(1) for m in re.finditer(r"_rebind_mixin_globals\((\w+)\)", src)}
 
 
@@ -76,7 +76,7 @@ def _free_names(fn: ast.AST) -> set[str]:
 
 
 def test_every_rebound_mixin_bare_name_resolves_in_aria_cli_namespace():
-    aria_cli = pytest.importorskip("aria_cli")
+    aria_cli = pytest.importorskip("aria_code.aria_cli")
     if not getattr(aria_cli, "HAS_RICH", False):
         # Console / Panel / Syntax / Table 等是 `if HAS_RICH:` 下的条件导入。rich 缺席时
         # 命名空间天然不完整，此时报错全是环境噪音而非真缺陷。rich 是硬依赖，正常
@@ -88,7 +88,7 @@ def test_every_rebound_mixin_bare_name_resolves_in_aria_cli_namespace():
     assert rebound, "没解析到任何 _rebind_mixin_globals(...) 调用——正则或架构变了"
 
     offenders: dict[str, list[str]] = {}
-    for path in sorted((REPO_ROOT / "apps/cli/commands").glob("*.py")):
+    for path in sorted((REPO_ROOT / "src" / "aria_code" / "apps" / "cli" / "commands").glob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"))
         own = _module_bindings(tree)
         for cls in [n for n in tree.body if isinstance(n, ast.ClassDef) and n.name in rebound]:
