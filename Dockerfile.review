@@ -1,0 +1,17 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+COPY pyproject.toml README.md ./
+COPY src ./src
+RUN pip install --no-cache-dir ".[service]"
+
+RUN useradd --create-home --uid 10001 aria \
+    && mkdir -p /var/lib/aria-code/workspaces \
+    && chown -R aria:aria /var/lib/aria-code /app
+
+ENV PYTHONUNBUFFERED=1
+ENV ARIA_RUNTIME_SCOPE=remote
+ENV ARIA_CODE_WORKSPACE_ROOT=/var/lib/aria-code/workspaces
+USER aria
+EXPOSE 8787
+CMD ["uvicorn", "aria_code.project_review_server:app", "--host", "0.0.0.0", "--port", "8787"]
