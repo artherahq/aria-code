@@ -118,7 +118,10 @@ class DataRouter:
 
     def __init__(self):
         self._user_chains = _load_user_chains()
-        self._source_cache: Dict[str, BaseDataSource] = {}
+        # name → instance, or None for "cannot serve" (unknown, unconfigured,
+        # or failed to construct). Caching the negative case is what stops a
+        # rebuild on every call; see invalidate_sources() for the escape hatch.
+        self._source_cache: Dict[str, Optional[BaseDataSource]] = {}
         self._lock = threading.Lock()
 
     def _get_chain(self, market: str) -> List[str]:
@@ -130,18 +133,47 @@ class DataRouter:
         return _DEFAULT_CHAINS.get(market, ["yfinance"])
 
     def _get_source(self, name: str) -> Optional[BaseDataSource]:
+        """The live instance for *name*, or None if it cannot serve.
+
+        Negative results are cached too. Only successes used to be, so an
+        unconfigured source was constructed again on every single call — for a
+        chain with two unkeyed providers ahead of a working one, that is two
+        wasted constructions per quote, forever. Some sources read files or
+        probe the environment in __init__, which makes it more than a
+        micro-cost.
+        """
         with self._lock:
-            if name not in self._source_cache:
-                cls = _SOURCE_REGISTRY.get(name.lower())
-                if not cls:
-                    logger.debug(f"未知数据源: {name}")
-                    return None
+            if name in self._source_cache:
+                return self._source_cache[name]
+
+            cls = _SOURCE_REGISTRY.get(name.lower())
+            if not cls:
+                logger.debug(f"未知数据源: {name}")
+                self._source_cache[name] = None
+                return None
+            try:
                 src = cls()
-                if not src.is_configured():
-                    logger.debug(f"数据源 {name} 未配置（缺少 API key）")
-                    return None
-                self._source_cache[name] = src
-            return self._source_cache[name]
+            except Exception as exc:
+                # A source whose constructor raises must not take down the
+                # chain; the next provider is very likely fine.
+                logger.debug(f"数据源 {name} 初始化失败: {exc}")
+                self._source_cache[name] = None
+                return None
+            if not src.is_configured():
+                logger.debug(f"数据源 {name} 未配置（缺少 API key）")
+                self._source_cache[name] = None
+                return None
+            self._source_cache[name] = src
+            return src
+
+    def invalidate_sources(self) -> None:
+        """Forget what is configured, after credentials change at runtime.
+
+        Without this the negative cache above would outlive an /apikey set for
+        the whole session.
+        """
+        with self._lock:
+            self._source_cache.clear()
 
     def quote(self, symbol: str) -> Optional[QuoteResult]:
         market = _detect_market(symbol)
