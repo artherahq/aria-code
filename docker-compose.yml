@@ -23,7 +23,7 @@ services:
         condition: service_healthy
     networks:
     - aria-net
-    command: python3 aria_daemon.py
+    command: python3 -m aria_code.aria_daemon
   aria-relay-client:
     image: aria-code:local
     restart: unless-stopped
@@ -42,7 +42,7 @@ services:
     - ollama
     networks:
     - aria-net
-    command: python3 aria_relay_client.py
+    command: python3 -m aria_code.clients.aria_relay_client
   ollama:
     image: ollama/ollama:latest
     restart: unless-stopped
