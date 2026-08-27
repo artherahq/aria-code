@@ -132,7 +132,7 @@ jobs:
           gitleaks version
 
       - name: Scan repository and history for secrets
-        run: gitleaks detect --source . --redact --verbose --exit-code 1
+        run: gitleaks detect --source . --config .gitleaks.toml --redact --verbose --exit-code 1
 
   eval-preflight:
     name: Eval suites still measure something
