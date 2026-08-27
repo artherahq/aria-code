@@ -11,28 +11,28 @@ import shlex
 from typing import Dict, Any, Optional
 
 def _render_portfolio_bt(*args, **kwargs):
-    from aria_cli import _render_portfolio_bt as fn
+    from aria_code.aria_cli import _render_portfolio_bt as fn
     return fn(*args, **kwargs)
 def _print_error(*args, **kwargs):
-    from aria_cli import _print_error as fn
+    from aria_code.aria_cli import _print_error as fn
     return fn(*args, **kwargs)
 def _render_alerts(*args, **kwargs):
-    from aria_cli import _render_alerts as fn
+    from aria_code.aria_cli import _render_alerts as fn
     return fn(*args, **kwargs)
 def _get__HAS_LOCAL_FINANCE():
-    from aria_cli import _HAS_LOCAL_FINANCE as val
+    from aria_code.aria_cli import _HAS_LOCAL_FINANCE as val
     return val
 def _get_LOCAL_TOOLS():
-    from aria_cli import LOCAL_TOOLS as val
+    from aria_code.aria_cli import LOCAL_TOOLS as val
     return val
 def _render_corr_matrix(*args, **kwargs):
-    from aria_cli import _render_corr_matrix as fn
+    from aria_code.aria_cli import _render_corr_matrix as fn
     return fn(*args, **kwargs)
 def _render_peer_comparison(*args, **kwargs):
-    from aria_cli import _render_peer_comparison as fn
+    from aria_code.aria_cli import _render_peer_comparison as fn
     return fn(*args, **kwargs)
 def _render_sql_result(*args, **kwargs):
-    from aria_cli import _render_sql_result as fn
+    from aria_code.aria_cli import _render_sql_result as fn
     return fn(*args, **kwargs)
 
 import json
@@ -72,7 +72,7 @@ class DataCommandsMixin:
         rest = parts[1] if len(parts) > 1 else ""
 
         try:
-            from data_analysis_tools import (sql_query, sql_list_tables,
+            from aria_code.data_analysis_tools import (sql_query, sql_list_tables,
                                               export_to_excel, load_csv_data)
         except ImportError as e:
             if self.context.has_rich:
@@ -169,7 +169,7 @@ class DataCommandsMixin:
         sub = parts[0].lower() if parts else "list"
 
         try:
-            from data_analysis_tools import (add_price_alert, list_price_alerts,
+            from aria_code.data_analysis_tools import (add_price_alert, list_price_alerts,
                                               delete_price_alert, check_alerts)
         except ImportError as e:
             if self.context.has_rich:
@@ -255,7 +255,7 @@ class DataCommandsMixin:
         symbols = parts if parts else ["AAPL", "MSFT", "TSLA", "SPY", "QQQ"]
 
         try:
-            from data_analysis_tools import calc_correlation_matrix
+            from aria_code.data_analysis_tools import calc_correlation_matrix
         except ImportError as e:
             if self.context.has_rich:
                 self.context.console.print(f"[red]data_analysis_tools 未加载: {e}[/red]")
@@ -276,7 +276,7 @@ class DataCommandsMixin:
         parts = args.strip().split() if args.strip() else []
 
         try:
-            from data_analysis_tools import portfolio_backtest
+            from aria_code.data_analysis_tools import portfolio_backtest
         except ImportError as e:
             if self.context.has_rich:
                 self.context.console.print(f"[red]data_analysis_tools 未加载: {e}[/red]")
@@ -333,11 +333,11 @@ class DataCommandsMixin:
         loop = _asyncio.get_event_loop()
         if self.context.has_rich:
             with self.context.console.status(f"[dim]获取 {symbol} 同行数据...[/dim]", spinner="dots"):
-                from local_finance_tools import _peer_comparison
+                from aria_code.local_finance_tools import _peer_comparison
                 r = await loop.run_in_executor(None, _peer_comparison,
                                                {"symbol": symbol, "peers": peers})
         else:
-            from local_finance_tools import _peer_comparison
+            from aria_code.local_finance_tools import _peer_comparison
             r = _peer_comparison({"symbol": symbol, "peers": peers})
 
         _render_peer_comparison(r)

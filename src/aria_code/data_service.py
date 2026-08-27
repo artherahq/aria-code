@@ -145,7 +145,7 @@ class DataService:
         provider_health: ProviderHealthRegistry | None = None,
     ):
         if market_client is None:
-            from market_data_client import MarketDataClient
+            from aria_code.market_data_client import MarketDataClient
             market_client = MarketDataClient()
         self._router_disabled = router is False
         if self._router_disabled:

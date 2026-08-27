@@ -38,7 +38,7 @@ def _fetch_prices(symbols: List[str]) -> Dict[str, Dict]:
         return {}
     result: Dict[str, Dict] = {}
     try:
-        from market_data_client import MarketDataClient
+        from aria_code.market_data_client import MarketDataClient
 
         quotes = MarketDataClient().multi_quote(symbols).get("quotes") or {}
         for sym, quote in quotes.items():
@@ -69,7 +69,7 @@ def _load_portfolio() -> Tuple[List[Dict], List[Dict]]:
         return [], []
     try:
         sys.path.insert(0, str(Path(__file__).parent))
-        from portfolio_ledger import PortfolioLedger
+        from aria_code.portfolio_ledger import PortfolioLedger
         ledger    = PortfolioLedger()
         positions = ledger.get_positions()
         realized  = ledger.get_realized_pnl()
@@ -97,7 +97,7 @@ def _load_recent_artifacts(limit: int = 10) -> List[Dict]:
     items: List[Dict] = []
     try:
         sys.path.insert(0, str(Path(__file__).parent))
-        from artifacts import recent_artifacts_all
+        from aria_code.artifacts import recent_artifacts_all
         for art in recent_artifacts_all(limit=limit):
             p = Path(str(art.get("path") or art.get("metadata_path") or "")).expanduser()
             if p.exists():
@@ -516,7 +516,7 @@ def generate(
 
     artifact = None
     if output_path is None:
-        from artifacts import create_user_artifact
+        from aria_code.artifacts import create_user_artifact
 
         artifact = create_user_artifact("dashboards", mode, f"aria_dashboard_{mode}", ".html")
         out = artifact.path
@@ -526,7 +526,7 @@ def generate(
     out.write_text(html, encoding="utf-8")
     if artifact is not None:
         try:
-            from artifacts import write_artifact_metadata, write_artifact_raw_data
+            from aria_code.artifacts import write_artifact_metadata, write_artifact_raw_data
 
             write_artifact_metadata(artifact, {
                 "kind": "dashboard",

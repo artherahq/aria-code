@@ -130,7 +130,7 @@ def generate_image_local(
     given `model` loads weights from disk (or downloads them once) into
     memory and is much slower than subsequent calls.
     """
-    from artifacts import create_user_artifact
+    from aria_code.artifacts import create_user_artifact
 
     try:
         pipe = _get_pipeline(model)
@@ -167,7 +167,7 @@ def edit_image_local(
     prompt dominate. 0.6 is a reasonable "restyle but keep composition"
     default for the minimal-editorial-poster use case.
     """
-    from artifacts import create_user_artifact
+    from aria_code.artifacts import create_user_artifact
 
     src = Path(image_path)
     if not src.exists():

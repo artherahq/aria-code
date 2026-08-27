@@ -688,7 +688,7 @@ class TestCommandRegistryContract(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        import aria_cli as _ac
+        from aria_code import aria_cli as _ac
         cls._ac = _ac
         cls.term = _ac.ArtheraTerminal(dict(_ac.DEFAULT_CONFIG))
         cls.cmds = cls.term.commands.commands

@@ -35,7 +35,7 @@ def _quote_time_metadata(quote: dict) -> dict[str, str]:
 
 # ── Optional: market data client ────────────────────────────────────────────
 try:
-    from market_data_client import get_mdc as _get_mdc   # noqa: E402
+    from aria_code.market_data_client import get_mdc as _get_mdc   # noqa: E402
     _HAS_MDC = True
 except ImportError:
     _HAS_MDC = False
@@ -51,7 +51,7 @@ _DATA_SERVICE = None
 def _get_data_service():
     global _DATA_SERVICE
     if _DATA_SERVICE is None:
-        from data_service import DataService
+        from aria_code.data_service import DataService
         _DATA_SERVICE = DataService()
     return _DATA_SERVICE
 

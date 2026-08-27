@@ -14,25 +14,25 @@ import shlex
 from typing import Dict, Any, Optional
 
 def _get_ARIA_TOOLS():
-    from aria_cli import ARIA_TOOLS as val
+    from aria_code.aria_cli import ARIA_TOOLS as val
     return val
 def get_model_cfg(*args, **kwargs):
-    from aria_cli import get_model_cfg as fn
+    from aria_code.aria_cli import get_model_cfg as fn
     return fn(*args, **kwargs)
 def _get_MODELS():
-    from aria_cli import MODELS as val
+    from aria_code.aria_cli import MODELS as val
     return val
 def _get_LOCAL_TOOLS():
-    from aria_cli import LOCAL_TOOLS as val
+    from aria_code.aria_cli import LOCAL_TOOLS as val
     return val
 def _get_SKILLS():
-    from aria_cli import SKILLS as val
+    from aria_code.aria_cli import SKILLS as val
     return val
 def _get_Syntax():
-    from aria_cli import Syntax as val
+    from aria_code.aria_cli import Syntax as val
     return val
 def _get__SYNTAX_THEME():
-    from aria_cli import _SYNTAX_THEME as val
+    from aria_code.aria_cli import _SYNTAX_THEME as val
     return val
 
 import json

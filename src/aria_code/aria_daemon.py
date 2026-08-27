@@ -1291,7 +1291,7 @@ async def main() -> None:
     # Start Telegram bot if token configured
     tg_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
     if tg_token:
-        from aria_telegram_bot import TelegramBot
+        from aria_code.aria_telegram_bot import TelegramBot
         allowed_raw = os.environ.get("TELEGRAM_ALLOWED_IDS", "")
         allowed_ids = set(
             int(x.strip()) for x in allowed_raw.split(",") if x.strip().isdigit()
@@ -1311,7 +1311,7 @@ async def main() -> None:
     relay_mode      = os.environ.get("ARIA_RELAY_MODE", "")
     if relay_url and relay_client_id and relay_mode == "relay":
         try:
-            from aria_relay_client import _connect_and_serve as _relay_serve
+            from aria_code.aria_relay_client import _connect_and_serve as _relay_serve
             tasks.append(asyncio.create_task(_relay_serve(), name="feishu_relay"))
             logger.info("Feishu relay client started → %s (client=%s)", relay_url, relay_client_id)
         except ImportError:

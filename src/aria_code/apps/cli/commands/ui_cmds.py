@@ -18,28 +18,28 @@ import os
 from typing import Dict, Any, Optional
 
 def get_model_capability(*args, **kwargs):
-    from aria_cli import get_model_capability as fn
+    from aria_code.aria_cli import get_model_capability as fn
     return fn(*args, **kwargs)
 def _get__HAS_COMPUTER_USE():
-    from aria_cli import _HAS_COMPUTER_USE as val
+    from aria_code.aria_cli import _HAS_COMPUTER_USE as val
     return val
 def _get__PROJECT_CONTEXT():
-    from aria_cli import _PROJECT_CONTEXT as val
+    from aria_code.aria_cli import _PROJECT_CONTEXT as val
     return val
 def _print_error(*args, **kwargs):
-    from aria_cli import _print_error as fn
+    from aria_code.aria_cli import _print_error as fn
     return fn(*args, **kwargs)
 def _get__HAS_MODEL_CAP():
-    from aria_cli import _HAS_MODEL_CAP as val
+    from aria_code.aria_cli import _HAS_MODEL_CAP as val
     return val
 def _get_rich_box():
-    from aria_cli import rich_box as val
+    from aria_code.aria_cli import rich_box as val
     return val
 def get_model_cfg(*args, **kwargs):
-    from aria_cli import get_model_cfg as fn
+    from aria_code.aria_cli import get_model_cfg as fn
     return fn(*args, **kwargs)
 def _get_Panel():
-    from aria_cli import Panel as val
+    from aria_code.aria_cli import Panel as val
     return val
 
 import json
@@ -187,7 +187,7 @@ class UiCommandsMixin:
                 "Install: pip install playwright mss pyautogui pillow && playwright install chromium",
             )
             return
-        from computer_use_tools import _tool_browser_navigate, _tool_browser_screenshot
+        from aria_code.computer_use_tools import _tool_browser_navigate, _tool_browser_screenshot
 
         parts = args.strip().split(maxsplit=1)
         if not parts:
@@ -204,7 +204,7 @@ class UiCommandsMixin:
                 result = _tool_browser_screenshot({"url": url})
             if result.get("success"):
                 d = result["data"]
-                from computer_use_tools import pop_pending_vision_image
+                from aria_code.computer_use_tools import pop_pending_vision_image
                 b64 = pop_pending_vision_image()
                 if b64:
                     self.terminal._pending_image = {
@@ -255,7 +255,7 @@ class UiCommandsMixin:
                 "Install: pip install mss pillow",
             )
             return
-        from computer_use_tools import _tool_computer_screenshot, pop_pending_vision_image
+        from aria_code.computer_use_tools import _tool_computer_screenshot, pop_pending_vision_image
 
         monitor = int(args.strip()) if args.strip().isdigit() else 1
         if self.context.has_rich:

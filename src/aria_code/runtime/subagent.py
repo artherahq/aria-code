@@ -254,7 +254,7 @@ async def _run_background(task: SubagentTask) -> None:
         )
         full_prompt = f"{execution_contract}\n\n{full_prompt}"
         if task.backend != "aria":
-            from external_agent_runner import RUNNERS
+            from aria_code.external_agent_runner import RUNNERS
 
             result_text = await RUNNERS[task.backend](full_prompt, cwd=task.workspace or None)
         else:

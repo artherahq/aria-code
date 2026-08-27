@@ -55,7 +55,7 @@ def _get_feishu_bot():
     if str(aria_dir) not in sys.path:
         sys.path.insert(0, str(aria_dir))
     try:
-        import aria_feishu_bot
+        from aria_code import aria_feishu_bot
         return aria_feishu_bot
     except ImportError as e:
         logger.warning("aria_feishu_bot not importable: %s", e)

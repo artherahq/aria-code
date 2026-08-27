@@ -257,7 +257,7 @@ def error_hint(error: str, context: str = "") -> str:
         m = re.search(r"model ['\"]?([^'\"]+)['\"]? not found", err_lower)
         model_hint = m.group(1) if m else "the requested model"
         try:
-            from local_llm_provider import list_ollama_models
+            from aria_code.local_llm_provider import list_ollama_models
             available = list_ollama_models("http://localhost:11434")
             if available:
                 suggestion = available[0]

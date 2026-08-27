@@ -20,7 +20,7 @@ from .models import Provenance, QuantEvidence, ThemeGroup
 
 def _default_runner(tool: str, params: Dict) -> Optional[Dict]:
     try:
-        import local_finance_tools as lft
+        from aria_code import local_finance_tools as lft
     except Exception:
         return None
     fn = getattr(lft, tool, None)

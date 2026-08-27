@@ -17,7 +17,7 @@ def _isolate_market_data(monkeypatch):
     - block the no-proxy fallback session so a reachable Eastmoney host can't
       turn a 'should fail' case into a flaky pass via a real network call.
     """
-    import market_data_client
+    from aria_code import market_data_client
 
     class _NoNetSession:
         def get(self, *_a, **_k):
@@ -146,7 +146,7 @@ class _YahooChartSession:
 
 
 def test_ashare_quote_prefers_eastmoney():
-    from market_data_client import MarketDataClient
+    from aria_code.market_data_client import MarketDataClient
 
     client = MarketDataClient()
     client._sess = _EastmoneySession()
@@ -165,7 +165,7 @@ def test_ashare_quote_prefers_eastmoney():
 
 
 def test_ashare_quote_failure_returns_friendly_error(monkeypatch):
-    from market_data_client import MarketDataClient
+    from aria_code.market_data_client import MarketDataClient
 
     original_import = builtins.__import__
 
@@ -187,7 +187,7 @@ def test_ashare_quote_failure_returns_friendly_error(monkeypatch):
 
 
 def test_ashare_history_prefers_eastmoney():
-    from market_data_client import MarketDataClient
+    from aria_code.market_data_client import MarketDataClient
 
     client = MarketDataClient()
     client._sess = _EastmoneyHistorySession()
@@ -201,7 +201,7 @@ def test_ashare_history_prefers_eastmoney():
 
 
 def test_ashare_history_falls_back_to_sina():
-    from market_data_client import MarketDataClient
+    from aria_code.market_data_client import MarketDataClient
 
     client = MarketDataClient()
     client._sess = _SinaHistorySession()
@@ -215,7 +215,7 @@ def test_ashare_history_falls_back_to_sina():
 
 
 def test_ashare_history_failure_returns_friendly_error(monkeypatch):
-    from market_data_client import MarketDataClient
+    from aria_code.market_data_client import MarketDataClient
 
     original_import = builtins.__import__
 
@@ -273,7 +273,7 @@ class _FakeTushareSource:
 
 def test_ashare_quote_uses_tushare_when_configured():
     """A configured Tushare source is preferred over the HTTP chain."""
-    from market_data_client import MarketDataClient
+    from aria_code.market_data_client import MarketDataClient
 
     client = MarketDataClient()
     client._sess = _EastmoneySession()      # would otherwise win
@@ -289,7 +289,7 @@ def test_ashare_quote_uses_tushare_when_configured():
 
 
 def test_ashare_history_uses_tushare_when_configured():
-    from market_data_client import MarketDataClient
+    from aria_code.market_data_client import MarketDataClient
 
     client = MarketDataClient()
     client._sess = _EastmoneyHistorySession()  # would otherwise win
@@ -305,7 +305,7 @@ def test_ashare_history_uses_tushare_when_configured():
 
 
 def test_global_history_falls_back_to_stooq(monkeypatch):
-    from market_data_client import MarketDataClient
+    from aria_code.market_data_client import MarketDataClient
 
     original_import = builtins.__import__
 
@@ -327,7 +327,7 @@ def test_global_history_falls_back_to_stooq(monkeypatch):
 
 
 def test_global_quote_falls_back_to_stooq_when_yfinance_unavailable(monkeypatch):
-    from market_data_client import MarketDataClient
+    from aria_code.market_data_client import MarketDataClient
 
     original_import = builtins.__import__
 
@@ -349,7 +349,7 @@ def test_global_quote_falls_back_to_stooq_when_yfinance_unavailable(monkeypatch)
 
 
 def test_global_history_uses_yahoo_chart_before_stooq(monkeypatch):
-    from market_data_client import MarketDataClient
+    from aria_code.market_data_client import MarketDataClient
 
     original_import = builtins.__import__
 
@@ -371,7 +371,7 @@ def test_global_history_uses_yahoo_chart_before_stooq(monkeypatch):
 
 
 def test_global_quote_uses_yahoo_chart_for_index_when_yfinance_unavailable(monkeypatch):
-    from market_data_client import MarketDataClient
+    from aria_code.market_data_client import MarketDataClient
 
     original_import = builtins.__import__
 
@@ -394,7 +394,7 @@ def test_global_quote_uses_yahoo_chart_for_index_when_yfinance_unavailable(monke
 
 
 def test_global_ta_uses_stooq_history_when_yfinance_unavailable(monkeypatch):
-    from market_data_client import MarketDataClient
+    from aria_code.market_data_client import MarketDataClient
 
     original_import = builtins.__import__
 
@@ -417,7 +417,7 @@ def test_global_ta_uses_stooq_history_when_yfinance_unavailable(monkeypatch):
 
 
 def test_crypto_yahoo_style_symbol_normalizes_to_ccxt_pair():
-    from market_data_client import _norm_crypto
+    from aria_code.market_data_client import _norm_crypto
 
     assert _norm_crypto("BTC-USD") == "BTC/USDT"
     assert _norm_crypto("ETH-USD") == "ETH/USDT"
@@ -426,7 +426,7 @@ def test_crypto_yahoo_style_symbol_normalizes_to_ccxt_pair():
 def test_sh_index_secid_not_confused_with_sz_stock():
     """上证指数族(000001.SS)与深市个股(000001.SZ 平安银行)共享 000 前缀,
     secid 必须以交易所后缀为准——否则"上证指数"会返回平安银行的价格。"""
-    from market_data_client import _ashare_secid, _is_sh_index_family, _yf_ashare_symbol
+    from aria_code.market_data_client import _ashare_secid, _is_sh_index_family, _yf_ashare_symbol
 
     assert _ashare_secid("000001", "000001.SS") == "1.000001"   # 上证综指 → 沪
     assert _ashare_secid("000001", "000001.SZ") == "0.000001"   # 平安银行 → 深
@@ -444,7 +444,7 @@ def test_sh_index_secid_not_confused_with_sz_stock():
 def test_fallback_currency_follows_market_suffix():
     """stooq/yfinance_download 兜底不带货币字段;按市场后缀推断,
     不再硬编码 USD(NL 分析块的"货币单位:{currency}"直接消费该字段)。"""
-    from market_data_client import _currency_for_symbol
+    from aria_code.market_data_client import _currency_for_symbol
 
     assert _currency_for_symbol("0700.HK") == "HKD"
     assert _currency_for_symbol("MC.PA") == "EUR"
@@ -458,7 +458,7 @@ def test_fallback_currency_follows_market_suffix():
 def test_finnhub_guard_skips_non_us_style_symbols():
     """Finnhub 免费档只覆盖美股普通代码;指数/期货/外汇/带市场后缀符号
     直接跳过(省一次注定失败的往返),由 yfinance 承接。"""
-    from market_data_client import _finnhub_style_symbol
+    from aria_code.market_data_client import _finnhub_style_symbol
 
     assert _finnhub_style_symbol("AAPL")
     assert _finnhub_style_symbol("NVDA")

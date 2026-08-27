@@ -15,61 +15,61 @@ import os
 from typing import Dict, Any, Optional
 
 def _get__HAS_BROKERS():
-    from aria_cli import _HAS_BROKERS as val
+    from aria_code.aria_cli import _HAS_BROKERS as val
     return val
 def _render_cb_rates(*args, **kwargs):
-    from aria_cli import _render_cb_rates as fn
+    from aria_code.aria_cli import _render_cb_rates as fn
     return fn(*args, **kwargs)
 def _render_fear_greed(*args, **kwargs):
-    from aria_cli import _render_fear_greed as fn
+    from aria_code.aria_cli import _render_fear_greed as fn
     return fn(*args, **kwargs)
 def _render_quality_scores(*args, **kwargs):
-    from aria_cli import _render_quality_scores as fn
+    from aria_code.aria_cli import _render_quality_scores as fn
     return fn(*args, **kwargs)
 def _render_options_chain(*args, **kwargs):
-    from aria_cli import _render_options_chain as fn
+    from aria_code.aria_cli import _render_options_chain as fn
     return fn(*args, **kwargs)
 def build_analyze_context(*args, **kwargs):
-    from aria_cli import build_analyze_context as fn
+    from aria_code.aria_cli import build_analyze_context as fn
     return fn(*args, **kwargs)
 def _render_funding_rates(*args, **kwargs):
-    from aria_cli import _render_funding_rates as fn
+    from aria_code.aria_cli import _render_funding_rates as fn
     return fn(*args, **kwargs)
 def logger(*args, **kwargs):
-    from aria_cli import logger as fn
+    from aria_code.aria_cli import logger as fn
     return fn(*args, **kwargs)
 def _get_broker_registry(*args, **kwargs):
-    from aria_cli import _get_broker_registry as fn
+    from aria_code.aria_cli import _get_broker_registry as fn
     return fn(*args, **kwargs)
 def build_analyze_prompt(*args, **kwargs):
-    from aria_cli import build_analyze_prompt as fn
+    from aria_code.aria_cli import build_analyze_prompt as fn
     return fn(*args, **kwargs)
 def _render_funding_compare(*args, **kwargs):
-    from aria_cli import _render_funding_compare as fn
+    from aria_code.aria_cli import _render_funding_compare as fn
     return fn(*args, **kwargs)
 def _is_ashare_symbol(*args, **kwargs):
-    from aria_cli import _is_ashare_symbol as fn
+    from aria_code.aria_cli import _is_ashare_symbol as fn
     return fn(*args, **kwargs)
 def _get__HAS_MDC():
-    from aria_cli import _HAS_MDC as val
+    from aria_code.aria_cli import _HAS_MDC as val
     return val
 def _ashare_code_to_name(*args, **kwargs):
-    from aria_cli import _ashare_code_to_name as fn
+    from aria_code.aria_cli import _ashare_code_to_name as fn
     return fn(*args, **kwargs)
 def _get__HAS_LOCAL_FINANCE():
-    from aria_cli import _HAS_LOCAL_FINANCE as val
+    from aria_code.aria_cli import _HAS_LOCAL_FINANCE as val
     return val
 def _render_econ_calendar(*args, **kwargs):
-    from aria_cli import _render_econ_calendar as fn
+    from aria_code.aria_cli import _render_econ_calendar as fn
     return fn(*args, **kwargs)
 def _render_macro_result(*args, **kwargs):
-    from aria_cli import _render_macro_result as fn
+    from aria_code.aria_cli import _render_macro_result as fn
     return fn(*args, **kwargs)
 def _render_ichimoku(*args, **kwargs):
-    from aria_cli import _render_ichimoku as fn
+    from aria_code.aria_cli import _render_ichimoku as fn
     return fn(*args, **kwargs)
 def _get_mdc(*args, **kwargs):
-    from aria_cli import _get_mdc as fn
+    from aria_code.aria_cli import _get_mdc as fn
     return fn(*args, **kwargs)
 
 import json
@@ -147,7 +147,7 @@ class AnalysisCommandsMixin:
         indicator = parts[1] if len(parts) > 1 else "all"
 
         try:
-            from macro_tools import get_us_macro, get_cn_macro, get_central_bank_rates, get_economic_calendar
+            from aria_code.macro_tools import get_us_macro, get_cn_macro, get_central_bank_rates, get_economic_calendar
         except ImportError:
             if self.context.has_rich:
                 self.context.console.print("[red]macro_tools 模块未找到[/red]")
@@ -208,11 +208,11 @@ class AnalysisCommandsMixin:
         loop = _asyncio.get_event_loop()
         if self.context.has_rich:
             with self.context.console.status(f"[dim]获取 {symbol} 期权链...[/dim]", spinner="dots"):
-                from local_finance_tools import _get_options_chain
+                from aria_code.local_finance_tools import _get_options_chain
                 r = await loop.run_in_executor(None, _get_options_chain,
                                                {"symbol": symbol, "type": opt_type, "expiry": expiry, "limit": 20})
         else:
-            from local_finance_tools import _get_options_chain
+            from aria_code.local_finance_tools import _get_options_chain
             r = _get_options_chain({"symbol": symbol, "type": opt_type, "expiry": expiry, "limit": 20})
 
         if not r.get("success"):
@@ -273,11 +273,11 @@ class AnalysisCommandsMixin:
         loop = _asyncio.get_event_loop()
         if self.context.has_rich:
             with self.context.console.status(f"[dim]计算 {symbol} 财务质量评分...[/dim]", spinner="dots"):
-                from local_finance_tools import _piotroski_fscore, _altman_zscore
+                from aria_code.local_finance_tools import _piotroski_fscore, _altman_zscore
                 f_r = await loop.run_in_executor(None, _piotroski_fscore, {"symbol": symbol})
                 z_r = await loop.run_in_executor(None, _altman_zscore, {"symbol": symbol})
         else:
-            from local_finance_tools import _piotroski_fscore, _altman_zscore
+            from aria_code.local_finance_tools import _piotroski_fscore, _altman_zscore
             f_r = _piotroski_fscore({"symbol": symbol})
             z_r = _altman_zscore({"symbol": symbol})
 
@@ -295,10 +295,10 @@ class AnalysisCommandsMixin:
         loop = _asyncio.get_event_loop()
         if self.context.has_rich:
             with self.context.console.status(f"[dim]计算 {symbol} 一目均衡表...[/dim]", spinner="dots"):
-                from local_finance_tools import _calculate_ichimoku
+                from aria_code.local_finance_tools import _calculate_ichimoku
                 r = await loop.run_in_executor(None, _calculate_ichimoku, {"symbol": symbol})
         else:
-            from local_finance_tools import _calculate_ichimoku
+            from aria_code.local_finance_tools import _calculate_ichimoku
             r = _calculate_ichimoku({"symbol": symbol})
 
         _render_ichimoku(r)
@@ -314,10 +314,10 @@ class AnalysisCommandsMixin:
         loop = _asyncio.get_event_loop()
         if self.context.has_rich:
             with self.context.console.status("[dim]获取恐惧贪婪指数...[/dim]", spinner="dots"):
-                from local_finance_tools import _get_fear_greed_index
+                from aria_code.local_finance_tools import _get_fear_greed_index
                 r = await loop.run_in_executor(None, _get_fear_greed_index, {})
         else:
-            from local_finance_tools import _get_fear_greed_index
+            from aria_code.local_finance_tools import _get_fear_greed_index
             r = _get_fear_greed_index({})
 
         _render_fear_greed(r)
@@ -348,18 +348,18 @@ class AnalysisCommandsMixin:
         if compare_mode:
             if self.context.has_rich:
                 with self.context.console.status("[dim]并行查询 binance / okx / bybit...[/dim]", spinner="dots"):
-                    from local_finance_tools import _get_funding_rates_compare
+                    from aria_code.local_finance_tools import _get_funding_rates_compare
                     r = await loop.run_in_executor(None, _get_funding_rates_compare, {"symbols": syms})
             else:
-                from local_finance_tools import _get_funding_rates_compare
+                from aria_code.local_finance_tools import _get_funding_rates_compare
                 r = _get_funding_rates_compare({"symbols": syms})
             _render_funding_compare(r)
         else:
             if self.context.has_rich:
                 with self.context.console.status(f"[dim]获取 {exchange} 资金费率...[/dim]", spinner="dots"):
-                    from local_finance_tools import _get_funding_rates
+                    from aria_code.local_finance_tools import _get_funding_rates
                     r = await loop.run_in_executor(None, _get_funding_rates, {"exchange": exchange, "symbols": syms})
             else:
-                from local_finance_tools import _get_funding_rates
+                from aria_code.local_finance_tools import _get_funding_rates
                 r = _get_funding_rates({"exchange": exchange, "symbols": syms})
             _render_funding_rates(r)

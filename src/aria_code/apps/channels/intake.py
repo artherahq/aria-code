@@ -64,7 +64,7 @@ async def analyze_alert_via_gateway(
         # rebinding. Until that module is untangled, any out-of-CLI consumer
         # of the default Ollama path must import aria_cli first — a one-time
         # ~1s cost the long-lived daemon amortizes.
-        import aria_cli  # noqa: F401  (side effect: binds stream_ollama globals)
+        from aria_code import aria_cli  # noqa: F401  (side effect: binds stream_ollama globals)
         from aria_code.apps.cli.providers.runtime_bridge import build_tool_executor, make_provider_fn
         from aria_code.runtime.gateway import run_turn as run_turn_fn_impl
 

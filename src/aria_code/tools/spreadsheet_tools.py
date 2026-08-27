@@ -236,7 +236,7 @@ def write_workbook(spec: Dict[str, Any], out_path: Optional[Path] = None) -> Dic
     if out_path is None:
         stem = str(spec.get("filename") or "workbook").removesuffix(".xlsx")
         try:
-            from artifacts import create_user_artifact, write_artifact_metadata
+            from aria_code.artifacts import create_user_artifact, write_artifact_metadata
             record = create_user_artifact(
                 "spreadsheets", spec.get("topic"), stem, ".xlsx"
             )

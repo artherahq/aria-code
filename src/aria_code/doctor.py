@@ -359,7 +359,7 @@ def integration_checks() -> List[DoctorCheck]:
         # Read stored config directly rather than calling _access_token(),
         # which refreshes an expired token over the network — this function
         # is a local-first, no-mutation health check, not a live probe.
-        from canva_client import _load_canva_config
+        from aria_code.canva_client import _load_canva_config
 
         connected = bool(_load_canva_config().get("access_token"))
         checks.append(_check(
@@ -600,7 +600,7 @@ def run_doctor(
     checks.extend(integration_checks())
 
     try:
-        from artifacts import artifact_root, artifact_summary
+        from aria_code.artifacts import artifact_root, artifact_summary
 
         root = artifact_root()
         writable, detail = _is_writable(root)

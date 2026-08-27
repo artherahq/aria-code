@@ -107,7 +107,7 @@ def _is_known_football_name(name: str) -> bool:
     if not n:
         return False
     try:
-        from football_data_client import _CN_TEAM_MAP, _FIFA_RATINGS
+        from aria_code.football_data_client import _CN_TEAM_MAP, _FIFA_RATINGS
     except Exception:
         return False
     if n in _CN_TEAM_MAP:
@@ -154,7 +154,7 @@ def _parse_nl_team_pair(text: str) -> Optional[Tuple[str, str]]:
     Returns None if two teams cannot be confidently identified.
     """
     try:
-        from football_data_client import _CN_TEAM_MAP, _FIFA_RATINGS
+        from aria_code.football_data_client import _CN_TEAM_MAP, _FIFA_RATINGS
     except Exception:
         return None
 
@@ -253,76 +253,76 @@ import shlex
 from typing import Dict, Any, Optional
 
 def print_quote_result(*args, **kwargs):
-    from aria_cli import print_quote_result as fn
+    from aria_code.aria_cli import print_quote_result as fn
     return fn(*args, **kwargs)
 def _football_fixtures(*args, **kwargs):
-    from aria_cli import _football_fixtures as fn
+    from aria_code.aria_cli import _football_fixtures as fn
     return fn(*args, **kwargs)
 def execute_aria_tool(*args, **kwargs):
-    from aria_cli import execute_aria_tool as fn
+    from aria_code.aria_cli import execute_aria_tool as fn
     return fn(*args, **kwargs)
 def _is_ashare_symbol(*args, **kwargs):
-    from aria_cli import _is_ashare_symbol as fn
+    from aria_code.aria_cli import _is_ashare_symbol as fn
     return fn(*args, **kwargs)
 def _prompt_str(*args, **kwargs):
-    from aria_cli import _prompt_str as fn
+    from aria_code.aria_cli import _prompt_str as fn
     return fn(*args, **kwargs)
 def _render_reits_list(*args, **kwargs):
-    from aria_cli import _render_reits_list as fn
+    from aria_code.aria_cli import _render_reits_list as fn
     return fn(*args, **kwargs)
 def _render_multi_city(*args, **kwargs):
-    from aria_cli import _render_multi_city as fn
+    from aria_code.aria_cli import _render_multi_city as fn
     return fn(*args, **kwargs)
 def _football_team(*args, **kwargs):
-    from aria_cli import _football_team as fn
+    from aria_code.aria_cli import _football_team as fn
     return fn(*args, **kwargs)
 def _get_LOCAL_TOOLS():
-    from aria_cli import LOCAL_TOOLS as val
+    from aria_code.aria_cli import LOCAL_TOOLS as val
     return val
 def logger(*args, **kwargs):
-    from aria_cli import logger as fn
+    from aria_code.aria_cli import logger as fn
     return fn(*args, **kwargs)
 def _render_property_val(*args, **kwargs):
-    from aria_cli import _render_property_val as fn
+    from aria_code.aria_cli import _render_property_val as fn
     return fn(*args, **kwargs)
 def _get_mdc(*args, **kwargs):
-    from aria_cli import _get_mdc as fn
+    from aria_code.aria_cli import _get_mdc as fn
     return fn(*args, **kwargs)
 def _load_data_keys(*args, **kwargs):
-    from aria_cli import _load_data_keys as fn
+    from aria_code.aria_cli import _load_data_keys as fn
     return fn(*args, **kwargs)
 def _render_asset_score(*args, **kwargs):
-    from aria_cli import _render_asset_score as fn
+    from aria_code.aria_cli import _render_asset_score as fn
     return fn(*args, **kwargs)
 def _print_error(*args, **kwargs):
-    from aria_cli import _print_error as fn
+    from aria_code.aria_cli import _print_error as fn
     return fn(*args, **kwargs)
 def _render_rental_yield(*args, **kwargs):
-    from aria_cli import _render_rental_yield as fn
+    from aria_code.aria_cli import _render_rental_yield as fn
     return fn(*args, **kwargs)
 def _football_h2h(*args, **kwargs):
-    from aria_cli import _football_h2h as fn
+    from aria_code.aria_cli import _football_h2h as fn
     return fn(*args, **kwargs)
 def _football_standings(*args, **kwargs):
-    from aria_cli import _football_standings as fn
+    from aria_code.aria_cli import _football_standings as fn
     return fn(*args, **kwargs)
 def _render_house_price(*args, **kwargs):
-    from aria_cli import _render_house_price as fn
+    from aria_code.aria_cli import _render_house_price as fn
     return fn(*args, **kwargs)
 def format_quote_output(*args, **kwargs):
-    from aria_cli import format_quote_output as fn
+    from aria_code.aria_cli import format_quote_output as fn
     return fn(*args, **kwargs)
 def _prompt_float(*args, **kwargs):
-    from aria_cli import _prompt_float as fn
+    from aria_code.aria_cli import _prompt_float as fn
     return fn(*args, **kwargs)
 def _ashare_code_to_name(*args, **kwargs):
-    from aria_cli import _ashare_code_to_name as fn
+    from aria_code.aria_cli import _ashare_code_to_name as fn
     return fn(*args, **kwargs)
 def _get__HAS_MDC():
-    from aria_cli import _HAS_MDC as val
+    from aria_code.aria_cli import _HAS_MDC as val
     return val
 def parse_symbols(*args, **kwargs):
-    from aria_cli import parse_symbols as fn
+    from aria_code.aria_cli import parse_symbols as fn
     return fn(*args, **kwargs)
 
 import json
@@ -364,7 +364,7 @@ class MarketCommandsMixin:
         sub = parts[0].lower() if parts else "market"
 
         try:
-            from realty_data_tools import (
+            from aria_code.realty_data_tools import (
                 get_house_price_index, get_re_investment,
                 get_reits_list, get_reit_analysis, get_multi_city_comparison,
                 calc_rental_yield, property_valuation, asset_location_score,
@@ -566,7 +566,7 @@ class MarketCommandsMixin:
                 rest    = raw[idx + 4:].strip()
                 away_parts = rest.split()
                 # last token might be league code (including wc/世界杯)
-                from football_data_client import LEAGUE_IDS, TOURNAMENT_CODES
+                from aria_code.football_data_client import LEAGUE_IDS, TOURNAMENT_CODES
                 _all_codes = {**LEAGUE_IDS, **{k: v for k, v in TOURNAMENT_CODES.items()}}
                 if away_parts and away_parts[-1].lower().replace(" ", "") in _all_codes:
                     league = away_parts[-1]
@@ -584,7 +584,7 @@ class MarketCommandsMixin:
         # ── team ──────────────────────────────────────────────────────────────
         elif sub in ("team", "球队"):
             rest  = " ".join(parts[1:])
-            from football_data_client import LEAGUE_IDS
+            from aria_code.football_data_client import LEAGUE_IDS
             tokens = rest.split()
             if tokens and tokens[-1].lower() in LEAGUE_IDS:
                 league = tokens[-1]
@@ -601,7 +601,7 @@ class MarketCommandsMixin:
                 idx  = raw.lower().index(" vs ")
                 t1   = raw[:idx].strip()
                 rest = raw[idx + 4:].strip()
-                from football_data_client import LEAGUE_IDS
+                from aria_code.football_data_client import LEAGUE_IDS
                 tokens = rest.split()
                 if tokens and tokens[-1].lower() in LEAGUE_IDS:
                     league = tokens[-1]
@@ -628,7 +628,7 @@ class MarketCommandsMixin:
                     _h_cn, _a_cn = _nl_pair
                     # Determine league: national teams → wc, club → pl default
                     try:
-                        from football_data_client import _CN_TEAM_MAP, _find_fifa_rating
+                        from aria_code.football_data_client import _CN_TEAM_MAP, _find_fifa_rating
                         _h_en = _CN_TEAM_MAP.get(_h_cn, _h_cn)
                         _a_en = _CN_TEAM_MAP.get(_a_cn, _a_cn)
                         _is_nat = bool(_find_fifa_rating(_h_en) or _find_fifa_rating(_a_en))
@@ -640,7 +640,7 @@ class MarketCommandsMixin:
 
                 # ── Step 2: Fall back to get_sports_context_for_query ─────────
                 try:
-                    from football_data_client import get_sports_context_for_query
+                    from aria_code.football_data_client import get_sports_context_for_query
                     _sports_ctx = get_sports_context_for_query(full_args)
                 except Exception:
                     _sports_ctx = ""
@@ -677,7 +677,7 @@ class MarketCommandsMixin:
 
         if _is_wc:
             try:
-                from football_data_client import (
+                from aria_code.football_data_client import (
                     predict_wc_match,
                     _find_fifa_rating,
                     team_display_name,
@@ -837,7 +837,7 @@ class MarketCommandsMixin:
         from rich.columns import Columns
         from rich.text import Text
         try:
-            from football_data_client import team_display_name as _football_display_name
+            from aria_code.football_data_client import team_display_name as _football_display_name
         except Exception:
             def _football_display_name(value, locale="zh"):
                 return str(value or "-")

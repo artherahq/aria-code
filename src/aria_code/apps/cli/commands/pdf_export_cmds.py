@@ -68,7 +68,7 @@ class PdfExportCommandsMixin:
         # 函数自己的局部命名空间，不受影响。
         from pathlib import Path
         from aria_code.apps.cli.pdf_report import PARSERS, THEMES, render_document
-        from artifacts import user_generated_dir
+        from aria_code.artifacts import user_generated_dir
 
         opts = self._parse_export_pdf_args(args.strip())
         if not opts["path"]:
@@ -109,7 +109,7 @@ class PdfExportCommandsMixin:
             html_path = out_dir / f"{src.stem}.pdfexport.html"
             html_path.write_text(html_doc, encoding="utf-8")
 
-            from report_generator import export_pdf
+            from aria_code.report_generator import export_pdf
             import asyncio
             pdf_path = await asyncio.get_event_loop().run_in_executor(None, lambda: export_pdf(html_path))
             html_path.unlink(missing_ok=True)  # 中间产物，转完就不需要留着

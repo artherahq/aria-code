@@ -68,7 +68,7 @@ def _order():
 
 
 def test_cli_broker_views_switch_between_stacked_compact_and_full(monkeypatch):
-    import aria_cli
+    from aria_code import aria_cli
 
     outputs = {}
     for width in (80, 100, 120):

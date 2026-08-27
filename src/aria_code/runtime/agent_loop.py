@@ -1098,7 +1098,7 @@ def build_next_turn_messages(total_response: str, tool_results: Sequence[dict]) 
     # Check for a pending screenshot from computer_screenshot / browser_screenshot
     vision_b64: "str | None" = None
     try:
-        from computer_use_tools import pop_pending_vision_image
+        from aria_code.computer_use_tools import pop_pending_vision_image
         vision_b64 = pop_pending_vision_image()
     except ImportError:
         pass

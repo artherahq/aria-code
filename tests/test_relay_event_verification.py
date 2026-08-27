@@ -34,7 +34,7 @@ def _load_relay(monkeypatch, tmp_path, **env):
         monkeypatch.delenv(key, raising=False)
     for key, value in env.items():
         monkeypatch.setenv(key, value)
-    import aria_relay_server
+    from aria_code import aria_relay_server
     return importlib.reload(aria_relay_server)
 
 

@@ -14,17 +14,17 @@ from typing import Optional
 
 
 def _local_tools() -> dict:
-    import aria_cli
+    from aria_code import aria_cli
     return aria_cli.LOCAL_TOOLS
 
 
 def _fix_json(raw: str) -> str:
-    import aria_cli
+    from aria_code import aria_cli
     return aria_cli._fix_json_string(raw)
 
 
 def _get_model_cfg(key: str) -> dict:
-    import aria_cli
+    from aria_code import aria_cli
     return aria_cli.get_model_cfg(key)
 
 
@@ -260,7 +260,7 @@ def build_broker_context_block() -> str:
 
     Returns "" if no broker is connected or data fetch fails.
     """
-    import aria_cli as _ac
+    from aria_code import aria_cli as _ac
     if not getattr(_ac, "_HAS_BROKERS", False):
         return ""
     try:
