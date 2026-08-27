@@ -1307,31 +1307,27 @@ def _extract_market_symbols(message: str, limit: int = 6) -> list[str]:
     return ordered
 
 
-def _extract_symbol_from_history(history: list, max_lookback: int = 8) -> str:
+def _extract_symbol_from_history(history: list, max_lookback: int = 4) -> str:
     """从最近的会话历史中提取标的（跟进问题继承上下文，如"现在的股票和趋势呢"）。
 
-    倒序扫描最近 max_lookback 条消息，返回最先命中的标的代码。
-    user 消息优先于 assistant 消息（用户提到的标的意图最明确）。
+    只扫描 **user** 消息，倒序返回最先命中的标的代码。
+
+    assistant 回复被刻意排除：模型回答里的普通英文词会被当成股票代码继承下来。
+    实际发生过的例子——上一轮回答中提到 ``Cassandra/MongoDB`` 这样的技术选型，
+    "MongoDB" 被解析成 ticker ``MDB``，用户接着说"开始完善"就被路由去查了
+    MongoDB Inc. 的行情。标的意图必须来自用户本人，不能来自模型自己的输出。
     """
     if not history:
         return ""
     recent = history[-max_lookback:]
-    # 先扫 user 消息（倒序）
     for msg in reversed(recent):
-        if msg.get("role") != "user":
+        if not isinstance(msg, dict) or msg.get("role") != "user":
             continue
         content = msg.get("content", "")
         if isinstance(content, list):   # 多模态消息取 text 部分
             content = " ".join(p.get("text", "") for p in content
                                if isinstance(p, dict) and p.get("type") == "text")
-        sym = _extract_market_symbol(content)
-        if sym:
-            return sym
-    # 再扫 assistant 消息（倒序）
-    for msg in reversed(recent):
-        if msg.get("role") != "assistant":
-            continue
-        sym = _extract_market_symbol(str(msg.get("content", "")))
+        sym = _extract_market_symbol(str(content))
         if sym:
             return sym
     return ""
@@ -1533,16 +1529,30 @@ def _is_market_snapshot_request(message: str, history: list = None) -> bool:
     if _is_coding or _is_stock_chart_analysis_request(message) or _is_visual_market_artifact_request(message):
         return False
     low = message.lower()
-    has_market_word = any(k in low for k in (
-        "市场", "行情", "股价", "价格", "涨跌", "涨幅", "现价", "今天",
-        "现在", "最新", "分析", "走势", "趋势", "market", "quote", "price",
-    ))
-    if not has_market_word:
+    # Unambiguously market-specific wording.  These carry enough intent on their
+    # own to inherit a symbol from an earlier turn ("行情呢" / "现价多少").
+    _strong_market_words = (
+        "行情", "股价", "涨跌", "涨幅", "现价", "大盘", "收盘", "开盘",
+        "market", "quote", "stock price",
+    )
+    # Generic words that are market-related only in a market conversation.
+    # "分析"/"趋势"/"现在" are ordinary Chinese and appear constantly in product
+    # and engineering chat — "根据以上分析和建议开始完善" is not a quote request.
+    _weak_market_words = (
+        "市场", "价格", "今天", "现在", "最新", "分析", "走势", "趋势", "price",
+    )
+    has_strong = any(k in low for k in _strong_market_words)
+    has_weak = any(k in low for k in _weak_market_words)
+    if not (has_strong or has_weak):
         return False
     if _extract_market_symbol(message):
         return True
     # Only inherit history if the message doesn't name an unresolvable company
     if _has_unresolved_company_mention(message):
+        return False
+    # No symbol in the message → inheriting one from history is only justified
+    # by explicit market wording, never by a generic word like "分析".
+    if not has_strong:
         return False
     return bool(history and _extract_symbol_from_history(history))
 

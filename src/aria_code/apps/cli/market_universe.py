@@ -444,6 +444,20 @@ def resolve_market_symbol(text: str) -> str:
     return hits[0][1].symbol if hits else ""
 
 
+# Words that routinely sit in front of a market term without naming a company:
+# time adverbs, demonstratives and scope words.  Without this stoplist the guard
+# below read "现在的行情呢" as the unknown company "现在", which blocked the very
+# follow-up case it exists to support — "现在的股票和趋势呢" is the example named
+# in _is_market_snapshot_request's own docstring, and it did not work.
+_NON_COMPANY_QUALIFIERS = (
+    "现在", "目前", "当前", "今天", "今日", "昨天", "昨日", "明天", "近期",
+    "最新", "最近", "短期", "中期", "长期", "未来", "后续", "以上", "上面",
+    "刚才", "这个", "那个", "这些", "那些", "整体", "总体", "大盘", "所有",
+    "上述", "全部", "其他", "别的", "同类", "相关", "本周", "本月", "今年",
+    "去年", "它", "他", "她", "我", "你",
+)
+
+
 def looks_like_unresolved_market_name(text: str) -> bool:
     """Heuristic guard: a Chinese name before market words should not inherit history."""
     if resolve_market_symbol(text):
@@ -451,4 +465,23 @@ def looks_like_unresolved_market_name(text: str) -> bool:
     if not re.search(r"[\u4e00-\u9fff]{2,12}", text or ""):
         return False
     market_words = "走势|预测|股价|股票|行情|趋势|技术面|基本面|涨跌|价格|市值"
-    return bool(re.search(rf"[\u4e00-\u9fffA-Za-z0-9]{{2,16}}(?:的)?(?:{market_words})", text or ""))
+    # A market term can also precede another one ("股价涨跌怎么样"); such a
+    # qualifier names no company either and must be stripped alongside the
+    # generic time/scope words.
+    droppable = tuple(market_words.split("|")) + _NON_COMPANY_QUALIFIERS
+    pattern = rf"([\u4e00-\u9fffA-Za-z0-9]{{2,16}}?)(?:的)?(?:{market_words})"
+    for match in re.finditer(pattern, text or ""):
+        qualifier = match.group(1)
+        # Strip trailing non-company words so "腾讯现在的股价" still reports the
+        # name "腾讯", while "现在的股价" and "股价涨跌" report nothing.
+        changed = True
+        while changed and qualifier:
+            changed = False
+            for word in droppable:
+                if qualifier.endswith(word):
+                    qualifier = qualifier[: -len(word)]
+                    changed = True
+                    break
+        if len(qualifier) >= 2:
+            return True
+    return False
