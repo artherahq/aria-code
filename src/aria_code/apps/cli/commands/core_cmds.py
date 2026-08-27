@@ -13,6 +13,8 @@ NameError，而这正是 requires-python = "<3.14,>=3.10" 声明支持的全部�
 全绿。已发布的 4.3.0 同样中招：pip install 后运行 aria-code 直接崩溃。
 """
 
+from aria_code.ui.render.output import display_path as _display_path
+
 import pathlib
 
 
@@ -780,6 +782,10 @@ class CoreCommandsMixin:
                           else "No response")
             return
 
+
+        from aria_code.aria_cli import _extract_code_block
+
+
         code = _extract_code_block(last_response)
         if not code:
             self.context.console.print("[dim]No code block found in last response[/dim]" if self.context.has_rich
@@ -868,6 +874,8 @@ class CoreCommandsMixin:
                 if msg["role"] == "assistant":
                     last_response = msg["content"]
                     break
+    
+            from aria_code.aria_cli import _extract_code_block
             code = _extract_code_block(last_response)
             if code:
                 if save_path:
@@ -880,6 +888,7 @@ class CoreCommandsMixin:
                     _save_path = default_save
                 _save_path.parent.mkdir(parents=True, exist_ok=True)
                 _save_path.write_text(code, encoding="utf-8")
+                from aria_code.ui.render.output import display_path as _display_path
                 _save_label = _display_path(str(_save_path))
                 if self.context.has_rich:
                     self.context.console.print(f"\n[green]Code saved to {_save_label}[/green] "

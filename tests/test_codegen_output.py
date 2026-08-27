@@ -24,12 +24,12 @@ class _CodeTerminal:
 
 @pytest.mark.asyncio
 async def test_cmd_code_saves_to_user_generated_dir_by_default(monkeypatch, tmp_path):
-    import aria_cli
+    from aria_code import aria_cli
 
     monkeypatch.setenv("ARIA_USER_OUTPUT_ROOT", str(tmp_path))
     terminal = _CodeTerminal("```python\nprint('hello')\n```")
+    terminal.context = type("AriaContextMock", (), {"console": None, "has_rich": False, "save_config": lambda: None})()
     commands = aria_cli.SlashCommands(terminal)
-    commands.context = type("AriaContextMock", (), {"console": None, "has_rich": False, "save_config": lambda: None})()
 
 
     await commands.cmd_code("build a simple strategy script")
@@ -41,7 +41,7 @@ async def test_cmd_code_saves_to_user_generated_dir_by_default(monkeypatch, tmp_
 
 
 def test_cmd_code_relative_save_paths_go_to_user_workspace(monkeypatch, tmp_path):
-    from artifacts import user_generated_dir
+    from aria_code.artifacts import user_generated_dir
     from aria_code.apps.cli.codegen_paths import resolve_user_code_path
 
     monkeypatch.setenv("ARIA_USER_OUTPUT_ROOT", str(tmp_path))
