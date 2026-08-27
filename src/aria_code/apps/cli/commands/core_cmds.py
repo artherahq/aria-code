@@ -266,7 +266,7 @@ class CoreCommandsMixin:
                     limit = int(head)
                 except Exception:
                     limit = 20
-        from artifacts import artifact_summary_all, prune_artifacts_all, recent_artifacts_all
+        from aria_code.artifacts import artifact_summary_all, prune_artifacts_all, recent_artifacts_all
 
         if mode in {"open", "reveal", "show", "path", "copy-path"}:
             items = recent_artifacts_all(limit=100)
@@ -537,7 +537,7 @@ class CoreCommandsMixin:
                 self.context.console.print(f"[yellow]{msg}[/yellow]") if self.context.has_rich else print(msg)
                 return
             client_id, client_secret = parts[1], parts[2]
-            from canva_client import connect as _canva_connect
+            from aria_code.canva_client import connect as _canva_connect
             msg = "打开浏览器完成 Canva 授权…"
             self.context.console.print(f"[cyan]{msg}[/cyan]") if self.context.has_rich else print(msg)
             result = _canva_connect(client_id, client_secret)
@@ -549,7 +549,7 @@ class CoreCommandsMixin:
             return
 
         if sub == "status":
-            from canva_client import _load_canva_config
+            from aria_code.canva_client import _load_canva_config
             entry = _load_canva_config()
             msg = "✓ Canva 已连接" if entry.get("access_token") else "未连接 Canva。运行 /canva connect <client_id> <client_secret>"
             self.context.console.print(msg) if self.context.has_rich else print(msg)
@@ -827,7 +827,7 @@ class CoreCommandsMixin:
             description = parts[0].strip()
             save_path = parts[1].strip() if len(parts) > 1 else None
 
-        from artifacts import user_generated_dir
+        from aria_code.artifacts import user_generated_dir
         from aria_code.apps.cli.codegen_paths import resolve_user_code_path
         default_save = resolve_user_code_path(
             description,
@@ -1448,7 +1448,7 @@ class CoreCommandsMixin:
             self.terminal._mcp_registry = None
             if self.context.has_rich:
                 self.context.console.print("  [dim]Restarting MCP servers…[/dim]")
-            from mcp_client import MCPToolRegistry
+            from aria_code.mcp_client import MCPToolRegistry
             self.terminal._mcp_registry = MCPToolRegistry()
             results = await self.terminal._mcp_registry.start_all()
             n = self.terminal._mcp_registry.register_into(LOCAL_TOOLS, LOCAL_TOOL_SCHEMAS, overwrite=True)
@@ -1499,7 +1499,7 @@ class CoreCommandsMixin:
     def cmd_license(self, args: str):
         """Show feature license / entitlement status."""
         try:
-            from licensing import current_license, license_status
+            from aria_code.licensing import current_license, license_status
             current_license(refresh=True)   # re-read in case a key was just installed
             st = license_status()
         except Exception as e:
@@ -1731,7 +1731,7 @@ class CoreCommandsMixin:
         except ImportError:
             UI_SYSTEM_PROMPT = ""
         try:
-            from artifacts import user_generated_dir
+            from aria_code.artifacts import user_generated_dir
             generated_dir = user_generated_dir()
         except Exception:
             generated_dir = pathlib.Path.home() / "Documents" / "Aria Code" / "generated"
@@ -1772,7 +1772,7 @@ class CoreCommandsMixin:
         数据来源: 本地持仓DB + 价格预警DB + yfinance 实时行情 + 最近生成文件
         """
         try:
-            from dashboard_generator import generate_and_open
+            from aria_code.dashboard_generator import generate_and_open
         except ImportError:
             if self.context.has_rich:
                 self.context.console.print("[red]dashboard_generator.py 未找到，请检查安装[/red]")
