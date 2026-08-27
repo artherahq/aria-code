@@ -213,6 +213,26 @@ class GroqProvider(OpenAICompatProvider):
         super().__init__(config)
 
 
+class GoogleProvider(OpenAICompatProvider):
+    """Gemini through Google's OpenAI-compatible endpoint.
+
+    The registry previously had no Google entry at all, so Gemini — the default
+    model in the shipped config — could not be reached through the provider
+    chain and never appeared in fallback.  Vertex AI (service-account / ADC) is
+    handled separately by apps/cli/providers/vertexai_stream.py; this covers the
+    API-key path.
+    """
+
+    provider_name    = "google"
+    DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai"
+    DEFAULT_MODEL    = "gemini-2.5-flash"
+
+    def __init__(self, config: ProviderConfig):
+        if not config.api_key:
+            config.api_key = os.getenv("GEMINI_API_KEY", "") or os.getenv("GOOGLE_API_KEY", "")
+        super().__init__(config)
+
+
 class TogetherProvider(OpenAICompatProvider):
     provider_name    = "together"
     DEFAULT_BASE_URL = "https://api.together.xyz"

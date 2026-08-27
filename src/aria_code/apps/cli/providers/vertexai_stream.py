@@ -1,7 +1,14 @@
-"""Native Google Cloud Vertex AI LLM Provider using google-genai."""
+"""Native Google Cloud Vertex AI LLM Provider using google-genai.
+
+google-genai is an optional dependency: most users run Ollama or an
+OpenAI-compatible endpoint and should not have to install a Google SDK. That
+makes the "it is not installed" path a normal one to land on, so it has to say
+what to do rather than leaking a ModuleNotFoundError.
+"""
 
 import asyncio
 import json
+import os
 from typing import AsyncGenerator, Optional
 
 from aria_code.apps.cli.providers.base import (
@@ -34,15 +41,67 @@ class VertexAIProvider(LLMProvider):
         self.system_override = system_override
         self._client = None
 
+    def _api_key(self) -> str:
+        """Gemini API key from config, falling back to the standard env vars."""
+        for value in (
+            self.config.get("api_key"),
+            self.config.get("gemini_key"),
+            os.getenv("GEMINI_API_KEY"),
+            os.getenv("GOOGLE_API_KEY"),
+        ):
+            key = str(value or "").strip()
+            if key:
+                return key
+        return ""
+
+    def _use_vertex(self) -> bool:
+        """Decide between Vertex AI (ADC) and the Gemini API-key endpoint.
+
+        ``use_vertexai`` used to default to True unconditionally, so a developer
+        holding only a GEMINI_API_KEY got ``genai.Client(vertexai=True)`` and a
+        credentials error — Vertex needs application-default credentials and a
+        project.  An explicit config value still wins; otherwise pick whichever
+        set of credentials is actually present.
+        """
+        configured = self.config.get("use_vertexai")
+        if configured is not None:
+            return bool(configured)
+        env_flag = os.getenv("GOOGLE_GENAI_USE_VERTEXAI", "").strip().lower()
+        if env_flag in {"1", "true", "yes", "on"}:
+            return True
+        if env_flag in {"0", "false", "no", "off"}:
+            return False
+        has_vertex_creds = bool(
+            os.getenv("GOOGLE_CLOUD_PROJECT")
+            or os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+        )
+        if has_vertex_creds:
+            return True
+        # No project/ADC configured: an API key is the only usable path.
+        return not self._api_key()
+
     def _get_client(self):
         if self._client is None:
             from google import genai
-            is_vertex = self.config.get("use_vertexai", True)
-            api_key = self.config.get("api_key") or self.config.get("gemini_key")
-            
-            if is_vertex:
-                self._client = genai.Client(vertexai=True)
+
+            if self._use_vertex():
+                project = os.getenv("GOOGLE_CLOUD_PROJECT") or self.config.get("gcp_project")
+                location = (
+                    os.getenv("GOOGLE_CLOUD_LOCATION")
+                    or self.config.get("gcp_location")
+                    or "us-central1"
+                )
+                kwargs = {"vertexai": True, "location": location}
+                if project:
+                    kwargs["project"] = str(project)
+                self._client = genai.Client(**kwargs)
             else:
+                api_key = self._api_key()
+                if not api_key:
+                    raise RuntimeError(
+                        "Gemini 需要凭据：设置 GEMINI_API_KEY，或配置 Vertex AI "
+                        "(GOOGLE_CLOUD_PROJECT + gcloud auth application-default login)。"
+                    )
                 self._client = genai.Client(api_key=api_key)
         return self._client
         
