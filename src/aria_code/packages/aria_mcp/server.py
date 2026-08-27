@@ -463,7 +463,7 @@ async def _call_agent_team(args: Dict[str, Any]) -> Dict[str, Any]:
 
 
 async def _call_artifacts_list(args: Dict[str, Any]) -> Dict[str, Any]:
-    from artifacts import recent_artifacts_all
+    from aria_code.artifacts import recent_artifacts_all
 
     limit = int(args.get("limit", 20) or 20)
     return {"success": True, "artifacts": recent_artifacts_all(limit=limit)}
@@ -704,8 +704,8 @@ async def _call_report_chart(args: Dict[str, Any]) -> Dict[str, Any]:
     import asyncio
     import base64
 
-    from artifacts import create_user_artifact
-    from report_generator import _fetch_report_data_sync, generate_price_chart
+    from aria_code.artifacts import create_user_artifact
+    from aria_code.report_generator import _fetch_report_data_sync, generate_price_chart
 
     symbol = str(args.get("symbol", "")).strip().upper()
     if not symbol:
@@ -735,8 +735,8 @@ async def _call_indicator_chart(args: Dict[str, Any]) -> Dict[str, Any]:
     import asyncio
     import base64
 
-    from artifacts import create_user_artifact
-    from report_generator import _fetch_report_data_sync, generate_indicator_chart
+    from aria_code.artifacts import create_user_artifact
+    from aria_code.report_generator import _fetch_report_data_sync, generate_indicator_chart
 
     symbol = str(args.get("symbol", "")).strip().upper()
     if not symbol:
@@ -766,8 +766,8 @@ async def _call_comparison_chart(args: Dict[str, Any]) -> Dict[str, Any]:
     import asyncio
     import base64
 
-    from artifacts import create_user_artifact
-    from report_generator import _fetch_report_data_sync, generate_comparison_chart
+    from aria_code.artifacts import create_user_artifact
+    from aria_code.report_generator import _fetch_report_data_sync, generate_comparison_chart
 
     symbols = args.get("symbols") or []
     if not isinstance(symbols, list) or len(symbols) < 2:
@@ -804,8 +804,8 @@ async def _call_allocation_chart(args: Dict[str, Any]) -> Dict[str, Any]:
     import asyncio
     import base64
 
-    from artifacts import create_user_artifact
-    from report_generator import generate_allocation_chart
+    from aria_code.artifacts import create_user_artifact
+    from aria_code.report_generator import generate_allocation_chart
 
     title = str(args.get("title") or "").strip()
     loop = asyncio.get_event_loop()
@@ -834,8 +834,8 @@ async def _call_allocation_chart(args: Dict[str, Any]) -> Dict[str, Any]:
 async def _call_report_pdf(args: Dict[str, Any]) -> Dict[str, Any]:
     import asyncio
 
-    from artifacts import create_user_artifact
-    from markdown_pdf import markdown_to_pdf
+    from aria_code.artifacts import create_user_artifact
+    from aria_code.markdown_pdf import markdown_to_pdf
 
     md = str(args.get("markdown", ""))
     if not md.strip():
@@ -854,7 +854,7 @@ async def _call_report_pdf(args: Dict[str, Any]) -> Dict[str, Any]:
 
 
 async def _call_report_generate(args: Dict[str, Any]) -> Dict[str, Any]:
-    from report_generator import generate_report
+    from aria_code.report_generator import generate_report
 
     symbol = str(args.get("symbol", "")).strip().upper()
     if not symbol:
@@ -872,7 +872,7 @@ async def _call_backtest_run(args: Dict[str, Any]) -> Dict[str, Any]:
     import asyncio
     from dataclasses import asdict
 
-    from backtest_engine import BacktestEngine, get_strategy, load_bars
+    from aria_code.backtest_engine import BacktestEngine, get_strategy, load_bars
 
     symbol = str(args.get("symbol", "")).strip().upper()
     if not symbol:
@@ -900,7 +900,7 @@ async def _call_backtest_run(args: Dict[str, Any]) -> Dict[str, Any]:
 async def _call_figma_read_file(args: Dict[str, Any]) -> Dict[str, Any]:
     import asyncio
 
-    from figma_client import get_file_summary
+    from aria_code.figma_client import get_file_summary
 
     file_key = str(args.get("file_key", "")).strip()
     if not file_key:
@@ -916,7 +916,7 @@ async def _call_figma_read_file(args: Dict[str, Any]) -> Dict[str, Any]:
 async def _call_figma_comments(args: Dict[str, Any]) -> Dict[str, Any]:
     import asyncio
 
-    from figma_client import list_comments
+    from aria_code.figma_client import list_comments
 
     file_key = str(args.get("file_key", "")).strip()
     if not file_key:
@@ -931,7 +931,7 @@ async def _call_figma_comments(args: Dict[str, Any]) -> Dict[str, Any]:
 async def _call_video_probe(args: Dict[str, Any]) -> Dict[str, Any]:
     import asyncio
 
-    from video_editor import probe_video
+    from aria_code.video_editor import probe_video
 
     input_path = str(args.get("input_path", "")).strip()
     if not input_path:
@@ -947,7 +947,7 @@ async def _call_video_trim(args: Dict[str, Any]) -> Dict[str, Any]:
     import asyncio
     from functools import partial
 
-    from video_editor import trim_video
+    from aria_code.video_editor import trim_video
 
     input_path = str(args.get("input_path", "")).strip()
     if not input_path or "start" not in args or "end" not in args:
@@ -963,7 +963,7 @@ async def _call_video_trim(args: Dict[str, Any]) -> Dict[str, Any]:
 async def _call_video_concat(args: Dict[str, Any]) -> Dict[str, Any]:
     import asyncio
 
-    from video_editor import concat_videos
+    from aria_code.video_editor import concat_videos
 
     input_paths = args.get("input_paths") or []
     if not isinstance(input_paths, list) or len(input_paths) < 2:
@@ -979,7 +979,7 @@ async def _call_video_overlay_text(args: Dict[str, Any]) -> Dict[str, Any]:
     import asyncio
     from functools import partial
 
-    from video_editor import overlay_text
+    from aria_code.video_editor import overlay_text
 
     input_path = str(args.get("input_path", "")).strip()
     text = str(args.get("text", ""))
@@ -1002,7 +1002,7 @@ async def _call_video_overlay_audio(args: Dict[str, Any]) -> Dict[str, Any]:
     import asyncio
     from functools import partial
 
-    from video_editor import overlay_audio
+    from aria_code.video_editor import overlay_audio
 
     input_path = str(args.get("input_path", "")).strip()
     audio_path = str(args.get("audio_path", "")).strip()
@@ -1020,7 +1020,7 @@ async def _call_video_convert(args: Dict[str, Any]) -> Dict[str, Any]:
     import asyncio
     from functools import partial
 
-    from video_editor import convert_video
+    from aria_code.video_editor import convert_video
 
     input_path = str(args.get("input_path", "")).strip()
     if not input_path:
@@ -1037,7 +1037,7 @@ async def _call_video_change_speed(args: Dict[str, Any]) -> Dict[str, Any]:
     import asyncio
     from functools import partial
 
-    from video_editor import change_speed
+    from aria_code.video_editor import change_speed
 
     input_path = str(args.get("input_path", "")).strip()
     if not input_path or "factor" not in args:
@@ -1054,7 +1054,7 @@ async def _call_video_transcribe(args: Dict[str, Any]) -> Dict[str, Any]:
     import asyncio
     from functools import partial
 
-    from video_analysis import transcribe_video
+    from aria_code.video_analysis import transcribe_video
 
     input_path = str(args.get("input_path", "")).strip()
     if not input_path:
@@ -1075,7 +1075,7 @@ async def _call_video_detect_scenes(args: Dict[str, Any]) -> Dict[str, Any]:
     import asyncio
     from functools import partial
 
-    from video_analysis import detect_scenes
+    from aria_code.video_analysis import detect_scenes
 
     input_path = str(args.get("input_path", "")).strip()
     if not input_path:
@@ -1168,8 +1168,8 @@ async def _call_video_generate_status(args: Dict[str, Any]) -> Dict[str, Any]:
 async def _call_report_docx(args: Dict[str, Any]) -> Dict[str, Any]:
     import asyncio
 
-    from artifacts import create_user_artifact
-    from report_exporters import markdown_to_docx
+    from aria_code.artifacts import create_user_artifact
+    from aria_code.report_exporters import markdown_to_docx
 
     md = str(args.get("markdown", ""))
     if not md.strip():
@@ -1190,8 +1190,8 @@ async def _call_report_docx(args: Dict[str, Any]) -> Dict[str, Any]:
 async def _call_report_pptx(args: Dict[str, Any]) -> Dict[str, Any]:
     import asyncio
 
-    from artifacts import create_user_artifact
-    from report_exporters import markdown_to_pptx
+    from aria_code.artifacts import create_user_artifact
+    from aria_code.report_exporters import markdown_to_pptx
 
     md = str(args.get("markdown", ""))
     if not md.strip():
@@ -1210,7 +1210,7 @@ async def _call_report_pptx(args: Dict[str, Any]) -> Dict[str, Any]:
 
 
 async def _call_estimate_image_cost(args: Dict[str, Any]) -> Dict[str, Any]:
-    from openai_image_client import estimate_cost
+    from aria_code.openai_image_client import estimate_cost
 
     return {"success": True, **estimate_cost(size=args.get("size") or "1024x1536", quality=args.get("quality") or "high")}
 
@@ -1231,7 +1231,7 @@ async def _call_generate_image(args: Dict[str, Any]) -> Dict[str, Any]:
     import asyncio
     from functools import partial
 
-    from openai_image_client import generate_image
+    from aria_code.openai_image_client import generate_image
 
     prompt = str(args.get("prompt", "")).strip()
     if not prompt:
@@ -1263,7 +1263,7 @@ async def _call_edit_image(args: Dict[str, Any]) -> Dict[str, Any]:
     import asyncio
     from functools import partial
 
-    from openai_image_client import edit_image
+    from aria_code.openai_image_client import edit_image
 
     image_path = str(args.get("image_path", "")).strip()
     prompt = str(args.get("prompt", "")).strip()
@@ -1289,7 +1289,7 @@ async def _call_generate_image_local(args: Dict[str, Any]) -> Dict[str, Any]:
     import asyncio
     from functools import partial
 
-    from local_image_provider import generate_image_local
+    from aria_code.local_image_provider import generate_image_local
 
     prompt = str(args.get("prompt", "")).strip()
     if not prompt:
@@ -1313,7 +1313,7 @@ async def _call_edit_image_local(args: Dict[str, Any]) -> Dict[str, Any]:
     import asyncio
     from functools import partial
 
-    from local_image_provider import edit_image_local
+    from aria_code.local_image_provider import edit_image_local
 
     image_path = str(args.get("image_path", "")).strip()
     prompt = str(args.get("prompt", "")).strip()
@@ -1331,7 +1331,7 @@ async def _call_edit_image_local(args: Dict[str, Any]) -> Dict[str, Any]:
 async def _call_canva_design(args: Dict[str, Any]) -> Dict[str, Any]:
     import asyncio
 
-    from canva_client import autofill_design
+    from aria_code.canva_client import autofill_design
 
     template_id = str(args.get("template_id", "")).strip()
     data = args.get("data") or {}
@@ -1349,7 +1349,7 @@ async def _call_canva_design(args: Dict[str, Any]) -> Dict[str, Any]:
 async def _call_canva_upload_asset(args: Dict[str, Any]) -> Dict[str, Any]:
     import asyncio
 
-    from canva_client import upload_asset
+    from aria_code.canva_client import upload_asset
 
     file_path = str(args.get("file_path", "")).strip()
     if not file_path:
