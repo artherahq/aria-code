@@ -113,7 +113,7 @@ try:
 except ImportError:
     RunStore = None
 
-    class RunStatus:  # pragma: no cover - fallback until runtime/run_state.py lands
+    class RunStatus:  # type: ignore[no-redef]  # pragma: no cover - fallback until runtime/run_state.py lands
         PLANNING = RUNNING = WAITING_APPROVAL = VERIFYING = "unavailable"
         SUCCEEDED = FAILED = CANCELLED = INTERRUPTED = "unavailable"
 from aria_code.runtime.tool_policy import check_tool_policy
@@ -1195,7 +1195,7 @@ try:
     logger.info("Registered %d subagent tools", len(SUBAGENT_TOOLS))
 except Exception as _exc:
     logger.debug("Subagent tools init error: %s", _exc)
-    SUBAGENT_SCHEMAS: list = []
+    SUBAGENT_SCHEMAS: list = []  # type: ignore[no-redef]
 
 # ── Register LSP diagnostics tool ─────────────────────────────────────────────
 try:
@@ -1204,7 +1204,7 @@ try:
     logger.info("Registered %d LSP tools", len(LSP_TOOLS))
 except Exception as _exc:
     logger.debug("LSP tools init error: %s", _exc)
-    LSP_SCHEMAS: list = []
+    LSP_SCHEMAS: list = []  # type: ignore[no-redef]
 
 # ── Register repo-map tools (symbol index + symbol lookup) ────────────────────
 try:
@@ -1213,7 +1213,7 @@ try:
     logger.info("Registered %d repo-map tools", len(REPO_MAP_TOOLS))
 except Exception as _exc:
     logger.debug("Repo-map tools init error: %s", _exc)
-    REPO_MAP_SCHEMAS: list = []
+    REPO_MAP_SCHEMAS: list = []  # type: ignore[no-redef]
 
 # ── Register artifact publishing (model-facing canvas tool) ───────────────────
 try:
@@ -1222,17 +1222,17 @@ try:
     logger.info("Registered %d artifact tools", len(ARTIFACT_TOOLS))
 except Exception as _exc:
     logger.debug("Artifact tools init error: %s", _exc)
-    ARTIFACT_TOOL_SCHEMAS: list = []
+    ARTIFACT_TOOL_SCHEMAS: list = []  # type: ignore[no-redef]
 
 # ── Register computer-use tools (browser automation + desktop control) ──────
 _HAS_COMPUTER_USE = False
 try:
-    from computer_use_tools import COMPUTER_USE_TOOLS, COMPUTER_USE_SCHEMAS as _CU_SCHEMAS
+    from aria_code.computer_use_tools import COMPUTER_USE_TOOLS, COMPUTER_USE_SCHEMAS as _CU_SCHEMAS
     LOCAL_TOOLS.update(COMPUTER_USE_TOOLS)
     _HAS_COMPUTER_USE = True
     logger.info("Registered %d computer-use tools", len(COMPUTER_USE_TOOLS))
 except ImportError:
-    _CU_SCHEMAS: list = []
+    _CU_SCHEMAS: list = []  # type: ignore[no-redef]
 
 # Pre-initialize so finance/plugin registrations can append schemas to it.
 # The bulk static schemas are extended below; this empty list must exist first.
@@ -3107,12 +3107,6 @@ def _fuzzy_match(query: str, candidates: list, max_results: int = 3) -> list:
 def _error_hint(error: str, context: str = "") -> str:
     from aria_code.ui.render.output import error_hint as _eh
     return _eh(error, context)
-
-
-class _null_ctx:
-    """No-op context manager used when HAS_RICH is False and we can't use console.status."""
-    def __enter__(self): return self
-    def __exit__(self, *_): pass
 
 
 def _print_error(msg: str, context: str = ""):

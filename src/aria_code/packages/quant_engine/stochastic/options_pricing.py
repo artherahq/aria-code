@@ -17,9 +17,16 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass, field
-from typing import Dict, List, Literal, Optional, Tuple
+from typing import TYPE_CHECKING, Dict, List, Literal, Optional, Tuple
 
 import numpy as np
+
+if TYPE_CHECKING:
+    # pandas is a real (optional) runtime dependency, imported lazily inside
+    # iv_surface() below so this module stays importable without it. This
+    # guarded import exists only so the "pd.DataFrame" annotation resolves
+    # for the type checker, not to force pandas onto module import.
+    import pandas as pd
 
 logger = logging.getLogger(__name__)
 
@@ -532,7 +539,7 @@ def delta_hedge_ratio(
 
 def iv_surface(
     S: float,
-    calls: "pd.DataFrame",    # columns: expiry(年), strike, price  # noqa: F821
+    calls: "pd.DataFrame",    # columns: expiry(年), strike, price
     r: float = 0.05,
     q: float = 0.0,
 ) -> VolSurface:
