@@ -1,0 +1,122 @@
+"""An analysis tool must not invent the data it analyses.
+
+These three had a "sensible default sample dataset" behind an `if not data:`
+branch. Called with nothing they returned a complete, ordinary-looking result:
+a specific ARR and subscriber count, a freight spend, a full financial
+diagnosis carrying the requested company's ticker — for businesses none of them
+had ever seen. Nothing in the result said the numbers were invented.
+
+That was survivable only while the tools had no schema and the model could not
+call them. Making them visible made it a live risk, so the sample data had to
+go with it.
+"""
+
+import unittest
+
+from aria_code.tools.enterprise_finance_tools import tool_analyze_financial_statements
+from aria_code.tools.logistics_tools import tool_analyze_logistics_data
+from aria_code.tools.stripe_tools import tool_analyze_stripe_data
+
+
+class NoDataMeansNoAnswerTests(unittest.TestCase):
+    def test_stripe_refuses_without_data(self):
+        result = tool_analyze_stripe_data({})
+        self.assertFalse(result["success"])
+        self.assertIn("No Stripe data", result["error"])
+
+    def test_financials_refuse_without_statements(self):
+        result = tool_analyze_financial_statements({})
+        self.assertFalse(result["success"])
+        self.assertIn("does not estimate", result["error"])
+
+    def test_a_named_company_with_no_filings_is_refused_not_invented(self):
+        # The worst case: a real ticker whose filings cannot be fetched used to
+        # come back as a confident diagnosis of a 12,000,000-revenue business
+        # labelled with that ticker.
+        result = tool_analyze_financial_statements({"company_name": "ZZZZ"})
+        if result["success"]:
+            self.assertNotEqual(
+                result["data"].get("revenue"), 12000000.0,
+                "the mock dataset is still being substituted",
+            )
+        else:
+            self.assertIn("ZZZZ", result["error"])
+
+    def test_no_module_still_carries_the_sample_numbers(self):
+        import inspect
+
+        from aria_code.tools import enterprise_finance_tools, logistics_tools, stripe_tools
+
+        for module in (stripe_tools, logistics_tools, enterprise_finance_tools):
+            with self.subTest(module=module.__name__):
+                code = "\n".join(
+                    line for line in inspect.getsource(module).splitlines()
+                    if not line.lstrip().startswith("#")
+                )
+                self.assertNotIn("12000000.0", code)
+                self.assertNotIn("Default representative", code)
+
+
+class ProvenanceTests(unittest.TestCase):
+    """Where a number came from is part of the number."""
+
+    def test_supplied_records_are_labelled_as_such(self):
+        result = tool_analyze_logistics_data({
+            "waybills": [
+                {"total_cost": 100.0, "is_on_time": True},
+                {"total_cost": 50.0, "is_on_time": False},
+            ],
+        })
+        self.assertTrue(result["success"])
+        self.assertEqual(result["data"]["data_source"], "caller-supplied records")
+        self.assertIn("来源", result["summary"])
+
+    def test_financial_results_name_their_source(self):
+        result = tool_analyze_financial_statements({
+            "company_name": "DemoCo",
+            "financials": {
+                "income_statement": {
+                    "revenue": 100.0, "cost_of_goods_sold": 60.0, "gross_profit": 40.0,
+                    "operating_income": 20.0, "net_income": 10.0,
+                },
+                "balance_sheet": {
+                    "total_assets": 200.0, "total_equity": 120.0,
+                    "current_assets": 80.0, "current_liabilities": 40.0, "inventory": 10.0,
+                },
+            },
+        })
+        self.assertTrue(result["success"])
+        self.assertEqual(result["data"]["data_source"], "caller-supplied statements")
+
+
+class ComputedNotAssertedTests(unittest.TestCase):
+    def test_the_on_time_rate_is_computed_from_the_records(self):
+        # It was hardcoded to 75.0 and returned beside a genuinely computed
+        # freight total, so an invented figure travelled under the same roof
+        # as a real one.
+        result = tool_analyze_logistics_data({
+            "waybills": [
+                {"total_cost": 10.0, "is_on_time": True},
+                {"total_cost": 10.0, "is_on_time": True},
+                {"total_cost": 10.0, "is_on_time": True},
+                {"total_cost": 10.0, "is_on_time": False},
+            ],
+        })
+        self.assertEqual(result["data"]["overall_on_time_rate"], 75.0)
+
+        flipped = tool_analyze_logistics_data({
+            "waybills": [
+                {"total_cost": 10.0, "is_on_time": False},
+                {"total_cost": 10.0, "is_on_time": False},
+            ],
+        })
+        self.assertEqual(flipped["data"]["overall_on_time_rate"], 0.0)
+
+    def test_an_unknowable_rate_is_reported_as_unknown(self):
+        result = tool_analyze_logistics_data({"waybills": [{"total_cost": 10.0}]})
+        self.assertIsNone(result["data"]["overall_on_time_rate"])
+        self.assertIn("不可得", result["summary"])
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -44,8 +44,27 @@ def test_stripe_revenue_agent_analysis():
 
 
 def test_stripe_tool_execution():
-    tool_res = tool_analyze_stripe_data({"business_name": "Test Co"})
+    # Supplies charges and subscriptions: the tool no longer falls back to a
+    # sample dataset, so this used to assert on numbers nobody provided.
+    tool_res = tool_analyze_stripe_data({
+        "business_name": "Test Co",
+        "charges": [
+            {"charge_id": "ch_01", "amount_usd": 120.0, "status": "succeeded",
+             "fee_usd": 3.78, "refunded_amount_usd": 0.0},
+            {"charge_id": "ch_02", "amount_usd": 500.0, "status": "succeeded",
+             "fee_usd": 14.80, "refunded_amount_usd": 0.0},
+        ],
+        "subscriptions": [
+            {"subscription_id": "sub_01", "customer_id": "cus_01",
+             "plan_name": "Pro Plan", "mrr_usd": 120.0, "status": "active"},
+        ],
+    })
     assert tool_res["success"] is True
-    assert "data" in tool_res
     assert tool_res["data"]["gross_payment_volume_usd"] > 0
     assert tool_res["data"]["mrr_usd"] > 0
+
+
+def test_stripe_tool_refuses_without_data():
+    result = tool_analyze_stripe_data({"business_name": "Test Co"})
+    assert result["success"] is False
+    assert "No Stripe data" in result["error"]
