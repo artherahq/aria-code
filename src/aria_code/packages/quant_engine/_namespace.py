@@ -38,8 +38,8 @@ from typing import List
 
 __all__ = ["extend"]
 
-# packages/quant_engine/_namespace.py → 上溯 3 层到 aria-code/，再取同级 Arthera
-_PRIVATE_ROOT = Path(__file__).resolve().parents[3] / "Arthera" / "packages" / "quant_engine"
+# src/aria_code/packages/quant_engine/_namespace.py → 上溯 5 层到 aria-code/ 的父目录，再取同级 Arthera
+_PRIVATE_ROOT = Path(__file__).resolve().parents[5] / "Arthera" / "packages" / "quant_engine"
 
 
 def extend(package_path: List[str], subpackage: str) -> None:

@@ -19,7 +19,7 @@ from pathlib import Path
 # namespace lookup once it finds this regular subpackage, so extend *this*
 # package path as well; otherwise ``packages.quant_engine.services`` (the
 # audited A-share prediction engine) is silently unreachable from the CLI.
-_private_quant_engine = Path(__file__).resolve().parents[3] / "Arthera" / "packages" / "quant_engine"
+_private_quant_engine = Path(__file__).resolve().parents[5] / "Arthera" / "packages" / "quant_engine"
 if _private_quant_engine.is_dir() and str(_private_quant_engine) not in __path__:
     __path__.append(str(_private_quant_engine))
 
