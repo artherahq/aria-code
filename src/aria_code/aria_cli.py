@@ -1367,7 +1367,7 @@ try:
         from aria_code.tools.code_audit_tools import register_code_audit_tools as _reg_audit
     except ImportError:
         from aria_code.tools.code_audit_tools import register_code_audit_tools as _reg_audit
-    _reg_audit(LOCAL_TOOLS)
+    _reg_audit(LOCAL_TOOLS, LOCAL_TOOL_SCHEMAS)
     logger.info("Registered code audit & diff tools")
 except Exception as _exc:
     logger.debug("Code audit tools init error: %s", _exc)
