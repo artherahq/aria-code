@@ -2786,6 +2786,10 @@ stream_ollama = _types_rebind.FunctionType(
     _stream_ollama_src.__code__, _ollama_stream_globals, "stream_ollama",
     _stream_ollama_src.__defaults__, _stream_ollama_src.__closure__
 )
+# FunctionType does not carry keyword-only defaults; without this every
+# keyword-only parameter of stream_ollama becomes required after the rebind.
+stream_ollama.__kwdefaults__ = _stream_ollama_src.__kwdefaults__
+stream_ollama.__doc__ = _stream_ollama_src.__doc__
 del _ollama_stream_globals
 del _types_rebind
 
@@ -3653,15 +3657,34 @@ from aria_code.apps.cli.commands.market_cmds import _parse_nl_team_pair
 
 import types as _types
 
+
+def _clone_function_with_globals(fn):
+    """Rebuild *fn* against this module's globals, preserving its signature.
+
+    ``FunctionType`` carries ``__defaults__`` but not ``__kwdefaults__``, so a
+    keyword-only parameter with a default silently became *required* after a
+    rebind — the caller then failed with "missing required keyword-only
+    argument" for a parameter that plainly has a default in the source.  The
+    metadata below is copied for the same reason: a rebound function should be
+    indistinguishable from the original apart from its globals.
+    """
+    clone = _types.FunctionType(
+        fn.__code__, globals(), fn.__name__, fn.__defaults__, fn.__closure__
+    )
+    clone.__kwdefaults__ = fn.__kwdefaults__
+    clone.__doc__ = fn.__doc__
+    clone.__module__ = fn.__module__
+    clone.__qualname__ = fn.__qualname__
+    clone.__annotations__ = dict(getattr(fn, "__annotations__", {}) or {})
+    clone.__dict__.update(fn.__dict__)
+    return clone
+
+
 def _rebind_mixin_globals(mixin_cls):
     """Point mixin methods' __globals__ to this module's namespace so bare names resolve."""
     for _attr_name, _attr in list(vars(mixin_cls).items()):
         if isinstance(_attr, _types.FunctionType):
-            _new_fn = _types.FunctionType(
-                _attr.__code__, globals(), _attr.__name__,
-                _attr.__defaults__, _attr.__closure__
-            )
-            setattr(mixin_cls, _attr_name, _new_fn)
+            setattr(mixin_cls, _attr_name, _clone_function_with_globals(_attr))
 
 
 def _rebind_module_function_globals(module, names):
@@ -3677,10 +3700,7 @@ def _rebind_module_function_globals(module, names):
     for _name in names:
         _attr = getattr(module, _name, None)
         if isinstance(_attr, _types.FunctionType):
-            globals()[_name] = _types.FunctionType(
-                _attr.__code__, globals(), _attr.__name__,
-                _attr.__defaults__, _attr.__closure__,
-            )
+            globals()[_name] = _clone_function_with_globals(_attr)
 
 
 import aria_code.apps.cli.tool_executor as _tool_executor_module
