@@ -29,7 +29,7 @@ import yaml
 from .base import BaseLLMProvider, Message, ProviderConfig
 from .ollama import OllamaProvider
 from .openai_compat import (
-    DeepSeekProvider, OpenAIProvider, GroqProvider,
+    DeepSeekProvider, OpenAIProvider, GroqProvider, GoogleProvider,
     TogetherProvider, DashScopeProvider, LMStudioProvider,
     SiliconFlowProvider, MoonshotProvider, ZhiPuProvider,
 )
@@ -50,6 +50,8 @@ _PROVIDER_CLASSES: Dict[str, Type[BaseLLMProvider]] = {
     "deepseek":     DeepSeekProvider,
     "openai":       OpenAIProvider,
     "anthropic":    AnthropicProvider,
+    "google":       GoogleProvider,
+    "gemini":       GoogleProvider,
     "groq":         GroqProvider,
     "together":     TogetherProvider,
     "dashscope":    DashScopeProvider,
@@ -69,6 +71,7 @@ _DEFAULT_FALLBACK_CHAIN = [
     ("dashscope",    "DASHSCOPE_API_KEY",     "qwen-plus"),
     ("moonshot",     "MOONSHOT_API_KEY",      "moonshot-v1-8k"),
     ("zhipu",        "ZHIPUAI_API_KEY",       "glm-4-flash"),
+    ("google",       "GEMINI_API_KEY",        "gemini-2.5-flash"),
     ("openai",       "OPENAI_API_KEY",        "gpt-4o-mini"),
     ("anthropic",    "ANTHROPIC_API_KEY",     "claude-3-5-haiku-latest"),
     ("groq",         "GROQ_API_KEY",          "llama-3.3-70b-versatile"),
