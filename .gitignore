@@ -105,3 +105,8 @@ apps/vscode/*.vsix
 *.pid
 *.lock
 nohup.out
+
+# ── Build/packaging output (generated, not source) ────────────────────────────
+*.tgz
+docs/assets/*.mp4
+docs/assets/*.gif
