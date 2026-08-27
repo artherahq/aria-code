@@ -347,12 +347,23 @@ class ConfiguredProvider:
         system_override: Optional[str] = None,
     ) -> None:
         self.config = dict(config or {})
-        self.model = model
-        from aria_code.apps.cli.providers.chat_routing import normalize_provider_name
+        from aria_code.apps.cli.providers.chat_routing import (
+            model_provider,
+            normalize_provider_name,
+        )
 
-        self.backend = normalize_provider_name(
+        # A provider-qualified model id names its own backend and wins over
+        # local_provider — the default config pairs model="gemini-pro" with
+        # local_provider="ollama", so deriving the backend from local_provider
+        # alone sent every Gemini request to Ollama.
+        declared = model_provider(model)
+        self.backend = declared or normalize_provider_name(
             self.config.get("local_provider") or "ollama"
         )
+        # Downstream APIs expect the bare model name; "google/gemini-2.5-pro"
+        # would 404 against Google's endpoint and would be re-prefixed into
+        # "google/google/gemini-2.5-pro" by the registry path below.
+        self.model = model.split("/", 1)[1] if declared else model
         self.config["local_provider"] = self.backend
         self.system_override = system_override
 
