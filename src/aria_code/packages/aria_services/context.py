@@ -273,11 +273,11 @@ class ContextService:
     def build_summary_prompt(self, messages: List[dict]) -> str:
         transcript = self.build_summary_transcript(messages)
         return (
-            "You are a context compressor for a quantitative finance AI assistant.\n"
+            "You are a context compressor for a general product-review and software-engineering assistant.\n"
             "Given the conversation transcript, produce a DENSE SUMMARY (<=350 words).\n"
             "You MUST preserve:\n"
-            "  - All ticker symbols / asset names discussed\n"
-            "  - Key numerical results (prices, rates, backtest metrics)\n"
+            "  - Product goals, target users, requirements, and acceptance criteria\n"
+            "  - Important domain entities and numerical results, including financial data when relevant\n"
             "  - Code files written or modified (file paths + purpose)\n"
             "  - Unresolved blockers and the final resolution of past errors\n"
             "  - User preferences or decisions made\n"
