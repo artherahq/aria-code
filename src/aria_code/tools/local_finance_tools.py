@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 try:
-    from aliyun_data_client import (
+    from aria_code.aliyun_data_client import (
         AliyunDataClient,
         cloud_get_quote_sync,
         cloud_get_history_sync,
@@ -981,7 +981,7 @@ def _screen_ashare(params: dict) -> dict:
     # Primary: direct eastmoney clist (host-rotating, proxy-resilient, small
     # paged query). Far more reliable than akshare's full-market spot endpoint.
     try:
-        from market_data_client import screen_ashare as _em_screen
+        from aria_code.market_data_client import screen_ashare as _em_screen
         _em = _em_screen(max_pe=max_pe, min_market_cap_yi=min_market_cap, limit=limit)
         if _em.get("success") and _em.get("stocks"):
             _em["criteria"] = params
@@ -1557,7 +1557,7 @@ def _get_market_insights(params: dict) -> dict:
 
     if _HAS_CLOUD:
         try:
-            from aliyun_data_client import run_async
+            from aria_code.aliyun_data_client import run_async
             result = run_async(AliyunDataClient.get().get_market_insights(symbols, market=market))
             if result:
                 return {"success": True, **result, "provider": "aliyun_cloud"}
@@ -1607,7 +1607,7 @@ def _get_predictions(params: dict) -> dict:
 
     if _HAS_CLOUD:
         try:
-            from aliyun_data_client import run_async
+            from aria_code.aliyun_data_client import run_async
             result = run_async(AliyunDataClient.get().get_predictions(symbols, prediction_days=days, market=market))
             if result and result.get("predictions"):
                 return {"success": True, **result, "provider": "aliyun_cloud"}
@@ -1669,7 +1669,7 @@ def _cloud_backtest(params: dict) -> dict:
 
     if _HAS_CLOUD:
         try:
-            from aliyun_data_client import run_async
+            from aria_code.aliyun_data_client import run_async
             result = run_async(
                 AliyunDataClient.get().run_backtest(
                     symbols, strategy_cfg,
@@ -3227,7 +3227,7 @@ def _run_portfolio_backtest(params: dict) -> dict:
         return {"success": False, "error": "symbols is required"}
 
     try:
-        from backtest_engine import BacktestEngine, get_strategy, load_bars
+        from aria_code.backtest_engine import BacktestEngine, get_strategy, load_bars
     except Exception as exc:
         return {"success": False, "error": f"backtest engine unavailable: {exc}"}
 
