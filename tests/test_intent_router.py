@@ -31,7 +31,29 @@ def test_plain_greeting_has_no_service_intents():
 
     assert route.intents == ()
     assert route.services == ()
-    assert route.primary in {"general", "finance"}
+    assert route.primary == "general"
+
+
+def test_general_product_review_routes_to_code_without_finance_services():
+    route = build_intent_route("请审核项目代码，并给出产品风险和修复建议")
+
+    assert route.primary == "code"
+    assert route.market_related is False
+    assert not any(service.endswith("market_data") for service in route.services)
+
+
+def test_non_financial_product_analysis_uses_general_route():
+    route = build_intent_route("分析这个电商产品的用户流程和商业风险")
+
+    assert route.primary == "general"
+    assert route.market_related is False
+
+
+def test_general_framework_implementation_routes_to_code():
+    route = build_intent_route("帮我实现一个 React 登录页面并添加测试")
+
+    assert route.primary == "code"
+    assert route.explicit_code is True
 
 
 def test_financial_market_intents_select_the_right_data_services():
