@@ -177,15 +177,53 @@ def is_offline() -> bool:
     return os.getenv("ARIA_OFFLINE", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _fetch_timeout_seconds() -> float:
+    """Wall-clock budget for one remote universe fetch.
+
+    ``is_offline()`` documents that these akshare calls had neither a timeout
+    nor a switch, so a slow or hanging endpoint stalled the caller
+    indefinitely — on the routing hot path that reads as the CLI freezing.
+    ARIA_OFFLINE=1 still skips the network entirely; this bounds the wait when
+    the network *is* used.
+    """
+    try:
+        value = float(os.getenv("ARIA_UNIVERSE_FETCH_TIMEOUT", "8") or 8)
+    except (TypeError, ValueError):
+        return 8.0
+    return max(1.0, value)
+
+
+def _call_with_timeout(fn, timeout: float):
+    """Run *fn* with a wall-clock budget; return None if it overruns.
+
+    The worker thread is a daemon and is abandoned on timeout — akshare offers
+    no cancellation — but the caller is released instead of blocking forever.
+    """
+    import concurrent.futures
+
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    try:
+        future = executor.submit(fn)
+        try:
+            return future.result(timeout=timeout)
+        except Exception:
+            return None
+    finally:
+        executor.shutdown(wait=False)
+
+
 def fetch_market_universe() -> list[MarketSymbol]:
     """Fetch A-share and HK symbol tables when akshare is available."""
     symbols = _iter_static_symbols()
     if is_offline():
         return symbols
+    budget = _fetch_timeout_seconds()
     try:
         import akshare as ak
         try:
-            a_df = ak.stock_info_a_code_name()
+            a_df = _call_with_timeout(ak.stock_info_a_code_name, budget)
+            if a_df is None:
+                raise TimeoutError("stock_info_a_code_name timed out")
             symbols.extend(_symbols_from_frame(
                 a_df,
                 name_cols=("name", "证券简称", "股票简称", "名称"),
@@ -196,7 +234,9 @@ def fetch_market_universe() -> list[MarketSymbol]:
         except Exception:
             pass
         try:
-            hk_df = ak.stock_hk_spot_em()
+            hk_df = _call_with_timeout(ak.stock_hk_spot_em, budget)
+            if hk_df is None:
+                raise TimeoutError("stock_hk_spot_em timed out")
             symbols.extend(_symbols_from_frame(
                 hk_df,
                 name_cols=("名称", "股票简称", "name"),
@@ -215,10 +255,33 @@ def fetch_market_universe() -> list[MarketSymbol]:
     return list(dedup.values())
 
 
+# Guard against repeating an expensive remote refresh within one process.  The
+# fetch pulls the full A-share + HK symbol universe over the network; when it
+# fails or returns nothing, retrying it on the next message just stalls the REPL
+# again for the same result.
+_UNIVERSE_REFRESH_ATTEMPTED = False
+
+
+def _universe_refresh_attempted() -> bool:
+    return _UNIVERSE_REFRESH_ATTEMPTED
+
+
+def _mark_universe_refresh_attempted() -> None:
+    global _UNIVERSE_REFRESH_ATTEMPTED
+    _UNIVERSE_REFRESH_ATTEMPTED = True
+
+
+def reset_universe_refresh_guard() -> None:
+    """Clear the once-per-process refresh guard (tests, explicit /refresh)."""
+    global _UNIVERSE_REFRESH_ATTEMPTED
+    _UNIVERSE_REFRESH_ATTEMPTED = False
+
+
 def ensure_market_universe(*, force: bool = False) -> list[MarketSymbol]:
     cached = [] if force else _load_cache()
     if cached:
         return _iter_static_symbols() + cached
+    _mark_universe_refresh_attempted()
     fetched = fetch_market_universe()
     _write_cache(fetched)
     return fetched
@@ -270,8 +333,21 @@ def resolve_market_mentions(
     else:
         scan(_load_cache())
         market_words = "走势|预测|股价|股票|行情|趋势|技术面|基本面|涨跌|价格|市值|k线|图表|财报"
-        if not hits and re.search(r"[\u4e00-\u9fff]", text) and re.search(market_words, text, re.I):
-            scan(ensure_market_universe(force=True))
+        if (
+            not hits
+            and re.search(r"[\u4e00-\u9fff]", text)
+            and re.search(market_words, text, re.I)
+            and not _universe_refresh_attempted()
+        ):
+            # Refresh only when the local cache cannot answer, and only once per
+            # process.  This used to pass force=True, which skipped the 7-day
+            # cache and re-downloaded the entire A-share + HK universe over the
+            # network on *every* message containing a word like "行情" — a
+            # multi-second synchronous stall on the routing hot path, repeated
+            # even for messages such as "现在的行情呢" that name no company
+            # at all and so can never be resolved by any refresh.
+            _mark_universe_refresh_attempted()
+            scan(ensure_market_universe())
 
     ordered: list[tuple[int, MarketSymbol]] = []
     seen_symbols: set[str] = set()
