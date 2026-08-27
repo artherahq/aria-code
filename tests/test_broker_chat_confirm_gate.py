@@ -84,7 +84,7 @@ async def test_allow_chat_confirm_requires_exact_broker_id_not_yes(monkeypatch, 
     _patch_config_path(monkeypatch, tmp_path)
     add_broker_config({"id": "ths1", "type": "easytrader", "label": "同花顺"})
 
-    import aria_cli
+    from aria_code import aria_cli
     from aria_code.apps.cli.commands import broker_cmds
 
     fake_console = _FakeConsole(answer="yes")
@@ -101,6 +101,10 @@ async def test_allow_chat_confirm_requires_exact_broker_id_not_yes(monkeypatch, 
     monkeypatch.setattr(aria_cli, "_get_broker_registry", lambda: _Registry(), raising=False)
 
     handler = broker_cmds.BrokerCommandsMixin()
+    class FakeContext:
+        console = fake_console
+        has_rich = True
+    handler.context = FakeContext()
     await handler.cmd_trade("allow-chat-confirm ths1")
 
     assert is_chat_confirm_enabled("ths1") is False
@@ -111,7 +115,7 @@ async def test_allow_chat_confirm_succeeds_with_exact_broker_id(monkeypatch, tmp
     _patch_config_path(monkeypatch, tmp_path)
     add_broker_config({"id": "ths1", "type": "easytrader", "label": "同花顺"})
 
-    import aria_cli
+    from aria_code import aria_cli
     from aria_code.apps.cli.commands import broker_cmds
 
     fake_console = _FakeConsole(answer="ths1")
@@ -128,6 +132,10 @@ async def test_allow_chat_confirm_succeeds_with_exact_broker_id(monkeypatch, tmp
     monkeypatch.setattr(aria_cli, "_get_broker_registry", lambda: _Registry(), raising=False)
 
     handler = broker_cmds.BrokerCommandsMixin()
+    class FakeContext:
+        console = fake_console
+        has_rich = True
+    handler.context = FakeContext()
     await handler.cmd_trade("allow-chat-confirm ths1")
 
     assert is_chat_confirm_enabled("ths1") is True
@@ -139,7 +147,7 @@ async def test_disallow_chat_confirm_turns_it_back_off(monkeypatch, tmp_path):
     add_broker_config({"id": "ths1", "type": "easytrader", "label": "同花顺"})
     set_chat_confirm_enabled("ths1", True)
 
-    import aria_cli
+    from aria_code import aria_cli
     from aria_code.apps.cli.commands import broker_cmds
 
     fake_console = _FakeConsole(answer="")
@@ -156,6 +164,10 @@ async def test_disallow_chat_confirm_turns_it_back_off(monkeypatch, tmp_path):
     monkeypatch.setattr(aria_cli, "_get_broker_registry", lambda: _Registry(), raising=False)
 
     handler = broker_cmds.BrokerCommandsMixin()
+    class FakeContext:
+        console = fake_console
+        has_rich = True
+    handler.context = FakeContext()
     await handler.cmd_trade("disallow-chat-confirm ths1")
 
     assert is_chat_confirm_enabled("ths1") is False

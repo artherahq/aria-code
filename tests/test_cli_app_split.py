@@ -223,7 +223,7 @@ def test_cli_catalog_exposes_watchable_direct_commands_and_visible_help():
 
 @pytest.mark.asyncio
 async def test_football_nl_query_uses_parser_after_mixin_rebind(monkeypatch):
-    import aria_cli
+    from aria_code import aria_cli
 
     calls = []
 
@@ -251,7 +251,7 @@ def test_console_script_points_to_apps_cli_entrypoint():
 
 
 def test_market_slash_commands_are_registered_for_interactive_routing():
-    import aria_cli
+    from aria_code import aria_cli
 
     commands = aria_cli.SlashCommands(SimpleNamespace(config={}))
 
@@ -619,7 +619,7 @@ def test_report_helpers_cover_agent_selection_failure_and_size(tmp_path):
 
 @pytest.mark.asyncio
 async def test_report_pdf_and_index_helpers_delegate_to_generator(monkeypatch, tmp_path):
-    import report_generator
+    from aria_code import report_generator
 
     report_path = tmp_path / "report.html"
     report_path.write_text("ok", encoding="utf-8")
@@ -647,7 +647,7 @@ async def test_report_pdf_and_index_helpers_delegate_to_generator(monkeypatch, t
 async def test_generate_html_report_runs_team_and_generator(monkeypatch, tmp_path):
     import aria_code.agents.team
     import aria_code.datasources.router
-    import report_generator
+    from aria_code import report_generator
 
     calls = {}
     team_result = SimpleNamespace(final_signal="HOLD", results=[])
@@ -662,8 +662,8 @@ async def test_generate_html_report_runs_team_and_generator(monkeypatch, tmp_pat
         output_path.write_text("<html></html>", encoding="utf-8")
         return output_path
 
-    monkeypatch.setattr(agents.team, "run_team", fake_run_team)
-    monkeypatch.setattr(datasources.router, "get_router", lambda: "router")
+    monkeypatch.setattr(aria_code.agents.team, "run_team", fake_run_team)
+    monkeypatch.setattr(aria_code.datasources.router, "get_router", lambda: "router")
     monkeypatch.setattr(report_generator, "generate_report", fake_generate_report)
 
     result = await generate_html_report(
@@ -713,8 +713,8 @@ async def test_run_team_analysis_captures_noisy_output_and_sanitizes(monkeypatch
         assert bundle is data_bundle
         return ["cleaned"]
 
-    monkeypatch.setattr(agents.team, "run_team", fake_run_team)
-    monkeypatch.setattr(datasources.router, "get_router", lambda: "router")
+    monkeypatch.setattr(aria_code.agents.team, "run_team", fake_run_team)
+    monkeypatch.setattr(aria_code.datasources.router, "get_router", lambda: "router")
     monkeypatch.setattr(team_module, "fetch_team_data_bundle", fake_bundle)
     monkeypatch.setattr(team_module, "build_team_llm_provider", lambda _config: "llm")
 
