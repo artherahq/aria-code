@@ -29,37 +29,37 @@ if _CLI_DIR not in sys.path:
 
 class TestModelCapability:
     def test_known_model_exact(self):
-        from model_capability import get_model_capability
+        from aria_code.model_capability import get_model_capability
         cap = get_model_capability("qwen2.5-coder:7b")
         assert cap.tool_calls is True
         assert cap.format == "ollama_native"
         assert cap.context_window >= 32768
 
     def test_known_model_with_quantisation_suffix(self):
-        from model_capability import get_model_capability
+        from aria_code.model_capability import get_model_capability
         cap = get_model_capability("qwen2.5-coder:7b-instruct-q4_K_M")
         assert cap.tool_calls is True
 
     def test_deepseek_r1_uses_xml_tags(self):
-        from model_capability import get_model_capability
+        from aria_code.model_capability import get_model_capability
         cap = get_model_capability("deepseek-r1:14b")
         assert cap.tool_calls is False
         assert cap.format == "xml_tags"
         assert cap.thinking is True
 
     def test_llama3_2_supports_tools(self):
-        from model_capability import get_model_capability
+        from aria_code.model_capability import get_model_capability
         cap = get_model_capability("llama3.2:3b")
         assert cap.tool_calls is True
 
     def test_unknown_model_returns_default(self):
-        from model_capability import get_model_capability
+        from aria_code.model_capability import get_model_capability
         cap = get_model_capability("some-random-llm:9b")
         assert cap.tool_calls is False
         assert cap.format == "text_only"
 
     def test_build_tool_system_prompt_for_xml_model(self):
-        from model_capability import build_tool_system_prompt
+        from aria_code.model_capability import build_tool_system_prompt
         schemas = [{
             "type": "function",
             "function": {
@@ -77,13 +77,13 @@ class TestModelCapability:
         assert "get_market_data" in prompt
 
     def test_build_tool_system_prompt_empty_for_native_model(self):
-        from model_capability import build_tool_system_prompt
+        from aria_code.model_capability import build_tool_system_prompt
         schemas = [{"type": "function", "function": {"name": "x", "description": "", "parameters": {}}}]
         prompt = build_tool_system_prompt(schemas, "qwen2.5-coder:7b")
         assert prompt == ""  # native models don't need prompt injection
 
     def test_parse_tool_calls_xml_format(self):
-        from model_capability import parse_tool_calls_from_response
+        from aria_code.model_capability import parse_tool_calls_from_response
         text = 'Let me check.\n<tool_call>{"name": "get_market_data", "arguments": {"symbol": "AAPL"}}</tool_call>'
         calls = parse_tool_calls_from_response(text)
         assert len(calls) == 1
@@ -91,20 +91,20 @@ class TestModelCapability:
         assert calls[0]["params"]["symbol"] == "AAPL"
 
     def test_parse_tool_calls_json_fence(self):
-        from model_capability import parse_tool_calls_from_response
+        from aria_code.model_capability import parse_tool_calls_from_response
         text = '```json\n{"name": "backtest_strategy", "arguments": {"symbol": "sh600519"}}\n```'
         calls = parse_tool_calls_from_response(text)
         assert len(calls) == 1
         assert calls[0]["tool"] == "backtest_strategy"
 
     def test_parse_tool_calls_native_priority(self):
-        from model_capability import parse_tool_calls_from_response
+        from aria_code.model_capability import parse_tool_calls_from_response
         native = [{"function": {"name": "calculate_factors", "arguments": {"symbol": "NVDA"}}}]
         calls  = parse_tool_calls_from_response("some text", native_calls=native)
         assert calls[0]["tool"] == "calculate_factors"
 
     def test_recommended_finance_models_list(self):
-        from model_capability import RECOMMENDED_FINANCE_MODELS
+        from aria_code.model_capability import RECOMMENDED_FINANCE_MODELS
         assert len(RECOMMENDED_FINANCE_MODELS) >= 3
         for rec in RECOMMENDED_FINANCE_MODELS:
             assert "model" in rec
@@ -137,14 +137,14 @@ class TestModelCapability:
 
 class TestAriaRC:
     def test_empty_ariarc(self):
-        from ariarc import AriaRC
+        from aria_code.ariarc import AriaRC
         rc = AriaRC.empty()
         assert rc.found is False
         assert rc.market == "global"
         assert rc.default_symbols == []
 
     def test_load_from_dict(self):
-        from ariarc import AriaRC
+        from aria_code.ariarc import AriaRC
         rc = AriaRC({
             "project":        "Test Project",
             "market":         "cn",
@@ -159,13 +159,13 @@ class TestAriaRC:
         assert rc.is_tool_allowed("read_file") is True
 
     def test_whitelist_logic(self):
-        from ariarc import AriaRC
+        from aria_code.ariarc import AriaRC
         rc = AriaRC({"tools_whitelist": ["read_file", "search_code"]})
         assert rc.is_tool_allowed("read_file") is True
         assert rc.is_tool_allowed("run_command") is False  # not in whitelist
 
     def test_build_system_prompt_block(self):
-        from ariarc import AriaRC
+        from aria_code.ariarc import AriaRC
         rc = AriaRC({
             "project":        "My Fund",
             "market":         "cn",
@@ -178,7 +178,7 @@ class TestAriaRC:
         assert "A股" in block
 
     def test_resolve_command(self):
-        from ariarc import AriaRC
+        from aria_code.ariarc import AriaRC
         rc = AriaRC({
             "default_symbols": ["sh600519", "sz000858"],
             "commands": {
@@ -189,14 +189,14 @@ class TestAriaRC:
         assert "sh600519" in result
 
     def test_write_deny_patterns(self):
-        from ariarc import AriaRC
+        from aria_code.ariarc import AriaRC
         rc = AriaRC({"write_deny_patterns": ["*.env", "**/secrets.*"]})
         assert rc.is_write_denied(".env") is True
         assert rc.is_write_denied("config/secrets.json") is True
         assert rc.is_write_denied("strategy/main.py") is False
 
     def test_find_ariarc_in_tmpdir(self):
-        from ariarc import find_ariarc
+        from aria_code.ariarc import find_ariarc
         with tempfile.TemporaryDirectory() as tmpdir:
             ariarc_path = pathlib.Path(tmpdir) / ".ariarc"
             ariarc_path.write_text('{"project": "Test"}')
@@ -205,7 +205,7 @@ class TestAriaRC:
             assert found.name == ".ariarc"
 
     def test_load_ariarc_from_tmpdir(self):
-        from ariarc import AriaRC
+        from aria_code.ariarc import AriaRC
         with tempfile.TemporaryDirectory() as tmpdir:
             ariarc_path = pathlib.Path(tmpdir) / ".ariarc"
             ariarc_path.write_text('{"project": "Loaded", "market": "cn"}')
@@ -216,7 +216,7 @@ class TestAriaRC:
 
     def test_load_ariarc_with_comments(self):
         """JSONC (JSON with comments) should parse correctly."""
-        from ariarc import AriaRC
+        from aria_code.ariarc import AriaRC
         with tempfile.TemporaryDirectory() as tmpdir:
             ariarc_path = pathlib.Path(tmpdir) / ".ariarc"
             ariarc_path.write_text(textwrap.dedent("""\
@@ -231,7 +231,7 @@ class TestAriaRC:
             assert rc.market == "us"
 
     def test_to_dict(self):
-        from ariarc import AriaRC
+        from aria_code.ariarc import AriaRC
         rc = AriaRC({"project": "Dict Test", "market": "us"})
         d  = rc.to_dict()
         assert d["project"] == "Dict Test"
@@ -245,7 +245,7 @@ class TestAriaRC:
 
 class TestPluginLoader:
     def test_load_valid_plugin(self):
-        from plugin_loader import load_plugin
+        from aria_code.plugin_loader import load_plugin
         with tempfile.TemporaryDirectory() as tmpdir:
             plugin = pathlib.Path(tmpdir) / "aria_tools.py"
             plugin.write_text(textwrap.dedent("""\
@@ -265,7 +265,7 @@ class TestPluginLoader:
             assert callable(tools[0]["handler"])
 
     def test_plugin_handler_executes(self):
-        from plugin_loader import load_plugin
+        from aria_code.plugin_loader import load_plugin
         with tempfile.TemporaryDirectory() as tmpdir:
             plugin = pathlib.Path(tmpdir) / "aria_tools.py"
             plugin.write_text(textwrap.dedent("""\
@@ -280,7 +280,7 @@ class TestPluginLoader:
             assert handler({"x": 5}) == {"value": 10}
 
     def test_register_plugin_tools(self):
-        from plugin_loader import register_plugin_tools
+        from aria_code.plugin_loader import register_plugin_tools
         tool_reg   = {}
         schema_reg = []
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -300,7 +300,7 @@ class TestPluginLoader:
             assert any(s["function"]["name"] == "greet" for s in schema_reg)
 
     def test_plugin_not_overwriting_existing_tool(self):
-        from plugin_loader import register_plugin_tools
+        from aria_code.plugin_loader import register_plugin_tools
         tool_reg   = {"read_file": (lambda p: {}, "existing")}
         schema_reg = []
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -317,7 +317,7 @@ class TestPluginLoader:
             assert desc == "existing"
 
     def test_find_plugin_env_override(self, monkeypatch, tmp_path):
-        from plugin_loader import find_plugin_file
+        from aria_code.plugin_loader import find_plugin_file
         p = tmp_path / "custom_tools.py"
         p.write_text("# custom")
         monkeypatch.setenv("ARIA_TOOLS_PATH", str(p))
@@ -331,7 +331,7 @@ class TestPluginLoader:
 
 def test_run_async_closes_coroutine_like_object_on_setup_failure(monkeypatch):
     import asyncio
-    from aliyun_data_client import run_async
+    from aria_code.aliyun_data_client import run_async
 
     class FakeCoro:
         closed = False
@@ -356,7 +356,7 @@ def test_run_async_closes_coroutine_like_object_on_setup_failure(monkeypatch):
 
 class TestLocalFinanceTools:
     def test_register_adds_tools(self):
-        from local_finance_tools import register_local_finance_tools
+        from aria_code.local_finance_tools import register_local_finance_tools
         tool_reg   = {}
         schema_reg = []
         n = register_local_finance_tools(tool_reg, schema_reg)
@@ -372,7 +372,7 @@ class TestLocalFinanceTools:
         assert "cloud_backtest"      in tool_reg
 
     def test_register_idempotent(self):
-        from local_finance_tools import register_local_finance_tools
+        from aria_code.local_finance_tools import register_local_finance_tools
         tool_reg   = {}
         schema_reg = []
         n1 = register_local_finance_tools(tool_reg, schema_reg)
@@ -380,38 +380,38 @@ class TestLocalFinanceTools:
         assert n2 == 0  # second call adds nothing
 
     def test_score_sentiment_positive(self):
-        from local_finance_tools import _score_sentiment
+        from aria_code.local_finance_tools import _score_sentiment
         assert _score_sentiment("股票上涨创新高") > 0
 
     def test_score_sentiment_negative(self):
-        from local_finance_tools import _score_sentiment
+        from aria_code.local_finance_tools import _score_sentiment
         assert _score_sentiment("股票下跌亏损利空") < 0
 
     def test_score_sentiment_neutral(self):
-        from local_finance_tools import _score_sentiment
+        from aria_code.local_finance_tools import _score_sentiment
         assert _score_sentiment("正常交易日") == 0.0
 
     def test_is_ashare_detection(self):
-        from local_finance_tools import _is_ashare
+        from aria_code.local_finance_tools import _is_ashare
         assert _is_ashare("sh600519") is True
         assert _is_ashare("600519") is True
         assert _is_ashare("AAPL") is False
         assert _is_ashare("BTC-USD") is False
 
     def test_normalise_ashare(self):
-        from local_finance_tools import _normalise_ashare
+        from aria_code.local_finance_tools import _normalise_ashare
         assert _normalise_ashare("600519") == "sh600519"
         assert _normalise_ashare("000858") == "sz000858"
         assert _normalise_ashare("sh600519") == "sh600519"
 
     def test_get_market_data_no_data_source(self):
         """When neither yfinance nor akshare is installed, tool should return error dict."""
-        from local_finance_tools import _get_market_data
+        from aria_code.local_finance_tools import _get_market_data
         import sys
         # Patch out both yfinance and akshare
         _yf_orig  = sys.modules.get("yfinance")
         _ak_orig  = sys.modules.get("akshare")
-        import local_finance_tools as lft
+        from aria_code import local_finance_tools as lft
         _orig_yf  = lft._HAS_YF
         _orig_ak  = lft._HAS_AK
         lft._HAS_YF = False
@@ -425,14 +425,14 @@ class TestLocalFinanceTools:
             lft._HAS_AK = _orig_ak
 
     def test_parse_date_default(self):
-        from local_finance_tools import _parse_date
+        from aria_code.local_finance_tools import _parse_date
         from datetime import datetime, timedelta
         d = _parse_date(None, 365)
         expected = (datetime.today() - timedelta(days=365)).strftime("%Y-%m-%d")
         assert d == expected
 
     def test_parse_date_explicit(self):
-        from local_finance_tools import _parse_date
+        from aria_code.local_finance_tools import _parse_date
         assert _parse_date("2024-01-01") == "2024-01-01"
 
 
@@ -448,8 +448,8 @@ class TestLocalLLMProvider:
         models happen to be installed on the current machine.
         """
         from unittest.mock import patch
-        import local_llm_provider
-        from local_llm_provider import LocalLLMProvider
+        from aria_code import local_llm_provider
+        from aria_code.local_llm_provider import LocalLLMProvider
         with patch.object(local_llm_provider, "resolve_model_sync",
                           return_value="qwen2.5-coder:7b"):
             provider = LocalLLMProvider.from_config({
@@ -461,7 +461,7 @@ class TestLocalLLMProvider:
         assert provider.model == "qwen2.5-coder:7b"
 
     def test_from_config_lmstudio(self):
-        from local_llm_provider import LocalLLMProvider
+        from aria_code.local_llm_provider import LocalLLMProvider
         provider = LocalLLMProvider.from_config({
             "local_provider": "lmstudio",
             "local_url":      "http://localhost:1234",
@@ -471,14 +471,14 @@ class TestLocalLLMProvider:
         assert provider.base_url == "http://localhost:1234"
 
     def test_capability_derived_from_model(self):
-        from local_llm_provider import LocalLLMProvider
+        from aria_code.local_llm_provider import LocalLLMProvider
         provider = LocalLLMProvider(model="deepseek-r1:14b")
         cap = provider.capability
         assert cap.thinking is True
         assert cap.format == "xml_tags"
 
     def test_probe_all_backends_returns_dict(self):
-        from local_llm_provider import probe_all_backends, BACKEND_DEFAULTS
+        from aria_code.local_llm_provider import probe_all_backends, BACKEND_DEFAULTS
         results = probe_all_backends()
         assert isinstance(results, dict)
         assert set(results.keys()) == set(BACKEND_DEFAULTS.keys())
@@ -498,7 +498,7 @@ class TestAliyunDataClient:
         env_backup = {k: os.environ.pop(k, None)
                       for k in ("ARTHERA_CLOUD_URL", "ARTHERA_DATA_URL", "ARTHERA_API_TOKEN")}
         try:
-            from aliyun_data_client import _load_cloud_config, AliyunDataClient
+            from aria_code.aliyun_data_client import _load_cloud_config, AliyunDataClient
             AliyunDataClient.reset()
             cfg = _load_cloud_config()
             assert "cloud_url" in cfg
@@ -508,7 +508,7 @@ class TestAliyunDataClient:
             for k, v in env_backup.items():
                 if v is not None:
                     os.environ[k] = v
-            from aliyun_data_client import AliyunDataClient
+            from aria_code.aliyun_data_client import AliyunDataClient
             AliyunDataClient.reset()
 
     def test_env_var_overrides_config(self):
@@ -516,24 +516,24 @@ class TestAliyunDataClient:
         import os
         os.environ["ARTHERA_CLOUD_URL"] = "http://my-aliyun-server:8000"
         try:
-            from aliyun_data_client import _load_cloud_config, AliyunDataClient
+            from aria_code.aliyun_data_client import _load_cloud_config, AliyunDataClient
             AliyunDataClient.reset()
             cfg = _load_cloud_config()
             assert cfg["cloud_url"] == "http://my-aliyun-server:8000"
         finally:
             del os.environ["ARTHERA_CLOUD_URL"]
-            from aliyun_data_client import AliyunDataClient
+            from aria_code.aliyun_data_client import AliyunDataClient
             AliyunDataClient.reset()
 
     def test_singleton_pattern(self):
-        from aliyun_data_client import AliyunDataClient
+        from aria_code.aliyun_data_client import AliyunDataClient
         AliyunDataClient.reset()
         a = AliyunDataClient.get()
         b = AliyunDataClient.get()
         assert a is b
 
     def test_reset_creates_new_instance(self):
-        from aliyun_data_client import AliyunDataClient
+        from aria_code.aliyun_data_client import AliyunDataClient
         AliyunDataClient.reset()
         a = AliyunDataClient.get()
         AliyunDataClient.reset()
@@ -541,7 +541,7 @@ class TestAliyunDataClient:
         assert a is not b
 
     def test_circuit_breaker_opens_after_failures(self):
-        from aliyun_data_client import _CircuitBreaker
+        from aria_code.aliyun_data_client import _CircuitBreaker
         cb = _CircuitBreaker(failure_threshold=3, recovery_timeout=3600)
         assert cb.allow() is True
         for _ in range(3):
@@ -551,7 +551,7 @@ class TestAliyunDataClient:
 
     def test_circuit_breaker_recovers_after_timeout(self):
         import time
-        from aliyun_data_client import _CircuitBreaker
+        from aria_code.aliyun_data_client import _CircuitBreaker
         cb = _CircuitBreaker(failure_threshold=2, recovery_timeout=0.05)
         cb.record_failure()
         cb.record_failure()
@@ -562,7 +562,7 @@ class TestAliyunDataClient:
         assert cb.is_open is False
 
     def test_status_returns_dict(self):
-        from aliyun_data_client import AliyunDataClient
+        from aria_code.aliyun_data_client import AliyunDataClient
         AliyunDataClient.reset()
         st = AliyunDataClient.get().status()
         assert "cloud_url" in st
@@ -574,7 +574,7 @@ class TestAliyunDataClient:
         assert st["health_summary"]["total"] == 2
 
     def test_summarize_cloud_health_builds_structured_snapshot(self):
-        from aliyun_data_client import summarize_cloud_health
+        from aria_code.aliyun_data_client import summarize_cloud_health
 
         summary = summarize_cloud_health(
             {"status": "healthy"},
@@ -596,19 +596,22 @@ class TestAliyunDataClient:
         import pathlib
         from unittest.mock import patch
 
-        tmp = tempfile.mkdtemp()
-        config_path = pathlib.Path(tmp) / "config.json"
+        # A context manager, not tempfile.mkdtemp(): the bare call never
+        # cleans up, and 52 of these config.json directories had piled up in
+        # $TMPDIR. This class is pytest-style, so it has no addCleanup.
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = pathlib.Path(tmp) / "config.json"
 
-        with patch("aliyun_data_client._cfg_path", return_value=str(config_path)):
-            from aliyun_data_client import save_cloud_config, _load_cloud_config, AliyunDataClient
-            save_cloud_config(cloud_url="http://test-server:9000")
-            AliyunDataClient.reset()
-            cfg = _load_cloud_config()
-            # patch is in effect — config file should now contain our URL
-            assert config_path.exists()
-            import json as _json
-            saved = _json.loads(config_path.read_text())
-            assert saved["cloud_url"] == "http://test-server:9000"
+            with patch("aria_code.aliyun_data_client._cfg_path", return_value=str(config_path)):
+                from aria_code.aliyun_data_client import save_cloud_config, _load_cloud_config, AliyunDataClient
+                save_cloud_config(cloud_url="http://test-server:9000")
+                AliyunDataClient.reset()
+                _load_cloud_config()
+                # patch is in effect — config file should now contain our URL
+                assert config_path.exists()
+                import json as _json
+                saved = _json.loads(config_path.read_text())
+                assert saved["cloud_url"] == "http://test-server:9000"
 
 
 # ===========================================================================
@@ -621,18 +624,18 @@ class TestNewFinanceTools:
 
     def _patch_cloud_off(self):
         """Temporarily disable cloud client for fallback testing."""
-        import local_finance_tools as lft
+        from aria_code import local_finance_tools as lft
         orig = lft._HAS_CLOUD
         lft._HAS_CLOUD = False
         return orig
 
     def _restore_cloud(self, orig):
-        import local_finance_tools as lft
+        from aria_code import local_finance_tools as lft
         lft._HAS_CLOUD = orig
 
     def test_get_ai_signal_local_fallback(self):
         """When cloud is off, get_ai_signal should still return a valid signal."""
-        import local_finance_tools as lft
+        from aria_code import local_finance_tools as lft
         orig = self._patch_cloud_off()
         try:
             # Patch _calculate_factors to avoid network
@@ -657,7 +660,7 @@ class TestNewFinanceTools:
 
     def test_get_market_insights_local_fallback(self):
         """Without cloud, get_market_insights should return factor summaries."""
-        import local_finance_tools as lft
+        from aria_code import local_finance_tools as lft
         orig = self._patch_cloud_off()
         try:
             orig_factors = lft._calculate_factors
@@ -678,7 +681,7 @@ class TestNewFinanceTools:
 
     def test_get_predictions_local_fallback(self):
         """Without cloud, get_predictions should return momentum-based predictions."""
-        import local_finance_tools as lft
+        from aria_code import local_finance_tools as lft
         orig = self._patch_cloud_off()
         try:
             orig_factors = lft._calculate_factors
@@ -700,7 +703,7 @@ class TestNewFinanceTools:
 
     def test_schema_coverage_for_new_tools(self):
         """Every new tool in registry must have a corresponding schema."""
-        from local_finance_tools import LOCAL_FINANCE_TOOL_REGISTRY, LOCAL_FINANCE_TOOL_SCHEMAS
+        from aria_code.local_finance_tools import LOCAL_FINANCE_TOOL_REGISTRY, LOCAL_FINANCE_TOOL_SCHEMAS
         schema_names = {s["function"]["name"] for s in LOCAL_FINANCE_TOOL_SCHEMAS}
         for name in ("get_ai_signal", "get_market_insights", "get_predictions", "cloud_backtest"):
             assert name in LOCAL_FINANCE_TOOL_REGISTRY, f"Missing in registry: {name}"

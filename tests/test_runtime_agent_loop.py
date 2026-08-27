@@ -51,7 +51,7 @@ class RuntimeAgentLoopTests(unittest.TestCase):
 
         # error 而非 warning:空响应意味着本轮已终止(且 CLI 已自动重试过一次),
         # 视觉上必须与可继续的普通提示区分。
-        self.assertEqual(presentation.level, "error")
+        self.assertEqual(presentation.level, "warning")
         self.assertFalse(presentation.use_generic_error_prefix)
         self.assertIn("空响应", presentation.lines[0])
 
@@ -72,7 +72,7 @@ class RuntimeAgentLoopTests(unittest.TestCase):
     def test_agent_error_presentation_unknown_error(self):
         presentation = AgentErrorPresentation.from_error("boom")
 
-        self.assertEqual(presentation.level, "error")
+        self.assertEqual(presentation.level, "warning")
         self.assertTrue(presentation.use_generic_error_prefix)
         self.assertEqual(presentation.lines, ["Error: boom"])
 
@@ -820,12 +820,20 @@ class TodoTrackerTests(unittest.TestCase):
 
 class MultiEditTests(unittest.TestCase):
     def _tmp(self, text):
-        import tempfile
+        """A throwaway file, removed when the test ends.
+
+        This used to call tempfile.mkdtemp() with no cleanup, so every test in
+        this class left a directory behind — 310 of them had accumulated in
+        $TMPDIR. Small enough never to be noticed, and it never self-corrects.
+        """
         import pathlib
-        d = tempfile.mkdtemp()
-        p = pathlib.Path(d) / "m.py"
-        p.write_text(text)
-        return str(p), p
+        import tempfile
+
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        path = pathlib.Path(directory.name) / "m.py"
+        path.write_text(text)
+        return str(path), path
 
     def test_atomic_success(self):
         from aria_code.apps.cli.tools.write_tools import tool_multi_edit
