@@ -7,7 +7,7 @@ from aria_code.apps.cli.providers.chat_routing import normalize_provider_name
 
 @pytest.mark.asyncio
 async def test_configured_provider_uses_non_ollama_local_runtime(monkeypatch):
-    import local_llm_provider
+    from aria_code import local_llm_provider
 
     seen = {}
 
@@ -73,7 +73,7 @@ async def test_configured_cloud_provider_normalizes_tool_schema(monkeypatch):
 
 
 def test_local_provider_uses_backend_default_not_application_local_url():
-    from local_llm_provider import LocalLLMProvider
+    from aria_code.local_llm_provider import LocalLLMProvider
 
     provider = LocalLLMProvider.from_config({
         "local_provider": "lmstudio",
@@ -84,7 +84,7 @@ def test_local_provider_uses_backend_default_not_application_local_url():
 
 
 def test_openai_compatible_url_joining():
-    from local_llm_provider import openai_models_url
+    from aria_code.local_llm_provider import openai_models_url
 
     assert chat_completions_url("https://api.openai.com") == (
         "https://api.openai.com/v1/chat/completions"

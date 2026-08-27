@@ -17,7 +17,7 @@ import sys
 
 def main() -> None:
     """Synchronous entry point for the ``aria-code`` command."""
-    from aria_cli import main as _async_main
+    from aria_code.aria_cli import main as _async_main
 
     try:
         asyncio.run(_async_main())

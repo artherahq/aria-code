@@ -45,7 +45,7 @@ class MarketResearchTools:
 
     @staticmethod
     def _default_service() -> Any:
-        from data_service import DataService
+        from aria_code.data_service import DataService
 
         return DataService()
 

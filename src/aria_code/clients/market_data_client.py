@@ -15,7 +15,7 @@ Design principles
 
 Quick usage
 ───────────
-    from market_data_client import MarketDataClient
+    from aria_code.market_data_client import MarketDataClient
     mdc = MarketDataClient()
     print(mdc.quote("NVDA"))
     print(mdc.quote("000001"))          # A-share

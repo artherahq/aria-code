@@ -91,7 +91,7 @@ def write_crash_report(
         path = crash_dir / f"crash-{stamp}.json"
 
         try:
-            from aria_cli import __version__ as _ver
+            from aria_code.aria_cli import __version__ as _ver
         except Exception:
             _ver = "unknown"
 

@@ -68,7 +68,7 @@ def _merge_present(target: Dict[str, Any], source: Dict[str, Any], keys: List[st
 
 def _fetch_report_data_sync(symbol: str) -> Tuple[Any, Any, Dict[str, Any]]:
     """Fetch report data with fallback providers and source diagnostics."""
-    from data_cleaner import CleanResult, clean_price_series, get_clean_prices, get_fundamentals
+    from aria_code.data_cleaner import CleanResult, clean_price_series, get_clean_prices, get_fundamentals
     import pandas as _pd
 
     provider_chain: List[str] = []

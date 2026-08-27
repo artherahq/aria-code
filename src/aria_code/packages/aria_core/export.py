@@ -127,7 +127,7 @@ def build_session_diagnostic_bundle(
         bundle["artifact_summary"] = dict(artifact_summary)
     else:
         try:
-            from artifacts import artifact_summary as _artifact_summary
+            from aria_code.artifacts import artifact_summary as _artifact_summary
 
             bundle["artifact_summary"] = _artifact_summary()
         except Exception:

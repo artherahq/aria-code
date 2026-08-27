@@ -22,82 +22,82 @@ import shlex
 from typing import Dict, Any, Optional
 
 def parse_team_args(*args, **kwargs):
-    from aria_cli import parse_team_args as fn
+    from aria_code.aria_cli import parse_team_args as fn
     return fn(*args, **kwargs)
 def evaluate_command_policy(*args, **kwargs):
-    from aria_cli import evaluate_command_policy as fn
+    from aria_code.aria_cli import evaluate_command_policy as fn
     return fn(*args, **kwargs)
 def resolve_team_symbols(*args, **kwargs):
-    from aria_cli import resolve_team_symbols as fn
+    from aria_code.aria_cli import resolve_team_symbols as fn
     return fn(*args, **kwargs)
 def team_agent_names(*args, **kwargs):
-    from aria_cli import team_agent_names as fn
+    from aria_code.aria_cli import team_agent_names as fn
     return fn(*args, **kwargs)
 def execute_aria_tool(*args, **kwargs):
-    from aria_cli import execute_aria_tool as fn
+    from aria_code.aria_cli import execute_aria_tool as fn
     return fn(*args, **kwargs)
 def export_report_pdf(*args, **kwargs):
-    from aria_cli import export_report_pdf as fn
+    from aria_code.aria_cli import export_report_pdf as fn
     return fn(*args, **kwargs)
 def run_team_analysis(*args, **kwargs):
-    from aria_cli import run_team_analysis as fn
+    from aria_code.aria_cli import run_team_analysis as fn
     return fn(*args, **kwargs)
 def save_markdown_report(*args, **kwargs):
-    from aria_cli import save_markdown_report as fn
+    from aria_code.aria_cli import save_markdown_report as fn
     return fn(*args, **kwargs)
 def all_agents_failed(*args, **kwargs):
-    from aria_cli import all_agents_failed as fn
+    from aria_code.aria_cli import all_agents_failed as fn
     return fn(*args, **kwargs)
 def logger(*args, **kwargs):
-    from aria_cli import logger as fn
+    from aria_code.aria_cli import logger as fn
     return fn(*args, **kwargs)
 def _get_Panel():
-    from aria_cli import Panel as val
+    from aria_code.aria_cli import Panel as val
     return val
 def save_team_report(*args, **kwargs):
-    from aria_cli import save_team_report as fn
+    from aria_code.aria_cli import save_team_report as fn
     return fn(*args, **kwargs)
 def _print_verdict_banner(*args, **kwargs):
-    from aria_cli import _print_verdict_banner as fn
+    from aria_code.aria_cli import _print_verdict_banner as fn
     return fn(*args, **kwargs)
 def _get_mdc(*args, **kwargs):
-    from aria_cli import _get_mdc as fn
+    from aria_code.aria_cli import _get_mdc as fn
     return fn(*args, **kwargs)
 def _print_error(*args, **kwargs):
-    from aria_cli import _print_error as fn
+    from aria_code.aria_cli import _print_error as fn
     return fn(*args, **kwargs)
 def report_agent_names(*args, **kwargs):
-    from aria_cli import report_agent_names as fn
+    from aria_code.aria_cli import report_agent_names as fn
     return fn(*args, **kwargs)
 def _tool_run_command(*args, **kwargs):
-    from aria_cli import _tool_run_command as fn
+    from aria_code.aria_cli import _tool_run_command as fn
     return fn(*args, **kwargs)
 def run_deep_cli(*args, **kwargs):
-    from aria_cli import run_deep_cli as fn
+    from aria_code.aria_cli import run_deep_cli as fn
     return fn(*args, **kwargs)
 def report_agent_health(*args, **kwargs):
-    from aria_cli import report_agent_health as fn
+    from aria_code.aria_cli import report_agent_health as fn
     return fn(*args, **kwargs)
 def report_file_size_kb(*args, **kwargs):
-    from aria_cli import report_file_size_kb as fn
+    from aria_code.aria_cli import report_file_size_kb as fn
     return fn(*args, **kwargs)
 def generate_html_report(*args, **kwargs):
-    from aria_cli import generate_html_report as fn
+    from aria_code.aria_cli import generate_html_report as fn
     return fn(*args, **kwargs)
 def _get__HAS_MDC():
-    from aria_cli import _HAS_MDC as val
+    from aria_code.aria_cli import _HAS_MDC as val
     return val
 def _sanitize_team_result_with_market_data(*args, **kwargs):
-    from aria_cli import _sanitize_team_result_with_market_data as fn
+    from aria_code.aria_cli import _sanitize_team_result_with_market_data as fn
     return fn(*args, **kwargs)
 def update_report_index(*args, **kwargs):
-    from aria_cli import update_report_index as fn
+    from aria_code.aria_cli import update_report_index as fn
     return fn(*args, **kwargs)
 def build_markdown_report_prompt(*args, **kwargs):
-    from aria_cli import build_markdown_report_prompt as fn
+    from aria_code.aria_cli import build_markdown_report_prompt as fn
     return fn(*args, **kwargs)
 def parse_report_args(*args, **kwargs):
-    from aria_cli import parse_report_args as fn
+    from aria_code.aria_cli import parse_report_args as fn
     return fn(*args, **kwargs)
 
 import json
@@ -137,7 +137,7 @@ class PortfolioCommandsMixin:
           /journal delete <id>                  → 删除指定记录
         """
         try:
-            from portfolio_ledger import PortfolioLedger as _PL
+            from aria_code.portfolio_ledger import PortfolioLedger as _PL
         except ImportError:
             msg = "portfolio_ledger 模块未找到"
             self.context.console.print(f"[red]{msg}[/red]") if self.context.has_rich else print(msg)
@@ -457,7 +457,7 @@ class PortfolioCommandsMixin:
                 if export_pdf_flag:
                     from pathlib import Path as _Path  # mixin 重绑定后无模块级 Path
                     try:
-                        from markdown_pdf import markdown_to_pdf as _md_to_pdf
+                        from aria_code.markdown_pdf import markdown_to_pdf as _md_to_pdf
                         _pdf_out = await asyncio.get_event_loop().run_in_executor(
                             None,
                             lambda: _md_to_pdf(_Path(out_f),
@@ -673,7 +673,7 @@ class PortfolioCommandsMixin:
             symbols = [s.strip(",").upper() for s in sym_parts if s.strip(",")]
         else:
             try:
-                from portfolio_ledger import PortfolioLedger as _PL_default
+                from aria_code.portfolio_ledger import PortfolioLedger as _PL_default
                 positions = _PL_default().get_positions()
             except ImportError:
                 positions = []
@@ -789,14 +789,14 @@ class PortfolioCommandsMixin:
     async def _portfolio_holdings_by_strategy(self):
         """实盘持仓看板：按来源策略分组（策略名匹配交易 reason），含实时浮盈。"""
         try:
-            from portfolio_ledger import PortfolioLedger
+            from aria_code.portfolio_ledger import PortfolioLedger
         except ImportError:
             self.context.console.print("[red]portfolio_ledger 模块未找到[/red]") if self.context.has_rich else print("portfolio_ledger 未找到")
             return
         ledger = PortfolioLedger()
         names = []
         try:
-            from strategy_vault import get_vault
+            from aria_code.strategy_vault import get_vault
             names = get_vault().list_all_names()
         except Exception:
             pass
@@ -988,7 +988,7 @@ class PortfolioCommandsMixin:
         """
         def _latest_close(symbol: str):
             try:
-                import data_cleaner
+                from aria_code import data_cleaner
                 df, _ = data_cleaner.get_clean_prices(symbol, period="5d")
                 if df is not None and len(df):
                     for col in ("close", "Close", "adj_close", "收盘"):
@@ -1006,7 +1006,7 @@ class PortfolioCommandsMixin:
             store, log = CalibrationStore(), PredictionLog()
             led_res = {"evaluated": 0, "hits": 0}
             try:  # actual realised P&L first — the strongest ground truth
-                from portfolio_ledger import PortfolioLedger
+                from aria_code.portfolio_ledger import PortfolioLedger
                 led_res = evaluate_from_ledger(store, log, PortfolioLedger())
             except Exception:
                 pass

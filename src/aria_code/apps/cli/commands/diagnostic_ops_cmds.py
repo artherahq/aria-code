@@ -60,37 +60,37 @@ import shlex
 from typing import Dict, Any, Optional
 
 def _test_datasource(*args, **kwargs):
-    from aria_cli import _test_datasource as fn
+    from aria_code.aria_cli import _test_datasource as fn
     return fn(*args, **kwargs)
 def _print_error(*args, **kwargs):
-    from aria_cli import _print_error as fn
+    from aria_code.aria_cli import _print_error as fn
     return fn(*args, **kwargs)
 def _get_ARIA_TOOLS():
-    from aria_cli import ARIA_TOOLS as val
+    from aria_code.aria_cli import ARIA_TOOLS as val
     return val
 def get_model_cfg(*args, **kwargs):
-    from aria_cli import get_model_cfg as fn
+    from aria_code.aria_cli import get_model_cfg as fn
     return fn(*args, **kwargs)
 def _get_LOCAL_TOOLS():
-    from aria_cli import LOCAL_TOOLS as val
+    from aria_code.aria_cli import LOCAL_TOOLS as val
     return val
 def _get___version__():
-    from aria_cli import __version__ as val
+    from aria_code.aria_cli import __version__ as val
     return val
 def _get_Panel():
-    from aria_cli import Panel as val
+    from aria_code.aria_cli import Panel as val
     return val
 def _get_provider_key(*args, **kwargs):
-    from aria_cli import _get_provider_key as fn
+    from aria_code.aria_cli import _get_provider_key as fn
     return fn(*args, **kwargs)
 def _get_rich_box():
-    from aria_cli import rich_box as val
+    from aria_code.aria_cli import rich_box as val
     return val
 def _get__HAS_MCP():
-    from aria_cli import _HAS_MCP as val
+    from aria_code.aria_cli import _HAS_MCP as val
     return val
 def _get_CONFIG_DIR():
-    from aria_cli import CONFIG_DIR as val
+    from aria_code.aria_cli import CONFIG_DIR as val
     return val
 
 import json
@@ -305,7 +305,7 @@ class DiagnosticOpsCommandsMixin:
 
     def cmd_doctor(self, args: str):
         try:
-            from doctor import run_doctor
+            from aria_code.doctor import run_doctor
 
             _ctx_stats = None
             try:
@@ -344,7 +344,7 @@ class DiagnosticOpsCommandsMixin:
                 self.context.console.print(f"[{color}]{report.passed} passed · {report.warnings} warnings · {report.errors} errors[/{color}]")
                 self.context.console.print()
             else:
-                from doctor import format_doctor_plain
+                from aria_code.doctor import format_doctor_plain
                 print(format_doctor_plain(report))
             return
         except Exception as exc:
@@ -694,7 +694,7 @@ class DiagnosticOpsCommandsMixin:
             # File parser availability is cached for performance.  Refresh it
             # now so DOCX/PDF/XLSX tools work in this same Aria session.
             try:
-                from file_analysis_tools import refresh_optional_parsers
+                from aria_code.file_analysis_tools import refresh_optional_parsers
 
                 refresh_optional_parsers()
             except Exception:

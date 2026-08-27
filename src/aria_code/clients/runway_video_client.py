@@ -142,7 +142,7 @@ def poll_video(task_id: str, *, download: bool = True) -> Dict[str, Any]:
             return {"success": False, "status": status, "error": "SUCCEEDED but no output URLs present"}
         result = {"success": True, "status": status, "video_url": outputs[0]}
         if download:
-            from artifacts import create_user_artifact
+            from aria_code.artifacts import create_user_artifact
 
             video_resp = requests.get(outputs[0], timeout=120)
             if video_resp.status_code == 200:

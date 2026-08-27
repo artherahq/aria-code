@@ -44,7 +44,7 @@ def _patch_mdc(monkeypatch):
     def _install(fake):
         # The tool now routes through DataService; wrap the fake MDC in a real
         # DataService (router disabled) so we exercise the actual code path.
-        from data_service import DataService
+        from aria_code.data_service import DataService
         svc = DataService(market_client=fake, router=False)
         monkeypatch.setattr(mt, "_HAS_MDC", True, raising=False)
         monkeypatch.setattr(mt, "_get_mdc", lambda: fake, raising=False)

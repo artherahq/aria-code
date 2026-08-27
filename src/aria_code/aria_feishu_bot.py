@@ -360,7 +360,7 @@ async def _handle_command(cmd: str, message_id: str, sender_id: str, chat_id: st
     elif verb == "brief":
         await reply_card(message_id, "⏳ 生成晨报…", "正在获取市场数据，请稍候…", "blue")
         try:
-            from aria_daemon import _run_morning_brief
+            from aria_code.aria_daemon import _run_morning_brief
             brief = await _run_morning_brief()
             await reply_card(message_id, "📊 Aria 晨报", brief[:2000], "green",
                              footer="Aria Code · 实时市场分析")
@@ -370,7 +370,7 @@ async def _handle_command(cmd: str, message_id: str, sender_id: str, chat_id: st
     elif verb == "screen":
         await reply_card(message_id, "⏳ 筛选中…", "正在扫描 A 股涨停预测，请稍候…", "blue")
         try:
-            from aria_daemon import _run_screener
+            from aria_code.aria_daemon import _run_screener
             result = await _run_screener()
             await reply_card(message_id, "🔍 涨停预测 Top10", result[:2000], "turquoise")
         except Exception as exc:
@@ -398,7 +398,7 @@ async def _handle_command(cmd: str, message_id: str, sender_id: str, chat_id: st
                                  "支持的条件：\n" + "\n".join(f"• `{c}`" for c in sorted(valid_conds)), "red")
                 return
             import sqlite3
-            from aria_daemon import _DB_PATH
+            from aria_code.aria_daemon import _DB_PATH
             with sqlite3.connect(_DB_PATH) as conn:
                 conn.execute(
                     "INSERT INTO alerts(id,symbol,condition,value,message,active) VALUES(?,?,?,?,?,1)",
@@ -413,7 +413,7 @@ async def _handle_command(cmd: str, message_id: str, sender_id: str, chat_id: st
 
     elif verb == "alerts":
         import sqlite3
-        from aria_daemon import _DB_PATH
+        from aria_code.aria_daemon import _DB_PATH
         rows = sqlite3.connect(_DB_PATH).execute(
             "SELECT symbol,condition,value FROM alerts WHERE active=1 ORDER BY created_at DESC LIMIT 20"
         ).fetchall()
@@ -425,7 +425,7 @@ async def _handle_command(cmd: str, message_id: str, sender_id: str, chat_id: st
 
     elif verb == "status":
         import sqlite3
-        from aria_daemon import _DB_PATH, _PID_FILE
+        from aria_code.aria_daemon import _DB_PATH, _PID_FILE
         pid_alive = _PID_FILE.exists()
         conn = sqlite3.connect(_DB_PATH)
         alert_count = conn.execute("SELECT COUNT(*) FROM alerts WHERE active=1").fetchone()[0]
@@ -518,7 +518,7 @@ async def _handle_football_predict(match_str: str, message_id: str) -> None:
         return
     home_raw, away_raw, league = m.group(1).strip(), m.group(2).strip(), (m.group(3) or "pl")
     try:
-        from football_data_client import _CN_TEAM_MAP, _FIFA_RATINGS, predict_match, predict_wc_match
+        from aria_code.football_data_client import _CN_TEAM_MAP, _FIFA_RATINGS, predict_match, predict_wc_match
 
         # Translate Chinese team names → English for model lookup
         home_en = _CN_TEAM_MAP.get(home_raw, home_raw)
@@ -572,7 +572,7 @@ async def _handle_football_predict(match_str: str, message_id: str) -> None:
 async def _handle_football_standings(league: str, message_id: str) -> None:
     """Handle /football standings from Feishu."""
     try:
-        from football_data_client import get_standings
+        from aria_code.football_data_client import get_standings
         data = get_standings(league)
         if not data:
             await reply_card(message_id, "❌ 无法获取数据",
@@ -591,7 +591,7 @@ async def _handle_football_standings(league: str, message_id: str) -> None:
 async def _fetch_price_feishu(symbol: str):
     """Thin wrapper around aria_daemon._fetch_price for use inside bot."""
     try:
-        from aria_daemon import _fetch_price
+        from aria_code.aria_daemon import _fetch_price
         return await _fetch_price(symbol)
     except ImportError:
         # Fallback: inline yfinance
@@ -607,7 +607,7 @@ async def _fetch_price_feishu(symbol: str):
 async def _async_report(symbol: str, message_id: str) -> None:
     """Background task: generate report and reply when done."""
     try:
-        from aria_daemon import _run_report
+        from aria_code.aria_daemon import _run_report
         result = await _run_report(symbol)
         await reply_card(message_id, f"📄 {symbol} 研报完成", result[:2000], "turquoise",
                          footer="Aria Code · 多智能体分析")

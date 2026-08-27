@@ -57,7 +57,7 @@ def test_stock_chart_html_uses_inline_plotly_js(monkeypatch, tmp_path):
 
 
 def test_stat_arb_chart_html_uses_inline_plotly_js(monkeypatch, tmp_path):
-    import aria_cli
+    from aria_code import aria_cli
 
     sym_a = "AAPL"
     sym_b = "MSFT"

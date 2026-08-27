@@ -11,13 +11,13 @@ import shlex
 from typing import Dict, Any, Optional
 
 def _p(*args, **kwargs):
-    from aria_cli import _p as fn
+    from aria_code.aria_cli import _p as fn
     return fn(*args, **kwargs)
 def _print_realty_result(*args, **kwargs):
-    from aria_cli import _print_realty_result as fn
+    from aria_code.aria_cli import _print_realty_result as fn
     return fn(*args, **kwargs)
 def _print_risk_scan(*args, **kwargs):
-    from aria_cli import _print_risk_scan as fn
+    from aria_code.aria_cli import _print_risk_scan as fn
     return fn(*args, **kwargs)
 
 import json

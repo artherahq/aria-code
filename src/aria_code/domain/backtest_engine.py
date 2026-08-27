@@ -337,7 +337,7 @@ def get_strategy(name: str, **kwargs: Any) -> Strategy:
 
 def load_bars(symbol: str, days: int = 365, interval: str = "1d") -> List[Bar]:
     """Pull OHLC history via DataService and adapt to Bar objects (for real runs)."""
-    from data_service import DataService
+    from aria_code.data_service import DataService
     res = DataService().history(symbol, days=days, interval=interval)
     rows = (res.data or {}).get("data") or []
     out: List[Bar] = []

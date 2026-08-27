@@ -98,42 +98,42 @@ import os
 from typing import Dict, Any, Optional
 
 def format_sparkline(*args, **kwargs):
-    from aria_cli import format_sparkline as fn
+    from aria_code.aria_cli import format_sparkline as fn
     return fn(*args, **kwargs)
 def _get_broker_registry(*args, **kwargs):
-    from aria_cli import _get_broker_registry as fn
+    from aria_code.aria_cli import _get_broker_registry as fn
     return fn(*args, **kwargs)
 def _get__HAS_BROKERS():
-    from aria_cli import _HAS_BROKERS as val
+    from aria_code.aria_cli import _HAS_BROKERS as val
     return val
 def _tool_run_command(*args, **kwargs):
-    from aria_cli import _tool_run_command as fn
+    from aria_code.aria_cli import _tool_run_command as fn
     return fn(*args, **kwargs)
 def logger(*args, **kwargs):
-    from aria_cli import logger as fn
+    from aria_code.aria_cli import logger as fn
     return fn(*args, **kwargs)
 def _print_error(*args, **kwargs):
-    from aria_cli import _print_error as fn
+    from aria_code.aria_cli import _print_error as fn
     return fn(*args, **kwargs)
 def _get__HAS_VAULT():
-    from aria_cli import _HAS_VAULT as val
+    from aria_code.aria_cli import _HAS_VAULT as val
     return val
 import pandas as pd
 def _get__HAS_MDC():
-    from aria_cli import _HAS_MDC as val
+    from aria_code.aria_cli import _HAS_MDC as val
     return val
 import pathlib
 def _get_vault(*args, **kwargs):
-    from aria_cli import _get_vault as fn
+    from aria_code.aria_cli import _get_vault as fn
     return fn(*args, **kwargs)
 def _tool_write_file(*args, **kwargs):
-    from aria_cli import _tool_write_file as fn
+    from aria_code.aria_cli import _tool_write_file as fn
     return fn(*args, **kwargs)
 def _ai_review(*args, **kwargs):
-    from aria_cli import _ai_review as fn
+    from aria_code.aria_cli import _ai_review as fn
     return fn(*args, **kwargs)
 def _get_mdc(*args, **kwargs):
-    from aria_cli import _get_mdc as fn
+    from aria_code.aria_cli import _get_mdc as fn
     return fn(*args, **kwargs)
 
 import json
@@ -312,7 +312,7 @@ class BacktestCommandsMixin:
         api_url = self.terminal.config.get("api_url", "http://localhost:8000")
 
         async def _do_backtest():
-            from backtest_report import BacktestConfig, generate_backtest_report
+            from aria_code.backtest_report import BacktestConfig, generate_backtest_report
             local_config = BacktestConfig(
                 symbol=symbol,
                 strategy=strategy,
@@ -329,7 +329,7 @@ class BacktestCommandsMixin:
                 if _output_dir:
                     _out_path = pathlib.Path(_output_dir).expanduser()
                     if not _out_path.is_absolute():
-                        from artifacts import user_generated_dir
+                        from aria_code.artifacts import user_generated_dir
                         _out_path = user_generated_dir() / _out_path
                 local_result = await asyncio.get_event_loop().run_in_executor(
                     None, lambda: generate_backtest_report(local_config, output_dir=_out_path)
@@ -783,7 +783,7 @@ class BacktestCommandsMixin:
             )
 
             _fname = f"auto_strat_{strategy_type}_{symbol}_r{round_num}_{int(_time.time())}.py"
-            from artifacts import user_generated_dir as _user_generated_dir
+            from aria_code.artifacts import user_generated_dir as _user_generated_dir
             _fpath = _user_generated_dir() / _fname
 
             self.context.console.print("  [dim]生成策略代码...[/dim]") if self.context.has_rich else print("  Generating strategy...")
@@ -1243,7 +1243,7 @@ class BacktestCommandsMixin:
 
         # Resolve base directory under the user's local Aria Code workspace.
         # Generated strategy/code projects must not silently land in the source repo.
-        from artifacts import user_projects_dir as _user_projects_dir
+        from aria_code.artifacts import user_projects_dir as _user_projects_dir
         base_dir = _user_projects_dir() / project_name
 
         # ── LLM-generated scaffold (when user gives a description) ────────────
@@ -1665,7 +1665,7 @@ class BacktestCommandsMixin:
             return
         deployed = set()
         try:
-            from portfolio_ledger import PortfolioLedger
+            from aria_code.portfolio_ledger import PortfolioLedger
             groups = PortfolioLedger().positions_by_strategy(names)
             deployed = {k for k in groups if k != PortfolioLedger.UNATTRIBUTED}
         except Exception:
@@ -1831,7 +1831,7 @@ class BacktestCommandsMixin:
         latest = all_versions[0]
         bt = latest.backtest_result or next((v.backtest_result for v in all_versions if v.backtest_result), None)
 
-        from portfolio_ledger import PortfolioLedger
+        from aria_code.portfolio_ledger import PortfolioLedger
         ledger = PortfolioLedger()
         rest = parts[1:]
 
@@ -2220,7 +2220,7 @@ class BacktestCommandsMixin:
 
                 self.context.console.print("\n  [bold]实盘部署[/bold]")
                 try:
-                    from portfolio_ledger import PortfolioLedger
+                    from aria_code.portfolio_ledger import PortfolioLedger
                     trades = PortfolioLedger().get_trades(limit=2000)
                     tagged = [t for t in trades if name.lower() in str(t.get("reason") or "").lower()]
                     if not tagged:
@@ -2310,7 +2310,7 @@ class BacktestCommandsMixin:
                     print(f"  backtest: sharpe={br.get('sharpe_ratio')} "
                           f"return={br.get('total_return_pct', br.get('total_return'))}")
                 try:
-                    from portfolio_ledger import PortfolioLedger
+                    from aria_code.portfolio_ledger import PortfolioLedger
                     tagged = [t for t in PortfolioLedger().get_trades(limit=2000)
                               if name.lower() in str(t.get("reason") or "").lower()]
                     if tagged:

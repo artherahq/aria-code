@@ -14,7 +14,7 @@ Commands handled:
   /help                 — command list
 
 Usage:
-    from aria_telegram_bot import TelegramBot
+    from aria_code.aria_telegram_bot import TelegramBot
     bot = TelegramBot(token="...", allowed_ids={123456})
     await bot.start(command_handler)   # command_handler(cmd, args, chat_id) -> str
 """

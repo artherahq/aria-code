@@ -30,7 +30,7 @@ def _default_provider(symbol: str) -> Dict[str, Dict]:
     """Best-effort pull of quant signals from local_finance_tools (each optional)."""
     out: Dict[str, Dict] = {}
     try:
-        import local_finance_tools as lft
+        from aria_code import local_finance_tools as lft
     except Exception:
         return out
     for key, fn in (("ai", "_get_ai_signal"), ("risk", "_get_risk_metrics"),

@@ -154,7 +154,7 @@ def generate_image(
 
     import requests
 
-    from artifacts import create_user_artifact
+    from aria_code.artifacts import create_user_artifact
 
     key = _require_key()
     resp = requests.post(
@@ -203,7 +203,7 @@ def edit_image(
 
     import requests
 
-    from artifacts import create_user_artifact
+    from aria_code.artifacts import create_user_artifact
 
     src = Path(image_path)
     if not src.exists():

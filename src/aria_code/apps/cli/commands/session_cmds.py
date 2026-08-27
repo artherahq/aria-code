@@ -17,13 +17,13 @@ import os
 from typing import Dict, Any, Optional
 
 def _arrow_select(*args, **kwargs):
-    from aria_cli import _arrow_select as fn
+    from aria_code.aria_cli import _arrow_select as fn
     return fn(*args, **kwargs)
 def get_model_cfg(*args, **kwargs):
-    from aria_cli import get_model_cfg as fn
+    from aria_code.aria_cli import get_model_cfg as fn
     return fn(*args, **kwargs)
 def _print_error(*args, **kwargs):
-    from aria_cli import _print_error as fn
+    from aria_code.aria_cli import _print_error as fn
     return fn(*args, **kwargs)
 
 import json
@@ -182,7 +182,7 @@ class SessionCommandsMixin:
                 # A support bundle should carry environment health and MCP/circuit
                 # state — the two things a maintainer asks for first. Best-effort.
                 try:
-                    from doctor import run_doctor
+                    from aria_code.doctor import run_doctor
                     doctor_report = run_doctor(self.terminal.config)
                 except Exception:
                     doctor_report = None

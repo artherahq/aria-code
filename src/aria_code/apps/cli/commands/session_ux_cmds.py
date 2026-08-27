@@ -13,13 +13,13 @@ import shlex
 from typing import Dict, Any, Optional
 
 def get_model_cfg(*args, **kwargs):
-    from aria_cli import get_model_cfg as fn
+    from aria_code.aria_cli import get_model_cfg as fn
     return fn(*args, **kwargs)
 def OllamaProvider(*args, **kwargs):
-    from aria_cli import OllamaProvider as fn
+    from aria_code.aria_cli import OllamaProvider as fn
     return fn(*args, **kwargs)
 def stream_provider_result(*args, **kwargs):
-    from aria_cli import stream_provider_result as fn
+    from aria_code.aria_cli import stream_provider_result as fn
     return fn(*args, **kwargs)
 
 import json

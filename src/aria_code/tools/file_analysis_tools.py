@@ -222,7 +222,7 @@ def tool_analyze_file(params: dict) -> dict:
     vision_attached = False
     if fc.images_b64:
         try:
-            from computer_use_tools import _store_screenshot
+            from aria_code.computer_use_tools import _store_screenshot
             raw = fc.images_b64[0]
             if "base64," in raw:
                 raw = raw.split("base64,", 1)[1]

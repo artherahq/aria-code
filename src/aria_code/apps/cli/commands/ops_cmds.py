@@ -11,28 +11,28 @@ import shlex
 from typing import Dict, Any, Optional
 
 def _display_path(*args, **kwargs):
-    from aria_cli import _display_path as fn
+    from aria_code.aria_cli import _display_path as fn
     return fn(*args, **kwargs)
 def _tool_github(*args, **kwargs):
-    from aria_cli import _tool_github as fn
+    from aria_code.aria_cli import _tool_github as fn
     return fn(*args, **kwargs)
 def _get_LOCAL_TOOLS():
-    from aria_cli import LOCAL_TOOLS as val
+    from aria_code.aria_cli import LOCAL_TOOLS as val
     return val
 def _get_provider_key(*args, **kwargs):
-    from aria_cli import _get_provider_key as fn
+    from aria_code.aria_cli import _get_provider_key as fn
     return fn(*args, **kwargs)
 def _tool_run_command(*args, **kwargs):
-    from aria_cli import _tool_run_command as fn
+    from aria_code.aria_cli import _tool_run_command as fn
     return fn(*args, **kwargs)
 def _tool_write_file(*args, **kwargs):
-    from aria_cli import _tool_write_file as fn
+    from aria_code.aria_cli import _tool_write_file as fn
     return fn(*args, **kwargs)
 def _get_Syntax():
-    from aria_cli import Syntax as val
+    from aria_code.aria_cli import Syntax as val
     return val
 def _get__SYNTAX_THEME():
-    from aria_cli import _SYNTAX_THEME as val
+    from aria_code.aria_cli import _SYNTAX_THEME as val
     return val
 
 import json
@@ -222,7 +222,7 @@ class OpsCommandsMixin:
                 print("  /plan 1. Analyze sentiment  2. Build model  3. Backtest")
             return
 
-        from plan_utils import parse_plan
+        from aria_code.plan_utils import parse_plan
         plan_steps = parse_plan(raw)
         if not plan_steps:
             self.context.console.print("[dim]No valid steps found[/dim]" if self.context.has_rich else "No valid steps found")

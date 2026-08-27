@@ -17,7 +17,7 @@ Document"的函数（参考 parse_shortterm_report），不需要重新设计 CS
     doc = parse_shortterm_report(md_text)
     html = render_document(doc, THEMES["institutional"])
     Path("out.html").write_text(html)
-    from report_generator import export_pdf
+    from aria_code.report_generator import export_pdf
     export_pdf(Path("out.html"))
 """
 from __future__ import annotations
