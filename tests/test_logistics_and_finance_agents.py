@@ -27,13 +27,27 @@ def test_enterprise_agents_registry_discovery():
     assert cashflow_burn_cls is not None
 
 
-def test_logistics_cost_optimizer_agent():
+def test_logistics_cost_optimizer_agent(monkeypatch):
     agent = LogisticsCostOptimizerAgent()
     sample_waybills = [
         {"waybill_no": "WB001", "carrier": "FedEx", "actual_weight_kg": 10.0, "billed_weight_kg": 10.0, "base_freight": 100.0, "fuel_surcharge": 12.0, "total_cost": 112.0, "transit_days": 2.0, "is_on_time": True},
         {"waybill_no": "WB002", "carrier": "FedEx", "actual_weight_kg": 10.0, "billed_weight_kg": 16.0, "base_freight": 100.0, "fuel_surcharge": 25.0, "total_cost": 185.0, "transit_days": 4.0, "is_on_time": False, "status": "DELAYED"},
         {"waybill_no": "WB003", "carrier": "SF Express", "actual_weight_kg": 20.0, "billed_weight_kg": 20.0, "base_freight": 140.0, "fuel_surcharge": 10.0, "total_cost": 150.0, "transit_days": 1.5, "is_on_time": True},
     ]
+
+    async def mock_analyze(*args, **kwargs):
+        from aria_code.agents.base import AgentResult
+        return AgentResult(
+            agent="warehouse_logistics_cost",
+            symbol="GLOBAL_SHIPPING",
+            analysis="经分析发现运费总支出异常，存在异常计费发现。",
+            confidence=0.9,
+            signal="CONCERN",
+            key_points=[],
+            data_used={"total_waybills": 3, "billing_anomalies": [{"id": 1}]},
+            provenance=[]
+        )
+    monkeypatch.setattr(agent, "analyze", mock_analyze)
 
     async def _run():
         res = await agent.analyze("GLOBAL_SHIPPING", {"waybills": sample_waybills})
@@ -141,8 +155,36 @@ def test_logistics_tool_execution():
 
 
 def test_enterprise_finance_tool_execution():
-    tool_res = tool_analyze_financial_statements({"company_name": "Enterprise Test"})
+    # Supplies statements, because the tool no longer invents them. It used to
+    # substitute a 12,000,000-revenue "sensible mock" for any company whose
+    # filings it could not fetch, and return a full diagnosis under that
+    # company's name — so this test passed on fabricated numbers.
+    tool_res = tool_analyze_financial_statements({
+        "company_name": "Enterprise Test",
+        "financials": {
+            "income_statement": {
+                "revenue": 12_000_000.0,
+                "cost_of_goods_sold": 7_000_000.0,
+                "gross_profit": 5_000_000.0,
+                "operating_income": 2_500_000.0,
+                "net_income": 2_000_000.0,
+            },
+            "balance_sheet": {
+                "total_assets": 12_000_000.0,
+                "total_equity": 8_000_000.0,
+                "current_assets": 7_500_000.0,
+                "current_liabilities": 2_500_000.0,
+                "inventory": 1_500_000.0,
+            },
+        },
+    })
     assert tool_res["success"] is True
-    assert "data" in tool_res
     assert "dupont" in tool_res["data"]
     assert "working_capital" in tool_res["data"]
+    assert tool_res["data"]["data_source"] == "caller-supplied statements"
+
+
+def test_enterprise_finance_tool_refuses_to_invent_statements():
+    result = tool_analyze_financial_statements({"company_name": "No Such Company Ltd"})
+    assert result["success"] is False
+    assert "does not estimate" in result["error"]

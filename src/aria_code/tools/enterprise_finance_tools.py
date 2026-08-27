@@ -102,20 +102,37 @@ def tool_analyze_financial_statements(params: Dict[str, Any]) -> Dict[str, Any]:
         except Exception as e:
             logger.warning(f"yfinance failed for {company_name}: {e}")
             
-    # If still empty, use sensible mock
+    # No statements, no diagnosis.
+    #
+    # A "sensible mock" used to fill in here — revenue 12,000,000, net income
+    # 2,000,000 — and the result then carried the requested company's name.
+    # Asked about a real company whose filings could not be fetched, the tool
+    # returned a complete, confident diagnosis of a business that does not
+    # exist, labelled with that company's ticker. There is no way for the
+    # caller to tell that apart from a real one.
     if not income:
-        income = {"revenue": 12000000.0, "cost_of_goods_sold": 7000000.0, "gross_profit": 5000000.0, "operating_income": 2500000.0, "net_income": 2000000.0}
-        balance = {"total_assets": 12000000.0, "total_equity": 8000000.0, "current_assets": 7500000.0, "current_liabilities": 2500000.0, "inventory": 1500000.0}
-        cashflow = {}
-        
+        return {
+            "success": False,
+            "error": (
+                f"No financial statements available"
+                f"{f' for {company_name}' if company_name else ''}. "
+                "Pass financials={income_statement, balance_sheet, cashflow}, or "
+                "give a ticker whose filings yfinance can fetch. "
+                "This tool does not estimate missing figures."
+            ),
+        }
+
     metrics = compute_financial_metrics(income, balance, cashflow)
     metrics["company_name"] = company_name
+    metrics["data_source"] = (
+        "caller-supplied statements" if params.get("financials") else f"yfinance:{company_name}"
+    )
 
     return {
         "success": True,
         "data": metrics,
         "summary": (
-            f"{company_name} 财务诊断完成: 毛利率 {metrics.get('gross_margin_pct')}%，"
+            f"{company_name} 财务诊断完成（来源：{metrics['data_source']}）: 毛利率 {metrics.get('gross_margin_pct')}%，"
             f"净利率 {metrics.get('net_margin_pct')}%，杜邦 ROE {metrics.get('dupont', {}).get('roe')}%，"
             f"偿债安全性 {metrics.get('solvency_risk')} (Altman Z: {metrics.get('altman_z_score')})。"
         ),

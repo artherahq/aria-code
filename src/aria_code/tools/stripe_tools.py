@@ -47,22 +47,23 @@ def tool_analyze_stripe_data(params: Dict[str, Any]) -> Dict[str, Any]:
         except Exception as exc:
             return {"success": False, "error": f"Failed to parse Stripe file: {exc}"}
 
+    # No data means no analysis.
+    #
+    # This used to substitute a "representative sample dataset" and analyse
+    # that instead, returning a normal-looking result with no indication the
+    # numbers were invented. Called with no arguments it reported a specific
+    # ARR and subscriber count for a business it had never seen — and once the
+    # tool became visible to the model, that is a figure it would relay to the
+    # user as theirs. Demo data is only safe when it announces itself.
     if not charges and not subscriptions:
-        # Default representative enterprise sample dataset if empty
-        charges = [
-            {"charge_id": "ch_01", "amount_usd": 120.0, "status": "succeeded", "fee_usd": 3.78, "refunded_amount_usd": 0.0},
-            {"charge_id": "ch_02", "amount_usd": 500.0, "status": "succeeded", "fee_usd": 14.80, "refunded_amount_usd": 0.0},
-            {"charge_id": "ch_03", "amount_usd": 120.0, "status": "failed", "fee_usd": 0.0, "refunded_amount_usd": 0.0},
-            {"charge_id": "ch_04", "amount_usd": 1200.0, "status": "succeeded", "fee_usd": 35.10, "refunded_amount_usd": 0.0},
-            {"charge_id": "ch_05", "amount_usd": 250.0, "status": "succeeded", "fee_usd": 7.55, "refunded_amount_usd": 50.0},
-        ]
-        subscriptions = [
-            {"subscription_id": "sub_01", "customer_id": "cus_01", "plan_name": "Pro Plan", "mrr_usd": 120.0, "status": "active"},
-            {"subscription_id": "sub_02", "customer_id": "cus_02", "plan_name": "Enterprise Plan", "mrr_usd": 500.0, "status": "active"},
-            {"subscription_id": "sub_03", "customer_id": "cus_03", "plan_name": "Scale Plan", "mrr_usd": 1200.0, "status": "active"},
-            {"subscription_id": "sub_04", "customer_id": "cus_04", "plan_name": "Pro Plan", "mrr_usd": 120.0, "status": "canceled"},
-            {"subscription_id": "sub_05", "customer_id": "cus_05", "plan_name": "Pro Plan", "mrr_usd": 120.0, "status": "active", "cancel_at_period_end": True},
-        ]
+        return {
+            "success": False,
+            "error": (
+                "No Stripe data supplied. Pass file_path (a CSV/JSON export of "
+                "charges and subscriptions), or charges/subscriptions directly. "
+                "This tool analyses data you provide; it does not connect to Stripe."
+            ),
+        }
 
     try:
         from aria_code.packages.quant_engine.services.stripe_analytics_service import StripeAnalyticsService

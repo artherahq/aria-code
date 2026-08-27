@@ -25,8 +25,14 @@ def tool_analyze_logistics_data(params: Dict[str, Any]) -> Dict[str, Any]:
         file_path (str, optional): Path to CSV/JSON/Excel with waybill records
         waybills (list, optional): Raw waybill records
     """
+    # Where the data came from, carried through to the result. A caller
+    # cannot judge an anomaly report without knowing whether it was computed
+    # from the file they passed or from the local ERP snapshot.
+    origin = "none"
     file_path = params.get("file_path")
     waybills = params.get("waybills", [])
+    if waybills:
+        origin = "caller-supplied records"
 
     if file_path:
         p = pathlib.Path(file_path).expanduser().resolve()
@@ -40,6 +46,7 @@ def tool_analyze_logistics_data(params: Dict[str, Any]) -> Dict[str, Any]:
                 with open(p, "r", encoding="utf-8-sig") as f:
                     reader = csv.DictReader(f)
                     waybills = list(reader)
+            origin = f"file:{p.name}"
         except Exception as exc:
             return {"success": False, "error": f"Failed to parse file {file_path}: {exc}"}
 
@@ -50,6 +57,7 @@ def tool_analyze_logistics_data(params: Dict[str, Any]) -> Dict[str, Any]:
         db_path = os.path.expanduser("~/.aria/erp_warehouse.db")
         if os.path.exists(db_path):
             try:
+                origin = "local ERP snapshot (~/.aria/erp_warehouse.db)"
                 conn = sqlite3.connect(db_path)
                 conn.row_factory = sqlite3.Row
                 cursor = conn.cursor()
@@ -72,8 +80,19 @@ def tool_analyze_logistics_data(params: Dict[str, Any]) -> Dict[str, Any]:
                         "total_freight_spend": totals["total_spend"],
                         "carrier_metrics": carrier_stats,
                         "billing_anomalies": anomalies,
+                        "data_source": origin,
+                        # The anomaly query is LIMIT 10, so this is a sample of
+                        # the exceptions rather than all of them. Saying so is
+                        # the difference between "10 anomalies exist" and "here
+                        # are 10 of them".
+                        "billing_anomalies_truncated": len(anomalies) >= 10,
                     },
-                    "summary": f"已自动连接至真实 ERP 数据库 ({db_path})，共计 {totals['total_waybills']} 条单据。发现抛货/计费异常 {len(anomalies)} 笔典型记录，总运费支出 {totals['total_spend']:,.2f} 元。"
+                    "summary": (
+                        f"数据来源：本地 ERP 快照 ({db_path})，共 {totals['total_waybills']} 条单据，"
+                        f"总运费支出 {totals['total_spend']:,.2f} 元。"
+                        f"抽样列出计费异常 {len(anomalies)} 笔"
+                        f"{'（查询上限 10 笔，实际可能更多）' if len(anomalies) >= 10 else ''}。"
+                    )
                 }
             except Exception as e:
                 logger.error(f"DB query failed: {e}")
@@ -81,14 +100,23 @@ def tool_analyze_logistics_data(params: Dict[str, Any]) -> Dict[str, Any]:
                 if 'conn' in locals():
                     conn.close()
 
+    # No data means no analysis.
+    #
+    # This used to substitute a "representative sample dataset" and analyse
+    # that instead, returning a normal-looking result with no indication the
+    # numbers were invented. Called with no arguments it reported a specific
+    # freight spend and carrier metrics for a business it had never seen — and once the
+    # tool became visible to the model, that is a figure it would relay to the
+    # user as theirs. Demo data is only safe when it announces itself.
     if not waybills:
-        # Default representative enterprise sample dataset if empty
-        waybills = [
-            {"waybill_no": "WB001", "carrier": "FedEx", "actual_weight_kg": 12.5, "billed_weight_kg": 12.5, "base_freight": 125.0, "fuel_surcharge": 15.0, "total_cost": 140.0, "transit_days": 2.0, "is_on_time": True},
-            {"waybill_no": "WB002", "carrier": "FedEx", "actual_weight_kg": 8.0, "billed_weight_kg": 14.0, "base_freight": 90.0, "fuel_surcharge": 25.0, "total_cost": 165.0, "transit_days": 4.0, "is_on_time": False},
-            {"waybill_no": "WB003", "carrier": "UPS", "actual_weight_kg": 20.0, "billed_weight_kg": 20.0, "base_freight": 180.0, "fuel_surcharge": 20.0, "total_cost": 200.0, "transit_days": 2.5, "is_on_time": True},
-            {"waybill_no": "WB004", "carrier": "SF Express", "actual_weight_kg": 15.0, "billed_weight_kg": 15.0, "base_freight": 105.0, "fuel_surcharge": 10.0, "total_cost": 115.0, "transit_days": 1.5, "is_on_time": True},
-        ]
+        return {
+            "success": False,
+            "error": (
+                "No waybill data supplied. Pass file_path (a CSV/JSON of waybills) "
+                "or waybills directly. This tool analyses data you provide; it does "
+                "not connect to a carrier or a TMS."
+            ),
+        }
 
     try:
         from aria_code.packages.quant_engine.services.logistics_analytics_service import LogisticsAnalyticsService
@@ -98,22 +126,35 @@ def tool_analyze_logistics_data(params: Dict[str, Any]) -> Dict[str, Any]:
     except Exception:
         # Fallback local calculation
         tot = sum(float(w.get("total_cost", 0.0)) for w in waybills)
+        # The on-time rate used to be hardcoded to 75.0 and returned beside a
+        # genuinely computed freight total, so a fabricated figure travelled
+        # under the same roof as a real one. Compute it, and report it as
+        # unknown when the records do not carry the field.
+        timed = [w for w in waybills if w.get("is_on_time") is not None]
+        on_time_rate = (
+            round(100.0 * sum(1 for w in timed if w.get("is_on_time")) / len(timed), 1)
+            if timed else None
+        )
         res = {
             "total_waybills": len(waybills),
             "total_freight_spend": tot,
-            "overall_on_time_rate": 75.0,
+            "overall_on_time_rate": on_time_rate,
             "carrier_metrics": [],
             "billing_anomalies": [],
-            "cost_saving_recommendations": ["审计完成，数据已归档"],
+            "cost_saving_recommendations": [],
+            "note": "简化计算：分析服务不可用，仅统计总量与准时率。",
         }
 
+    res.setdefault("data_source", origin)
+    _rate = res.get("overall_on_time_rate")
+    _rate_text = f"准时交付率 {_rate}%，" if _rate is not None else "准时交付率不可得，"
     return {
         "success": True,
         "data": res,
         "summary": (
-            f"已审计 {res.get('total_waybills', 0)} 单运单，"
+            f"已审计 {res.get('total_waybills', 0)} 单运单（来源：{origin}），"
             f"运费总计 ¥{res.get('total_freight_spend', 0):,.2f}，"
-            f"准时交付率 {res.get('overall_on_time_rate', 0)}%，"
+            f"{_rate_text}"
             f"发现 {len(res.get('billing_anomalies', []))} 笔计费异常。"
         ),
     }
