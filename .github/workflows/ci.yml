@@ -50,6 +50,17 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pytest pytest-asyncio pytest-cov pytest-timeout
+          # google-genai backs the Gemini/Vertex provider (aria_code.apps.cli.providers.vertexai_stream),
+          # now the default cloud model — kept optional in pyproject.toml so the
+          # base install stays light, but installed here so its tests run for
+          # real instead of failing on ModuleNotFoundError.
+          pip install google-genai
+          # Installs this repo itself (no-deps: requirements.txt already covers
+          # its dependencies) so `aria_code` is importable outside pytest's own
+          # process too — several tests deliberately spawn a subprocess to
+          # check import-time behavior on a fresh interpreter, which pytest's
+          # `pythonpath` ini setting does not reach.
+          pip install --no-deps -e .
 
       # 只把"能抓真 bug"的三类设成硬失败：name-defined / used-before-def /
       # no-redef。其余 280 个（多为缺类型注解）留作后续逐模块收紧——一次性

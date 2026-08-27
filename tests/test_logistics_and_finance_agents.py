@@ -148,7 +148,22 @@ def test_cashflow_burn_rate_agent():
 
 
 def test_logistics_tool_execution():
-    tool_res = tool_analyze_logistics_data({})
+    # Supplies waybills directly, for the same reason the finance tool test
+    # below does: the tool used to substitute a "representative sample" for
+    # a business it had never seen when called with no data, and it now
+    # correctly refuses to (returns success: False) instead of fabricating
+    # one. Calling it with {} only exercises that refusal path, and passed
+    # here only because a leftover ~/.aria/erp_warehouse.db from earlier
+    # local CLI use gave it real data to read on this machine — a fresh
+    # checkout, or CI, has no such file and the assertion below would fail
+    # for the right reason.
+    tool_res = tool_analyze_logistics_data({
+        "waybills": [
+            {"carrier": "SF Express", "total_cost": 128.5, "is_on_time": True},
+            {"carrier": "SF Express", "total_cost": 96.0, "is_on_time": False},
+            {"carrier": "YTO", "total_cost": 74.2, "is_on_time": True},
+        ]
+    })
     assert tool_res["success"] is True
     assert "data" in tool_res
     assert tool_res["data"]["total_waybills"] >= 1
