@@ -134,10 +134,12 @@ class PaymentsPackTests(unittest.TestCase):
         self.assertEqual(PAYMENTS_PACK.resolve_entities("refund this charge"), ())
 
     def test_a_leaked_key_produces_a_rotation_warning(self):
-        activation = activate_packs(
-            ("sk_" + "live_" + "51MowQVLkdIwHu7ixeRlqHVzs"),
-            packs=[PAYMENTS_PACK],
-        )[0]
+        # Assembled at runtime, and the body spells out that it is not a key.
+        # A literal of the real shape is indistinguishable from a live
+        # credential to a scanner — GitHub push protection rejected this file
+        # for it, which is the correct behaviour and not something to suppress.
+        fake_key = "sk_" + "live_" + "EXAMPLEONLY" + "0" * 12
+        activation = activate_packs(fake_key, packs=[PAYMENTS_PACK])[0]
         fragment = PAYMENTS_PACK.prompt_fragment(activation)
         self.assertIn("轮换", fragment)
 
