@@ -3204,7 +3204,7 @@ def _web_search(params: dict) -> dict:
             try:
                 from ddgs import DDGS
             except ImportError:
-                from duckduckgo_search import DDGS
+                from duckduckgo_search import DDGS  # type: ignore[no-redef]
         results = []
         for item in DDGS().text(query, max_results=num):
             results.append({
