@@ -446,6 +446,32 @@ async def test_skill_list_surfaces_integrity(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_skill_list_surfaces_declared_policy_and_source(monkeypatch):
+    from aria_code.packages.aria_skills import loader
+
+    skill = _fake_skill("a", "cat:a")
+    skill.policy = type("P", (), {
+        "allowed_tools": ("read_file",),
+        "permissions": ("workspace-read",),
+        "agents": ("research",),
+        "script_execution": "approval",
+        "script_network": False,
+        "script_workspace_write": False,
+    })()
+    skill.plugin_version = "1.2.3"
+    skill.repository = "https://github.com/artherahq/aria-skills"
+    skill.content_sha256 = "abc123"
+    monkeypatch.setattr(loader, "discover_external_skills", lambda *a, **kw: [skill])
+
+    result = await _call_skill_list({})
+    item = result["skills"][0]
+    assert item["policy"]["permissions"] == ["workspace-read"]
+    assert item["policy"]["allowed_tools"] == ["read_file"]
+    assert item["repository"].endswith("aria-skills")
+    assert item["content_sha256"] == "abc123"
+
+
+@pytest.mark.asyncio
 async def test_skill_get_returns_full_instructions_by_bare_name(monkeypatch):
     from aria_code.packages.aria_skills import loader
 
