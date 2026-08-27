@@ -979,78 +979,19 @@ def detect_ollama_models_rich(ollama_url: str = "http://localhost:11434") -> tup
     return results, None
 
 
-# ── Response cache for stateless queries (TTL = 60s) ─────────────────────────
-# Avoids sending the same market/concept query to Ollama multiple times
-# in rapid succession (e.g., user retries or tab-completion tests).
-import hashlib as _hashlib
-_RESPONSE_CACHE: dict = {}   # key → (response_text, expire_ts)
-_RESPONSE_CACHE_TTL = 60.0   # seconds
-
-def _cache_get(key: str) -> str | None:
-    """Return cached response text if still valid, else None."""
-    entry = _RESPONSE_CACHE.get(key)
-    if entry and time.time() < entry[1]:
-        return entry[0]
-    return None
-
-def _cache_set(key: str, value: str) -> None:
-    """Store response in cache with TTL expiry."""
-    _RESPONSE_CACHE[key] = (value, time.time() + _RESPONSE_CACHE_TTL)
-    # Keep cache small — evict expired entries when it grows large
-    if len(_RESPONSE_CACHE) > 200:
-        now = time.time()
-        for k in list(_RESPONSE_CACHE.keys()):
-            if _RESPONSE_CACHE[k][1] < now:
-                del _RESPONSE_CACHE[k]
-
-def _cache_key(model: str, message: str) -> str:
-    raw = f"{model}::{message.strip().lower()}"
-    return _hashlib.md5(raw.encode()).hexdigest()
-
-def _is_simple_greeting(message: str) -> bool:
-    text = (message or "").strip().lower()
-    greetings = {
-        "hi", "hello", "hey", "你好", "您好", "嗨", "哈喽", "在吗",
-        "早上好", "下午好", "晚上好",
-    }
-    return text in greetings or (len(text) <= 8 and any(g in text for g in greetings))
-
-
-def _offline_greeting_response() -> dict:
-    return {
-        "success": True,
-        "response": (
-            "你好，我是 Aria Code。\n\n"
-            "当前云端模型不可用，且本地 Ollama 服务没有启动；简单问候可以直接响应。"
-            "如果要进行代码修改、市场分析或长文本推理，请先启动本地模型：\n\n"
-            "```bash\n"
-            "ollama serve\n"
-            "```\n\n"
-            "然后可用 `ollama list` 检查已安装模型，或运行 `/health` 查看 Aria Code 状态。"
-        ),
-        "provider": "builtin",
-        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "thinking_tokens": 0},
-    }
-
-
-def _ollama_unavailable_result(ollama_url: str, err: str = "") -> dict:
-    host = ollama_url or "http://localhost:11434"
-    detail = f"\n\nDetail: {err}" if err else ""
-    return {
-        "success": False,
-        "provider": "ollama",
-        "error": (
-            "Local Ollama is not reachable.\n\n"
-            f"Host: {host}\n"
-            "Start it in another terminal:\n\n"
-            "  ollama serve\n\n"
-            "Then verify:\n\n"
-            "  curl http://127.0.0.1:11434/api/tags\n"
-            "  ollama list\n\n"
-            "If you do not want local fallback, use a working cloud/API provider or disable local mode."
-            f"{detail}"
-        ),
-    }
+# ── Response cache, greetings, offline fallbacks ─────────────────────────────
+# Moved to apps/cli/response_cache.py.  Re-exported under the original private
+# names because call sites across this module (and modules whose globals are
+# rebound to it) reference them as bare names.
+from aria_code.apps.cli.response_cache import (  # noqa: E402
+    RESPONSE_CACHE_TTL as _RESPONSE_CACHE_TTL,
+    cache_get as _cache_get,
+    cache_key as _cache_key,
+    cache_set as _cache_set,
+    is_simple_greeting as _is_simple_greeting,
+    offline_greeting_response as _offline_greeting_response,
+    ollama_unavailable_result as _ollama_unavailable_result,
+)
 
 
 def resolve_model_key(model_str: str) -> str:
