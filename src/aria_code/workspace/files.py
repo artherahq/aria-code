@@ -5,6 +5,7 @@ from __future__ import annotations
 import pathlib
 import re
 import tempfile
+import os
 from dataclasses import dataclass
 from typing import Any, Dict, List
 
@@ -28,11 +29,33 @@ class WorkspaceSecurity:
         "/root",
     )
 
-    def __init__(self, cwd: str | pathlib.Path | None = None) -> None:
+    def __init__(
+        self,
+        cwd: str | pathlib.Path | None = None,
+        *,
+        allowed_roots: List[str | pathlib.Path] | None = None,
+        allow_home: bool | None = None,
+    ) -> None:
         self.cwd = pathlib.Path(cwd or pathlib.Path.cwd()).expanduser().resolve()
+        self._configured_roots = tuple(
+            pathlib.Path(root).expanduser().resolve() for root in (allowed_roots or ())
+        )
+        if allow_home is None:
+            # Local CLI keeps its historical convenience. Remote/API workers must
+            # set ARIA_RUNTIME_SCOPE=remote (or pass allow_home=False) so one user
+            # can never inspect the worker account's home directory.
+            allow_home = os.getenv("ARIA_RUNTIME_SCOPE", "local").strip().lower() != "remote"
+        self.allow_home = bool(allow_home)
 
     def allowed_roots(self) -> List[pathlib.Path]:
-        roots = [pathlib.Path.home().resolve(), pathlib.Path("/tmp").resolve(), self.cwd]
+        roots = [self.cwd, *self._configured_roots]
+        if self.allow_home:
+            roots.append(pathlib.Path.home().resolve())
+        # Temporary roots are required by the local CLI, but a remote worker is
+        # confined to its explicitly assigned workspace root.
+        if not self.allow_home:
+            return list(dict.fromkeys(roots))
+        roots.append(pathlib.Path("/tmp").resolve())
         for tmp_candidate in (
             "/var/folders",
             "/private/tmp",
