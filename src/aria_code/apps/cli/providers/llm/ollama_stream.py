@@ -194,7 +194,7 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
 
     # ── 模型自动解析：确保请求的模型在 Ollama 中存在 ─────────────────────────
     try:
-        from local_llm_provider import resolve_model_async
+        from aria_code.local_llm_provider import resolve_model_async
         _resolved = await resolve_model_async(ollama_url, model)
         if _resolved != model:
             model = _resolved   # silently remap to available model
@@ -205,7 +205,7 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
     # 如果分配到的模型是 small/nano 级别，但任务需要代码生成、复杂分析或长文本，
     # 自动升级到 Ollama 中最优可用模型，防止低质量/模板化输出。
     try:
-        from model_capability import get_model_capability, is_router_only, can_handle_coding
+        from aria_code.model_capability import get_model_capability, is_router_only, can_handle_coding
         _cap_check = get_model_capability(model)
         _task_needs_upgrade = (
             is_router_only(_cap_check)
@@ -249,7 +249,7 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
     _finance_prompt = _build_finance_prompt(_intent_message)
 
     try:
-        from intent_classifier import (
+        from aria_code.intent_classifier import (
             classify_intent_async,
             INTENT_CODING, INTENT_ANALYSIS, INTENT_REALTIME,
             INTENT_GENERAL, INTENT_FINANCE,
@@ -410,7 +410,7 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
     # Analysis uses the full tool-aware prompt for capable models and the lite
     # prefetched-data prompt for small/text-only models.
     try:
-        from model_capability import get_model_capability as _gmc
+        from aria_code.model_capability import get_model_capability as _gmc
         _prompt_cap = _gmc(model)
         _model_size = _prompt_cap.size_class
         _model_supports_native_tools = bool(
@@ -495,7 +495,7 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
 
     # Prepend global user memory (user profile, project history, preferences)
     try:
-        from memory_manager import MemoryManager as _MM
+        from aria_code.memory_manager import MemoryManager as _MM
         _mem_block = _MM().load_context(max_chars=500)
         if _mem_block:
             system_prompt = _mem_block + "\n" + system_prompt
@@ -994,7 +994,7 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
                             _ollama_err = f"HTTP {resp.status}"
                         # Invalidate model cache so next call re-probes
                         try:
-                            from local_llm_provider import _model_cache
+                            from aria_code.local_llm_provider import _model_cache
                             _model_cache.clear()
                         except Exception:
                             pass
