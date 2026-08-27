@@ -994,8 +994,32 @@ from aria_code.apps.cli.response_cache import (  # noqa: E402
 )
 
 
+_MODEL_ID_INDEX: dict[str, str] | None = None
+
+
+def _model_id_index() -> dict[str, str]:
+    """Lazily build a lowercase {model id → MODELS key} index.
+
+    The config stores the provider-qualified *id* ("google/gemini-2.5-pro"),
+    while MODELS is keyed by short name ("gemini-pro").  Without this index a
+    registered cloud model looks unregistered and silently falls through to the
+    conservative unknown-model defaults (no tools, 4K context).
+    """
+    global _MODEL_ID_INDEX
+    if _MODEL_ID_INDEX is None:
+        index: dict[str, str] = {}
+        for key, cfg in MODELS.items():
+            model_id = str(cfg.get("id") or "").strip().lower()
+            if model_id and model_id not in index:
+                index[model_id] = key
+        _MODEL_ID_INDEX = index
+    return _MODEL_ID_INDEX
+
+
 def resolve_model_key(model_str: str) -> str:
     """Resolve any model alias/ID/key to a MODELS key.
+
+    Lookup order: exact key → alias → registered model id (case-insensitive).
 
     For community Ollama models (qwen2.5-coder, llama3.2, deepseek-r1, etc.)
     that are NOT in the MODELS registry, returns the sentinel "_community_"
@@ -1006,6 +1030,14 @@ def resolve_model_key(model_str: str) -> str:
         return model_str
     if model_str in MODEL_ALIASES:
         return MODEL_ALIASES[model_str]
+    normalized = str(model_str or "").strip().lower()
+    if normalized in MODELS:
+        return normalized
+    if normalized in MODEL_ALIASES:
+        return MODEL_ALIASES[normalized]
+    mapped = _model_id_index().get(normalized)
+    if mapped:
+        return mapped
     # Community/custom Ollama model — not in registry
     return "_community_"
 
@@ -4374,6 +4406,7 @@ class ArtheraTerminal:
         self._pending_market_resolution: Optional[dict] = None
         self._last_preflight_key: str = ""
         self._auto_compact_count: int = 0
+        self._unregistered_model_warned: set = set()
         # ── Multi-file analysis session ──────────────────────────────────────
         try:
             from file_analysis_tools import FileSession
@@ -5058,6 +5091,7 @@ class ArtheraTerminal:
             try:
                 _mc = get_model_capability(_curr_model_id)
                 _model_has_tools = bool(_mc.tool_calls and _mc.context_window >= 8192)
+                self._warn_unregistered_model(_curr_model_id, _mc)
             except Exception:
                 pass
 
@@ -6209,6 +6243,33 @@ class ArtheraTerminal:
             self.conversation, self.config, self._actual_model, get_model_cfg,
             known_context_tokens=known,
         )
+
+    def _warn_unregistered_model(self, model_id: str, cap) -> None:
+        """Warn once per model when it is missing from the capability registry.
+
+        An unregistered model runs with no tools and a 4K context budget, so it
+        answers repository questions from memory instead of reading files and
+        the context gauge measures against the wrong window.  That downgrade
+        used to be invisible; surface it so it can be fixed rather than
+        mistaken for the model being bad at the task.
+        """
+        try:
+            from aria_code.model_capability import is_unknown_model
+        except Exception:
+            return
+        if not is_unknown_model(cap):
+            return
+        if model_id in self._unregistered_model_warned:
+            return
+        self._unregistered_model_warned.add(model_id)
+        if HAS_RICH:
+            console.print(
+                f"  [yellow]⚠ 模型 {model_id} 未登记在能力表中[/yellow]\n"
+                f"  [dim]已按保守设置运行：不调用工具、上下文按 "
+                f"{cap.context_window} tokens 计算。[/dim]\n"
+                f"  [dim]如果它其实支持工具调用，请在 model_capability.py 的 "
+                f"_CAPABILITY_TABLE 中登记。[/dim]"
+            )
 
     async def _maybe_auto_compact_before_turn(self, incoming_content: str = "") -> bool:
         """Compact history before a request enters the model when context is hot."""
