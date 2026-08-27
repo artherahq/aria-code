@@ -1176,14 +1176,18 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
                 continue
 
             # Detect "intent without action" — model says it will do something
-            # but didn't output a tool call
-            _intent_words = [
-                "let me", "i will", "i'll", "let's", "让我", "我会", "我将",
-                "让我们", "我来", "接下来", "下面", "我们来", "我需要",
-                "再次", "重新", "检查", "修复", "fix", "retry", "check",
-            ]
-            has_intent = any(w in clean_text for w in _intent_words)
-            should_nudge = (_in_error_recovery or _last_tool_had_error or has_intent) and _nudge_count < 5
+            # but didn't output a tool call.  See apps/cli/action_nudge.py: the
+            # predicate lives there so it can be tested, and so that ordinary
+            # Chinese connectives no longer count as a promise to act.
+            from aria_code.apps.cli.action_nudge import should_nudge_for_action
+
+            should_nudge = should_nudge_for_action(
+                clean_text,
+                in_error_recovery=_in_error_recovery,
+                last_tool_had_error=_last_tool_had_error,
+                nudge_count=_nudge_count,
+                tools_available=bool(_available_tool_names),
+            )
 
             if should_nudge and tool_round < max_tool_rounds - 1:
                 _nudge_count += 1
@@ -1210,6 +1214,13 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
                         "Do NOT describe what you will do — just DO it. "
                         "Output a <tool_call> NOW to take the next action."
                     )
+                # Keep the prose this round produced.  Without this the answer
+                # was dropped from the returned text while the nudged follow-up
+                # round survived — the user saw a full review in the terminal
+                # (tokens had already streamed) but the stored answer was just
+                # the fragment that came after, e.g. a bare echoed "NOW".
+                if full_response.strip():
+                    response_segments.append(full_response.rstrip())
                 payload["messages"].append({"role": "assistant", "content": full_response})
                 payload["messages"].append({"role": "user", "content": nudge})
                 continue
