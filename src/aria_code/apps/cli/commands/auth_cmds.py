@@ -49,13 +49,19 @@ class AuthCommandsMixin:
     async def cmd_login(self, args: str):
         """Login to Arthera backend.
 
-        Usage: /login <email>           — prompts for password securely
+        Usage: /login google            — sign in with Google in the browser
+               /login <email>           — prompts for password securely
                /login                   — prompts for both email and password
         """
         import getpass as _getpass
         import aiohttp
 
         parts = args.split()
+
+        if parts and parts[0].lower() in {"google", "--google", "-g"}:
+            await self._login_with_google()
+            return
+
         if parts:
             email = parts[0]
         else:
@@ -124,10 +130,68 @@ class AuthCommandsMixin:
         except Exception as e:
             _print_error(f"Login error: {e}", "login")
 
+    async def _login_with_google(self):
+        """Browser-based Google sign-in (see apps/cli/google_login.py).
+
+        Run off the event loop: the flow blocks on a loopback socket for as long
+        as the user takes in the browser, which would otherwise stall every other
+        coroutine in the REPL.
+        """
+        import asyncio as _asyncio
+
+        from ..google_login import run_google_login
+
+        rich = self.context.has_rich
+        self.context.console.print(
+            "[dim]Opening your browser to sign in with Google…[/dim]"
+            if rich else "Opening your browser to sign in with Google…"
+        )
+
+        try:
+            session = await _asyncio.to_thread(
+                run_google_login, self.terminal.api_url
+            )
+        except RuntimeError as exc:
+            _print_error(str(exc), "login")
+            return
+        except Exception as exc:
+            _print_error(f"Google sign-in failed: {exc}", "login")
+            return
+
+        cfg = self.terminal.config
+        cfg["auth_token"] = session["auth_token"]
+        cfg["user_id"] = session.get("user_id")
+        cfg["auth_provider"] = "google.com"
+        if session.get("refresh_token"):
+            cfg["refresh_token"] = session["refresh_token"]
+        # Firebase ID tokens last an hour. Recording the expiry lets /whoami say
+        # "expired" instead of letting the next API call fail with an opaque 401.
+        if session.get("expires_in"):
+            # Imported locally: this module's `datetime` global is injected by
+            # aria_cli._rebind_mixin_globals, and timedelta/timezone are not.
+            from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+
+            try:
+                expires_at = _dt.now(_tz.utc) + _td(seconds=int(session["expires_in"]))
+                cfg["token_expires_at"] = expires_at.isoformat().replace("+00:00", "Z")
+            except Exception:
+                pass
+        self.context.save_config(cfg)
+
+        who = session.get("email") or session.get("user_id") or "your account"
+        self.context.console.print(
+            f"[green]✓ Signed in with Google as {who}[/green]" if rich
+            else f"Signed in with Google as {who}"
+        )
+
     def cmd_logout(self, args: str):
         self.terminal.config["auth_token"] = None
         self.terminal.config["user_id"] = None
         self.terminal.config.pop("token_expires_at", None)
+        # Added by the Google flow; leaving them behind would let /whoami report
+        # a provider for a session that no longer exists.
+        self.terminal.config.pop("refresh_token", None)
+        self.terminal.config.pop("auth_provider", None)
         self.context.save_config(self.terminal.config)
         self.context.console.print("[dim]Logged out[/dim]" if self.context.has_rich else "Logged out")
 
