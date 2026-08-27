@@ -472,15 +472,27 @@ async def _call_artifacts_list(args: Dict[str, Any]) -> Dict[str, Any]:
 def _skill_summary(skill: Any) -> Dict[str, Any]:
     """Listing shape — deliberately excludes `instructions` so a list call
     stays small; aria.skill.get fetches the full text for one skill."""
+    policy = getattr(skill, "policy", None)
     return {
         "name": skill.name,
         "qualified_name": skill.qualified_name,
         "description": skill.description,
         "plugin": skill.plugin_name,
+        "plugin_version": getattr(skill, "plugin_version", ""),
+        "repository": getattr(skill, "repository", ""),
+        "content_sha256": getattr(skill, "content_sha256", ""),
         # Surfaced so the caller can tell a signed catalog skill from an
         # unverified local drop-in — these are instruction documents the
         # model will follow, so provenance is worth showing, not hiding.
         "integrity": skill.integrity,
+        "policy": {
+            "allowed_tools": list(getattr(policy, "allowed_tools", ()) or ()),
+            "permissions": list(getattr(policy, "permissions", ()) or ()),
+            "agents": list(getattr(policy, "agents", ()) or ()),
+            "script_execution": str(getattr(policy, "script_execution", "approval")),
+            "script_network": bool(getattr(policy, "script_network", False)),
+            "script_workspace_write": bool(getattr(policy, "script_workspace_write", False)),
+        },
     }
 
 
