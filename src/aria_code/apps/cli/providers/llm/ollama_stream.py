@@ -863,6 +863,22 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
     _consecutive_reads = 0  # Track repeated read_file without fixing
     _last_failed_cmd = ""  # Track last failed run_command to detect repeats
     _consecutive_cmd_failures = 0  # Count consecutive failures of same command
+    # ── Tool-result context budget ────────────────────────────────────────
+    # Tool output is injected mid-turn, after the pre-turn compaction check has
+    # already run, so a turn that calls many tools could push the context from
+    # comfortable to full with nothing to stop it.  Cap what one turn may spend
+    # on tool results at a fraction of the window, and shrink each result's
+    # allowance as the budget is consumed.
+    _tool_result_budget_chars = max(
+        MIN_TOOL_RESULT_CHAR_LIMIT * 4,
+        int(_num_ctx * _chars_per_tok * 0.25),
+    )
+    _tool_result_chars_used = [0]
+
+    def _next_tool_result_limit() -> int:
+        """Per-result character allowance, given what this turn already spent."""
+        remaining = _tool_result_budget_chars - _tool_result_chars_used[0]
+        return max(MIN_TOOL_RESULT_CHAR_LIMIT, min(DEFAULT_TOOL_RESULT_CHAR_LIMIT, remaining))
     # Repetition loop detection — check every 80 chars (was 200, too slow for 200-token responses)
     _rep_check_interval = 80
     _rep_token_count = [0]     # mutable for closure
@@ -1323,7 +1339,10 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
                 break
             _print_tool_result(tool_name, result, tool_dt)
 
-            summary = _format_tool_summary(tool_name, result)
+            summary = _format_tool_summary(
+                tool_name, result, char_limit=_next_tool_result_limit()
+            )
+            _tool_result_chars_used[0] += len(summary)
 
             # Track if this tool had an error (for nudge logic)
             _last_tool_had_error = not result.get("success", False)
