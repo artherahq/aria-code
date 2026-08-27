@@ -17,10 +17,10 @@ import shlex
 from typing import Dict, Any, Optional
 
 def _esc_watcher(*args, **kwargs):
-    from aria_cli import _esc_watcher as fn
+    from aria_code.aria_cli import _esc_watcher as fn
     return fn(*args, **kwargs)
 def _print_error(*args, **kwargs):
-    from aria_cli import _print_error as fn
+    from aria_code.aria_cli import _print_error as fn
     return fn(*args, **kwargs)
 
 import json
