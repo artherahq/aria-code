@@ -3,7 +3,7 @@
  * aria-code — global CLI launcher
  *
  * Reads install metadata (written by postinstall.js) to find the correct
- * Python venv and aria_cli.py path, then delegates.
+ * Python venv and src/aria_code/apps/cli/main.py path, then delegates.
  *
  * Fallback chain:
  *   1. venv python from install-info
@@ -70,17 +70,17 @@ function findPython(info) {
   return null;
 }
 
-// ── Find aria_cli.py ──────────────────────────────────────────────────────────
+// ── Find src/aria_code/apps/cli/main.py ──────────────────────────────────────────────────────────
 
 function findAriaCli(info) {
   const installDir = info && info.installDir ? info.installDir : PATHS.installDir;
   const candidates = [
-    path.join(PATHS.installDir, "aria_cli.py"),
+    path.join(PATHS.installDir, "src/aria_code/apps/cli/main.py"),
     info && info.ariaCli,
-    path.join(installDir, "aria_cli.py"),
-    path.join(PATHS.legacyInstallDir, "aria_cli.py"),
+    path.join(installDir, "src/aria_code/apps/cli/main.py"),
+    path.join(PATHS.legacyInstallDir, "src/aria_code/apps/cli/main.py"),
     // bundled alongside this script (dev/test only)
-    path.join(__dirname, "..", "..", "aria_cli.py"),
+    path.join(__dirname, "..", "..", "src/aria_code/apps/cli/main.py"),
   ].filter(Boolean);
 
   for (const p of candidates) {
@@ -116,7 +116,7 @@ ${C.red}  aria-code: Python not found.${C.reset}
 
 if (!ariaCli) {
   process.stderr.write(`
-${C.red}  aria-code: aria_cli.py not found at ${installDir}${C.reset}
+${C.red}  aria-code: src/aria_code/apps/cli/main.py not found at ${installDir}${C.reset}
 
   Repair the installation:
     ${C.cyan}npm explore -g @artheras/aria-code -- npm run repair${C.reset}
@@ -128,13 +128,13 @@ ${C.red}  aria-code: aria_cli.py not found at ${installDir}${C.reset}
   process.exit(1);
 }
 
-const result = spawnSync(python, [ariaCli, ...args], {
+const result = spawnSync(python, ["-m", "aria_code.apps.cli.main", ...args], {
   stdio: "inherit",
   env: {
     ...process.env,
     // Ensure the venv's site-packages are used
     VIRTUAL_ENV: info && info.venvDir ? info.venvDir : undefined,
-    PYTHONPATH:  path.dirname(ariaCli),
+    PYTHONPATH:  path.resolve(path.dirname(ariaCli), "..", "..", ".."),
   },
   windowsHide: true,
 });

@@ -16,18 +16,17 @@ license = { text = "BUSL-1.1" }
 # clear "requires a different Python" message. Verified 3.13 installs and runs
 # (`aria-code --version` → 4.2.0); raise the bound once numba ships 3.14 wheels.
 requires-python = ">=3.10,<3.14"
-keywords = ["ai", "llm", "finance", "trading", "terminal", "cli"]
+keywords = ["ai", "llm", "coding-agent", "code-review", "product-review", "terminal", "cli", "finance"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Console",
-    "Intended Audience :: Financial and Insurance Industry",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
-    "Topic :: Office/Business :: Financial",
+    "Topic :: Software Development :: Quality Assurance",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 
@@ -67,6 +66,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+
+# Internal review service used by the Arthera API gateway. Kept optional so the
+# local terminal remains lightweight.
+service = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "python-multipart>=0.0.9",
+]
 
 # ── Data sources (heavy / region-specific) ────────────────────────────────────
 cn = ["akshare>=1.14.68"]          # China A-share / HK market data (large dep tree)

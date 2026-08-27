@@ -252,7 +252,7 @@ elif [[ -f "$LAUNCHER" ]]; then
 else
     cat > "$VENV_DIR/bin/aria-code-launcher" <<EOF
 #!/bin/bash
-exec "$VENV_DIR/bin/python" "$CLI_DIR/aria_cli.py" "\$@"
+exec "$VENV_DIR/bin/python" -m aria_code.apps.cli.main "\$@"
 EOF
     chmod +x "$VENV_DIR/bin/aria-code-launcher"
     ln -sf "$VENV_DIR/bin/aria-code-launcher" "$LINK_PATH"
@@ -332,10 +332,10 @@ if [[ "$NO_WIZARD" -eq 0 ]]; then
     read -r -p "  Run first-time setup wizard now? [Y/n] " RUN_WIZARD
     if [[ "${RUN_WIZARD:-Y}" =~ ^[Yy]$ ]] || [[ -z "${RUN_WIZARD:-}" ]]; then
         echo
-        "$VENV_PY" "$CLI_DIR/setup_wizard.py"
+        "$VENV_PY" -m aria_code.setup_wizard
     else
         echo
-        dim "  You can run the wizard later: python3 setup_wizard.py"
+        dim "  You can run the wizard later: python3 -m aria_code.setup_wizard"
         dim "  Or set up manually: cp .env.daemon.template ~/.aria/.env && edit it"
     fi
 fi
