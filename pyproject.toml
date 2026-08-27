@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aria-code"
-version = "4.4.1"
-description = "AI-powered financial terminal — local LLM + multi-source market data"
+version = "4.4.2"
+description = "General-purpose AI product reviewer and coding agent with optional finance capabilities"
 readme = "README.md"
 license = { text = "BUSL-1.1" }
 # Upper bound is real, not defensive: the core dep pandas_ta pulls numba, and
