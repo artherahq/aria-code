@@ -88,7 +88,7 @@ async def test_confirm_order_refuses_when_chat_confirm_not_enabled(monkeypatch):
         broker_id = "some_broker"
 
     monkeypatch.setattr(server_mod, "_get_broker", lambda broker_id="": _FakeBroker())
-    monkeypatch.setattr("brokers.config.is_chat_confirm_enabled", lambda broker_id: False)
+    monkeypatch.setattr("aria_code.brokers.config.is_chat_confirm_enabled", lambda broker_id: False)
 
     result = await _call_broker_confirm_order(
         {"preview_id": "tp_x", "broker_id": "some_broker", "confirmed": True}
@@ -105,7 +105,7 @@ async def test_confirm_order_executes_only_when_both_gates_pass(monkeypatch):
         broker_id = "some_broker"
 
     monkeypatch.setattr(server_mod, "_get_broker", lambda broker_id="": _FakeBroker())
-    monkeypatch.setattr("brokers.config.is_chat_confirm_enabled", lambda broker_id: True)
+    monkeypatch.setattr("aria_code.brokers.config.is_chat_confirm_enabled", lambda broker_id: True)
 
     called = {}
 
@@ -115,7 +115,7 @@ async def test_confirm_order_executes_only_when_both_gates_pass(monkeypatch):
         called["source"] = source
         return {"success": True, "order_id": "o1"}
 
-    monkeypatch.setattr("brokers.trading.execute_order_preview", fake_execute)
+    monkeypatch.setattr("aria_code.brokers.trading.execute_order_preview", fake_execute)
 
     result = await _call_broker_confirm_order(
         {"preview_id": "tp_x", "broker_id": "some_broker", "confirmed": True}
@@ -153,7 +153,7 @@ async def test_generate_submit_rejects_unknown_provider_even_when_confirmed():
 
 @pytest.mark.asyncio
 async def test_generate_submit_calls_provider_only_when_confirmed(monkeypatch):
-    import kling_video_client
+    from aria_code import kling_video_client
 
     called = {}
 
@@ -186,7 +186,7 @@ async def test_generate_image_refuses_with_confirmed_false():
 
 @pytest.mark.asyncio
 async def test_generate_image_calls_client_only_when_confirmed(monkeypatch):
-    import openai_image_client
+    from aria_code import openai_image_client
 
     called = {}
 
@@ -211,7 +211,7 @@ async def test_edit_image_refuses_without_confirmed():
 
 @pytest.mark.asyncio
 async def test_edit_image_calls_client_only_when_confirmed(monkeypatch):
-    import openai_image_client
+    from aria_code import openai_image_client
 
     called = {}
 
@@ -229,7 +229,7 @@ async def test_edit_image_calls_client_only_when_confirmed(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_edit_image_omits_mask_path_by_default(monkeypatch):
-    import openai_image_client
+    from aria_code import openai_image_client
 
     called = {}
 
@@ -244,7 +244,7 @@ async def test_edit_image_omits_mask_path_by_default(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_edit_image_passes_through_mask_path_for_inpainting(monkeypatch):
-    import openai_image_client
+    from aria_code import openai_image_client
 
     called = {}
 
@@ -300,7 +300,7 @@ async def test_indicator_chart_writes_artifact_on_success(monkeypatch, tmp_path)
 @pytest.mark.asyncio
 async def test_indicator_chart_no_data_reports_error(monkeypatch):
     import pandas as pd
-    import report_generator
+    from aria_code import report_generator
     monkeypatch.setattr(report_generator, "_fetch_report_data_sync", lambda symbol: (pd.DataFrame(), None, {}))
 
     result = await _call_indicator_chart({"symbol": "AAPL"})
@@ -332,7 +332,7 @@ async def test_comparison_chart_writes_artifact_on_success(monkeypatch, tmp_path
 @pytest.mark.asyncio
 async def test_comparison_chart_no_usable_data_reports_error(monkeypatch):
     import pandas as pd
-    import report_generator
+    from aria_code import report_generator
     monkeypatch.setattr(report_generator, "_fetch_report_data_sync", lambda symbol: (pd.DataFrame(), None, {}))
 
     result = await _call_comparison_chart({"symbols": ["AAPL", "MSFT"]})
