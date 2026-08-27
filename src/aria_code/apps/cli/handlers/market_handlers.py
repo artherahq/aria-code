@@ -538,25 +538,25 @@ def _get_provider_key(provider: str) -> str:
 
 # Lazy MDC accessor (mirrors the pattern in market_tools.py)
 def _get_mdc_lazy():
-    aria_cli = sys.modules.get("aria_cli")
-    injected = getattr(aria_cli, "_get_mdc", None) if aria_cli else None
+    from aria_code import aria_cli
+    injected = getattr(aria_cli, "_get_mdc", None)
     if callable(injected):
         try:
             return injected()
         except Exception:
             pass
     try:
-        from market_data_client import get_mdc as _gm
+        from aria_code.market_data_client import get_mdc as _gm
         return _gm()
     except Exception:
         return None
 
 def _has_mdc_lazy() -> bool:
-    aria_cli = sys.modules.get("aria_cli")
-    if aria_cli is not None and hasattr(aria_cli, "_HAS_MDC"):
+    from aria_code import aria_cli
+    if hasattr(aria_cli, "_HAS_MDC"):
         return bool(getattr(aria_cli, "_HAS_MDC"))
     try:
-        import market_data_client  # noqa
+        from aria_code import market_data_client  # noqa
         return True
     except ImportError:
         return False
@@ -2408,7 +2408,7 @@ def _try_handle_market_snapshot_analysis(message: str, history: list = None) -> 
             pred_symbol = symbol
             if _is_a_share and _ashare_code:
                 pred_symbol = ("sh" if _ashare_code.startswith(("6", "9")) else "sz") + _ashare_code
-            from local_finance_tools import _get_predictions
+            from aria_code.local_finance_tools import _get_predictions
             import contextlib as _ctxlib_pred
             import io as _io_pred
             with _ctxlib_pred.redirect_stdout(_io_pred.StringIO()), _ctxlib_pred.redirect_stderr(_io_pred.StringIO()):
