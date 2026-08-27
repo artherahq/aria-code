@@ -2798,7 +2798,7 @@ del _types_rebind
 # ============================================================================
 
 async def stream_chat(base_url: str, message: str, history: list,
-                      model: str = "qwen2.5:7b", thinking_mode: str = "auto",
+                      model: str = "", thinking_mode: str = "auto",
                       user_context: dict = None, auth_token: str = None,
                       on_token=None, on_thinking=None, on_tool_call=None,
                       on_tool_result=None, on_status=None,
