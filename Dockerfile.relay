@@ -10,10 +10,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl \
 
 RUN pip install --no-cache-dir fastapi uvicorn[standard] websockets httpx
 
-COPY aria_relay_server.py .
+# The relay server moved to src/aria_code/ in the package restructure; this
+# still copied a root-level aria_relay_server.py that has not existed since,
+# so `docker compose -f docker-compose.prod.yml build relay-server` failed on
+# the COPY. Install the package instead of copying one file — the server
+# imports from aria_code, so a lone module could not have run anyway.
+COPY pyproject.toml README.md ./
+COPY src ./src
+RUN pip install --no-cache-dir .
 
 ENV PYTHONUNBUFFERED=1
 
 EXPOSE 8765
 
-CMD ["python3", "aria_relay_server.py"]
+CMD ["python3", "-m", "aria_code.aria_relay_server"]
