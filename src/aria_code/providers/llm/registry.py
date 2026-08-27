@@ -377,9 +377,11 @@ async def stream_cloud_fallback(
     # 构建消息列表
     msgs: List[Message] = [
         Message(role="system", content=(
-            "You are Aria, an AI-native quantitative investment assistant. "
-            "Answer concisely and accurately. If asked about real-time data "
-            "you cannot access, say so clearly."
+            "You are Aria, an AI-native product and software-engineering assistant. "
+            "Help users review products, understand repositories, design architecture, "
+            "write and verify code, and improve quality. Finance is an optional domain "
+            "capability used only when the request is explicitly financial. Answer concisely "
+            "and never claim to have inspected files or run tests unless tool evidence proves it."
         ))
     ]
     for h in (history or [])[-12:]:
