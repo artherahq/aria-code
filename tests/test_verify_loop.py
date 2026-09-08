@@ -57,6 +57,27 @@ class TestToolVerifyChangesContract:
         assert result["all_passed"] is True
 
 
+class TestToolIsRegisteredWithTheModel:
+    """Guards against the exact bug class this tool started as: a real,
+    tested handler that the model can never actually select because it was
+    never added to aria_cli.py's LOCAL_TOOLS dispatch dict / LOCAL_TOOL_SCHEMAS
+    list (see tests/test_aria_cli_core.py for the sibling guard on commands)."""
+
+    def test_verify_changes_is_dispatchable(self):
+        from aria_code import aria_cli as _ac
+        assert "verify_changes" in _ac.LOCAL_TOOLS
+        handler, _description = _ac.LOCAL_TOOLS["verify_changes"]
+        assert handler is tool_verify_changes
+
+    def test_verify_changes_schema_is_visible_to_the_model(self):
+        from aria_code import aria_cli as _ac
+        names = [
+            s.get("name") or s.get("function", {}).get("name")
+            for s in _ac.LOCAL_TOOL_SCHEMAS
+        ]
+        assert "verify_changes" in names
+
+
 class TestTraceReporting:
     def test_reporter_is_called_with_a_goal_naming_the_files(self, tmp_path):
         import aria_code.runtime.verify_loop as vl

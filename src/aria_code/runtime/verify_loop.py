@@ -260,3 +260,43 @@ def tool_verify_changes(params: dict) -> dict:
     result = summary.to_dict()
     result["success"] = summary.all_passed
     return result
+
+
+# Registered into aria_cli.py's LOCAL_TOOLS the same way SUBAGENT_TOOLS is
+# (see the "Register subagent tools" block) — a dict of
+# name -> (handler, short_description) plus the model-facing JSON schema.
+VERIFY_TOOLS = {
+    "verify_changes": (tool_verify_changes, "Run automated post-edit verification (syntax, tests, type checks) and get a repair directive if something broke"),
+}
+
+VERIFY_SCHEMAS = [
+    {
+        "name": "verify_changes",
+        "description": (
+            "Run automated post-edit verification on the current project: detects and runs "
+            "the relevant checks (Python syntax + pytest, npm test, cargo check, go test) "
+            "based on what's present. Call this after making code changes to confirm they "
+            "actually hold up, instead of assuming an edit worked. On failure, returns a "
+            "repair_directive naming exactly what broke."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "modified_files": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Paths changed in this turn. An empty list still runs whole-project checks (pytest/npm test) if present.",
+                },
+                "workspace_root": {
+                    "type": "string",
+                    "description": "Project root to run checks from. Defaults to the current working directory.",
+                },
+                "timeout_seconds": {
+                    "type": "integer",
+                    "description": "Per-check timeout in seconds. Default 30.",
+                },
+            },
+            "required": [],
+        },
+    },
+]
