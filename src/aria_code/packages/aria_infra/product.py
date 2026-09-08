@@ -25,7 +25,10 @@ def aria_code_identity(version: str = "3.0.0") -> ProductIdentity:
         product="Aria Code",
         package_name="aria-code",
         version=version,
-        description="Local-first coding and quantitative research agent by Arthera.",
+        description=(
+            "Local-first product review and coding agent by Arthera, "
+            "with optional quantitative research capabilities."
+        ),
         product_family=[
             "Aria Code",
             "Aria Gateway",

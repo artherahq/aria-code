@@ -18,6 +18,19 @@ from aria_code.runtime.self_healing import SelfHealingEngine, SelfHealingResult
 
 logger = logging.getLogger(__name__)
 
+# Set by procedural_trace.wire_trace_reporters() — None disables reporting
+# entirely, and only that function should assign it, only after the user has
+# explicitly opted in (data_sharing + feedback_upload). See its docstring.
+_TRACE_REPORTER: Optional[Callable[[Dict[str, Any], str], None]] = None
+
+
+def set_trace_reporter(
+    reporter: Optional[Callable[[Dict[str, Any], str], None]]
+) -> None:
+    """Register a best-effort execution-trace reporter for self-healing runs."""
+    global _TRACE_REPORTER
+    _TRACE_REPORTER = reporter
+
 
 class TesterAgent(BaseAgent):
     __test__ = False
@@ -79,6 +92,12 @@ class TesterAgent(BaseAgent):
 
         # Run Self-Healing Engine
         heal_result: SelfHealingResult = await self.engine.execute_and_heal(target_file)
+
+        if _TRACE_REPORTER is not None:
+            try:
+                _TRACE_REPORTER(heal_result.to_dict(), f"test and self-heal {symbol}")
+            except Exception:
+                pass
 
         if heal_result.success:
             m = heal_result.metrics

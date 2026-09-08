@@ -13,6 +13,8 @@ NameError，而这正是 requires-python = "<3.14,>=3.10" 声明支持的全部�
 全绿。已发布的 4.3.0 同样中招：pip install 后运行 aria-code 直接崩溃。
 """
 
+from aria_code.ui.render.output import display_path as _display_path
+
 import pathlib
 
 
@@ -266,7 +268,7 @@ class CoreCommandsMixin:
                     limit = int(head)
                 except Exception:
                     limit = 20
-        from artifacts import artifact_summary_all, prune_artifacts_all, recent_artifacts_all
+        from aria_code.artifacts import artifact_summary_all, prune_artifacts_all, recent_artifacts_all
 
         if mode in {"open", "reveal", "show", "path", "copy-path"}:
             items = recent_artifacts_all(limit=100)
@@ -451,7 +453,7 @@ class CoreCommandsMixin:
     def cmd_tasks(self, args: str):
         """Show and manage background subagent tasks."""
         try:
-            from runtime.subagent import _TASKS, tool_task_cancel
+            from aria_code.runtime.subagent import _TASKS, tool_task_cancel
         except ImportError:
             msg = "Subagent module not available."
             self.context.console.print(f"[red]{msg}[/red]") if self.context.has_rich else print(msg)
@@ -501,7 +503,7 @@ class CoreCommandsMixin:
     def cmd_delegate(self, args: str):
         """Delegate a task to the Claude Code or Codex CLI as a background subagent."""
         try:
-            from runtime.subagent import tool_spawn_task
+            from aria_code.runtime.subagent import tool_spawn_task
         except ImportError:
             msg = "Subagent module not available."
             self.context.console.print(f"[red]{msg}[/red]") if self.context.has_rich else print(msg)
@@ -537,7 +539,7 @@ class CoreCommandsMixin:
                 self.context.console.print(f"[yellow]{msg}[/yellow]") if self.context.has_rich else print(msg)
                 return
             client_id, client_secret = parts[1], parts[2]
-            from canva_client import connect as _canva_connect
+            from aria_code.canva_client import connect as _canva_connect
             msg = "打开浏览器完成 Canva 授权…"
             self.context.console.print(f"[cyan]{msg}[/cyan]") if self.context.has_rich else print(msg)
             result = _canva_connect(client_id, client_secret)
@@ -549,7 +551,7 @@ class CoreCommandsMixin:
             return
 
         if sub == "status":
-            from canva_client import _load_canva_config
+            from aria_code.canva_client import _load_canva_config
             entry = _load_canva_config()
             msg = "✓ Canva 已连接" if entry.get("access_token") else "未连接 Canva。运行 /canva connect <client_id> <client_secret>"
             self.context.console.print(msg) if self.context.has_rich else print(msg)
@@ -591,7 +593,7 @@ class CoreCommandsMixin:
         if not silent and self.context.has_rich:
             self.context.console.print("[dim]Summarising conversation...[/dim]")
 
-        from packages.aria_services.context import build_context_service
+        from aria_code.packages.aria_services.context import build_context_service
 
         model_key = self.terminal.config.get("model", "qwen2.5:7b")
         max_ctx = int(get_model_cfg(model_key).get("num_ctx", 16384) or 16384)
@@ -644,7 +646,7 @@ class CoreCommandsMixin:
         # Architecture coverage summary (observability layer) — /architecture for the
         # full layered view. Best-effort; never let it break /doctor.
         try:
-            from packages.aria_core import architecture_gaps, architecture_status_counts
+            from aria_code.packages.aria_core import architecture_gaps, architecture_status_counts
             _c = architecture_status_counts()
             _done, _total = _c.get("done", 0), sum(_c.values())
             _line = (f"架构契约: {_done}/{_total} 层完成 · {len(architecture_gaps())} 层待办"
@@ -780,6 +782,10 @@ class CoreCommandsMixin:
                           else "No response")
             return
 
+
+        from aria_code.aria_cli import _extract_code_block
+
+
         code = _extract_code_block(last_response)
         if not code:
             self.context.console.print("[dim]No code block found in last response[/dim]" if self.context.has_rich
@@ -827,8 +833,8 @@ class CoreCommandsMixin:
             description = parts[0].strip()
             save_path = parts[1].strip() if len(parts) > 1 else None
 
-        from artifacts import user_generated_dir
-        from apps.cli.codegen_paths import resolve_user_code_path
+        from aria_code.artifacts import user_generated_dir
+        from aria_code.apps.cli.codegen_paths import resolve_user_code_path
         default_save = resolve_user_code_path(
             description,
             None,
@@ -868,6 +874,8 @@ class CoreCommandsMixin:
                 if msg["role"] == "assistant":
                     last_response = msg["content"]
                     break
+    
+            from aria_code.aria_cli import _extract_code_block
             code = _extract_code_block(last_response)
             if code:
                 if save_path:
@@ -880,6 +888,7 @@ class CoreCommandsMixin:
                     _save_path = default_save
                 _save_path.parent.mkdir(parents=True, exist_ok=True)
                 _save_path.write_text(code, encoding="utf-8")
+                from aria_code.ui.render.output import display_path as _display_path
                 _save_label = _display_path(str(_save_path))
                 if self.context.has_rich:
                     self.context.console.print(f"\n[green]Code saved to {_save_label}[/green] "
@@ -1448,7 +1457,7 @@ class CoreCommandsMixin:
             self.terminal._mcp_registry = None
             if self.context.has_rich:
                 self.context.console.print("  [dim]Restarting MCP servers…[/dim]")
-            from mcp_client import MCPToolRegistry
+            from aria_code.mcp_client import MCPToolRegistry
             self.terminal._mcp_registry = MCPToolRegistry()
             results = await self.terminal._mcp_registry.start_all()
             n = self.terminal._mcp_registry.register_into(LOCAL_TOOLS, LOCAL_TOOL_SCHEMAS, overwrite=True)
@@ -1499,7 +1508,7 @@ class CoreCommandsMixin:
     def cmd_license(self, args: str):
         """Show feature license / entitlement status."""
         try:
-            from licensing import current_license, license_status
+            from aria_code.licensing import current_license, license_status
             current_license(refresh=True)   # re-read in case a key was just installed
             st = license_status()
         except Exception as e:
@@ -1727,11 +1736,11 @@ class CoreCommandsMixin:
             return
 
         try:
-            from apps.cli.prompts.ui import UI_SYSTEM_PROMPT
+            from aria_code.apps.cli.prompts.ui import UI_SYSTEM_PROMPT
         except ImportError:
             UI_SYSTEM_PROMPT = ""
         try:
-            from artifacts import user_generated_dir
+            from aria_code.artifacts import user_generated_dir
             generated_dir = user_generated_dir()
         except Exception:
             generated_dir = pathlib.Path.home() / "Documents" / "Aria Code" / "generated"
@@ -1772,7 +1781,7 @@ class CoreCommandsMixin:
         数据来源: 本地持仓DB + 价格预警DB + yfinance 实时行情 + 最近生成文件
         """
         try:
-            from dashboard_generator import generate_and_open
+            from aria_code.dashboard_generator import generate_and_open
         except ImportError:
             if self.context.has_rich:
                 self.context.console.print("[red]dashboard_generator.py 未找到，请检查安装[/red]")
@@ -1842,7 +1851,7 @@ class CoreCommandsMixin:
         raw_symbol = symbol_parts[0] if symbol_parts else "AAPL"
         symbol = _resolve_market_arg_symbol(raw_symbol)
         try:
-            from apps.cli.tradingview_bridge import (
+            from aria_code.apps.cli.tradingview_bridge import (
                 export_pine_strategy,
                 tradingview_symbol,
                 tradingview_url,
@@ -2060,7 +2069,7 @@ class CoreCommandsMixin:
 
         compare_start = time.perf_counter()
         try:
-            from apps.cli.handlers.chart_handlers import handle_multi_stock_comparison_direct as _multi_chart
+            from aria_code.apps.cli.handlers.chart_handlers import handle_multi_stock_comparison_direct as _multi_chart
             result = await asyncio.get_event_loop().run_in_executor(
                 None, lambda: _multi_chart([resolved for _, resolved in symbols], period=period)
             )
@@ -2260,10 +2269,10 @@ class CoreCommandsMixin:
         service_result = None
         if self.context.has_rich:
             with self.context.console.status(f"[dim]计算 {symbol} 技术指标...[/dim]", spinner="dots"):
-                from packages.aria_services.data import DataService
+                from aria_code.packages.aria_services.data import DataService
                 service_result = DataService().technical_indicators(symbol, days=days)
         else:
-            from packages.aria_services.data import DataService
+            from aria_code.packages.aria_services.data import DataService
             service_result = DataService().technical_indicators(symbol, days=days)
         if not service_result or not service_result.success:
             _ta_warns = (service_result.warnings or []) if service_result else []

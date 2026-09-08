@@ -20,7 +20,7 @@ v2.0.0 — 2026-06
   tracker      — 预测追踪、Brier Score、自动 Elo 同步、动态场均进球
 
 快速使用:
-    from packages.quant_engine.sports import quick_predict, get_elo
+    from aria_code.packages.quant_engine.sports import quick_predict, get_elo
 
     # 预测（含 NB 分布 + 动态权重）
     result = quick_predict("germany", "curacao", league="wc")
@@ -31,7 +31,7 @@ v2.0.0 — 2026-06
     print(elo.get_rating("germany"))    # ~1912（赛后更新）
 
     # 自动同步已结束 WC 比赛 Elo
-    from packages.quant_engine.sports import sync_elo_from_wc
+    from aria_code.packages.quant_engine.sports import sync_elo_from_wc
     sync_elo_from_wc(api_get_fn)
 """
 

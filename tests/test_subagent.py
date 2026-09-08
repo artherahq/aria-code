@@ -18,15 +18,18 @@ from aria_code.runtime.task_ledger import TaskLedger
 @pytest.fixture(autouse=True)
 def clear_tasks():
     """Clear the task registry and runner between tests."""
-    import runtime.subagent as _sa
+    import aria_code.runtime.subagent as _sa
     _TASKS.clear()
     _orig_runner = _sa._RUNNER
     _orig_ledger = _sa._LEDGER
+    _orig_reporter = _sa._TRACE_REPORTER
     _sa._RUNNER = None  # ensure no runner is registered during tests
+    _sa._TRACE_REPORTER = None
     yield
     _TASKS.clear()
     _sa._RUNNER = _orig_runner
     _sa._LEDGER = _orig_ledger
+    _sa._TRACE_REPORTER = _orig_reporter
 
 
 class TestSpawnTask:
@@ -171,7 +174,7 @@ class TestTaskCancel:
 class TestTaskPersistence:
     def test_ledger_round_trip_and_running_recovery(self, tmp_path, monkeypatch):
         monkeypatch.setenv("ARIA_TASK_LEDGER_PATH", str(tmp_path / "tasks.json"))
-        import runtime.subagent as subagent
+        import aria_code.runtime.subagent as subagent
         subagent._LEDGER = TaskLedger(tmp_path / "tasks.json")
         task = SubagentTask(task_id="recover1", prompt="inspect", status="running")
         subagent._TASKS[task.task_id] = task
@@ -191,3 +194,42 @@ class TestTaskPersistence:
         _TASKS[task.task_id] = task
         result = tool_task_result({"task_id": task.task_id})
         assert result["handoff"]["verification"] == "pytest -q passed"
+
+
+class TestTraceReporting:
+    def test_reporter_is_called_for_terminal_states(self):
+        import aria_code.runtime.subagent as _sa
+        received = []
+        _sa.set_trace_reporter(lambda snapshot: received.append(snapshot))
+
+        task = SubagentTask(task_id="r1", prompt="inspect", status="done", result="ok")
+        _sa._persist(task)
+
+        assert len(received) == 1
+        assert received[0]["task_id"] == "r1"
+
+    def test_reporter_is_not_called_for_non_terminal_states(self):
+        import aria_code.runtime.subagent as _sa
+        received = []
+        _sa.set_trace_reporter(lambda snapshot: received.append(snapshot))
+
+        task = SubagentTask(task_id="r2", prompt="inspect", status="running")
+        _sa._persist(task)
+
+        assert received == []
+
+    def test_no_reporter_registered_is_a_silent_no_op(self):
+        import aria_code.runtime.subagent as _sa
+        _sa.set_trace_reporter(None)
+        task = SubagentTask(task_id="r3", prompt="inspect", status="done", result="ok")
+        _sa._persist(task)  # must not raise
+
+    def test_a_broken_reporter_never_breaks_ledger_persistence(self):
+        import aria_code.runtime.subagent as _sa
+
+        def _boom(snapshot):
+            raise RuntimeError("reporter backend unreachable")
+
+        _sa.set_trace_reporter(_boom)
+        task = SubagentTask(task_id="r4", prompt="inspect", status="done", result="ok")
+        _sa._persist(task)  # must not raise despite the reporter blowing up

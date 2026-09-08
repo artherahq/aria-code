@@ -19,7 +19,7 @@ _PNG_1X1 = base64.b64decode(
 
 
 def test_load_image_source_from_file(tmp_path):
-    from apps.cli.commands.ui_cmds import UiCommandsMixin
+    from aria_code.apps.cli.commands.ui_cmds import UiCommandsMixin
 
     path = tmp_path / "chart.png"
     path.write_bytes(_PNG_1X1)
@@ -33,7 +33,7 @@ def test_load_image_source_from_file(tmp_path):
 
 
 def test_load_image_source_from_url(monkeypatch):
-    from apps.cli.commands.ui_cmds import UiCommandsMixin
+    from aria_code.apps.cli.commands.ui_cmds import UiCommandsMixin
 
     class FakeResponse:
         status_code = 200
@@ -57,6 +57,6 @@ def test_load_image_source_from_url(monkeypatch):
 
 
 def test_visible_commands_include_upload_image():
-    from apps.cli.commands.catalog import VISIBLE_SLASH_COMMANDS
+    from aria_code.apps.cli.commands.catalog import VISIBLE_SLASH_COMMANDS
 
     assert "/upload-image" in VISIBLE_SLASH_COMMANDS

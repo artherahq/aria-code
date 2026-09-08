@@ -135,9 +135,22 @@ class DeepenTests(unittest.TestCase):
         self.assertEqual(len(prov), len(notes))
 
 
-class TierTests(unittest.TestCase):
+class _TempStoreMixin:
+    """A calibration-store path that is cleaned up afterwards.
+
+    Both test classes need one. They each called tempfile.mkdtemp(), which
+    never cleans up, so every run left directories behind in $TMPDIR.
+    """
+
+    def _store_path(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        return Path(directory.name) / "c.json"
+
+
+class TierTests(_TempStoreMixin, unittest.TestCase):
     def _result(self):
-        pipe = DeepAnalysisPipeline(store=CalibrationStore(Path(tempfile.mkdtemp()) / "c.json"))
+        pipe = DeepAnalysisPipeline(store=CalibrationStore(self._store_path()))
         return pipe.analyze("TEST", _bull_team(), quant_provider=_bull_quant,
                             tool_runner=_tool_runner)
 
@@ -151,9 +164,9 @@ class TierTests(unittest.TestCase):
         self.assertIn("量化", deep)
 
 
-class PipelineTests(unittest.TestCase):
+class PipelineTests(_TempStoreMixin, unittest.TestCase):
     def _pipe(self):
-        return DeepAnalysisPipeline(store=CalibrationStore(Path(tempfile.mkdtemp()) / "c.json"))
+        return DeepAnalysisPipeline(store=CalibrationStore(self._store_path()))
 
     def test_analyze_agree_calibrates_up(self):
         r = self._pipe().analyze("TEST", _bull_team(), quant_provider=_bull_quant,
@@ -275,7 +288,7 @@ class AgenticDeepenTests(unittest.TestCase):
 
 class LLMCriticTests(unittest.TestCase):
     def test_parse_llm_issues(self):
-        from agents.deep.critic import parse_llm_issues
+        from aria_code.agents.deep.critic import parse_llm_issues
         issues = parse_llm_issues("高|估值无现金流支撑\n中｜未提汇率风险\nOK")
         self.assertEqual(len(issues), 2)
         self.assertEqual(issues[0].severity, "high")
@@ -283,26 +296,26 @@ class LLMCriticTests(unittest.TestCase):
         self.assertEqual(issues[1].severity, "medium")
 
     def test_parse_ok_means_clean(self):
-        from agents.deep.critic import parse_llm_issues
+        from aria_code.agents.deep.critic import parse_llm_issues
         self.assertEqual(parse_llm_issues("OK"), [])
 
     def test_llm_critique_with_fake_llm(self):
-        from agents.deep.critic import llm_critique
+        from aria_code.agents.deep.critic import llm_critique
         llm = _FakeLLM(["高|过度自信：置信度与论据不符"])
         issues = asyncio.run(llm_critique("X", "结论：强烈看多", "动量:BUY", llm))
         self.assertTrue(issues and issues[0].severity == "high")
 
     def test_llm_critique_no_llm_is_noop(self):
-        from agents.deep.critic import llm_critique
+        from aria_code.agents.deep.critic import llm_critique
         self.assertEqual(asyncio.run(llm_critique("X", "syn", "t", None)), [])
 
 
 def test_pipeline_run_orchestrates_team_to_deep_result(monkeypatch):
     """End-to-end: run() drives team → deepen → themes → quant → critic into a
     structured DeepAnalysisResult. Fully mocked (no LLM, no network)."""
-    import agents.team as _team
-    from agents.team import TeamResult
-    from agents.deep import DeepAnalysisPipeline
+    import aria_code.agents.team as _team
+    from aria_code.agents.team import TeamResult
+    from aria_code.agents.deep import DeepAnalysisPipeline
 
     class _FakeTeam:
         def __init__(self, **kw):

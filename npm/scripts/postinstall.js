@@ -72,7 +72,7 @@ try { PKG_VERSION = (require("../package.json").version || "").trim(); } catch {
 const RELEASE_TAG = PKG_VERSION ? `v${PKG_VERSION}` : "";
 // Test-only override for this repo's own CI install-smoke-test: without it,
 // the smoke test packs the npm wrapper from the PR branch but the Python
-// runtime (aria_cli.py etc.) still gets git-cloned from RELEASE_TAG/main —
+// runtime (src/aria_code/apps/cli/main.py etc.) still gets git-cloned from RELEASE_TAG/main —
 // meaning a fix to any runtime file could never turn CI green pre-merge, only
 // after. Real installs never set this; only the CI workflow does.
 const TEST_REF = (process.env.ARIA_INSTALL_TEST_REF || "").trim();
@@ -532,7 +532,7 @@ function writeInstallInfo(python, venv) {
     installDirSource: PATHS.installDirSource,
     venvDir:    venv.venvDir,
     venvPy:     venv.venvPy,
-    ariaCli:    path.join(INSTALL_DIR, "aria_cli.py"),
+    ariaCli:    path.join(INSTALL_DIR, "src/aria_code/apps/cli/main.py"),
     configDir:  PATHS.configDir,
     cacheDir:   PATHS.cacheDir,
     infoFile:   INFO_FILE,

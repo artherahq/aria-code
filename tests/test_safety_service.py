@@ -88,13 +88,13 @@ class TradingRiskTests(unittest.TestCase):
         import subprocess
         import sys
         code = (
-            "import sys; import safety; "
+            "import sys; import aria_code.safety; "
             "bad = [m for m in sys.modules if m.startswith('brokers') or m.startswith('privacy')]; "
             "sys.exit(1 if bad else 0)"
         )
         proc = subprocess.run([sys.executable, "-c", code], capture_output=True)
         self.assertEqual(proc.returncode, 0,
-                         "importing safety must not import brokers/privacy")
+                         "importing safety must not import aria_code.brokers/privacy")
 
 
 if __name__ == "__main__":

@@ -123,7 +123,7 @@ def _fetch_mdc_history_frame(symbol: str, period: str, interval: str = "1d"):
         return None, None, "", "not an A-share symbol"
     try:
         import pandas as _pd
-        from market_data_client import get_mdc
+        from aria_code.market_data_client import get_mdc
 
         result = get_mdc().history(code, days=_days_for_period(period), interval=interval)
         if not result or not result.get("success"):
@@ -443,7 +443,7 @@ def handle_multi_stock_comparison_direct(symbols: list[str], period: str = "1y")
         })
 
     safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", "_".join(normalized_df.columns))
-    from artifacts import create_user_artifact, write_artifact_metadata, write_artifact_raw_data
+    from aria_code.artifacts import create_user_artifact, write_artifact_metadata, write_artifact_raw_data
     artifact = create_user_artifact("stock-charts", safe, f"{safe}_comparison", ".html")
     out_file = artifact.path
     metrics_rows = "".join(
@@ -784,7 +784,7 @@ def handle_stock_chart_analysis_direct(symbol: str, period: str = "1y") -> dict:
 
     # ── 生成 HTML ────────────────────────────────────────────────────────────────
     safe_sym  = re.sub(r"[^A-Za-z0-9_.-]+", "_", symbol)
-    from artifacts import create_user_artifact, write_artifact_metadata, write_artifact_raw_data
+    from aria_code.artifacts import create_user_artifact, write_artifact_metadata, write_artifact_raw_data
     _artifact = create_user_artifact("stock-charts", symbol, f"{safe_sym}_chart", ".html")
     out_file  = _artifact.path
 
@@ -1153,7 +1153,7 @@ def handle_stock_chart_analysis(
     rsi_view = "超买" if rsi14 is not None and rsi14 >= 70 else ("超卖" if rsi14 is not None and rsi14 <= 30 else "中性")
 
     safe_symbol = re.sub(r"[^A-Za-z0-9_.-]+", "_", symbol)
-    from artifacts import create_user_artifact, write_artifact_metadata, write_artifact_raw_data
+    from aria_code.artifacts import create_user_artifact, write_artifact_metadata, write_artifact_raw_data
     _artifact = create_user_artifact("stock-charts", symbol, f"{safe_symbol}_analysis_chart", ".html")
     out_file = _artifact.path
 

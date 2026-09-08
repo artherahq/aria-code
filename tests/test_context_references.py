@@ -118,7 +118,7 @@ def test_reference_service_never_reads_referenced_file_contents(tmp_path, monkey
 
 
 def test_legacy_path_detection_builds_tool_hint_without_source_content(tmp_path):
-    from aria_cli import _build_file_tool_hint
+    from aria_code.aria_cli import _build_file_tool_hint
 
     target = tmp_path / "secret.txt"
     target.write_text("DO-NOT-INJECT", encoding="utf-8")
@@ -131,7 +131,7 @@ def test_legacy_path_detection_builds_tool_hint_without_source_content(tmp_path)
 
 
 def test_slash_executor_expands_reference_before_handler(tmp_path):
-    from aria_cli import SlashCommands
+    from aria_code.aria_cli import SlashCommands
 
     seen = []
 
@@ -154,7 +154,7 @@ def test_slash_executor_expands_reference_before_handler(tmp_path):
 
 
 def test_slash_executor_stops_on_unresolved_reference(tmp_path):
-    from aria_cli import SlashCommands
+    from aria_code.aria_cli import SlashCommands
 
     seen = []
 

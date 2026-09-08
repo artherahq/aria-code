@@ -119,7 +119,7 @@ def test_summary_envelope_does_not_nest_previous_summary_wrapper():
 
 
 def test_message_processing_uses_context_service_compatibility_layer():
-    from apps.cli.message_processing import context_compaction_decision, estimate_message_tokens
+    from aria_code.apps.cli.message_processing import context_compaction_decision, estimate_message_tokens
 
     messages = [{"role": "user", "content": "x" * 3000} for _ in range(8)]
 

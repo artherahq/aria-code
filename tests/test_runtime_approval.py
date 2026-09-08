@@ -51,7 +51,7 @@ class RuntimeApprovalTests(unittest.TestCase):
         self.assertEqual(decision.command_prefix, ("python3", "/tmp/report.py"))
 
     def test_cli_command_prefix_scope_matches_similar_commands_only(self):
-        import aria_cli
+        from aria_code import aria_cli
 
         aria_cli._session_command_prefixes.clear()
         prefix = aria_cli._command_approval_prefix("python3 '/tmp/report.py' --format md")

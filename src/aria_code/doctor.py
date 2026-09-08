@@ -359,7 +359,7 @@ def integration_checks() -> List[DoctorCheck]:
         # Read stored config directly rather than calling _access_token(),
         # which refreshes an expired token over the network — this function
         # is a local-first, no-mutation health check, not a live probe.
-        from canva_client import _load_canva_config
+        from aria_code.canva_client import _load_canva_config
 
         connected = bool(_load_canva_config().get("access_token"))
         checks.append(_check(
@@ -467,7 +467,7 @@ def provider_health_checks(snapshot: Optional[List[Dict[str, Any]]] = None) -> L
     """Convert data provider health state into doctor checks."""
     if snapshot is None:
         try:
-            from packages.aria_services.provider_health import GLOBAL_PROVIDER_HEALTH
+            from aria_code.packages.aria_services.provider_health import GLOBAL_PROVIDER_HEALTH
 
             snapshot = GLOBAL_PROVIDER_HEALTH.snapshot()
         except Exception:
@@ -512,13 +512,13 @@ def provider_health_summary(snapshot: Optional[List[Dict[str, Any]]] = None) -> 
     """Summarise provider health into one dashboard-style check."""
     if snapshot is None:
         try:
-            from packages.aria_services.provider_health import GLOBAL_PROVIDER_HEALTH
+            from aria_code.packages.aria_services.provider_health import GLOBAL_PROVIDER_HEALTH
 
             snapshot = GLOBAL_PROVIDER_HEALTH.snapshot()
         except Exception:
             snapshot = []
     try:
-        from packages.aria_services.provider_health import summarize_provider_health
+        from aria_code.packages.aria_services.provider_health import summarize_provider_health
 
         summary = summarize_provider_health(snapshot)
         return _check("provider_health_summary", summary.status, summary.detail, summary.suggestion)
@@ -600,7 +600,7 @@ def run_doctor(
     checks.extend(integration_checks())
 
     try:
-        from artifacts import artifact_root, artifact_summary
+        from aria_code.artifacts import artifact_root, artifact_summary
 
         root = artifact_root()
         writable, detail = _is_writable(root)
@@ -636,7 +636,7 @@ def run_doctor(
     checks.append(_check("privacy", "ok", privacy_detail))
 
     try:
-        from datasources.router import DataRouter
+        from aria_code.datasources.router import DataRouter
 
         sources = DataRouter().list_sources()
         configured = [src["name"] for src in sources if src.get("configured")]

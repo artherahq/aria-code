@@ -18,7 +18,7 @@ Configuration (in ~/.arthera/config.json):
     }
 
 Usage:
-    from notification_tools import send_notification
+    from aria_code.notification_tools import send_notification
     send_notification("HSBC 触发预警", "现价 USD 79.5 已跌破目标 80.0")
 """
 

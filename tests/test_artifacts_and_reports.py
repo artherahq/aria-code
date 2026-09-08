@@ -326,8 +326,8 @@ def test_generate_price_chart_has_svg_fallback(monkeypatch):
 
 
 def test_report_data_fetch_falls_back_to_market_data_client(monkeypatch):
-    import data_cleaner
-    import market_data_client
+    from aria_code import data_cleaner
+    from aria_code import market_data_client
 
     empty = pd.DataFrame()
     monkeypatch.setattr(data_cleaner, "get_clean_prices", lambda symbol, period="1y": (empty, CleanResult(empty, quality_score=0)))
@@ -397,7 +397,7 @@ def test_generate_report_writes_sidecar_metadata_and_raw_data(monkeypatch, tmp_p
         return await generate_report("AAPL")
 
     monkeypatch.setattr(
-        "report_generator._fetch_report_data_sync",
+        "aria_code.report_generator._fetch_report_data_sync",
         lambda symbol: (
             df,
             CleanResult(df, quality_score=99),
@@ -412,7 +412,7 @@ def test_generate_report_writes_sidecar_metadata_and_raw_data(monkeypatch, tmp_p
             },
         ),
     )
-    monkeypatch.setattr("report_generator.generate_price_chart", lambda *_args, **_kwargs: "<svg></svg>")
+    monkeypatch.setattr("aria_code.report_generator.generate_price_chart", lambda *_args, **_kwargs: "<svg></svg>")
 
     path = asyncio.run(_run())
 

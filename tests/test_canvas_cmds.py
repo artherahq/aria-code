@@ -20,12 +20,15 @@ class _FakeSession:
 
 
 async def test_cmd_canvas_starts_session_and_opens_browser(monkeypatch):
-    import aria_cli
-    import preview_server
+    from aria_code import aria_cli
+    from aria_code import preview_server
 
+    handler = CanvasCommandsMixin()
     fake_console = _FakeConsole()
-    monkeypatch.setattr(aria_cli, "console", fake_console, raising=False)
-    monkeypatch.setattr(aria_cli, "HAS_RICH", True, raising=False)
+    class FakeContext:
+        console = fake_console
+        has_rich = True
+    handler.context = FakeContext()
 
     monkeypatch.setattr(preview_server, "get_active_session", lambda: None)
 
@@ -40,7 +43,7 @@ async def test_cmd_canvas_starts_session_and_opens_browser(monkeypatch):
     opened = {}
     monkeypatch.setattr(preview_server, "open_in_browser", lambda url: opened.setdefault("url", url))
 
-    handler = CanvasCommandsMixin()
+    
     await handler.cmd_canvas("")
 
     assert started.get("called") is True
@@ -49,12 +52,15 @@ async def test_cmd_canvas_starts_session_and_opens_browser(monkeypatch):
 
 
 async def test_cmd_canvas_already_running_does_not_restart(monkeypatch):
-    import aria_cli
-    import preview_server
+    from aria_code import aria_cli
+    from aria_code import preview_server
 
+    handler = CanvasCommandsMixin()
     fake_console = _FakeConsole()
-    monkeypatch.setattr(aria_cli, "console", fake_console, raising=False)
-    monkeypatch.setattr(aria_cli, "HAS_RICH", True, raising=False)
+    class FakeContext:
+        console = fake_console
+        has_rich = True
+    handler.context = FakeContext()
 
     existing = _FakeSession("http://127.0.0.1:8765/")
     monkeypatch.setattr(preview_server, "get_active_session", lambda: existing)
@@ -64,34 +70,40 @@ async def test_cmd_canvas_already_running_does_not_restart(monkeypatch):
 
     monkeypatch.setattr(preview_server, "start_session", fail_start_session)
 
-    handler = CanvasCommandsMixin()
+    
     await handler.cmd_canvas("")
 
     assert any("8765" in msg for msg in fake_console.printed)
 
 
 async def test_cmd_canvas_stop_with_no_session_running(monkeypatch):
-    import aria_cli
-    import preview_server
-
-    fake_console = _FakeConsole()
-    monkeypatch.setattr(aria_cli, "console", fake_console, raising=False)
-    monkeypatch.setattr(aria_cli, "HAS_RICH", True, raising=False)
-    monkeypatch.setattr(preview_server, "get_active_session", lambda: None)
+    from aria_code import aria_cli
+    from aria_code import preview_server
 
     handler = CanvasCommandsMixin()
+    fake_console = _FakeConsole()
+    class FakeContext:
+        console = fake_console
+        has_rich = True
+    handler.context = FakeContext()
+    monkeypatch.setattr(preview_server, "get_active_session", lambda: None)
+
+    
     await handler.cmd_canvas("stop")
 
     assert any("未在运行" in msg for msg in fake_console.printed)
 
 
 async def test_cmd_canvas_stop_tears_down_running_session(monkeypatch):
-    import aria_cli
-    import preview_server
+    from aria_code import aria_cli
+    from aria_code import preview_server
 
+    handler = CanvasCommandsMixin()
     fake_console = _FakeConsole()
-    monkeypatch.setattr(aria_cli, "console", fake_console, raising=False)
-    monkeypatch.setattr(aria_cli, "HAS_RICH", True, raising=False)
+    class FakeContext:
+        console = fake_console
+        has_rich = True
+    handler.context = FakeContext()
 
     existing = _FakeSession("http://127.0.0.1:8765/")
     monkeypatch.setattr(preview_server, "get_active_session", lambda: existing)
@@ -103,7 +115,7 @@ async def test_cmd_canvas_stop_tears_down_running_session(monkeypatch):
 
     monkeypatch.setattr(preview_server, "stop_session", fake_stop_session)
 
-    handler = CanvasCommandsMixin()
+    
     await handler.cmd_canvas("stop")
 
     assert stopped.get("called") is True
@@ -111,12 +123,15 @@ async def test_cmd_canvas_stop_tears_down_running_session(monkeypatch):
 
 
 async def test_cmd_canvas_start_failure_reports_error(monkeypatch):
-    import aria_cli
-    import preview_server
+    from aria_code import aria_cli
+    from aria_code import preview_server
 
+    handler = CanvasCommandsMixin()
     fake_console = _FakeConsole()
-    monkeypatch.setattr(aria_cli, "console", fake_console, raising=False)
-    monkeypatch.setattr(aria_cli, "HAS_RICH", True, raising=False)
+    class FakeContext:
+        console = fake_console
+        has_rich = True
+    handler.context = FakeContext()
     monkeypatch.setattr(preview_server, "get_active_session", lambda: None)
 
     errors = []
@@ -127,7 +142,7 @@ async def test_cmd_canvas_start_failure_reports_error(monkeypatch):
 
     monkeypatch.setattr(preview_server, "start_session", failing_start_session)
 
-    handler = CanvasCommandsMixin()
+    
     await handler.cmd_canvas("")
 
     assert any("no free port" in e for e in errors)

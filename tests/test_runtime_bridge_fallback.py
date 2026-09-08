@@ -99,8 +99,8 @@ async def test_on_token_forwarded_for_cloud_success():
 
 async def test_make_provider_fn_threads_system_override(monkeypatch):
     """system_override reaches Ollama as a ctor arg and cloud via user_context."""
-    import apps.cli.providers.base as base_mod
-    import packages.aria_sdk.streaming as streaming_mod
+    import aria_code.apps.cli.providers.base as base_mod
+    import aria_code.packages.aria_sdk.streaming as streaming_mod
 
     seen: dict = {}
 
@@ -120,7 +120,7 @@ async def test_make_provider_fn_threads_system_override(monkeypatch):
     monkeypatch.setattr(base_mod, "AriaSSEProvider", _FakeAriaSSE)
     monkeypatch.setattr(streaming_mod, "stream_provider_result", _fake_stream)
 
-    from apps.cli.providers.runtime_bridge import make_provider_fn
+    from aria_code.apps.cli.providers.runtime_bridge import make_provider_fn
 
     # local_mode → ollama route → override goes to the provider constructor
     pf_local = make_provider_fn(

@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 try:
-    from packages.aria_services.cache import DistributedCacheManager
+    from aria_code.packages.aria_services.cache import DistributedCacheManager
 except ImportError:
     DistributedCacheManager = None
 
@@ -145,7 +145,7 @@ class DataService:
         provider_health: ProviderHealthRegistry | None = None,
     ):
         if market_client is None:
-            from market_data_client import MarketDataClient
+            from aria_code.market_data_client import MarketDataClient
             market_client = MarketDataClient()
         self._router_disabled = router is False
         if self._router_disabled:
@@ -153,7 +153,7 @@ class DataService:
         if router is None:
             if not self._router_disabled:
                 try:
-                    from datasources.router import get_router
+                    from aria_code.datasources.router import get_router
                     router = get_router()
                 except Exception:
                     router = None

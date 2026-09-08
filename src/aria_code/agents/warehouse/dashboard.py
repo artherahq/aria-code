@@ -143,7 +143,7 @@ def save_report(
 
     if also_pdf:
         try:
-            from report_generator import html_string_to_pdf
+            from aria_code.report_generator import html_string_to_pdf
             pdf_path = html_path.with_suffix(".pdf")
             html_string_to_pdf(html_path.read_text(encoding="utf-8"), pdf_path)
         except Exception as exc:  # PDF 导出失败不该挡住 HTML 报告本身

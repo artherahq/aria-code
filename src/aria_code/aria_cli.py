@@ -26,7 +26,7 @@ Usage:
     python3 apps/cli/aria_cli.py -p "AAPL PE" --json     # JSON 输出
 """
 
-__version__ = "4.4.1"
+__version__ = "4.4.2"
 
 from aria_code.apps.cli.commands.core_cmds import CoreCommandsMixin
 import sys
@@ -72,10 +72,11 @@ from datetime import datetime
 from typing import Optional, Dict, Any, List, Callable, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from brokers.base import AccountInfo
+    from aria_code.brokers.base import AccountInfo
 
 from aria_code.apps.cli.plotly_html import plotly_script_tag
 from aria_code.apps.cli.bootstrap import (
+    DEFAULT_MODEL,
     default_config,
     disable_broken_proxy as _disable_broken_proxy,
     initialize_cli_environment,
@@ -108,11 +109,11 @@ try:
     # runtime/run_state.py) — still landing separately. Degrade gracefully rather than
     # fail the whole module import: _run_store stays None, every _transition_runtime_run/
     # _begin_runtime_run call already no-ops when that's the case (see ArtheraTerminal).
-    from runtime import RunStatus, RunStore
+    from aria_code.runtime import RunStatus, RunStore
 except ImportError:
     RunStore = None
 
-    class RunStatus:  # pragma: no cover - fallback until runtime/run_state.py lands
+    class RunStatus:  # type: ignore[no-redef]  # pragma: no cover - fallback until runtime/run_state.py lands
         PLANNING = RUNNING = WAITING_APPROVAL = VERIFYING = "unavailable"
         SUCCEEDED = FAILED = CANCELLED = INTERRUPTED = "unavailable"
 from aria_code.runtime.tool_policy import check_tool_policy
@@ -194,6 +195,7 @@ from aria_code.ui.render.finance import (
 )
 from aria_code.apps.cli.direct import dispatch_direct_command, is_watchable_direct_command
 from aria_code.apps.cli.tools.system_tools import (
+    tool_ask_user    as _src_ask_user,
     tool_run_command as _src_run_command,
     tool_web_fetch   as _src_web_fetch,
     tool_github      as _src_github,
@@ -203,6 +205,10 @@ from aria_code.apps.cli.tools.notebook_tools import (
     tool_notebook_read as _src_notebook_read,
     tool_notebook_edit as _src_notebook_edit,
 )
+
+from aria_code.apps.cli.tools.file_tools import tool_lsp_hover as _tool_lsp_hover
+from aria_code.apps.cli.tools.file_tools import tool_lsp_definition as _tool_lsp_definition
+from aria_code.apps.cli.tools.file_tools import tool_lsp_references as _tool_lsp_references
 from aria_code.apps.cli.tools.file_tools import (
     tool_read_file   as _src_read_file,
     tool_list_files  as _src_list_files,
@@ -341,7 +347,7 @@ except ImportError:
     _HAS_ARIARC = False
 
 try:
-    from brokers import (
+    from aria_code.brokers import (
         get_registry as _get_broker_registry,
         list_broker_configs as _list_broker_configs,
         get_broker_config as _get_broker_cfg,
@@ -973,82 +979,47 @@ def detect_ollama_models_rich(ollama_url: str = "http://localhost:11434") -> tup
     return results, None
 
 
-# ── Response cache for stateless queries (TTL = 60s) ─────────────────────────
-# Avoids sending the same market/concept query to Ollama multiple times
-# in rapid succession (e.g., user retries or tab-completion tests).
-import hashlib as _hashlib
-_RESPONSE_CACHE: dict = {}   # key → (response_text, expire_ts)
-_RESPONSE_CACHE_TTL = 60.0   # seconds
-
-def _cache_get(key: str) -> str | None:
-    """Return cached response text if still valid, else None."""
-    entry = _RESPONSE_CACHE.get(key)
-    if entry and time.time() < entry[1]:
-        return entry[0]
-    return None
-
-def _cache_set(key: str, value: str) -> None:
-    """Store response in cache with TTL expiry."""
-    _RESPONSE_CACHE[key] = (value, time.time() + _RESPONSE_CACHE_TTL)
-    # Keep cache small — evict expired entries when it grows large
-    if len(_RESPONSE_CACHE) > 200:
-        now = time.time()
-        for k in list(_RESPONSE_CACHE.keys()):
-            if _RESPONSE_CACHE[k][1] < now:
-                del _RESPONSE_CACHE[k]
-
-def _cache_key(model: str, message: str) -> str:
-    raw = f"{model}::{message.strip().lower()}"
-    return _hashlib.md5(raw.encode()).hexdigest()
-
-def _is_simple_greeting(message: str) -> bool:
-    text = (message or "").strip().lower()
-    greetings = {
-        "hi", "hello", "hey", "你好", "您好", "嗨", "哈喽", "在吗",
-        "早上好", "下午好", "晚上好",
-    }
-    return text in greetings or (len(text) <= 8 and any(g in text for g in greetings))
+# ── Response cache, greetings, offline fallbacks ─────────────────────────────
+# Moved to apps/cli/response_cache.py.  Re-exported under the original private
+# names because call sites across this module (and modules whose globals are
+# rebound to it) reference them as bare names.
+from aria_code.apps.cli.response_cache import (  # noqa: E402
+    RESPONSE_CACHE_TTL as _RESPONSE_CACHE_TTL,
+    cache_get as _cache_get,
+    cache_key as _cache_key,
+    cache_set as _cache_set,
+    is_simple_greeting as _is_simple_greeting,
+    offline_greeting_response as _offline_greeting_response,
+    ollama_unavailable_result as _ollama_unavailable_result,
+)
 
 
-def _offline_greeting_response() -> dict:
-    return {
-        "success": True,
-        "response": (
-            "你好，我是 Aria Code。\n\n"
-            "当前云端模型不可用，且本地 Ollama 服务没有启动；简单问候可以直接响应。"
-            "如果要进行代码修改、市场分析或长文本推理，请先启动本地模型：\n\n"
-            "```bash\n"
-            "ollama serve\n"
-            "```\n\n"
-            "然后可用 `ollama list` 检查已安装模型，或运行 `/health` 查看 Aria Code 状态。"
-        ),
-        "provider": "builtin",
-        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "thinking_tokens": 0},
-    }
+_MODEL_ID_INDEX: dict[str, str] | None = None
 
 
-def _ollama_unavailable_result(ollama_url: str, err: str = "") -> dict:
-    host = ollama_url or "http://localhost:11434"
-    detail = f"\n\nDetail: {err}" if err else ""
-    return {
-        "success": False,
-        "provider": "ollama",
-        "error": (
-            "Local Ollama is not reachable.\n\n"
-            f"Host: {host}\n"
-            "Start it in another terminal:\n\n"
-            "  ollama serve\n\n"
-            "Then verify:\n\n"
-            "  curl http://127.0.0.1:11434/api/tags\n"
-            "  ollama list\n\n"
-            "If you do not want local fallback, use a working cloud/API provider or disable local mode."
-            f"{detail}"
-        ),
-    }
+def _model_id_index() -> dict[str, str]:
+    """Lazily build a lowercase {model id → MODELS key} index.
+
+    The config stores the provider-qualified *id* ("google/gemini-2.5-pro"),
+    while MODELS is keyed by short name ("gemini-pro").  Without this index a
+    registered cloud model looks unregistered and silently falls through to the
+    conservative unknown-model defaults (no tools, 4K context).
+    """
+    global _MODEL_ID_INDEX
+    if _MODEL_ID_INDEX is None:
+        index: dict[str, str] = {}
+        for key, cfg in MODELS.items():
+            model_id = str(cfg.get("id") or "").strip().lower()
+            if model_id and model_id not in index:
+                index[model_id] = key
+        _MODEL_ID_INDEX = index
+    return _MODEL_ID_INDEX
 
 
 def resolve_model_key(model_str: str) -> str:
     """Resolve any model alias/ID/key to a MODELS key.
+
+    Lookup order: exact key → alias → registered model id (case-insensitive).
 
     For community Ollama models (qwen2.5-coder, llama3.2, deepseek-r1, etc.)
     that are NOT in the MODELS registry, returns the sentinel "_community_"
@@ -1059,6 +1030,14 @@ def resolve_model_key(model_str: str) -> str:
         return model_str
     if model_str in MODEL_ALIASES:
         return MODEL_ALIASES[model_str]
+    normalized = str(model_str or "").strip().lower()
+    if normalized in MODELS:
+        return normalized
+    if normalized in MODEL_ALIASES:
+        return MODEL_ALIASES[normalized]
+    mapped = _model_id_index().get(normalized)
+    if mapped:
+        return mapped
     # Community/custom Ollama model — not in registry
     return "_community_"
 
@@ -1121,11 +1100,20 @@ import difflib
 def _is_safe_path(resolved: pathlib.Path) -> bool:
     """Return True if the resolved path is inside an allowed root directory.
 
-    Allowed roots: home directory, /tmp, /var/folders (macOS temp).
+    Allowed roots: the working directory, the home directory, and the temp
+    dirs (/tmp, /var/folders on macOS).
     Blocks: /etc, /sys, /proc, /dev, and any path that resolves through a
     symlink to outside those roots (symlink traversal prevention).
+
+    ``allow_home`` is left unset so WorkspaceSecurity applies its documented
+    rule: local sessions get home and temp, and a remote worker confines
+    itself by setting ARIA_RUNTIME_SCOPE=remote (Dockerfile.review does).
+    Hardcoding False here applied the remote confinement to the local CLI,
+    which contradicted this docstring — and because the temp roots are only
+    added on the allow_home branch, it also blocked every write to /tmp and
+    /var/folders, so the CLI could not write to its own scratch space.
     """
-    return WorkspaceSecurity().is_safe_path(resolved)
+    return WorkspaceSecurity(cwd=__import__('os').getcwd()).is_safe_path(resolved)
 
 
 from aria_code.apps.cli.tool_executor import *
@@ -1182,6 +1170,10 @@ LOCAL_TOOLS = {
     "search_code":    (_tool_search_code,    "Search for patterns in code (grep)"),
     "search":         (_tool_search_code,    "Search for patterns in code (alias for search_code)"),
     "run_command":    (_tool_run_command,    "Execute a shell command"),
+    "ask_user":       (_src_ask_user,        "Ask the user for clarification"),
+    "lsp_hover":      (_tool_lsp_hover,      "Get hover documentation/type signature (LSP)"),
+    "lsp_definition": (_tool_lsp_definition, "Find definition (LSP)"),
+    "lsp_references": (_tool_lsp_references, "Find references (LSP)"),
     # ── Extended tools (Claude Code parity) ─────────────────────────────────
     "web_fetch":      (_tool_web_fetch,      "Fetch a URL and return page text"),
     "github":         (_tool_github,         "GitHub API/CLI: PRs, issues, diffs, search, git_status, commit_and_push (commits as Aria bot)"),
@@ -1198,31 +1190,58 @@ LOCAL_TOOLS = {
 
 # ── Register subagent tools ──────────────────────────────────────────────────
 try:
-    from runtime.subagent import SUBAGENT_TOOLS, SUBAGENT_SCHEMAS
+    from aria_code.runtime.subagent import SUBAGENT_TOOLS, SUBAGENT_SCHEMAS
     LOCAL_TOOLS.update(SUBAGENT_TOOLS)
     logger.info("Registered %d subagent tools", len(SUBAGENT_TOOLS))
 except Exception as _exc:
     logger.debug("Subagent tools init error: %s", _exc)
-    SUBAGENT_SCHEMAS: list = []
+    SUBAGENT_SCHEMAS: list = []  # type: ignore[no-redef]
+
+# ── Register post-edit verification tool ──────────────────────────────────────
+try:
+    from aria_code.runtime.verify_loop import VERIFY_TOOLS, VERIFY_SCHEMAS
+    LOCAL_TOOLS.update(VERIFY_TOOLS)
+    logger.info("Registered %d verification tools", len(VERIFY_TOOLS))
+except Exception as _exc:
+    logger.debug("Verification tool init error: %s", _exc)
+    VERIFY_SCHEMAS: list = []  # type: ignore[no-redef]
 
 # ── Register LSP diagnostics tool ─────────────────────────────────────────────
 try:
-    from runtime.lsp import LSP_TOOLS, LSP_SCHEMAS
+    from aria_code.runtime.lsp import LSP_TOOLS, LSP_SCHEMAS
     LOCAL_TOOLS.update(LSP_TOOLS)
     logger.info("Registered %d LSP tools", len(LSP_TOOLS))
 except Exception as _exc:
     logger.debug("LSP tools init error: %s", _exc)
-    LSP_SCHEMAS: list = []
+    LSP_SCHEMAS: list = []  # type: ignore[no-redef]
+
+# ── Register repo-map tools (symbol index + symbol lookup) ────────────────────
+try:
+    from aria_code.runtime.repo_map import REPO_MAP_TOOLS, REPO_MAP_SCHEMAS
+    LOCAL_TOOLS.update(REPO_MAP_TOOLS)
+    logger.info("Registered %d repo-map tools", len(REPO_MAP_TOOLS))
+except Exception as _exc:
+    logger.debug("Repo-map tools init error: %s", _exc)
+    REPO_MAP_SCHEMAS: list = []  # type: ignore[no-redef]
+
+# ── Register artifact publishing (model-facing canvas tool) ───────────────────
+try:
+    from aria_code.tools.artifact_tools import ARTIFACT_TOOLS, ARTIFACT_TOOL_SCHEMAS
+    LOCAL_TOOLS.update(ARTIFACT_TOOLS)
+    logger.info("Registered %d artifact tools", len(ARTIFACT_TOOLS))
+except Exception as _exc:
+    logger.debug("Artifact tools init error: %s", _exc)
+    ARTIFACT_TOOL_SCHEMAS: list = []  # type: ignore[no-redef]
 
 # ── Register computer-use tools (browser automation + desktop control) ──────
 _HAS_COMPUTER_USE = False
 try:
-    from computer_use_tools import COMPUTER_USE_TOOLS, COMPUTER_USE_SCHEMAS as _CU_SCHEMAS
+    from aria_code.computer_use_tools import COMPUTER_USE_TOOLS, COMPUTER_USE_SCHEMAS as _CU_SCHEMAS
     LOCAL_TOOLS.update(COMPUTER_USE_TOOLS)
     _HAS_COMPUTER_USE = True
     logger.info("Registered %d computer-use tools", len(COMPUTER_USE_TOOLS))
 except ImportError:
-    _CU_SCHEMAS: list = []
+    _CU_SCHEMAS: list = []  # type: ignore[no-redef]
 
 # Pre-initialize so finance/plugin registrations can append schemas to it.
 # The bulk static schemas are extended below; this empty list must exist first.
@@ -1278,7 +1297,7 @@ except Exception as _exc:
     
 # ── Register enterprise logistics & corporate finance analysis tools ────────
 try:
-    from tools.logistics_tools import register_logistics_tools as _reg_logistics
+    from aria_code.tools.logistics_tools import register_logistics_tools as _reg_logistics
     _n_logistics = _reg_logistics(LOCAL_TOOLS, LOCAL_TOOL_SCHEMAS)
     if _n_logistics:
         logger.info("Registered %d logistics tools", _n_logistics)
@@ -1286,7 +1305,7 @@ except Exception as _exc:
     logger.debug("Logistics tools init error: %s", _exc)
 
 try:
-    from tools.enterprise_finance_tools import register_enterprise_finance_tools as _reg_corp_fin
+    from aria_code.tools.enterprise_finance_tools import register_enterprise_finance_tools as _reg_corp_fin
     _n_corp_fin = _reg_corp_fin(LOCAL_TOOLS, LOCAL_TOOL_SCHEMAS)
     if _n_corp_fin:
         logger.info("Registered %d enterprise finance tools", _n_corp_fin)
@@ -1294,7 +1313,7 @@ except Exception as _exc:
     logger.debug("Enterprise finance tools init error: %s", _exc)
 
 try:
-    from tools.stripe_tools import register_stripe_tools as _reg_stripe
+    from aria_code.tools.stripe_tools import register_stripe_tools as _reg_stripe
     _n_stripe = _reg_stripe(LOCAL_TOOLS, LOCAL_TOOL_SCHEMAS)
     if _n_stripe:
         logger.info("Registered %d stripe tools", _n_stripe)
@@ -1302,7 +1321,7 @@ except Exception as _exc:
     logger.debug("Stripe tools init error: %s", _exc)
 
 try:
-    from tools.broker_tools import register_broker_tools as _reg_broker
+    from aria_code.tools.broker_tools import register_broker_tools as _reg_broker
     _n_broker = _reg_broker(LOCAL_TOOLS, LOCAL_TOOL_SCHEMAS)
     if _n_broker:
         logger.info("Registered %d broker tools", _n_broker)
@@ -1313,9 +1332,15 @@ try:
     try:
         from aria_code.tools.extended_tools import register_extended_tools as _reg_ext
     except ImportError:
-        from tools.extended_tools import register_extended_tools as _reg_ext
+        from aria_code.tools.extended_tools import register_extended_tools as _reg_ext
     _reg_ext(LOCAL_TOOLS)
-    logger.info("Registered extended enterprise tools (Slack, Feishu, TradingView, QuickBooks, Shopify, Snowflake)")
+    # Deliberately registered WITHOUT schemas: these six are shape-only stubs
+    # that fabricate success (see extended_tools' module docstring). Keeping
+    # them out of LOCAL_TOOL_SCHEMAS is what stops the model from calling one
+    # and reporting "posted to #trading-desk" when nothing was sent. They are
+    # registered at all so /tools can show what is stubbed and so the guard
+    # gives a real answer if something reaches them by name.
+    logger.info("Registered 6 enterprise connector stubs (not implemented; see extended_tools)")
 except Exception as _exc:
     logger.debug("Extended tools init error: %s", _exc)
 
@@ -1323,11 +1348,18 @@ try:
     try:
         from aria_code.tools.code_audit_tools import register_code_audit_tools as _reg_audit
     except ImportError:
-        from tools.code_audit_tools import register_code_audit_tools as _reg_audit
-    _reg_audit(LOCAL_TOOLS)
+        from aria_code.tools.code_audit_tools import register_code_audit_tools as _reg_audit
+    _reg_audit(LOCAL_TOOLS, LOCAL_TOOL_SCHEMAS)
     logger.info("Registered code audit & diff tools")
 except Exception as _exc:
     logger.debug("Code audit tools init error: %s", _exc)
+
+try:
+    from aria_code.tools.patch_tools import register_patch_tools as _reg_patch
+    _n_patch = _reg_patch(LOCAL_TOOLS, LOCAL_TOOL_SCHEMAS)
+    logger.info("Registered %d surgical patch tools (apply_patch, read_range, find_symbol, find_references)", _n_patch)
+except Exception as _exc:
+    logger.debug("Patch tools init error: %s", _exc)
 
 # Ollama tool schemas (for function calling) — extend so finance schemas added above are kept
 
@@ -1352,6 +1384,9 @@ if _HAS_COMPUTER_USE:
 # Make spawn_task / task_* and lsp_diagnostics visible to the model.
 LOCAL_TOOL_SCHEMAS.extend(_wrap_bare_schemas(SUBAGENT_SCHEMAS))
 LOCAL_TOOL_SCHEMAS.extend(_wrap_bare_schemas(LSP_SCHEMAS))
+LOCAL_TOOL_SCHEMAS.extend(_wrap_bare_schemas(REPO_MAP_SCHEMAS))
+LOCAL_TOOL_SCHEMAS.extend(_wrap_bare_schemas(ARTIFACT_TOOL_SCHEMAS))
+LOCAL_TOOL_SCHEMAS.extend(_wrap_bare_schemas(VERIFY_SCHEMAS))
 
 
 
@@ -1379,7 +1414,7 @@ _PLAN_MODE = PlanModeState()
 
 # Load JSON hooks once at startup; reloaded on demand via /hooks reload
 try:
-    from apps.cli.hooks import load_hooks as _load_hooks, fire as _fire_json_hook
+    from aria_code.apps.cli.hooks import load_hooks as _load_hooks, fire as _fire_json_hook
     _JSON_HOOKS: dict = _load_hooks()
     _HAS_JSON_HOOKS = True
 except Exception:
@@ -1522,7 +1557,7 @@ from aria_code.apps.cli.prompts.coding import CODING_SYSTEM_PROMPT  # noqa: F401
 
 def _detect_lang(text: str) -> str:
     """Thin shim — implementation in apps/cli/prompts/system_prompts.py."""
-    from apps.cli.prompts.system_prompts import detect_lang as _f
+    from aria_code.apps.cli.prompts.system_prompts import detect_lang as _f
     return _f(text)
 
 
@@ -1531,20 +1566,20 @@ from aria_code.apps.cli.prompts.system_prompts import LANG_RULE as _LANG_RULE
 
 def _build_coding_prompt_lite(user_message: str) -> str:
     """Thin shim — implementation in apps/cli/prompts/system_prompts.py."""
-    from apps.cli.prompts.system_prompts import build_coding_prompt_lite as _f
+    from aria_code.apps.cli.prompts.system_prompts import build_coding_prompt_lite as _f
     return _f(user_message)
 
 
 def _build_analysis_prompt_lite(user_message: str) -> str:
     """Thin shim — implementation in apps/cli/prompts/system_prompts.py."""
-    from apps.cli.prompts.system_prompts import build_analysis_prompt_lite as _f
+    from aria_code.apps.cli.prompts.system_prompts import build_analysis_prompt_lite as _f
     return _f(user_message)
 
 
 # NOTE: FINANCE_CHAT_PROMPT is a function now — it injects the current date dynamically.
 def _build_finance_prompt(user_message: str = "") -> str:
     """Thin shim — implementation in apps/cli/prompts/system_prompts.py."""
-    from apps.cli.prompts.system_prompts import build_finance_prompt as _f
+    from aria_code.apps.cli.prompts.system_prompts import build_finance_prompt as _f
     return _f(user_message)
 
 FINANCE_CHAT_PROMPT = _build_finance_prompt()  # evaluated once at import; rebuilt per stream call
@@ -1556,7 +1591,7 @@ FINANCE_CHAT_PROMPT = _build_finance_prompt()  # evaluated once at import; rebui
 
 def _build_analysis_system_prompt() -> str:
     """Thin shim — implementation in apps/cli/prompts/system_prompts.py."""
-    from apps.cli.prompts.system_prompts import build_analysis_system_prompt as _f
+    from aria_code.apps.cli.prompts.system_prompts import build_analysis_system_prompt as _f
     return _f()
 
 ANALYSIS_SYSTEM_PROMPT = _build_analysis_system_prompt()
@@ -1564,7 +1599,7 @@ ANALYSIS_SYSTEM_PROMPT = _build_analysis_system_prompt()
 
 def _build_prefetched_analysis_prompt(nano: bool = False, user_message: str = "") -> str:
     """Thin shim — implementation in apps/cli/prompts/system_prompts.py."""
-    from apps.cli.prompts.system_prompts import build_prefetched_analysis_prompt as _f
+    from aria_code.apps.cli.prompts.system_prompts import build_prefetched_analysis_prompt as _f
     return _f(nano=nano, user_message=user_message)
 
 
@@ -1770,19 +1805,19 @@ def _fix_json_string(raw: str) -> str:
 
 def _parse_text_tool_calls(text: str) -> list:
     """Thin shim — implementation in apps/cli/message_processing.py."""
-    from apps.cli.message_processing import parse_text_tool_calls as _f
+    from aria_code.apps.cli.message_processing import parse_text_tool_calls as _f
     return _f(text)
 
 
 def _strip_tool_call_tags(text: str) -> str:
     """Thin shim — implementation in apps/cli/message_processing.py."""
-    from apps.cli.message_processing import strip_tool_call_tags as _f
+    from aria_code.apps.cli.message_processing import strip_tool_call_tags as _f
     return _f(text)
 
 
 def _compact_messages(messages: list, max_chars: int = 0, model_key: str = "qwen7b") -> list:
     """Thin shim — implementation in apps/cli/message_processing.py."""
-    from apps.cli.message_processing import compact_messages as _f
+    from aria_code.apps.cli.message_processing import compact_messages as _f
     return _f(messages, max_chars=max_chars, model_key=model_key)
 
 
@@ -1790,7 +1825,7 @@ def _compact_messages(messages: list, max_chars: int = 0, model_key: str = "qwen
 
 def _build_broker_context_block() -> str:
     """Thin shim — implementation in apps/cli/message_processing.py."""
-    from apps.cli.message_processing import build_broker_context_block as _f
+    from aria_code.apps.cli.message_processing import build_broker_context_block as _f
     return _f()
 
 
@@ -1978,7 +2013,7 @@ def _try_handle_strategy_advice(message: str) -> dict:
 def _run_deterministic_chain(message: str, *, model_has_tools: bool,
                              history: list = None) -> dict:
     """Thin wrapper around the SDK-safe deterministic router."""
-    from apps.cli.deterministic import run_deterministic_chain
+    from aria_code.apps.cli.deterministic import run_deterministic_chain
 
     return run_deterministic_chain(
         message,
@@ -2557,7 +2592,7 @@ def _natural_language_visual_artifact_route(message: str, available_commands: se
     if not text or text.startswith("/"):
         return None
     try:
-        from apps.cli.intent_router import build_intent_route
+        from aria_code.apps.cli.intent_router import build_intent_route
 
         route = build_intent_route(text)
         if not route.visual_artifact:
@@ -2575,7 +2610,7 @@ def _natural_language_visual_artifact_route(message: str, available_commands: se
 def _fetch_macro_data(indicator: str, country: str = "WLD", days: int = 365):
     """Fetch macro data from FRED or World Bank, return list of (date, value) tuples."""
     try:
-        from datasources.sources.fred_source import FREDSource, MACRO_ALIASES
+        from aria_code.datasources.sources.fred_source import FREDSource, MACRO_ALIASES
         if indicator.upper() in MACRO_ALIASES or indicator.upper() in MACRO_ALIASES.values():
             src = FREDSource()
             h = src.history(indicator, days=days)
@@ -2584,7 +2619,7 @@ def _fetch_macro_data(indicator: str, country: str = "WLD", days: int = 365):
     except Exception as _e:
         pass
     try:
-        from datasources.sources.world_bank_source import WorldBankSource
+        from aria_code.datasources.sources.world_bank_source import WorldBankSource
         src = WorldBankSource()
         h = src.history(f"{country}:{indicator}", days=days)
         if h and h.data is not None and not h.data.empty:
@@ -2597,7 +2632,7 @@ def _fetch_macro_data(indicator: str, country: str = "WLD", days: int = 365):
 def _fetch_edgar_data(symbol: str, sub: str = "filings"):
     """Fetch SEC EDGAR data for a US stock."""
     try:
-        from datasources.sources.edgar_source import EDGARSource
+        from aria_code.datasources.sources.edgar_source import EDGARSource
         src = EDGARSource()
         if sub == "filings":
             return src.get_recent_filings(symbol)
@@ -2613,7 +2648,7 @@ def _fetch_edgar_data(symbol: str, sub: str = "filings"):
 def _test_datasource(name: str) -> None:
     """Test connectivity of a named data source."""
     try:
-        from datasources.router import _SOURCE_REGISTRY
+        from aria_code.datasources.router import _SOURCE_REGISTRY
         cls = _SOURCE_REGISTRY.get(name.lower())
         if not cls:
             if HAS_RICH:
@@ -2768,6 +2803,10 @@ stream_ollama = _types_rebind.FunctionType(
     _stream_ollama_src.__code__, _ollama_stream_globals, "stream_ollama",
     _stream_ollama_src.__defaults__, _stream_ollama_src.__closure__
 )
+# FunctionType does not carry keyword-only defaults; without this every
+# keyword-only parameter of stream_ollama becomes required after the rebind.
+stream_ollama.__kwdefaults__ = _stream_ollama_src.__kwdefaults__
+stream_ollama.__doc__ = _stream_ollama_src.__doc__
 del _ollama_stream_globals
 del _types_rebind
 
@@ -2776,13 +2815,13 @@ del _types_rebind
 # ============================================================================
 
 async def stream_chat(base_url: str, message: str, history: list,
-                      model: str = "qwen2.5:7b", thinking_mode: str = "auto",
+                      model: str = "", thinking_mode: str = "auto",
                       user_context: dict = None, auth_token: str = None,
                       on_token=None, on_thinking=None, on_tool_call=None,
                       on_tool_result=None, on_status=None,
                       cancel_event: asyncio.Event = None) -> dict:
     """Thin shim — implementation lives in apps/cli/providers/llm/sse_stream.py."""
-    from apps.cli.providers.llm.sse_stream import stream_chat as _stream_chat
+    from aria_code.apps.cli.providers.llm.sse_stream import stream_chat as _stream_chat
     return await _stream_chat(
         base_url, message, history,
         model=model, thinking_mode=thinking_mode,
@@ -2834,7 +2873,7 @@ def _build_user_context(config: dict) -> Optional[dict]:
     else:
         ctx["market_status"] = "closed"
     # Active model name
-    model_id = config.get("model", "qwen2.5:7b")
+    model_id = config.get("model", DEFAULT_MODEL)
     mkey = resolve_model_key(model_id)
     minfo = MODELS.get(mkey, {})
     ctx["ai_model"] = minfo.get("name", model_id)
@@ -2848,7 +2887,7 @@ def _build_user_context(config: dict) -> Optional[dict]:
 # ============================================================================
 
 def _clean_tool_error_message(error: object) -> str:
-    from ui.render.output import clean_tool_error_message as _ctm
+    from aria_code.ui.render.output import clean_tool_error_message as _ctm
     return _ctm(error)
 
 
@@ -3083,18 +3122,12 @@ def _fuzzy_match(query: str, candidates: list, max_results: int = 3) -> list:
 
 
 def _error_hint(error: str, context: str = "") -> str:
-    from ui.render.output import error_hint as _eh
+    from aria_code.ui.render.output import error_hint as _eh
     return _eh(error, context)
 
 
-class _null_ctx:
-    """No-op context manager used when HAS_RICH is False and we can't use console.status."""
-    def __enter__(self): return self
-    def __exit__(self, *_): pass
-
-
 def _print_error(msg: str, context: str = ""):
-    from ui.render.output import print_error as _pe
+    from aria_code.ui.render.output import print_error as _pe
     _pe(msg, context, console=console, has_rich=HAS_RICH, rich_box=rich_box)
 
 
@@ -3339,7 +3372,7 @@ from aria_code.ui.render.output import display_path as _display_path
 
 
 def _print_tool_result(tool_name: str, result: dict, elapsed: float = 0, params: dict = None):
-    from ui.render.output import print_tool_result as _ptr
+    from aria_code.ui.render.output import print_tool_result as _ptr
     _ptr(
         tool_name, result, elapsed, params,
         console=console, has_rich=HAS_RICH, rich_box=rich_box,
@@ -3635,15 +3668,34 @@ from aria_code.apps.cli.commands.market_cmds import _parse_nl_team_pair
 
 import types as _types
 
+
+def _clone_function_with_globals(fn):
+    """Rebuild *fn* against this module's globals, preserving its signature.
+
+    ``FunctionType`` carries ``__defaults__`` but not ``__kwdefaults__``, so a
+    keyword-only parameter with a default silently became *required* after a
+    rebind — the caller then failed with "missing required keyword-only
+    argument" for a parameter that plainly has a default in the source.  The
+    metadata below is copied for the same reason: a rebound function should be
+    indistinguishable from the original apart from its globals.
+    """
+    clone = _types.FunctionType(
+        fn.__code__, globals(), fn.__name__, fn.__defaults__, fn.__closure__
+    )
+    clone.__kwdefaults__ = fn.__kwdefaults__
+    clone.__doc__ = fn.__doc__
+    clone.__module__ = fn.__module__
+    clone.__qualname__ = fn.__qualname__
+    clone.__annotations__ = dict(getattr(fn, "__annotations__", {}) or {})
+    clone.__dict__.update(fn.__dict__)
+    return clone
+
+
 def _rebind_mixin_globals(mixin_cls):
     """Point mixin methods' __globals__ to this module's namespace so bare names resolve."""
     for _attr_name, _attr in list(vars(mixin_cls).items()):
         if isinstance(_attr, _types.FunctionType):
-            _new_fn = _types.FunctionType(
-                _attr.__code__, globals(), _attr.__name__,
-                _attr.__defaults__, _attr.__closure__
-            )
-            setattr(mixin_cls, _attr_name, _new_fn)
+            setattr(mixin_cls, _attr_name, _clone_function_with_globals(_attr))
 
 
 def _rebind_module_function_globals(module, names):
@@ -3659,24 +3711,21 @@ def _rebind_module_function_globals(module, names):
     for _name in names:
         _attr = getattr(module, _name, None)
         if isinstance(_attr, _types.FunctionType):
-            globals()[_name] = _types.FunctionType(
-                _attr.__code__, globals(), _attr.__name__,
-                _attr.__defaults__, _attr.__closure__,
-            )
+            globals()[_name] = _clone_function_with_globals(_attr)
 
 
-import apps.cli.tool_executor as _tool_executor_module
+import aria_code.apps.cli.tool_executor as _tool_executor_module
 _rebind_module_function_globals(_tool_executor_module, _tool_executor_module.__all__)
 
 # _test_api_key 同理：model_cmds.py 的 mixin 用裸名调用它。
-import apps.cli.provider_endpoints as _provider_endpoints_module
+import aria_code.apps.cli.provider_endpoints as _provider_endpoints_module
 _rebind_module_function_globals(_provider_endpoints_module, ["_test_api_key"])
 
 # ── Broker rendering ──────────────────────────────────────────────────────────
 # 实现已移到 apps/cli/broker_render.py。同 football_reports：这些函数依赖本模块的
 # console / HAS_RICH / Panel / rich_box，必须重绑到本模块 globals，普通 import 会
 # 在运行期 NameError。broker_cmds.py 与测试都通过 aria_cli 命名空间取用。
-import apps.cli.broker_render as _broker_render_module
+import aria_code.apps.cli.broker_render as _broker_render_module
 _rebind_module_function_globals(_broker_render_module, _broker_render_module.__all__)
 
 class SlashCommands(
@@ -3684,12 +3733,12 @@ class SlashCommands(
     """Claude Code-style slash command system."""
 
 
-    def __init__(self, terminal: 'ArtheraTerminal'):
-        self.terminal = terminal
-
     @property
     def context(self):
         return self.terminal.context
+
+    def __init__(self, terminal: 'ArtheraTerminal'):
+        self.terminal = terminal
         self.commands = {
             # ── Session ───────────────────────────────────────────────────────
             "/help":      (self.cmd_help,     "Show commands and examples"),
@@ -4082,7 +4131,7 @@ class SlashCommands(
     # ── Project scaffold templates ────────────────────────────────────────────
 
     # Scaffold templates moved to apps.cli.commands.scaffold_templates
-    from apps.cli.commands.scaffold_templates import SCAFFOLD_TEMPLATES as _SCAFFOLD_TEMPLATES  # noqa
+    from aria_code.apps.cli.commands.scaffold_templates import SCAFFOLD_TEMPLATES as _SCAFFOLD_TEMPLATES  # noqa
 
 
 
@@ -4300,7 +4349,7 @@ class ArtheraTerminal:
             logger.debug("Durable run store unavailable: %s", exc)
         # JSONL session store: crash-safe, append-per-turn
         try:
-            from apps.cli.session_jsonl import JsonlSessionStore
+            from aria_code.apps.cli.session_jsonl import JsonlSessionStore
             self._jsonl_store: Optional[Any] = JsonlSessionStore()
             self._jsonl_store.init_session(self.session_id)
         except Exception:
@@ -4347,7 +4396,7 @@ class ArtheraTerminal:
 
         # ── Wire subagent runner so spawn_task can use the same LLM ─────────
         try:
-            from runtime.subagent import (
+            from aria_code.runtime.subagent import (
                 register_runner as _register_subagent_runner,
                 restore_tasks as _restore_subagent_tasks,
             )
@@ -4388,6 +4437,7 @@ class ArtheraTerminal:
         self._pending_market_resolution: Optional[dict] = None
         self._last_preflight_key: str = ""
         self._auto_compact_count: int = 0
+        self._unregistered_model_warned: set = set()
         # ── Multi-file analysis session ──────────────────────────────────────
         try:
             from file_analysis_tools import FileSession
@@ -4426,8 +4476,8 @@ class ArtheraTerminal:
         # completer and slash-command executor so displayed behavior matches
         # submitted behavior.
         try:
-            from apps.cli.config_paths import resolve_user_output_root
-            from packages.aria_services.references import build_reference_service
+            from aria_code.apps.cli.config_paths import resolve_user_output_root
+            from aria_code.packages.aria_services.references import build_reference_service
             self._reference_service = build_reference_service(
                 workspace=pathlib.Path.cwd(),
                 output_root=resolve_user_output_root(),
@@ -4458,7 +4508,7 @@ class ArtheraTerminal:
 
         if HAS_PT and _interactive:
             try:
-                from apps.cli.config_paths import resolve_user_output_root as _reference_output_root
+                from aria_code.apps.cli.config_paths import resolve_user_output_root as _reference_output_root
                 _completion_output_root = _reference_output_root()
             except Exception:
                 _completion_output_root = None
@@ -4501,7 +4551,7 @@ class ArtheraTerminal:
 
     def print_header(self):
         # Resolve current model info
-        current_id  = self.config.get("model", "qwen2.5:7b")
+        current_id  = self.config.get("model", DEFAULT_MODEL)
 
         # ── 模型自动配对（现实优先）─────────────────────────────────────────
         # 检测本机已安装的 Ollama 模型；若配置模型未安装，自动配对到最优
@@ -4572,9 +4622,9 @@ class ArtheraTerminal:
             _ui_lang = self.config.get("ui_lang", "en") or "en"
             if _banner_mode == "compact":
                 _model_label = f"{m['name']} {m['version']}" if current_key else current_id
-                from ui.banner import render_compact_banner as _rcb
+                from aria_code.ui.banner import render_compact_banner as _rcb
                 try:
-                    from apps.cli.update_check import get_update_notice as _gun
+                    from aria_code.apps.cli.update_check import get_update_notice as _gun
                     _update_notice = _gun(wait_ms=1200)
                 except Exception:
                     _update_notice = None
@@ -4593,7 +4643,7 @@ class ArtheraTerminal:
             else:
                 _model_label = f"{m['name']} {m['version']}" if current_key else current_id
                 try:
-                    from apps.cli.i18n import t as _i18n_t
+                    from aria_code.apps.cli.i18n import t as _i18n_t
                     _lite_word  = _i18n_t("lite", lang=_ui_lang)
                     _cloud_word = _i18n_t("cloud", lang=_ui_lang)
                     _local_word = _i18n_t("local", lang=_ui_lang)
@@ -4607,10 +4657,10 @@ class ArtheraTerminal:
                     _rt_label = f"{_model_label}  [dim]{_local_word}[/dim]"
 
                 _best_id = (MODELS.get("qwen7b") or {}).get("id", "qwen2.5:7b")
-                from ui.banner import render_startup_dashboard as _rsd, render_try_hints as _rth
-                from ui.startup_dashboard import StartupDashboardViewModel as _StartupDashboardViewModel
+                from aria_code.ui.banner import render_startup_dashboard as _rsd, render_try_hints as _rth
+                from aria_code.ui.startup_dashboard import StartupDashboardViewModel as _StartupDashboardViewModel
                 try:
-                    from apps.cli.update_check import get_update_notice as _gun
+                    from aria_code.apps.cli.update_check import get_update_notice as _gun
                     _update_notice = _gun(wait_ms=1200)
                 except Exception:
                     _update_notice = None
@@ -4656,7 +4706,7 @@ class ArtheraTerminal:
                         )
         else:
             if _banner_mode != "off":
-                from ui.banner import render_full_banner as _rfb
+                from aria_code.ui.banner import render_full_banner as _rfb
                 _rfb(
                     version=__version__,
                     rt_label=_runtime,
@@ -4671,17 +4721,17 @@ class ArtheraTerminal:
                 )
 
     def _privacy_status_label(self, rich: bool = False) -> str:
-        from ui.banner import privacy_status_label as _psl
+        from aria_code.ui.banner import privacy_status_label as _psl
         _lang = self.config.get("ui_lang", "en") or "en"
         return _psl(self.config, rich=rich, lang=_lang)
 
     def _control_status_label(self, rich: bool = False) -> str:
-        from ui.banner import control_status_label as _csl
+        from aria_code.ui.banner import control_status_label as _csl
         _lang = self.config.get("ui_lang", "en") or "en"
         return _csl(self.config, rich=rich, lang=_lang)
 
     def _ollama_status_label(self, rich: bool = False) -> str:
-        from ui.banner import ollama_status_label as _osl
+        from aria_code.ui.banner import ollama_status_label as _osl
         _lang = self.config.get("ui_lang", "en") or "en"
         return _osl(
             getattr(self, "_ollama_alive", False),
@@ -4692,7 +4742,7 @@ class ArtheraTerminal:
         )
 
     def _status_line(self) -> str:
-        current_id = self.config.get("model", "qwen2.5:7b")
+        current_id = self.config.get("model", DEFAULT_MODEL)
         # If Ollama switched to a different model, show the actual running model
         display_id = self._actual_model or current_id
         model_name = display_id  # fallback: raw model ID
@@ -4797,7 +4847,7 @@ class ArtheraTerminal:
         if message.startswith("/"):
             return False
         try:
-            from apps.cli.commands.market_cmds import (
+            from aria_code.apps.cli.commands.market_cmds import (
                 _is_probable_football_query as _pfq,
                 _parse_nl_team_pair as _pfnl,
             )
@@ -4914,7 +4964,7 @@ class ArtheraTerminal:
         # can silently pick the first ticker.  The clarification lives outside
         # conversation history so the eventual request is recorded only once.
         if not system_override and not message.lstrip().startswith("/"):
-            from apps.cli.market_universe import (
+            from aria_code.apps.cli.market_universe import (
                 ambiguous_market_candidates,
                 select_market_candidate,
             )
@@ -5072,6 +5122,7 @@ class ArtheraTerminal:
             try:
                 _mc = get_model_capability(_curr_model_id)
                 _model_has_tools = bool(_mc.tool_calls and _mc.context_window >= 8192)
+                self._warn_unregistered_model(_curr_model_id, _mc)
             except Exception:
                 pass
 
@@ -5088,7 +5139,7 @@ class ArtheraTerminal:
         if _is_broker_setup_intent(message):
             _btype = _detect_broker_type(message)
             if HAS_RICH:
-                from apps.cli.utils.market_detect import _BROKER_SETUP_NAMES
+                from aria_code.apps.cli.utils.market_detect import _BROKER_SETUP_NAMES
                 _display = _BROKER_SETUP_NAMES.get(_btype, ("",))[0] if _btype else ""
                 _label = f"  正在启动{_display}配置向导…" if _display else "  正在启动券商配置向导…"
                 console.print(f"\n[bold]Aria[/bold]  [dim]{_label}[/dim]\n")
@@ -5216,7 +5267,7 @@ class ArtheraTerminal:
                 return
             # Analysis query: fall through to LLM for deep commentary on the snapshot data
 
-        model = self.config.get("model", "qwen2.5:7b")
+        model = self.config.get("model", DEFAULT_MODEL)
         thinking_mode = self.config.get("thinking_mode", "auto")
         auth_token = self.config.get("auth_token")
         user_context = _build_user_context(self.config)
@@ -5227,8 +5278,8 @@ class ArtheraTerminal:
 
         # Context pressure warning — only once per session when > 85% full
         _est_tokens = sum(len(m.get("content", "")) for m in self.conversation) // 3
-        _max_ctx    = get_model_cfg(self.config.get("model", "qwen2.5:7b")).get("num_ctx", 16384)
-        from ui.render.output import print_context_warning as _pcw
+        _max_ctx    = get_model_cfg(self.config.get("model", DEFAULT_MODEL)).get("num_ctx", 16384)
+        from aria_code.ui.render.output import print_context_warning as _pcw
         _pcw(_est_tokens, _max_ctx, console=console, has_rich=HAS_RICH,
              session_id=getattr(self, "session_id", ""))
 
@@ -5264,7 +5315,7 @@ class ArtheraTerminal:
                 _plan_result = await stream_provider_result(
                     OllamaProvider(
                         self.config.get("ollama_url", "http://localhost:11434"),
-                        self.config.get("model", "qwen2.5:7b"),
+                        self.config.get("model", DEFAULT_MODEL),
                         show_market_prefetch_status=False,
                     ),
                     _decomp_prompt,
@@ -5317,7 +5368,7 @@ class ArtheraTerminal:
         elapsed = 0.0
 
         try:
-            from apps.cli.todo_tracker import clear_todos as _clear_todos
+            from aria_code.apps.cli.todo_tracker import clear_todos as _clear_todos
             _clear_todos()  # reset task checklist for this new turn
         except Exception:
             pass
@@ -5347,7 +5398,7 @@ class ArtheraTerminal:
         # loop-guard and (now) per-tool approval. This block only adapts the
         # terminal — stream consumer, approval UI, run-store transitions —
         # to that loop and renders its outcome.
-        from apps.cli.providers.runtime_bridge import run_chat_via_runtime
+        from aria_code.apps.cli.providers.runtime_bridge import run_chat_via_runtime
 
         response_text = ""
         stream_consumer = TerminalRuntimeEventConsumer(
@@ -5427,7 +5478,7 @@ class ArtheraTerminal:
         # only a confirmed-successful turn clears it.
         _rt_sys_ov = getattr(self, "_system_override", None)
         _rt_turn = None
-        from packages.aria_services.research_protocol import (
+        from aria_code.packages.aria_services.research_protocol import (
             grounding_tool_names,
             requires_financial_evidence,
         )
@@ -5544,7 +5595,7 @@ class ArtheraTerminal:
             _rescue = None
             if _fallback_mode != "off" and "ARIA-4223" not in str(_err):
                 try:
-                    from providers.llm.registry import stream_cloud_fallback
+                    from aria_code.providers.llm.registry import stream_cloud_fallback
                     _rescue = await stream_cloud_fallback(
                         current_message, self.conversation,
                         on_token=on_token,
@@ -5823,9 +5874,9 @@ class ArtheraTerminal:
             self._last_response = final_text   # for /copy
             _context_compacted_from_usage = False
 
-            _ctx_max = get_model_cfg(self.config.get("model", "qwen2.5:7b")).get("num_ctx", 16384)
+            _ctx_max = get_model_cfg(self.config.get("model", DEFAULT_MODEL)).get("num_ctx", 16384)
             if HAS_RICH:
-                from ui.render.output import format_turn_footer as _format_turn_footer
+                from aria_code.ui.render.output import format_turn_footer as _format_turn_footer
                 _footer = _format_turn_footer(
                     metadata,
                     mode=self.config.get("response_footer", "compact"),
@@ -5834,7 +5885,7 @@ class ArtheraTerminal:
                 if _footer:
                     console.print(f"\n[dim]{_footer}[/dim]")
             else:
-                from ui.render.output import format_turn_footer as _format_turn_footer
+                from aria_code.ui.render.output import format_turn_footer as _format_turn_footer
                 _footer = _format_turn_footer(
                     metadata,
                     mode=self.config.get("response_footer", "compact"),
@@ -5862,7 +5913,7 @@ class ArtheraTerminal:
                         try:
                             self.conversation = _compact_messages(
                                 self.conversation,
-                                model_key=self.config.get("model", "qwen2.5:7b"),
+                                model_key=self.config.get("model", DEFAULT_MODEL),
                             )
                         except Exception:
                             if len(self.conversation) > 10:
@@ -5872,7 +5923,7 @@ class ArtheraTerminal:
                     if HAS_RICH:
                         console.print(f"  [dim]↩ Auto-compacted context after response ({_old_pct}% full)[/dim]")
                 elif _ctx_fill_pct >= 0.85:
-                    from ui.render.output import print_context_warning as _print_context_warning
+                    from aria_code.ui.render.output import print_context_warning as _print_context_warning
                     _print_context_warning(
                         prompt_t,
                         _ctx_max,
@@ -5929,7 +5980,7 @@ class ArtheraTerminal:
             # Auto-warn when context approaches the limit; auto-compact before
             # the prompt is already at the edge and tool traces become noisy.
             _est = sum(len(m.get("content", "")) for m in self.conversation) // 3
-            _max = get_model_cfg(self.config.get("model", "qwen2.5:7b")).get("num_ctx", 16384)
+            _max = get_model_cfg(self.config.get("model", DEFAULT_MODEL)).get("num_ctx", 16384)
             _pct = min(100, int(_est / _max * 100))
             if _pct >= 90 and not _context_compacted_from_usage:
                 # Auto-compact: silently summarise and truncate
@@ -6122,7 +6173,7 @@ class ArtheraTerminal:
         honors ARIA_NO_TELEMETRY, never raises.
         """
         try:
-            from apps.cli.prediction_feedback import PredictionTracker
+            from aria_code.apps.cli.prediction_feedback import PredictionTracker
             if not entry_price or entry_price <= 0:
                 try:
                     import market_data_client as _mdc
@@ -6143,7 +6194,7 @@ class ArtheraTerminal:
     def _verify_predictions(self, min_age_hours: float = 24.0) -> dict:
         """Settle pending predictions against live prices; emit DPO feedback."""
         try:
-            from apps.cli.prediction_feedback import PredictionTracker
+            from aria_code.apps.cli.prediction_feedback import PredictionTracker
 
             def _quote(sym: str):
                 try:
@@ -6211,7 +6262,7 @@ class ArtheraTerminal:
         return f"{model_label} · {cwd} · {privacy} · /help · esc · {est_tokens:,}/{max_ctx:,}"
 
     def _bottom_toolbar_parts(self):
-        from ui.banner import bottom_toolbar_parts as _btp
+        from aria_code.ui.banner import bottom_toolbar_parts as _btp
         # /clear、/compact 等把对话截短后,上一轮的真实 token 计数即失效
         # (自愈式判定,免去在每个重置点手工清零)。
         known = getattr(self, "_last_prompt_tokens", 0)
@@ -6224,6 +6275,33 @@ class ArtheraTerminal:
             known_context_tokens=known,
         )
 
+    def _warn_unregistered_model(self, model_id: str, cap) -> None:
+        """Warn once per model when it is missing from the capability registry.
+
+        An unregistered model runs with no tools and a 4K context budget, so it
+        answers repository questions from memory instead of reading files and
+        the context gauge measures against the wrong window.  That downgrade
+        used to be invisible; surface it so it can be fixed rather than
+        mistaken for the model being bad at the task.
+        """
+        try:
+            from aria_code.model_capability import is_unknown_model
+        except Exception:
+            return
+        if not is_unknown_model(cap):
+            return
+        if model_id in self._unregistered_model_warned:
+            return
+        self._unregistered_model_warned.add(model_id)
+        if HAS_RICH:
+            console.print(
+                f"  [yellow]⚠ 模型 {model_id} 未登记在能力表中[/yellow]\n"
+                f"  [dim]已按保守设置运行：不调用工具、上下文按 "
+                f"{cap.context_window} tokens 计算。[/dim]\n"
+                f"  [dim]如果它其实支持工具调用，请在 model_capability.py 的 "
+                f"_CAPABILITY_TABLE 中登记。[/dim]"
+            )
+
     async def _maybe_auto_compact_before_turn(self, incoming_content: str = "") -> bool:
         """Compact history before a request enters the model when context is hot."""
         if not bool(self.config.get("auto_compact_context", True)):
@@ -6233,10 +6311,10 @@ class ArtheraTerminal:
         except Exception:
             threshold = 0.78
         try:
-            from apps.cli.message_processing import context_compaction_decision
+            from aria_code.apps.cli.message_processing import context_compaction_decision
             decision = context_compaction_decision(
                 self.conversation,
-                model_key=self.config.get("model", "qwen2.5:7b"),
+                model_key=self.config.get("model", DEFAULT_MODEL),
                 extra_content=incoming_content,
                 threshold=threshold,
             )
@@ -6255,7 +6333,7 @@ class ArtheraTerminal:
                 self.conversation = _compact_messages(
                     self.conversation,
                     max_chars=max_chars,
-                    model_key=self.config.get("model", "qwen2.5:7b"),
+                    model_key=self.config.get("model", DEFAULT_MODEL),
                 )
             except Exception:
                 if len(self.conversation) > 10:
@@ -6264,7 +6342,7 @@ class ArtheraTerminal:
         try:
             new_decision = context_compaction_decision(
                 self.conversation,
-                model_key=self.config.get("model", "qwen2.5:7b"),
+                model_key=self.config.get("model", DEFAULT_MODEL),
                 extra_content=incoming_content,
                 threshold=threshold,
             )
@@ -6379,7 +6457,7 @@ class ArtheraTerminal:
         self.print_header()
         await self._startup_health_check()
         try:
-            from ui.banner import render_session_banner
+            from aria_code.ui.banner import render_session_banner
             render_session_banner(
                 self.session_id,
                 console=console,
@@ -6443,7 +6521,7 @@ class ArtheraTerminal:
             try:
                 if self._pt_session:
                     if self.config.get("input_style", "panel") == "panel":
-                        from ui import PanelInputConfig, run_panel_input_async
+                        from aria_code.ui import PanelInputConfig, run_panel_input_async
                         # Drain notifications queued while pt was active (avoids stdout corruption)
                         while self._pending_notifications:
                             _note = self._pending_notifications.pop(0)
@@ -6504,6 +6582,34 @@ class ArtheraTerminal:
 
                 if not user_input:
                     continue
+
+                # -- Auto-hydrate path context (Claude Code parity) --
+                import os, pathlib
+                _potential_paths = [word for word in user_input.split() if "/" in word or "\\" in word]
+                _hydrated_files = []
+                for p in _potential_paths:
+                    try:
+                        p_obj = pathlib.Path(p).expanduser().resolve()
+                        if p_obj.exists():
+                            if p_obj.is_dir():
+                                # Temporarily change directory to the dragged project!
+                                os.chdir(p_obj)
+                                self.config["cwd"] = str(p_obj)
+                                user_input += f"\n\n[System Note: The current working directory has been automatically changed to {p_obj}. You MUST use `list_files` or `search_code` to explore this directory before answering.]"
+                            elif p_obj.is_file():
+                                _hydrated_files.append(p_obj)
+                    except Exception:
+                        pass
+                
+                if _hydrated_files:
+                    _context = "\n\n[System Note: The user mentioned the following local files. Here are their contents for context:]\n"
+                    for f in _hydrated_files:
+                        try:
+                            _content = f.read_text()[:15000] # Hydrate up to 15k chars
+                            _context += f"\n--- {f} ---\n{_content}\n"
+                        except Exception:
+                            pass
+                    user_input += _context
 
                 # ── Session recap: show summary if away for 3+ minutes ─────────
                 import time as _time
@@ -6644,7 +6750,7 @@ class ArtheraTerminal:
     async def run_prompt(self, prompt: str, json_output: bool = False,
                          fmt: str = "table", output_file: str = None, quiet: bool = False):
         """Run a single prompt (non-interactive / pipe mode)."""
-        model = self.config.get("model", "qwen2.5:7b")
+        model = self.config.get("model", DEFAULT_MODEL)
         thinking_mode = self.config.get("thinking_mode", "auto")
         auth_token = self.config.get("auth_token")
         user_context = _build_user_context(self.config)
@@ -6703,7 +6809,7 @@ class ArtheraTerminal:
         if _is_broker_setup_intent(prompt):
             _btype_p = _detect_broker_type(prompt)
             if HAS_RICH:
-                from apps.cli.utils.market_detect import _BROKER_SETUP_NAMES
+                from aria_code.apps.cli.utils.market_detect import _BROKER_SETUP_NAMES
                 _display_p = _BROKER_SETUP_NAMES.get(_btype_p, ("",))[0] if _btype_p else ""
                 _label_p = f"  正在启动{_display_p}配置向导…" if _display_p else "  正在启动券商配置向导…"
                 console.print(f"\n[bold]Aria[/bold]  [dim]{_label_p}[/dim]\n")
@@ -6729,51 +6835,61 @@ class ArtheraTerminal:
                 except Exception:
                     _prompt_spinner = None
             try:
-                # Ollama models (no "/" provider prefix) skip the api_url stub
-                # backend entirely — same routing as the interactive REPL.
-                _force_backend_p = bool(self.config.get("backend_chat")) and bool(self.api_url)
-                if not _force_backend_p and (local_mode or "/" not in (model or "")):
-                    result = await stream_provider_result(
-                        OllamaProvider(
-                            self.config.get("ollama_url", "http://localhost:11434"),
-                            model,
-                            show_market_prefetch_status=False,
-                        ),
-                        prompt,
-                        [],
-                        tools=LOCAL_TOOL_SCHEMAS,
-                    )
-                else:
-                    # Cloud-provider model: try api_url, fall back to Ollama on
-                    # failure OR a stub placeholder response.
-                    result = await stream_provider_result(
-                        AriaSSEProvider(
-                            self.api_url,
-                            model,
-                            thinking_mode=thinking_mode,
-                            user_context=user_context,
-                            auth_token=auth_token,
-                            project_context=_PROJECT_CONTEXT,
-                            use_react_gateway=bool(self.config.get("arthera_react_gateway")),
-                        ),
-                        prompt,
-                        [],
-                        tools=LOCAL_TOOL_SCHEMAS,
-                    )
-                    _resp = result.get("response", "") or ""
-                    if (not result.get("success")
-                            or len(_resp) < 20
-                            or _response_is_stub_placeholder(_resp)):
-                        result = await stream_provider_result(
-                            OllamaProvider(
-                                self.config.get("ollama_url", "http://localhost:11434"),
-                                model,
-                                show_market_prefetch_status=False,
-                            ),
-                            prompt,
-                            [],
-                            tools=LOCAL_TOOL_SCHEMAS,
-                        )
+                # Headless -p runs the SAME loop as the REPL.
+                #
+                # It used to call stream_provider_result directly: one provider
+                # round, tool schemas advertised but nothing executing what came
+                # back, and a single best-effort pass over tool_calls_pending
+                # afterwards whose results the model never saw. So `-p` was not
+                # agentic at all — no rounds, no tool results fed back, no loop
+                # guard, no acceptance gate. Every non-interactive user (CI, a
+                # pipe, the eval harness) got a chat reply where the REPL would
+                # have done the work.
+                #
+                # run_chat_via_runtime is the documented single entry point and
+                # already handles provider selection and cloud→Ollama fallback,
+                # which is what the two branches here were open-coding.
+                from aria_code.apps.cli.providers.runtime_bridge import run_chat_via_runtime
+
+                _turn = await run_chat_via_runtime(
+                    prompt=prompt, history=[],
+                    local_tools=LOCAL_TOOLS, tool_schemas=LOCAL_TOOL_SCHEMAS,
+                    model=model, config=self.config, api_url=self.api_url,
+                    ollama_url=self.config.get("ollama_url", "http://localhost:11434"),
+                    thinking_mode=thinking_mode, user_context=user_context,
+                    auth_token=auth_token, project_context=_PROJECT_CONTEXT,
+                    max_rounds=int(self.config.get("max_rounds", 30) or 30),
+                    # No approval UI exists in headless mode. Leaving the confirm
+                    # set populated would block every write on a prompt nobody is
+                    # there to answer; the operator opts in with
+                    # --dangerously-skip-permissions or --allow-tools.
+                    confirm_tools=(
+                        frozenset() if _auto_approve_session
+                        else frozenset(_CONFIRM_TOOLS) - _session_always_allow
+                    ),
+                    return_result=True,
+                )
+                _tools_used = list(getattr(_turn.final, "tools", []) or [])
+                # An empty closing message after the tools already ran is not a
+                # failed turn. The model did the work and then said nothing;
+                # exiting 1 there told a script the task failed while the edit
+                # sat finished on disk. Narrow on purpose — any other error,
+                # and a turn that ran no tools at all, still fails.
+                _empty_after_work = (
+                    _turn.error == "empty_response" and bool(_tools_used)
+                )
+                result = {
+                    "success": _turn.ok or _empty_after_work,
+                    "response": (
+                        _turn.text
+                        or (f"（模型未给出收尾说明。已执行的工具：{', '.join(_tools_used)}）"
+                            if _empty_after_work else "")
+                    ),
+                    "error": "" if _empty_after_work else (_turn.error or ""),
+                    "provider": getattr(_turn.final, "provider", ""),
+                    "tools_used": _tools_used,
+                    "acceptance": getattr(_turn.final, "acceptance", None),
+                }
             finally:
                 if _prompt_spinner is not None:
                     try:
@@ -6781,26 +6897,14 @@ class ArtheraTerminal:
                     except Exception:
                         pass
 
-        # Execute any pending tool calls (write_file / run_command) generated by
-        # the code-block fallback in stream_ollama.  This makes -p mode behave
-        # the same as interactive mode for code generation tasks.
-        pending = result.get("tool_calls_pending", [])
-        if pending and result.get("success"):
-            for tc in pending:
-                tool_name  = tc.get("tool", "")
-                tool_params = tc.get("params", {})
-                if tool_name in LOCAL_TOOLS:
-                    fn = LOCAL_TOOLS[tool_name][0]
-                    tr = fn(tool_params)
-                    if not quiet:
-                        if tool_name == "write_file":
-                            _status = "Created" if tr.get("success") else "Failed"
-                            msg = f"{_status}: file tool"
-                            print(msg if not HAS_RICH else msg, file=sys.stderr)
-                        elif tool_name == "run_command":
-                            _out = tr.get("data", {}).get("stdout", "") or tr.get("error", "")
-                            if _out:
-                                print(_out[:2000])
+        # The agent loop executes tools now, so there is nothing left over to
+        # run here. What is worth surfacing is the acceptance verdict: in
+        # headless mode nobody watched the run, so a turn that changed files
+        # and failed its checks must say so on stderr rather than print a
+        # confident summary and exit 0.
+        _acceptance = (result or {}).get("acceptance") or {}
+        if _acceptance.get("verified") is False and not quiet:
+            print(f"⚠ 验收未通过: {_acceptance.get('headline', '')}", file=sys.stderr)
 
         if json_output or fmt == "json":
             content = json.dumps(result, ensure_ascii=False, indent=2)
@@ -6913,9 +7017,16 @@ Examples:
 
     # ── Start background update check (non-blocking, daemon thread) ──────────
     try:
-        from apps.cli.update_check import start_update_check
+        from aria_code.apps.cli.update_check import start_update_check
         _ui_lang_early = config.get("ui_lang", "en") or "en"
         start_update_check(__version__, lang=_ui_lang_early)
+    except Exception:
+        pass
+
+    # ── Wire execution-trace reporting (no-ops unless the user opted in) ────
+    try:
+        from aria_code.runtime.procedural_trace import wire_trace_reporters
+        wire_trace_reporters(config)
     except Exception:
         pass
 
@@ -6928,7 +7039,7 @@ Examples:
         raw_model = str(args.model).strip()
         if "/" in raw_model and not raw_model.startswith("http"):
             provider_name, selected_model = raw_model.split("/", 1)
-            from apps.cli.providers.chat_routing import normalize_provider_name
+            from aria_code.apps.cli.providers.chat_routing import normalize_provider_name
 
             provider_name = normalize_provider_name(provider_name)
             config["local_provider"] = provider_name
@@ -7047,7 +7158,7 @@ Examples:
 # 而不是普通 import：market_cmds.py 那个 mixin 用裸名字调 _football_standings(...)，
 # 靠的是 _rebind_mixin_globals 把它的 __globals__ 指向本模块；同时这些函数自身也
 # 依赖本模块的 console。重新绑定后两边才都能解析。与 tool_executor 同一套机制。
-import apps.cli.football_reports as _football_reports_module
+import aria_code.apps.cli.football_reports as _football_reports_module
 _rebind_module_function_globals(_football_reports_module, _football_reports_module.__all__)
 
 

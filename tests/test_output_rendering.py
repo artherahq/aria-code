@@ -88,7 +88,7 @@ class _SnapshotMDC:
 
 
 def test_market_snapshot_output_avoids_na_placeholders(monkeypatch):
-    import aria_cli
+    from aria_code import aria_cli
 
     original_import = builtins.__import__
 
@@ -123,7 +123,7 @@ def test_market_snapshot_output_avoids_na_placeholders(monkeypatch):
 
 
 def test_market_snapshot_handles_multi_symbol_company_names(monkeypatch):
-    import aria_cli
+    from aria_code import aria_cli
 
     monkeypatch.setattr(aria_cli, "_HAS_MDC", True)
     monkeypatch.setattr(aria_cli, "_get_mdc", lambda: _SnapshotMDC())
@@ -146,8 +146,8 @@ def test_market_snapshot_handles_multi_symbol_company_names(monkeypatch):
 
 
 def test_market_snapshot_resolves_sidike_without_inheriting_previous_symbol(monkeypatch):
-    import aria_cli
-    from apps.cli.utils.market_detect import _extract_market_symbol
+    from aria_code import aria_cli
+    from aria_code.apps.cli.utils.market_detect import _extract_market_symbol
 
     monkeypatch.setattr(aria_cli, "_HAS_MDC", True)
     monkeypatch.setattr(aria_cli, "_get_mdc", lambda: _SnapshotMDC())
@@ -167,7 +167,7 @@ def test_market_snapshot_resolves_sidike_without_inheriting_previous_symbol(monk
 
 
 def test_market_snapshot_repeat_notice_compresses_identical_cache():
-    import aria_cli
+    from aria_code import aria_cli
 
     result = {
         "symbol": "AAPL",
@@ -190,7 +190,7 @@ def test_market_snapshot_repeat_notice_compresses_identical_cache():
 
 
 def test_market_snapshot_repeat_notice_expires_after_ttl():
-    import aria_cli
+    from aria_code import aria_cli
 
     result = {"symbol": "AAPL", "price": 195.2, "change_pct": 0.8, "signal": "NEUTRAL"}
     previous = aria_cli._market_snapshot_cache_entry(result, now=100.0)
@@ -199,7 +199,7 @@ def test_market_snapshot_repeat_notice_expires_after_ttl():
 
 
 def test_tradingview_indicator_readout_explains_bullish_and_bearish_drivers():
-    import aria_cli
+    from aria_code import aria_cli
 
     readout = aria_cli._build_tradingview_indicator_readout(
         {
@@ -231,7 +231,7 @@ def test_tradingview_indicator_readout_explains_bullish_and_bearish_drivers():
 
 
 def test_lvmh_prefetch_normalizes_symbol_name_and_currency(monkeypatch):
-    import aria_cli
+    from aria_code import aria_cli
 
     monkeypatch.setattr(aria_cli, "_HAS_MDC", True)
     monkeypatch.setattr(aria_cli, "_get_mdc", lambda: _SnapshotMDC())
@@ -246,7 +246,7 @@ def test_lvmh_prefetch_normalizes_symbol_name_and_currency(monkeypatch):
 
 
 def test_unresolved_market_name_does_not_inherit_history():
-    import aria_cli
+    from aria_code import aria_cli
 
     history = [{"role": "user", "content": "紫金矿业走势"}]
     result = aria_cli._try_handle_market_snapshot_analysis("不存在公司走势", history=history)
@@ -255,7 +255,7 @@ def test_unresolved_market_name_does_not_inherit_history():
 
 
 def test_tool_error_summary_hides_curl_details():
-    import aria_cli
+    from aria_code import aria_cli
 
     summary = aria_cli._format_tool_summary(
         "get_market_data",
@@ -267,7 +267,7 @@ def test_tool_error_summary_hides_curl_details():
 
 
 def test_market_tool_summary_preserves_data_provenance_and_rsi_direction():
-    import aria_cli
+    from aria_code import aria_cli
 
     summary = aria_cli._format_tool_summary(
         "get_market_data",
@@ -293,7 +293,7 @@ def test_market_tool_summary_preserves_data_provenance_and_rsi_direction():
 
 
 def test_run_command_activity_summary_uses_exit_code_field():
-    from ui.render.output import _one_line_tool_summary
+    from aria_code.ui.render.output import _one_line_tool_summary
 
     icon, detail = _one_line_tool_summary(
         "run_command",
@@ -307,7 +307,7 @@ def test_run_command_activity_summary_uses_exit_code_field():
 
 
 def test_activity_summary_hides_local_file_paths():
-    from ui.render.output import _one_line_tool_summary
+    from aria_code.ui.render.output import _one_line_tool_summary
 
     _icon, detail = _one_line_tool_summary(
         "write_file",
@@ -323,7 +323,7 @@ def test_activity_summary_hides_local_file_paths():
 
 
 def test_activity_summary_hides_web_fetch_url():
-    from ui.render.output import _one_line_tool_summary
+    from aria_code.ui.render.output import _one_line_tool_summary
 
     _icon, detail = _one_line_tool_summary(
         "web_fetch",
@@ -339,7 +339,7 @@ def test_activity_summary_hides_web_fetch_url():
 
 
 def test_activity_summary_hides_full_output_path():
-    from ui.render.output import _one_line_tool_summary
+    from aria_code.ui.render.output import _one_line_tool_summary
 
     _icon, detail = _one_line_tool_summary(
         "run_command",
@@ -354,22 +354,22 @@ def test_activity_summary_hides_full_output_path():
 
 
 def test_tool_display_label_marks_mcp_without_target_details():
-    from ui.render.output import tool_display_label
+    from aria_code.ui.render.output import tool_display_label
 
     assert tool_display_label("mcp__github__read_file") == "github · read file · MCP"
     assert tool_display_label("web_search") == "web_search · web search"
 
 
 def test_display_path_returns_filename_only():
-    from ui.render.output import display_path
+    from aria_code.ui.render.output import display_path
 
     assert display_path("/Users/mac/Desktop/aria-code/report.html") == "report.html"
     assert display_path("", fallback="artifact") == "artifact"
 
 
 def test_report_markdown_prompt_omits_na_placeholders(monkeypatch, tmp_path):
-    import aria_cli
-    import packages.aria_services.data as service_data
+    from aria_code import aria_cli
+    import aria_code.packages.aria_services.data as service_data
 
     prompts = []
 
@@ -381,6 +381,7 @@ def test_report_markdown_prompt_omits_na_placeholders(monkeypatch, tmp_path):
             prompts.append(prompt)
 
     class FakeCommands:
+        context = type("C",(),{"has_rich":False, "console": type("C",(),{"print": print})()})()
         terminal = FakeTerminal()
 
     class FakeBundle:
@@ -420,7 +421,7 @@ def test_report_markdown_prompt_omits_na_placeholders(monkeypatch, tmp_path):
 
 
 def test_display_value_uses_dash_for_missing_values():
-    import aria_cli
+    from aria_code import aria_cli
 
     assert aria_cli._display_value(None) == "—"
     assert aria_cli._display_value("N/A") == "—"
@@ -441,8 +442,8 @@ def test_market_render_import_does_not_require_prompt_toolkit():
                 return None
 
         sys.meta_path.insert(0, BlockPromptToolkit())
-        from ui.render.market import print_quote_result, print_ta_result
-        from ui.input_box import HAS_PROMPT_TOOLKIT
+        from aria_code.ui.render.market import print_quote_result, print_ta_result
+        from aria_code.ui.input_box import HAS_PROMPT_TOOLKIT
         assert HAS_PROMPT_TOOLKIT is False
         print("ok")
     """)
@@ -460,7 +461,7 @@ def test_market_render_import_does_not_require_prompt_toolkit():
 
 
 def test_repetition_stopped_text_is_recovered_for_display():
-    import aria_cli
+    from aria_code import aria_cli
 
     text = "已经生成文件。\n```python\nprint('ok')\n*[model stopped — repetition detected]*"
     recovered = aria_cli._recover_repetition_stopped_text(text)
@@ -471,7 +472,7 @@ def test_repetition_stopped_text_is_recovered_for_display():
 
 
 def test_repetition_recovery_drops_unfinished_markdown_table():
-    import aria_cli
+    from aria_code import aria_cli
 
     text = (
         "## 短期预测\n"
@@ -487,7 +488,7 @@ def test_repetition_recovery_drops_unfinished_markdown_table():
 
 
 def test_narrow_terminal_converts_markdown_table_to_stacked_records():
-    from ui.render.output import adapt_markdown_for_width
+    from aria_code.ui.render.output import adapt_markdown_for_width
 
     source = (
         "| 维度 | 观察 | 结论 |\n"
@@ -504,8 +505,8 @@ def test_narrow_terminal_converts_markdown_table_to_stacked_records():
 
 
 def test_turn_footer_defaults_to_compact_without_token_noise():
-    from runtime import AgentTurnState
-    from ui.render.output import format_turn_footer
+    from aria_code.runtime import AgentTurnState
+    from aria_code.ui.render.output import format_turn_footer
 
     state = AgentTurnState(provider="ollama")
     state.add_usage({"prompt_tokens": 100, "completion_tokens": 50})
@@ -522,7 +523,7 @@ def test_turn_footer_defaults_to_compact_without_token_noise():
 
 
 def test_context_compaction_decision_uses_incoming_content():
-    from apps.cli.message_processing import context_compaction_decision
+    from aria_code.apps.cli.message_processing import context_compaction_decision
 
     messages = [{"role": "user", "content": "x" * 1500} for _ in range(8)]
     decision = context_compaction_decision(
@@ -538,8 +539,8 @@ def test_context_compaction_decision_uses_incoming_content():
 
 def test_analyze_context_uses_data_service_quality(monkeypatch):
     import asyncio
-    import aria_cli
-    import packages.aria_services.data as service_data
+    from aria_code import aria_cli
+    import aria_code.packages.aria_services.data as service_data
 
     class FakeBundle:
         quote = {"success": True, "price": 100.0, "change_pct": 1.2, "name": "Apple"}
@@ -565,7 +566,7 @@ def test_analyze_context_uses_data_service_quality(monkeypatch):
     monkeypatch.setattr(service_data, "DataService", FakeDataService)
     monkeypatch.setattr(aria_cli, "_HAS_MDC", False)
 
-    ctx = asyncio.run(aria_cli.SlashCommands._build_analyze_context(object(), "AAPL", False))
+    ctx = asyncio.run(aria_cli.SlashCommands._build_analyze_context(type("Mock",(),{"context":type("C",(),{"has_rich":False, "console": type("C",(),{"print": print})()})()})(), "AAPL", False))
 
     assert "### Data Quality" in ctx
     assert "Status: partial" in ctx
@@ -575,10 +576,10 @@ def test_analyze_context_uses_data_service_quality(monkeypatch):
 
 
 def test_team_result_sanitizer_removes_stale_split_prices():
-    import aria_cli
-    from agents.base import AgentResult
-    from agents.team import TeamResult
-    from data_service import DataBundle
+    from aria_code import aria_cli
+    from aria_code.agents.base import AgentResult
+    from aria_code.agents.team import TeamResult
+    from aria_code.data_service import DataBundle
 
     team_result = TeamResult(
         symbol="NVDA",
@@ -614,10 +615,10 @@ def test_team_result_sanitizer_removes_stale_split_prices():
 
 def test_team_report_includes_data_quality_section(monkeypatch, tmp_path):
     import asyncio
-    import aria_cli
-    from agents.base import AgentResult
-    from agents.team import TeamResult
-    from data_service import DataBundle
+    from aria_code import aria_cli
+    from aria_code.agents.base import AgentResult
+    from aria_code.agents.team import TeamResult
+    from aria_code.data_service import DataBundle
 
     monkeypatch.setenv("ARIA_ARTIFACT_ROOT", str(tmp_path / "project-artifacts"))
     monkeypatch.setenv("ARIA_USER_OUTPUT_ROOT", str(tmp_path / "user-output"))
@@ -650,7 +651,7 @@ def test_team_report_includes_data_quality_section(monkeypatch, tmp_path):
 
     asyncio.run(
         aria_cli.SlashCommands._save_team_report(
-            object(),
+            type("Mock",(),{"context":type("C",(),{"has_rich":False, "console": type("C",(),{"print": print})()})()})(),
             "NVDA",
             team_result,
             bundle,

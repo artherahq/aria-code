@@ -20,29 +20,29 @@ import os
 from typing import Dict, Any, Optional
 
 def _display_path(*args, **kwargs):
-    from aria_cli import _display_path as fn
+    from aria_code.aria_cli import _display_path as fn
     return fn(*args, **kwargs)
 def _tool_read_file(*args, **kwargs):
-    from aria_cli import _tool_read_file as fn
+    from aria_code.aria_cli import _tool_read_file as fn
     return fn(*args, **kwargs)
 def _get_GLOBAL_CHANGE_STORE():
-    from aria_cli import GLOBAL_CHANGE_STORE as val
+    from aria_code.aria_cli import GLOBAL_CHANGE_STORE as val
     return val
 def _get_Syntax():
-    from aria_cli import Syntax as val
+    from aria_code.aria_cli import Syntax as val
     return val
 def _get__SYNTAX_THEME():
-    from aria_cli import _SYNTAX_THEME as val
+    from aria_code.aria_cli import _SYNTAX_THEME as val
     return val
 def _tool_list_files(*args, **kwargs):
-    from aria_cli import _tool_list_files as fn
+    from aria_code.aria_cli import _tool_list_files as fn
     return fn(*args, **kwargs)
 import pathlib
 def _tool_write_file(*args, **kwargs):
-    from aria_cli import _tool_write_file as fn
+    from aria_code.aria_cli import _tool_write_file as fn
     return fn(*args, **kwargs)
 def _tool_search_code(*args, **kwargs):
-    from aria_cli import _tool_search_code as fn
+    from aria_code.aria_cli import _tool_search_code as fn
     return fn(*args, **kwargs)
 
 import json

@@ -486,7 +486,7 @@ def render_finance_result(tool_name: str, result: dict, *, console=None, has_ric
         if has_rich:
             from rich.markup import escape
             from rich.table import Table
-            from ui.render.responsive import StackedRecord, render_stacked_records, structured_layout
+            from aria_code.ui.render.responsive import StackedRecord, render_stacked_records, structured_layout
 
             layout = structured_layout(console)
             if layout == "stacked":
@@ -547,7 +547,7 @@ def render_finance_result(tool_name: str, result: dict, *, console=None, has_ric
         if has_rich:
             from rich.markup import escape
             from rich.table import Table
-            from ui.render.responsive import StackedRecord, render_stacked_records, structured_layout
+            from aria_code.ui.render.responsive import StackedRecord, render_stacked_records, structured_layout
 
             if structured_layout(console) == "stacked":
                 records = []
@@ -780,7 +780,7 @@ def render_finance_result(tool_name: str, result: dict, *, console=None, has_ric
             if has_rich:
                 from rich.markup import escape
                 from rich.table import Table
-                from ui.render.responsive import StackedRecord, render_stacked_records, structured_layout
+                from aria_code.ui.render.responsive import StackedRecord, render_stacked_records, structured_layout
 
                 ordered = sorted(positions, key=lambda x: -abs(x.get("market_value", 0)))
                 total_mv = sum(p.get("market_value", 0) for p in positions)
@@ -861,7 +861,7 @@ def render_finance_result(tool_name: str, result: dict, *, console=None, has_ric
             if has_rich:
                 from rich.markup import escape
                 from rich.table import Table
-                from ui.render.responsive import StackedRecord, render_stacked_records, structured_layout
+                from aria_code.ui.render.responsive import StackedRecord, render_stacked_records, structured_layout
 
                 layout = structured_layout(console)
                 _ss = {"filled":"[green]成交[/green]","partial":"[yellow]部成[/yellow]",

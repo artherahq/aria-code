@@ -107,7 +107,7 @@ def update_todos(params: dict) -> dict:
 def _render(todos: List[Dict[str, str]]) -> None:
     """Print the task list as a checklist. Uses rich when available."""
     try:
-        import aria_cli as _ac
+        from aria_code import aria_cli as _ac
         console = getattr(_ac, "console", None)
         has_rich = getattr(_ac, "HAS_RICH", False)
     except Exception:

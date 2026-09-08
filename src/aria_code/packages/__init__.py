@@ -9,7 +9,7 @@ import pathlib as _pathlib
 
 # Extend __path__ to include Arthera/packages/ so that
 # `from packages.quant_engine.*` resolves transparently.
-_arthera_pkgs = _pathlib.Path(__file__).parents[2] / "Arthera" / "packages"
+_arthera_pkgs = _pathlib.Path(__file__).parents[4] / "Arthera" / "packages"
 if _arthera_pkgs.exists() and str(_arthera_pkgs) not in __path__:
     __path__.append(str(_arthera_pkgs))
 

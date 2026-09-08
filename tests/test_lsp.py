@@ -30,7 +30,7 @@ class TestServerFor:
     def test_python_returns_pylsp_when_installed(self, tmp_path, monkeypatch):
         monkeypatch.setattr(shutil, "which", lambda exe: "/usr/bin/" + exe)
         # Clear the availability cache so the patched which() is consulted
-        import runtime.lsp as _lsp
+        import aria_code.runtime.lsp as _lsp
         _lsp._AVAILABILITY.clear()
         cmd, lang = server_for(tmp_path / "x.py")
         assert cmd[0] == "pylsp"
@@ -38,13 +38,13 @@ class TestServerFor:
 
     def test_returns_none_when_server_missing(self, tmp_path, monkeypatch):
         monkeypatch.setattr(shutil, "which", lambda exe: None)
-        import runtime.lsp as _lsp
+        import aria_code.runtime.lsp as _lsp
         _lsp._AVAILABILITY.clear()
         assert server_for(tmp_path / "x.py") is None
 
     def test_typescript_language_id(self, tmp_path, monkeypatch):
         monkeypatch.setattr(shutil, "which", lambda exe: "/usr/bin/" + exe)
-        import runtime.lsp as _lsp
+        import aria_code.runtime.lsp as _lsp
         _lsp._AVAILABILITY.clear()
         cmd, lang = server_for(tmp_path / "x.tsx")
         assert lang == "typescriptreact"

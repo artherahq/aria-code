@@ -4,7 +4,7 @@ Stores policy in ~/.arthera/tool_policy.json.
 Checked in _confirm_tool_execution_decision() before any user prompt.
 
 Usage:
-    from runtime.tool_policy import check_tool_policy, add_to_policy
+    from aria_code.runtime.tool_policy import check_tool_policy, add_to_policy
 
     verdict = check_tool_policy("write_file")  # "allow" | "deny" | "ask" | "default"
     add_to_policy("read_file", "allow")         # permanently auto-approve

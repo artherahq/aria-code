@@ -3,10 +3,10 @@
 setup_wizard.py — Aria Code 首次配置向导
 ==========================================
 运行方式:
-  python3 setup_wizard.py             # 完整向导
-  python3 setup_wizard.py --model     # 仅配置模型
-  python3 setup_wizard.py --feishu    # 仅配置飞书
-  python3 setup_wizard.py --telegram  # 仅配置 Telegram
+  python3 -m aria_code.setup_wizard             # 完整向导
+  python3 -m aria_code.setup_wizard --model     # 仅配置模型
+  python3 -m aria_code.setup_wizard --feishu    # 仅配置飞书
+  python3 -m aria_code.setup_wizard --telegram  # 仅配置 Telegram
 
 向导完成后会生成:
   ~/.aria/.env          环境变量配置
@@ -49,7 +49,7 @@ _CFG_FILE = _ARIA_DIR / "config.json"
 # ── System language detection ─────────────────────────────────────────────────
 
 try:
-    from apps.cli.i18n import detect_system_lang as _detect_lang
+    from aria_code.apps.cli.i18n import detect_system_lang as _detect_lang
     _SYS_LANG = _detect_lang()
 except Exception:
     _SYS_LANG = "en"
@@ -569,7 +569,7 @@ def _print_summary(env: dict[str, str]) -> None:
         console.print(Panel(
             "[bold green]Aria Code 配置成功！[/bold green]\n\n"
             "启动方式：\n"
-            "  [cyan]python3 aria_cli.py[/cyan]              # 交互终端\n"
+            "  [cyan]aria-code[/cyan]              # 交互终端\n"
             "  [cyan]python3 aria_daemon.py --install[/cyan] # 安装为系统服务（开机自启）\n"
             "  [cyan]python3 aria_daemon.py[/cyan]           # 前台运行 daemon\n\n"
             "[dim]配置文件: ~/.aria/.env[/dim]",

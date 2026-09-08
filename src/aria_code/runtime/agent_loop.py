@@ -13,9 +13,14 @@ import time
 from dataclasses import dataclass, field
 from typing import AsyncGenerator, Awaitable, Callable, Dict, FrozenSet, Iterable, List, Optional, Sequence, Tuple, Union
 
+from .acceptance import AcceptanceGate
 from .approval import ApprovalDecision, apply_approval_decision
 from .tool_executor import ToolExecutor
 from .budget import BudgetTracker
+from .tool_result_router import ToolResultRouter
+
+# Global default tool result router
+_DEFAULT_TOOL_ROUTER = ToolResultRouter()
 
 
 DEFAULT_SERIAL_TOOLS = {"write_file", "edit_file", "multi_edit", "run_command"}
@@ -352,6 +357,7 @@ class AgentTurnState:
         success: bool = True,
         cancelled: bool = False,
         error: str = "",
+        acceptance: Optional[dict] = None,
     ) -> "AgentTurnResult":
         metadata = self.build_metadata(
             elapsed=elapsed,
@@ -367,6 +373,7 @@ class AgentTurnState:
             provider=metadata.provider,
             tools=metadata.tools,
             sources=list(self.sources),
+            acceptance=acceptance,
         )
 
     def build_cancelled_result(
@@ -435,6 +442,9 @@ class AgentTurnResult:
     provider: str = "aws"
     tools: List[str] = field(default_factory=list)
     sources: List[dict] = field(default_factory=list)
+    # 验收证据。None = 本轮没有验收(只读回合,或没有可推断的检查命令);
+    # 有值时 ``acceptance["verified"]`` 才是「做完了」这句话的凭据。
+    acceptance: Optional[dict] = None
 
     @classmethod
     def cancelled_result(
@@ -485,7 +495,11 @@ class AgentTurnResult:
                 "generation_time": self.metadata.generation_time,
                 "provider": self.metadata.provider,
                 "tools": list(self.metadata.tools),
+                # 只在真的验收过时才出现,免得每个只读回合都带一个空字段,
+                # 让消费者误以为「没验收」和「验收失败」是同一件事。
+                **({"acceptance": dict(self.acceptance)} if self.acceptance else {}),
             },
+            "acceptance": dict(self.acceptance) if self.acceptance else None,
         }
 
     def to_envelope(self) -> "AgentTurnEnvelope":
@@ -993,34 +1007,35 @@ def _truncate_tool_result(text: str, limit: int = _MAX_TOOL_RESULT_CHARS) -> str
     )
 
 
-def build_tool_followup(tool_results: Sequence[dict]) -> str:
+def build_tool_followup(tool_results: Sequence[dict], router: Optional[ToolResultRouter] = None) -> str:
     """Build a structured follow-up message from tool results.
 
     Each result block is labelled with its tool name and a success/error
     status so the model can clearly distinguish outcomes and respond
-    appropriately to failures rather than silently ignoring them. Each result
-    is size-capped (see ``_truncate_tool_result``) so a single huge output
-    cannot overflow the context window and cut the task short.
+    appropriately to failures rather than silently ignoring them. Large outputs
+    are routed to artifact logs with high-density summaries via ToolResultRouter.
     """
     if not tool_results:
         return "No tool results. Continue with what you know or ask the user for clarification."
 
+    res_router = router or _DEFAULT_TOOL_ROUTER
     blocks: List[str] = []
     error_tools: List[str] = []
 
     for item in tool_results:
         tool = item.get("tool", "unknown")
         result = item.get("result", "")
-        result_str = _truncate_tool_result(str(result))
+        routed = res_router.route(tool, result)
+        result_str = routed.inline_text
 
         is_error = (
             result_str.startswith("Error") or
-            result_str.startswith("❌") or
+            result_str.startswith("[Error]") or
             "error" in result_str[:80].lower() or
             "traceback" in result_str[:200].lower() or
             "exception" in result_str[:200].lower()
         )
-        status = "❌ Error" if is_error else "✓ Success"
+        status = "[Error]" if is_error else "[Success]"
         if is_error:
             error_tools.append(tool)
         blocks.append(f"### [{tool}] {status}\n{result_str}")
@@ -1088,7 +1103,7 @@ def build_next_turn_messages(total_response: str, tool_results: Sequence[dict]) 
     # Check for a pending screenshot from computer_screenshot / browser_screenshot
     vision_b64: "str | None" = None
     try:
-        from computer_use_tools import pop_pending_vision_image
+        from aria_code.computer_use_tools import pop_pending_vision_image
         vision_b64 = pop_pending_vision_image()
     except ImportError:
         pass
@@ -1199,6 +1214,10 @@ class AgentOptions:
     # 原因写进 result["budget_paused"]，而不是抛异常——抛异常会让调用方拿不到
     # 已经产出的中间结果。
     budget: Optional["BudgetTracker"] = None
+    # 验收闸门。None = 不验收（保持既有行为）。传入一个 AcceptanceGate 后，
+    # 只要本轮真的改写了磁盘上的文件，模型宣称完成时循环会先跑一遍推断出的
+    # 检查命令；红了就把失败输出回灌给模型继续修，绿了才让这一轮结束。
+    acceptance: Optional["AcceptanceGate"] = None
 
 
 # ── run_agent() ───────────────────────────────────────────────────────────────
@@ -1358,6 +1377,29 @@ async def run_agent(
 
         pending = result.get("tool_calls_pending", [])
         if not pending:
+            # ── 验收闸门 ─────────────────────────────────────────────────────
+            # 模型不再要工具 = 它认为做完了。这是唯一一个「宣称完成」的出口,
+            # 所以检查必须挂在这里:挂在写文件之后太早(改到一半必然是红的),
+            # 挂在循环结束之后太晚(那时已经没有轮次可以拿来修了)。
+            if opts.acceptance is not None and opts.acceptance.should_run():
+                report = await opts.acceptance.run()
+                if report is not None:
+                    yield AgentEventStatus(
+                        state="acceptance_passed" if report.passed else "acceptance_failed",
+                        message=report.headline(),
+                    )
+                    if hook is not None:
+                        hook("acceptance", "verify", report.summary(), None)
+                    if report.ran and not report.passed:
+                        # 把失败输出当成下一轮的用户消息回灌。走和工具结果
+                        # 完全相同的通道,模型不需要认识一种新的消息类型。
+                        history = list(history) + [
+                            {"role": "user", "content": current_message},
+                            {"role": "assistant", "content": turn_state.total_response},
+                        ]
+                        current_message = report.repair_directive()
+                        turn_state.reset_response()
+                        continue
             if opts.requires_evidence and grounded_results == 0:
                 yield AgentEventStatus(
                     state="evidence_required",
@@ -1403,6 +1445,8 @@ async def run_agent(
 
         for activity in tool_turn_result.activities:
             turn_state.tools_used.append(activity.tool)
+            if opts.acceptance is not None:
+                opts.acceptance.record_tool(activity.tool, activity.result)
             canonical_tool = str(activity.tool).rsplit("__", 1)[-1]
             allowed_tools = {
                 str(name).rsplit("__", 1)[-1]
@@ -1458,5 +1502,10 @@ async def run_agent(
         fallback_response=result.get("response", ""),
         token_count=token_count,
         thinking_tokens=thinking_tokens,
+        acceptance=(
+            opts.acceptance.summary()
+            if opts.acceptance is not None and opts.acceptance.reports
+            else None
+        ),
     )
     yield AgentEventComplete(result=turn_result)

@@ -11,7 +11,7 @@ datasources/ — Aria Code 统一市场数据层
   基本面 → tushare / yfinance
 
 快速使用:
-    from datasources.router import DataRouter
+    from aria_code.datasources.router import DataRouter
     router = DataRouter()
     print(router.quote("AAPL"))
     print(router.quote("000001"))   # A股

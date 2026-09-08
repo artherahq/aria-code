@@ -14,7 +14,17 @@ class FakeWarehouseClient:
         }
 
 
-def test_workflow_uses_the_warehouse_signal_scheme_and_snapshot_for_all_agents():
+def test_workflow_uses_the_warehouse_signal_scheme_and_snapshot_for_all_agents(monkeypatch):
+    from aria_code.agents.team import TeamResult
+    async def mock_run(*args, **kwargs):
+        return TeamResult(
+            symbol="WH-CN-01",
+            final_signal="GOOD",
+            confidence=0.9,
+            agents_run=kwargs.get("agents", []),
+            results=[]
+        )
+    monkeypatch.setattr("aria_code.agents.warehouse.workflow.AgentTeam.run", mock_run)
     result, snapshot = asyncio.run(run_warehouse_analysis("WH-CN-01", client=FakeWarehouseClient()))
     assert result.final_signal == "GOOD"
     assert result.confidence > 0

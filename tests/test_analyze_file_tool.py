@@ -43,7 +43,7 @@ def test_caps_long_text(tmp_path):
 
 
 def test_image_queued_for_vision(tmp_path, monkeypatch):
-    import computer_use_tools as cu
+    from aria_code import computer_use_tools as cu
     cu.pop_pending_vision_image()  # clear
     f = tmp_path / "chart.png"
     f.write_bytes(_PNG)
@@ -65,7 +65,7 @@ def test_video_routes_and_degrades_gracefully(tmp_path):
 
 
 def test_video_extensions_recognized(tmp_path):
-    from file_analysis_tools import parse_file
+    from aria_code.file_analysis_tools import parse_file
     for ext in ("mp4", "mov", "avi", "mkv", "webm", "m4v"):
         f = tmp_path / f"v.{ext}"
         f.write_bytes(b"\x00" * 64)
@@ -74,7 +74,7 @@ def test_video_extensions_recognized(tmp_path):
 
 
 def test_optional_parser_detection_refreshes_after_install(monkeypatch):
-    import file_analysis_tools as tools
+    from aria_code import file_analysis_tools as tools
 
     sentinel = object()
     monkeypatch.setattr(tools, "_docx_mod", None)

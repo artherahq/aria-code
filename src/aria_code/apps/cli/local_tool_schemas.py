@@ -210,6 +210,7 @@ def build_local_tool_schemas(
                     "command": {"type": "string", "description": "Shell command to run"},
                     "cwd": {"type": "string", "description": "Working directory (optional)"},
                     "timeout": {"type": "integer", "description": "Timeout in seconds (max 300, default 120). Use 180+ for data-heavy scripts."},
+                    "sandbox": {"type": "boolean", "description": "Set to true to securely execute the command inside an isolated Docker container instead of the host machine. Mandatory for running third-party or untested code."}
                 },
                 "required": ["command"],
             },
@@ -469,5 +470,67 @@ def build_local_tool_schemas(
                 "required": [],
             },
         },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "lsp_hover",
+            "description": "Get documentation or type signature for a symbol at a specific line and column using the Language Server Protocol (LSP).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Absolute or relative path to the file"},
+                    "line": {"type": "integer", "description": "1-based line number"},
+                    "col": {"type": "integer", "description": "1-based column number"}
+                },
+                "required": ["path", "line", "col"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "lsp_definition",
+            "description": "Find the definition of a symbol at a specific line and column (LSP). Returns file path, line, and column.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Absolute or relative path to the file"},
+                    "line": {"type": "integer", "description": "1-based line number"},
+                    "col": {"type": "integer", "description": "1-based column number"}
+                },
+                "required": ["path", "line", "col"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "lsp_references",
+            "description": "Find all references to a symbol at a specific line and column (LSP). Returns file paths, lines, and columns.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Absolute or relative path to the file"},
+                    "line": {"type": "integer", "description": "1-based line number"},
+                    "col": {"type": "integer", "description": "1-based column number"}
+                },
+                "required": ["path", "line", "col"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "ask_user",
+            "description": "Pause execution and ask the user a clarifying question when requirements are ambiguous or a major design decision is needed. The workflow will halt until the user responds.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "question": {"type": "string", "description": "The question to ask the user. Be specific about what options or information you need."}
+                },
+                "required": ["question"]
+            }
+        }
     },
     ]

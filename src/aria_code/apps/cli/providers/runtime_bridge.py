@@ -29,11 +29,105 @@ def build_tool_executor(
     execution_context: Optional[Callable[[], dict]] = None,
 ):
     """Wrap the CLI's LOCAL_TOOLS registry for run_agent."""
-    from runtime.tool_executor import ToolExecutor
+    from aria_code.runtime.tool_executor import ToolExecutor
     return ToolExecutor(
         local_tools,
         config=config or {},
         execution_context=execution_context,
+    )
+
+
+# Modes in which nothing can be written, so nothing can need verifying.
+_READ_ONLY_MODES = frozenset({"read-only", "readonly", "read_only", "plan"})
+
+
+def _declared_acceptance_commands(cfg: dict, message: str) -> tuple:
+    """What this workspace says "correct" means for this particular message.
+
+    Precedence, most specific first:
+
+      1. ``acceptance_commands`` in the session config — the user said it out
+         loud for this session, so nothing overrides it.
+      2. The active domain packs' commands. A pack contributes only when it
+         resolved a concrete entity from *this* message, so a declared
+         logistics check cannot fire on a payments question.
+      3. The workspace's ``acceptance.default`` from ``.ariarc``.
+
+    Nothing declared falls through to inference from the changed files, which
+    is the behaviour that existed before packs could speak here at all.
+    """
+    explicit = tuple(cfg.get("acceptance_commands") or ())
+    if explicit:
+        return explicit
+
+    commands: list = []
+    try:
+        from aria_code.packs import (
+            activate_packs,
+            active_acceptance_commands,
+            load_builtin_packs,
+        )
+
+        load_builtin_packs()
+        commands.extend(active_acceptance_commands(activate_packs(message or "")))
+    except Exception:
+        pass
+
+    try:
+        from aria_code.packs.rules import default_acceptance_commands
+
+        for command in default_acceptance_commands():
+            if command not in commands:
+                commands.append(command)
+    except Exception:
+        pass
+
+    return tuple(commands)
+
+
+def build_acceptance_gate(executor, config: Optional[dict] = None, message: str = ""):
+    """The CLI's acceptance gate, or ``None`` when this session shouldn't have one.
+
+    The gate runs its checks through the session's own ``run_command`` tool
+    rather than spawning subprocesses itself, so the workspace sandbox, the
+    command policy and the trace all apply to a verification run exactly as
+    they apply to a command the model asked for.
+
+    ``user_approved`` is set because the commands are the *planner's*, not the
+    model's or the user's prose — the same inferred plan ``/verify`` already
+    runs on request. Anything else would put an approval prompt between the
+    model finishing and the check that tells us whether it finished correctly,
+    which is the one place a prompt cannot help.
+    """
+    cfg = config or {}
+    if not cfg.get("acceptance_gate", True):
+        return None
+    mode = str(cfg.get("permission_mode", "workspace-write") or "")
+    if mode in _READ_ONLY_MODES:
+        return None
+    if "run_command" not in getattr(executor, "local_tools", {}):
+        return None
+
+    import os
+    from aria_code.runtime.acceptance import AcceptanceGate
+
+    timeout = int(cfg.get("acceptance_timeout", 300) or 300)
+
+    def _runner(command: str) -> dict:
+        return executor.execute_local("run_command", {
+            "command": command,
+            "policy": "balanced",
+            "permission_mode": mode,
+            "network_enabled": bool(cfg.get("network_enabled", True)),
+            "user_approved": True,
+            "timeout": timeout,
+        })
+
+    return AcceptanceGate(
+        runner=_runner,
+        root=os.getcwd(),
+        max_attempts=int(cfg.get("acceptance_max_attempts", 2) or 2),
+        commands=_declared_acceptance_commands(cfg, message),
     )
 
 
@@ -102,21 +196,55 @@ def make_provider_fn(
     it: cloud via ``user_context['system_role_override']``, Ollama via the
     provider's ``system_override`` argument.
     """
-    from apps.cli.providers.base import AriaSSEProvider, ConfiguredProvider, OllamaProvider
-    from packages.aria_sdk.streaming import stream_provider_result
+    from aria_code.apps.cli.providers.base import AriaSSEProvider, ConfiguredProvider, OllamaProvider
+    from aria_code.packages.aria_sdk.streaming import stream_provider_result
 
     _cloud_uctx = dict(user_context or {})
     if system_override:
         _cloud_uctx["system_role_override"] = system_override
+
+    def _scoped_tools(prompt: str) -> List[dict]:
+        """Tools this message may use: core always, domain only when claimed."""
+        try:
+            from aria_code.apps.cli.tool_scope import select_tool_schemas
+
+            return select_tool_schemas(tool_schemas, prompt)
+        except Exception:
+            return list(tool_schemas)
+
+    def _system_for(prompt: str) -> str:
+        """The rules this turn runs under, for the non-Ollama providers.
+
+        ollama_stream assembles its own (with prefetched data and sized
+        project context); everything else used to get nothing at all, so a
+        cloud model was never told the tool discipline. Built per message
+        because the right prompt depends on what was asked.
+        """
+        try:
+            from aria_code.apps.cli.prompts.select import build_turn_system_prompt
+
+            return build_turn_system_prompt(
+                prompt,
+                override=system_override,
+                project_context=str(project_context or ""),
+            )
+        except Exception:
+            return system_override or ""
 
     async def _provider_fn(prompt, history, *, on_token=None, on_thinking=None,
                            on_tool_call=None, on_tool_result=None, on_status=None,
                            cancel_event=None):
         route = first_round_route(model, config, api_url)
 
+        # ollama_stream does its own intent-based selection; the other
+        # providers had none, so a coding turn reached Gemini carrying all 74
+        # tool schemas including 34 domain tools. Scoped per message because
+        # what a turn may call depends on what it asked.
+        _scoped = _scoped_tools(prompt)
+
         async def _stream(provider, _on_token):
             return await stream_provider_result(
-                provider, prompt, history, tools=tool_schemas,
+                provider, prompt, history, tools=_scoped,
                 cancel_event=cancel_event, on_token=_on_token, on_thinking=on_thinking,
                 on_tool_call=on_tool_call, on_tool_result=on_tool_result, on_status=on_status,
             )
@@ -136,7 +264,7 @@ def make_provider_fn(
             selected = (
                 OllamaProvider(ollama_url, model, system_override=system_override)
                 if route == "ollama" else
-                ConfiguredProvider(config, model, system_override=system_override)
+                ConfiguredProvider(config, model, system_override=_system_for(prompt))
             )
             return await _stream(
                 selected,
@@ -191,7 +319,7 @@ async def run_chat_via_runtime(
     exposes the gateway result so terminal adapters can preserve provider and
     usage metadata during final rendering.
     """
-    from runtime.gateway import run_turn
+    from aria_code.runtime.gateway import run_turn
 
     provider_fn = make_provider_fn(
         model=model, config=config, api_url=api_url, ollama_url=ollama_url,
@@ -200,6 +328,7 @@ async def run_chat_via_runtime(
         system_override=system_override,
     )
     executor = build_tool_executor(local_tools, config, execution_context)
+    gate = build_acceptance_gate(executor, config, prompt)
 
     result = await run_turn(
         prompt, history,
@@ -214,5 +343,6 @@ async def run_chat_via_runtime(
         requires_evidence=requires_evidence,
         grounding_tools=grounding_tools,
         evidence_already_grounded=evidence_already_grounded,
+        acceptance=gate,
     )
     return result if return_result else result.text

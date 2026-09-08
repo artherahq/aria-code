@@ -2,8 +2,8 @@ from pathlib import Path
 
 
 def test_legacy_tool_registry_builds_manifests():
-    from packages.aria_core import PermissionLevel, ServiceKind
-    from packages.aria_tools import build_registry_from_legacy
+    from aria_code.packages.aria_core import PermissionLevel, ServiceKind
+    from aria_code.packages.aria_tools import build_registry_from_legacy
 
     def handler(_params):
         return {"success": True}
@@ -33,7 +33,7 @@ def test_legacy_tool_registry_builds_manifests():
 
 
 def test_agent_manifests_are_generated_from_existing_registry():
-    from packages.aria_agents import list_agent_manifests
+    from aria_code.packages.aria_agents import list_agent_manifests
 
     manifests = list_agent_manifests()
     names = {item.name for item in manifests}
@@ -45,7 +45,7 @@ def test_agent_manifests_are_generated_from_existing_registry():
 
 
 def test_builtin_skills_connect_tools_and_agents():
-    from packages.aria_skills import builtin_skill_specs
+    from aria_code.packages.aria_skills import builtin_skill_specs
 
     skills = {skill.name: skill for skill in builtin_skill_specs()}
 
@@ -59,8 +59,8 @@ def test_builtin_skills_connect_tools_and_agents():
 
 
 def test_service_boundaries_are_registered():
-    from packages.aria_core import PermissionLevel
-    from packages.aria_services import list_service_specs, required_service_names, service_map
+    from aria_code.packages.aria_core import PermissionLevel
+    from aria_code.packages.aria_services import list_service_specs, required_service_names, service_map
 
     services = service_map()
 
@@ -99,7 +99,7 @@ def test_service_boundaries_are_registered():
 
 
 def test_agent_architecture_contract_tracks_required_layers():
-    from packages.aria_core import (
+    from aria_code.packages.aria_core import (
         ARCHITECTURE_SCHEMA_VERSION,
         LayerStatus,
         architecture_contract,
@@ -137,7 +137,7 @@ def test_agent_architecture_contract_tracks_required_layers():
 
 
 def test_service_usage_catalog_maps_cli_packages_and_mcp_tools():
-    from packages.aria_services import list_service_usage_specs, service_usage_map
+    from aria_code.packages.aria_services import list_service_usage_specs, service_usage_map
 
     usage = service_usage_map()
 
@@ -162,7 +162,7 @@ def test_service_usage_catalog_maps_cli_packages_and_mcp_tools():
 
 
 def test_broker_capability_catalog_has_safe_trade_boundaries():
-    from brokers.capabilities import (
+    from aria_code.brokers.capabilities import (
         broker_connection_plan,
         broker_service_playbook,
         get_broker_capability,
@@ -181,7 +181,7 @@ def test_broker_capability_catalog_has_safe_trade_boundaries():
 
 
 def test_default_mcp_exposures_are_stable():
-    from packages.aria_mcp import default_exposures
+    from aria_code.packages.aria_mcp import default_exposures
 
     names = {item.name for item in default_exposures()}
 
@@ -191,8 +191,8 @@ def test_default_mcp_exposures_are_stable():
 
 
 def test_mcp_tools_convert_to_aria_tool_specs():
-    from packages.aria_core import PermissionLevel
-    from packages.aria_mcp import mcp_tools_to_specs
+    from aria_code.packages.aria_core import PermissionLevel
+    from aria_code.packages.aria_mcp import mcp_tools_to_specs
 
     specs = mcp_tools_to_specs(
         [
@@ -243,13 +243,13 @@ def test_mcp_tools_convert_to_aria_tool_specs():
 def test_package_manifest_export_shape(tmp_path):
     import json
 
-    from packages.aria_agents import list_agent_manifests
-    from packages.aria_core import build_package_manifest, write_package_manifest
-    from packages.aria_infra import aria_code_identity, discover_arthera_packages
-    from packages.aria_mcp import default_exposures, mcp_tools_to_specs
-    from packages.aria_services import list_service_specs
-    from packages.aria_skills import builtin_skill_specs
-    from packages.aria_tools import build_registry_from_legacy
+    from aria_code.packages.aria_agents import list_agent_manifests
+    from aria_code.packages.aria_core import build_package_manifest, write_package_manifest
+    from aria_code.packages.aria_infra import aria_code_identity, discover_arthera_packages
+    from aria_code.packages.aria_mcp import default_exposures, mcp_tools_to_specs
+    from aria_code.packages.aria_services import list_service_specs
+    from aria_code.packages.aria_skills import builtin_skill_specs
+    from aria_code.packages.aria_tools import build_registry_from_legacy
 
     def handler(_params):
         return {"success": True}
@@ -285,9 +285,9 @@ def test_package_manifest_export_shape(tmp_path):
 
 
 def test_package_doctor_report_statuses(tmp_path):
-    from packages.aria_core import list_architecture_layers, required_architecture_layer_names
-    from packages.aria_infra import discover_arthera_packages, build_package_doctor_report
-    from packages.aria_services import list_service_specs, required_service_names
+    from aria_code.packages.aria_core import list_architecture_layers, required_architecture_layer_names
+    from aria_code.packages.aria_infra import discover_arthera_packages, build_package_doctor_report
+    from aria_code.packages.aria_services import list_service_specs, required_service_names
 
     root = tmp_path / "packages"
     (root / "contracts").mkdir(parents=True)
@@ -343,7 +343,7 @@ def test_package_doctor_report_statuses(tmp_path):
 
 
 def test_arthera_package_discovery_finds_quant_engine(tmp_path):
-    from packages.aria_infra import discover_arthera_packages
+    from aria_code.packages.aria_infra import discover_arthera_packages
 
     root = tmp_path / "packages"
     (root / "contracts").mkdir(parents=True)
@@ -359,7 +359,7 @@ def test_arthera_package_discovery_finds_quant_engine(tmp_path):
 
 
 def test_real_arthera_packages_path_is_optional():
-    from packages.aria_infra import discover_arthera_packages
+    from aria_code.packages.aria_infra import discover_arthera_packages
 
     found = discover_arthera_packages(Path("/path/that/does/not/exist"))
 
@@ -368,7 +368,7 @@ def test_real_arthera_packages_path_is_optional():
 
 
 def test_product_identity_marks_aria_code_as_arthera_product():
-    from packages.aria_infra import aria_code_identity
+    from aria_code.packages.aria_infra import aria_code_identity
 
     identity = aria_code_identity("9.9.9")
 
@@ -380,7 +380,7 @@ def test_product_identity_marks_aria_code_as_arthera_product():
 
 
 def test_arthera_mcp_server_config_and_merge(tmp_path):
-    from packages.aria_mcp import (
+    from aria_code.packages.aria_mcp import (
         arthera_quant_engine_server_config,
         load_mcp_config,
         merge_server_config,

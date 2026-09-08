@@ -7,11 +7,11 @@ Two representations per formula:
   note    : One-line explanation injected into system prompts
 
 Usage in system prompts:
-    from finance_formulas import FORMULA_PROMPT_BLOCK
+    from aria_code.finance_formulas import FORMULA_PROMPT_BLOCK
     system_prompt += FORMULA_PROMPT_BLOCK
 
 Usage for CLI rendering:
-    from finance_formulas import formula_to_plaintext
+    from aria_code.finance_formulas import formula_to_plaintext
     clean = formula_to_plaintext(raw_latex_string)
 """
 

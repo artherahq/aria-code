@@ -4,7 +4,7 @@ When plan mode is active, the agent loop asks the user to approve each tool
 call before execution. A plan-mode header shows which step is being proposed.
 
 Usage (from aria_cli.py):
-    from apps.cli.plan_mode import PlanModeState
+    from aria_code.apps.cli.plan_mode import PlanModeState
 
     _PLAN = PlanModeState()          # module-level singleton
 
@@ -81,7 +81,7 @@ class PlanModeState:
         arrow_select_fn,
     ):
         """Show plan-mode confirmation prompt. Returns ApprovalDecision."""
-        from runtime.approval import ApprovalDecision
+        from aria_code.runtime.approval import ApprovalDecision
 
         step_num = self._index + 1  # preview next number
 

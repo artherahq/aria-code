@@ -48,7 +48,7 @@ def _run_ffmpeg(args: List[str], *, timeout: float = DEFAULT_TIMEOUT) -> Dict[st
 
 def _default_output(input_path: str, suffix: str, ext: Optional[str] = None) -> Path:
     src = Path(input_path)
-    from artifacts import create_user_artifact
+    from aria_code.artifacts import create_user_artifact
 
     artifact = create_user_artifact("video", src.stem, f"{src.stem}_{suffix}", ext or src.suffix)
     return artifact.path

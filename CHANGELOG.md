@@ -4,6 +4,61 @@ All notable changes to Aria Code are documented here.
 
 ---
 
+## [4.4.2] — 2026-08-27
+
+### Fixed
+
+**已发布的 npm 包在任何 ARIA_HOME 安装上都启动不了 — 包重构后遗留的路径**
+- `aria_cli.py` 在包重构时迁到了 `src/aria_code/`，但发布链上有三处仍指向根目录：
+  - `npm/bin/aria-code.js` 找 `<installDir>/aria_cli.py`，找不到就报
+    "aria_cli.py not found"。已发布的 4.4.1 带的就是这个版本
+  - `scripts/bump_version.py` 读根目录的 `aria_cli.py`，`--check` 直接
+    FileNotFoundError。而这是 `publish.yml` 在 tag 上跑的第一个 job——
+    **发布流程本身跑不起来**，且报错指向一个不存在的文件而不是过期路径
+  - `Dockerfile.relay` 的 `COPY aria_relay_server.py .`、`Dockerfile` 的
+    `CMD ["python3", "aria_cli.py"]`、`docker-compose.yml` 里两条
+    `python3 <script>.py` 命令，同样停留在迁移前
+- 发现路径：一个 621MB 的 `$TMPDIR` 目录，是一次 `ARIA_HOME` 指向临时目录的
+  npm 安装留下的。那个安装记录把 `ariaCli` 记成了根目录路径，于是 launcher
+  一直去够一个再也不会回来的文件
+- launcher 现有三条降级候选，所以一条坏记录是可恢复的而非致命的——缺的是
+  没有任何东西断言这一点。`npm test` 新增 4 项检查看守
+- 容器侧同样补了 4 项检查：每个 `COPY` 源存在、没有命令跑裸脚本、每个
+  `python -m` 模块可导入、每个 `CMD` 是可导入模块/已声明 console script/
+  依赖提供的命令
+
+**分析工具会编造它所分析的数据**
+- `analyze_stripe_data` / `analyze_logistics_data` /
+  `analyze_financial_statements` 在没有输入时会静默替换成一份"样本数据集"，
+  然后把结果当真实结论返回。空参数调用会给出具体的 ARR、订阅数、
+  以及一份挂着所请求公司名字的完整财务诊断
+- 三个现在都拒绝并说明需要什么输入。结果附带 `data_source` 说明数据来源
+- 物流回退计算里写死的 `overall_on_time_rate = 75.0` 改为实算，
+  记录不含该字段时报告为"不可得"
+
+**工具注册与 schema 不一致 — 注册了、能调用、但模型看不见**
+- `_dedup_tool_schemas` 只读 OpenAI 信封格式的 name，裸格式 schema 被静默丢弃：
+  `analyze_logistics_data`、`analyze_stripe_data`、`analyze_financial_statements`、
+  `get_funding_rates_compare`、`audit_code_diagnostics`、`generate_code_diff`
+  六个工具从未被告知给模型。现在统一归一化
+- 六个企业连接器（Slack / 飞书 / TradingView / QuickBooks / Shopify /
+  Snowflake）不联系任何服务却返回伪造的成功。加守卫拒绝执行并说明缺什么，
+  且不进 schema 列表
+
+**领域工具在所有 provider 上无差别暴露**
+- pack 契约的第三项贡献（工具门控）写了但从未接线：一个"修好挂掉的测试"的
+  请求带着全部 74 个 schema 到达模型，其中 34 个是行情/券商/回测工具
+- `tool_scope` 按 pack 激活情况筛选：编码回合 38 个，点名标的的回合 72 个
+
+**本地 CLI 跑在远程 worker 隔离模式下**
+- `_is_safe_path` 与 `file_tools` 硬编码 `allow_home=False`，而
+  `WorkspaceSecurity` 只在 `allow_home` 分支追加临时目录根——连带
+  `/tmp` 和 `/var/folders` 一起关掉。CLI 能把文件写进临时目录却读不回来
+- 改为尊重 `ARIA_RUNTIME_SCOPE`（`Dockerfile.review` 已在用），
+  远程隔离强度不变
+
+---
+
 ## [4.4.1] — 2026-08-20
 
 ### Fixed

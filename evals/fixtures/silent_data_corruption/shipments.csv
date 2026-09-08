@@ -1,0 +1,6 @@
+shipment_id,origin,destination,weight_kg,declared_value,currency
+SH-1001,SHA,LAX,120.5,18000,USD
+SH-1002,SHA,HAM,88.0,15400,EUR
+SH-1003,SZX,LHR,240.0,52000,GBP
+SH-1004,SHA,LAX,15.25,2100,USD
+SH-1005,SZX,HAM,310.75,74000,EUR

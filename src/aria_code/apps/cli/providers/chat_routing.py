@@ -50,13 +50,49 @@ def force_backend(config: dict, api_url: Optional[str]) -> bool:
     return bool(config.get("backend_chat")) and bool(api_url)
 
 
+# Prefixes that genuinely name a provider.  Checked explicitly because a slash
+# in a model id does not always mean a provider: Ollama serves namespaced
+# community models such as "hf.co/someone/qwen", whose first segment is a host,
+# not a backend to route to.
+KNOWN_MODEL_PROVIDERS = frozenset({
+    "ollama", "openai", "anthropic", "google", "xai", "deepseek", "groq",
+    "together", "dashscope", "lmstudio", "siliconflow", "moonshot", "zhipu",
+    "mistral", "cohere", "perplexity", "baidu", "ernie", "qianfan",
+    "bytedance", "doubao", "ark", "minimax", "stepfun", "01ai", "yi",
+    "vertexai", "vertex-ai", "google-genai",
+})
+
+
+def model_provider(model: str) -> str:
+    """Provider named by the model id itself, or "" when it names none.
+
+    Returns "" for bare Ollama names ("qwen2.5:7b") and for namespaced Ollama
+    models whose prefix is not a known provider ("hf.co/someone/qwen").
+    """
+    if not is_cloud_model(model):
+        return ""
+    candidate = normalize_provider_name(model.split("/", 1)[0])
+    return candidate if candidate in KNOWN_MODEL_PROVIDERS else ""
+
+
 def first_round_route(model: str, config: dict, api_url: Optional[str]) -> str:
-    """Return ``ollama`` | ``configured`` | ``cloud`` for the first round."""
+    """Return ``ollama`` | ``configured`` | ``cloud`` for the first round.
+
+    A provider-qualified model id ("google/gemini-2.5-pro") names its own
+    provider, and that wins over ``local_provider``.  It used to lose: the
+    default config ships ``model="gemini-pro"`` together with
+    ``local_provider="ollama"``, so every request for the flagship default
+    model was routed to Ollama instead — the status line reading "ollama"
+    beside a Gemini model name was reporting this honestly.
+
+    ``local_provider`` still decides for bare Ollama-style names
+    ("qwen2.5:7b", "gpt-oss:120b-cloud"), which is what it is there for.
+    """
     if force_backend(config, api_url):
         return "cloud"
-    provider = normalize_provider_name(config.get("local_provider") or "")
+    provider = model_provider(model)
     if not provider:
-        provider = model.split("/", 1)[0].lower() if is_cloud_model(model) else "ollama"
+        provider = normalize_provider_name(config.get("local_provider") or "") or "ollama"
     return "ollama" if provider == "ollama" else "configured"
 
 

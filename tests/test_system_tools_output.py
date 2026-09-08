@@ -8,7 +8,7 @@ if _CLI_DIR not in sys.path:
 
 
 def test_run_command_persists_full_output_when_inline_stdout_is_truncated(monkeypatch, tmp_path):
-    from apps.cli.tools.system_tools import tool_run_command
+    from aria_code.apps.cli.tools.system_tools import tool_run_command
 
     monkeypatch.setenv("ARIA_ARTIFACT_ROOT", str(tmp_path))
     command = "python3 -c \"print('x' * 6001)\""
@@ -31,7 +31,7 @@ def test_run_command_persists_full_output_when_inline_stdout_is_truncated(monkey
 
 
 def test_run_command_persists_full_output_for_many_lines(monkeypatch, tmp_path):
-    from apps.cli.tools.system_tools import tool_run_command
+    from aria_code.apps.cli.tools.system_tools import tool_run_command
 
     monkeypatch.setenv("ARIA_ARTIFACT_ROOT", str(tmp_path))
 
@@ -50,7 +50,7 @@ def test_run_command_persists_full_output_for_many_lines(monkeypatch, tmp_path):
 
 
 def test_run_command_console_hides_full_output_path(monkeypatch, tmp_path):
-    from apps.cli.tools.system_tools import tool_run_command
+    from aria_code.apps.cli.tools.system_tools import tool_run_command
 
     class FakeConsole:
         def __init__(self):

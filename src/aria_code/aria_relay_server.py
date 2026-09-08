@@ -439,7 +439,7 @@ async def feishu_event(request: Request):
                 feishu_user_id,
                 "👋 你好！要开始使用 Aria，请：\n"
                 "1. 在你的电脑上安装 Aria Code\n"
-                "2. 运行 `python3 setup_wizard.py` 完成配置\n"
+                "2. 运行 `python3 -m aria_code.setup_wizard` 完成配置\n"
                 "3. 发送绑定码绑定你的账户"
             )
         else:

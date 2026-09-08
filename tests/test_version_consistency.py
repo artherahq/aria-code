@@ -38,7 +38,7 @@ def _npm_version() -> str:
 
 
 def _cli_version() -> str:
-    text = (REPO_ROOT / "aria_cli.py").read_text(encoding="utf-8")
+    text = (REPO_ROOT / "src" / "aria_code" / "aria_cli.py").read_text(encoding="utf-8")
     m = re.search(r'^__version__\s*=\s*"([^"]+)"', text, re.M)
     assert m, "aria_cli.py 缺少 __version__"
     return m.group(1)

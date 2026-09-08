@@ -550,6 +550,18 @@ class TerminalRuntimeEventConsumer:
                     self.terminal._task_list.append({"id": tid, "title": title, "status": status})
 
     def on_status(self, state: str, message: str) -> None:
+        if state in ("acceptance_passed", "acceptance_failed"):
+            # The gate's verdict is the one piece of evidence behind "done", so
+            # it is printed rather than left in the turn result: a user who
+            # cannot see that the check went red will read the model's summary
+            # as if it had gone green.
+            passed = state == "acceptance_passed"
+            if self.has_rich and self.console is not None:
+                colour = "green" if passed else "yellow"
+                self.console.print(f"  [{colour}]{'✓' if passed else '✗'} {message}[/{colour}]")
+            else:
+                print(f"  {'✓' if passed else '✗'} {message}")
+            return
         if state != "fallback":
             return
         match = re.search(r"(?:from\s+)?(\w+)\s*(?:→|->|to)\s*(\w+)", message or "", re.I)
@@ -557,7 +569,7 @@ class TerminalRuntimeEventConsumer:
             from_provider, to_provider = match.group(1), match.group(2)
         else:
             from_provider, to_provider = self.fallback_from, "cloud"
-        from ui.render.output import print_fallback_toast
+        from aria_code.ui.render.output import print_fallback_toast
 
         print_fallback_toast(
             from_provider,
@@ -623,7 +635,7 @@ class TerminalApprovalEventConsumer:
             tool_name,
         )
         if not approval.approved:
-            from ui.render.output import print_tool_blocked
+            from aria_code.ui.render.output import print_tool_blocked
 
             print_tool_blocked(tool_name, "用户取消", console=self.console, has_rich=self.has_rich)
         return approval

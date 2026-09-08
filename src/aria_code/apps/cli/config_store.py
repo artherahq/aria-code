@@ -19,17 +19,17 @@ from aria_code.packages.aria_services.settings import (  # noqa: F401  (re-expor
 
 
 def _normalize_provider(name: str) -> str:
-    from apps.cli.providers.chat_routing import normalize_provider_name
+    from aria_code.apps.cli.providers.chat_routing import normalize_provider_name
     return normalize_provider_name(name)
 
 
 def _detect_lang() -> str:
-    from apps.cli.i18n import detect_system_lang
+    from aria_code.apps.cli.i18n import detect_system_lang
     return detect_system_lang()
 
 
 def _auto_select_model(ollama_url: str, fallback: str) -> str:
-    from apps.cli.i18n import auto_select_model
+    from aria_code.apps.cli.i18n import auto_select_model
     return auto_select_model(ollama_url, fallback=fallback)
 
 
@@ -58,8 +58,22 @@ def load_cli_config(
     *,
     sync_policy: Callable[[dict], None] | None = None,
 ) -> dict:
-    """Load config.json and merge with defaults (SettingsService-backed)."""
-    return build_settings_service(paths, defaults, sync_policy=sync_policy).load()
+    """Load config.json, merge with defaults, then apply the project's .ariarc.
+
+    The .ariarc overlay goes last so a repo that pins a model gets it for
+    everyone who opens it, without each developer editing their global config.
+    It is best-effort: a malformed project file must not stop the CLI from
+    starting, because the user would then have no way to run the tool that
+    would fix it.
+    """
+    config = build_settings_service(paths, defaults, sync_policy=sync_policy).load()
+    try:
+        from aria_code.ariarc import apply_to_config
+
+        apply_to_config(config)
+    except Exception:
+        pass
+    return config
 
 
 def save_cli_config(paths: AriaConfigPaths, cfg: dict) -> None:

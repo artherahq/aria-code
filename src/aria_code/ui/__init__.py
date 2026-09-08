@@ -2,14 +2,14 @@
 
 Public surface:
 
-    from ui import console, HAS_RICH, HAS_PT        # shared console + flags
-    from ui import _EscWatcher, _esc_watcher         # ESC cancellation
-    from ui import AriaPTCompleter, ARIA_PT_STYLE    # prompt_toolkit completer
-    from ui import arrow_select, run_picker_in_thread # arrow-key picker
-    from ui import PanelInputConfig, run_panel_input  # structured input panel
-    from ui.render import render_verdict_banner, ...  # Rich output renderers
-    from ui.banner import render_full_banner, ...     # startup banner
-    from ui.render.output import print_error, print_tool_result, ...
+    from aria_code.ui import console, HAS_RICH, HAS_PT        # shared console + flags
+    from aria_code.ui import _EscWatcher, _esc_watcher         # ESC cancellation
+    from aria_code.ui import AriaPTCompleter, ARIA_PT_STYLE    # prompt_toolkit completer
+    from aria_code.ui import arrow_select, run_picker_in_thread # arrow-key picker
+    from aria_code.ui import PanelInputConfig, run_panel_input  # structured input panel
+    from aria_code.ui.render import render_verdict_banner, ...  # Rich output renderers
+    from aria_code.ui.banner import render_full_banner, ...     # startup banner
+    from aria_code.ui.render.output import print_error, print_tool_result, ...
 """
 
 from .console import (

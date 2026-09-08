@@ -12,12 +12,12 @@ Intent labels (matching CODING_SYSTEM_PROMPT routing in aria_cli.py):
   "coding"      → code generation, backtest scripts, chart scripts
   "analysis"    → stock/macro analysis, technical/fundamental research
   "realtime"    → live price / quote / market data queries (needs tool)
-  "general"     → conceptual / educational finance questions (no tools needed)
-  "finance"     → default finance chat with tool access
+  "general"     → product, engineering, document, and general questions
+  "finance"     → explicit finance chat with market-aware tool access
 
 Usage::
 
-    from intent_classifier import classify_intent, INTENT_CODING, INTENT_ANALYSIS
+    from aria_code.intent_classifier import classify_intent, INTENT_CODING, INTENT_ANALYSIS
 
     intent = await classify_intent_async("写一个 AAPL 动量策略", ollama_url)
     # → "coding"
@@ -38,7 +38,7 @@ INTENT_CODING   = "coding"
 INTENT_ANALYSIS = "analysis"
 INTENT_REALTIME = "realtime"
 INTENT_GENERAL  = "general"
-INTENT_FINANCE  = "finance"   # default / catch-all
+INTENT_FINANCE  = "finance"
 
 # ── Prelude model name ────────────────────────────────────────────────────────
 _PRELUDE_MODEL = "aria-prelude"
@@ -46,13 +46,13 @@ _PRELUDE_TIMEOUT = 3.0   # seconds — must be fast; fallback on timeout
 
 # ── Prelude system prompt (mirrors the adapter training format) ───────────────
 _PRELUDE_SYSTEM = (
-    "You are an intent classifier for a quantitative finance AI assistant.\n"
+    "You are an intent classifier for a general product and software-engineering AI assistant.\n"
     "Classify the user message into EXACTLY ONE of these labels:\n"
-    "  coding    — code generation, script writing, backtest, chart plotting\n"
+    "  coding    — code generation, debugging, repository review, product implementation\n"
     "  analysis  — stock analysis, market research, technical/fundamental analysis\n"
     "  realtime  — live price, current quote, today's market data\n"
-    "  general   — conceptual/educational finance question, no live data needed\n"
-    "  finance   — other finance chat, portfolio, risk, strategy discussion\n"
+    "  general   — product review, architecture, UX, documentation, or general question\n"
+    "  finance   — explicit finance, portfolio, risk, or investment discussion\n"
     "Reply with ONLY the label word, nothing else."
 )
 
@@ -64,6 +64,13 @@ _CODING_KW = (
     "策略", "代码", "回测", "编写", "生成", "k线", "k-line", "kline",
     "python", "dashboard", "写一个", "生成代码", "写代码", "编写代码",
     "analyze and save", "analysis script",
+    "review code", "code review", "review project", "audit project", "audit code",
+    "repository", "repo", "codebase", "pull request", "debug", "refactor", "fix bug",
+    "implement", "implementation", "react", "next.js", "nextjs", "vue", "swiftui",
+    "flutter", "fastapi", "django", "express", "typescript", "frontend", "backend",
+    "审核代码", "代码审查", "审核项目", "项目审核", "审查项目", "代码库", "仓库",
+    "调试", "修复 bug", "重构", "实现", "实现功能", "开发产品", "编写应用",
+    "前端", "后端", "登录页面", "单元测试", "集成测试",
 )
 
 _VISUAL_ARTIFACT_KW = (
@@ -185,7 +192,16 @@ def is_visual_market_artifact_request(message: str) -> bool:
 
     These should prefer chart/dashboard/report workflows instead of generic
     market-data prefetch.
+
+    Delegates to apps/cli/intent_signals, which matches CJK terms against a
+    whitespace-stripped message so "K 线图" and "K线图" behave identically.
+    The legacy body below is the fallback if that module is unavailable.
     """
+    try:
+        from aria_code.apps.cli.intent_signals import is_visual_artifact_request
+        return is_visual_artifact_request(message)
+    except Exception:
+        pass
     low = message.lower().strip()
     if low.startswith(("/chart", "/dashboard", "/report")):
         return True
@@ -202,9 +218,21 @@ def is_visual_market_artifact_request(message: str) -> bool:
 
 def classify_intent_sync(message: str) -> str:
     """
-    Tier-2 keyword-based classification (synchronous, always available).
+    Tier-2 classification (synchronous, always available).
     Returns one of the INTENT_* constants.
+
+    Delegates to apps/cli/intent_signals, which extracts signals independently
+    and applies one explicit precedence table.  The keyword cascade kept below
+    is the fallback if that module cannot be imported; it is the historical
+    implementation and is known to misclassify the cases listed in
+    tests/test_intent_signals.py.
     """
+    try:
+        from aria_code.apps.cli.intent_signals import classify as _classify
+        return _classify(message)
+    except Exception:
+        pass
+
     import re as _re
     low = message.lower().strip()
 
@@ -215,7 +243,7 @@ def classify_intent_sync(message: str) -> str:
     if _re.search(_FILE_EXT_RE, low):
         if any(k in low for k in _CODING_KW):
             return INTENT_CODING   # "帮我写一个解析这个 csv 的脚本"
-        return INTENT_FINANCE      # "分析这个文件的可行性 loads/x.docx"
+        return INTENT_GENERAL      # document/product analysis without market tools
 
     has_coding = any(k in low for k in _CODING_KW)
     has_realtime = any(k in low for k in _REALTIME_KW)
@@ -245,12 +273,12 @@ def classify_intent_sync(message: str) -> str:
         if any(t in low for t in _MACRO_GENERAL_TOPICS):
             return INTENT_GENERAL
         if any(t in low for t in _NON_STOCK_ANALYSIS_TOPICS):
-            return INTENT_FINANCE
+            return INTENT_GENERAL
         # Bug ① — "分析" without a financial entity = general task (project, doc, etc.)
         if not any(e in low for e in _FIN_ENTITY_KW):
             # Check for uppercase ticker pattern (e.g. AAPL, BTC)
             if not _re.search(r'\b[A-Z]{2,5}\b', message):
-                return INTENT_FINANCE
+                return INTENT_GENERAL
         # Bug ④ — recommendation phrasing ("应该买入吗") → finance chat, not chart analysis
         _rec_phrases = ("应该", "是否值得", "要不要", "该不该", "值不值", "建议买", "建议卖")
         if any(p in low for p in _rec_phrases):
@@ -275,7 +303,7 @@ def classify_intent_sync(message: str) -> str:
     if any(k in low for k in _GENERAL_KW):
         return INTENT_GENERAL
 
-    return INTENT_FINANCE
+    return INTENT_GENERAL
 
 
 def _prelude_available(ollama_url: str) -> bool:

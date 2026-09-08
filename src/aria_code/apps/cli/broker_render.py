@@ -56,7 +56,7 @@ def _print_broker_positions(positions: list, broker_label: str, currency: str = 
         console.print(f"[dim]{broker_label} — 当前无持仓[/dim]")
         return
     from rich.markup import escape as _esc
-    from ui.render.responsive import StackedRecord, render_stacked_records, structured_layout
+    from aria_code.ui.render.responsive import StackedRecord, render_stacked_records, structured_layout
 
     ordered = sorted(positions, key=lambda x: -abs(x.market_value))
     total_mv = sum(p.market_value for p in positions)
@@ -131,7 +131,7 @@ def _print_broker_orders(orders: list, broker_label: str, status_filter: str = "
         console.print(f"[dim]{broker_label} — 无 {status_filter} 订单[/dim]")
         return
     from rich.markup import escape as _esc
-    from ui.render.responsive import StackedRecord, render_stacked_records, structured_layout
+    from aria_code.ui.render.responsive import StackedRecord, render_stacked_records, structured_layout
 
     layout = structured_layout(console)
     _STATUS_STYLE = {"filled":"[green]成交[/green]","partial":"[yellow]部成[/yellow]",

@@ -52,12 +52,15 @@ class StripeRevenueAgent(BaseAgent):
         subscriptions = data.get("subscriptions", [])
 
         import sys
-        if "/Users/mac/Desktop/Arthera" not in sys.path:
-            sys.path.insert(0, "/Users/mac/Desktop/Arthera")
+        import os
+        from pathlib import Path
+        arthera_path = os.environ.get("ARTHERA_PATH", str(Path(__file__).resolve().parents[4].parent / "Arthera"))
+        if arthera_path not in sys.path:
+            sys.path.insert(0, arthera_path)
 
         # Try to use Arthera StripeAnalyticsService
         try:
-            from packages.quant_engine.services.stripe_analytics_service import StripeAnalyticsService
+            from aria_code.packages.quant_engine.services.stripe_analytics_service import StripeAnalyticsService
             service = StripeAnalyticsService()
             summary = service.analyze_stripe_data(charges, subscriptions)
             summary_dict = summary.to_dict()

@@ -216,7 +216,7 @@ def build_intent_route(message: str) -> IntentRoute:
                 is_visual_market_artifact_request,
             )
         except ImportError:
-            from intent_classifier import (
+            from aria_code.intent_classifier import (
                 INTENT_ANALYSIS,
                 INTENT_CODING,
                 INTENT_FINANCE,
@@ -233,7 +233,7 @@ def build_intent_route(message: str) -> IntentRoute:
         INTENT_FINANCE = "finance"
         INTENT_GENERAL = "general"
         INTENT_REALTIME = "realtime"
-        classifier_intent = INTENT_FINANCE
+        classifier_intent = INTENT_GENERAL
         visual_artifact = any(i in intents for i in ("chart", "dashboard", "report", "ui_artifact"))
 
     if conceptual_market_question:
@@ -252,7 +252,7 @@ def build_intent_route(message: str) -> IntentRoute:
     elif classifier_intent == INTENT_GENERAL:
         primary = "general"
     elif classifier_intent == INTENT_FINANCE:
-        primary = "finance"
+        primary = "general"
     else:
         primary = "finance"
 

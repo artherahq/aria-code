@@ -29,7 +29,7 @@ import yaml
 from .base import BaseLLMProvider, Message, ProviderConfig
 from .ollama import OllamaProvider
 from .openai_compat import (
-    DeepSeekProvider, OpenAIProvider, GroqProvider,
+    DeepSeekProvider, OpenAIProvider, GroqProvider, GoogleProvider,
     TogetherProvider, DashScopeProvider, LMStudioProvider,
     SiliconFlowProvider, MoonshotProvider, ZhiPuProvider,
 )
@@ -50,6 +50,8 @@ _PROVIDER_CLASSES: Dict[str, Type[BaseLLMProvider]] = {
     "deepseek":     DeepSeekProvider,
     "openai":       OpenAIProvider,
     "anthropic":    AnthropicProvider,
+    "google":       GoogleProvider,
+    "gemini":       GoogleProvider,
     "groq":         GroqProvider,
     "together":     TogetherProvider,
     "dashscope":    DashScopeProvider,
@@ -69,6 +71,7 @@ _DEFAULT_FALLBACK_CHAIN = [
     ("dashscope",    "DASHSCOPE_API_KEY",     "qwen-plus"),
     ("moonshot",     "MOONSHOT_API_KEY",      "moonshot-v1-8k"),
     ("zhipu",        "ZHIPUAI_API_KEY",       "glm-4-flash"),
+    ("google",       "GEMINI_API_KEY",        "gemini-2.5-flash"),
     ("openai",       "OPENAI_API_KEY",        "gpt-4o-mini"),
     ("anthropic",    "ANTHROPIC_API_KEY",     "claude-3-5-haiku-latest"),
     ("groq",         "GROQ_API_KEY",          "llama-3.3-70b-versatile"),
@@ -278,7 +281,7 @@ def _build_cfg(name: str, model: Optional[str] = None) -> ProviderConfig:
         if name.lower() in _env_names:
             logger.debug(
                 "⚠ API key for '%s' loaded from ~/.arthera/providers.json (plaintext). "
-                "Migrate to env var: export %s=<key>  then remove api_key from providers.json.",
+                "Migrate to env var: export %s=<key>  then remove api_key from aria_code.providers.json.",
                 name, _env_names[name.lower()],
             )
     # 补充 base_url（支持用户自定义端点 / 代理）
@@ -374,9 +377,11 @@ async def stream_cloud_fallback(
     # 构建消息列表
     msgs: List[Message] = [
         Message(role="system", content=(
-            "You are Aria, an AI-native quantitative investment assistant. "
-            "Answer concisely and accurately. If asked about real-time data "
-            "you cannot access, say so clearly."
+            "You are Aria, an AI-native product and software-engineering assistant. "
+            "Help users review products, understand repositories, design architecture, "
+            "write and verify code, and improve quality. Finance is an optional domain "
+            "capability used only when the request is explicitly financial. Answer concisely "
+            "and never claim to have inspected files or run tests unless tool evidence proves it."
         ))
     ]
     for h in (history or [])[-12:]:

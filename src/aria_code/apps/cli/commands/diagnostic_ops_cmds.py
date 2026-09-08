@@ -60,37 +60,37 @@ import shlex
 from typing import Dict, Any, Optional
 
 def _test_datasource(*args, **kwargs):
-    from aria_cli import _test_datasource as fn
+    from aria_code.aria_cli import _test_datasource as fn
     return fn(*args, **kwargs)
 def _print_error(*args, **kwargs):
-    from aria_cli import _print_error as fn
+    from aria_code.aria_cli import _print_error as fn
     return fn(*args, **kwargs)
 def _get_ARIA_TOOLS():
-    from aria_cli import ARIA_TOOLS as val
+    from aria_code.aria_cli import ARIA_TOOLS as val
     return val
 def get_model_cfg(*args, **kwargs):
-    from aria_cli import get_model_cfg as fn
+    from aria_code.aria_cli import get_model_cfg as fn
     return fn(*args, **kwargs)
 def _get_LOCAL_TOOLS():
-    from aria_cli import LOCAL_TOOLS as val
+    from aria_code.aria_cli import LOCAL_TOOLS as val
     return val
 def _get___version__():
-    from aria_cli import __version__ as val
+    from aria_code.aria_cli import __version__ as val
     return val
 def _get_Panel():
-    from aria_cli import Panel as val
+    from aria_code.aria_cli import Panel as val
     return val
 def _get_provider_key(*args, **kwargs):
-    from aria_cli import _get_provider_key as fn
+    from aria_code.aria_cli import _get_provider_key as fn
     return fn(*args, **kwargs)
 def _get_rich_box():
-    from aria_cli import rich_box as val
+    from aria_code.aria_cli import rich_box as val
     return val
 def _get__HAS_MCP():
-    from aria_cli import _HAS_MCP as val
+    from aria_code.aria_cli import _HAS_MCP as val
     return val
 def _get_CONFIG_DIR():
-    from aria_cli import CONFIG_DIR as val
+    from aria_code.aria_cli import CONFIG_DIR as val
     return val
 
 import json
@@ -119,7 +119,7 @@ class DiagnosticOpsCommandsMixin:
     def cmd_architecture(self, args: str):
         """显示分层架构契约(各层状态 + 每层下一步)。用法: /architecture [--gaps]"""
         try:
-            from packages.aria_core import (
+            from aria_code.packages.aria_core import (
                 list_architecture_layers, architecture_status_counts)
         except Exception as exc:  # pragma: no cover - import guard
             msg = f"架构契约不可用: {exc}"
@@ -161,7 +161,7 @@ class DiagnosticOpsCommandsMixin:
     def cmd_accuracy(self, args: str):
         res = self.terminal._verify_predictions(min_age_hours=24.0)
         try:
-            from apps.cli.prediction_feedback import PredictionTracker
+            from aria_code.apps.cli.prediction_feedback import PredictionTracker
             acc = PredictionTracker(_get_CONFIG_DIR()).accuracy()
         except Exception:
             acc = {}
@@ -305,11 +305,11 @@ class DiagnosticOpsCommandsMixin:
 
     def cmd_doctor(self, args: str):
         try:
-            from doctor import run_doctor
+            from aria_code.doctor import run_doctor
 
             _ctx_stats = None
             try:
-                from packages.aria_services.context import context_health_snapshot
+                from aria_code.packages.aria_services.context import context_health_snapshot
                 _mc = get_model_cfg(self.terminal.config.get("model", "qwen2.5:7b"))
                 _ctx_stats = context_health_snapshot(
                     self.terminal.conversation,
@@ -344,7 +344,7 @@ class DiagnosticOpsCommandsMixin:
                 self.context.console.print(f"[{color}]{report.passed} passed · {report.warnings} warnings · {report.errors} errors[/{color}]")
                 self.context.console.print()
             else:
-                from doctor import format_doctor_plain
+                from aria_code.doctor import format_doctor_plain
                 print(format_doctor_plain(report))
             return
         except Exception as exc:
@@ -500,7 +500,7 @@ class DiagnosticOpsCommandsMixin:
         import shlex as _shlex
         import subprocess as _sp
         import sys as _sys
-        from apps.cli.preflight import (
+        from aria_code.apps.cli.preflight import (
             build_full_dependency_report,
             build_intent_preflight,
             build_install_plan,
@@ -694,7 +694,7 @@ class DiagnosticOpsCommandsMixin:
             # File parser availability is cached for performance.  Refresh it
             # now so DOCX/PDF/XLSX tools work in this same Aria session.
             try:
-                from file_analysis_tools import refresh_optional_parsers
+                from aria_code.file_analysis_tools import refresh_optional_parsers
 
                 refresh_optional_parsers()
             except Exception:
@@ -738,7 +738,7 @@ class DiagnosticOpsCommandsMixin:
             return
 
         try:
-            from datasources.router import _SOURCE_REGISTRY, DataRouter
+            from aria_code.datasources.router import _SOURCE_REGISTRY, DataRouter
             router = DataRouter()
         except ImportError:
             _print_error("datasources 模块未找到")
@@ -748,7 +748,7 @@ class DiagnosticOpsCommandsMixin:
             from rich.markup import escape
             from rich.table import Table
             from rich import box
-            from ui.render.responsive import StackedRecord, render_stacked_records, structured_layout
+            from aria_code.ui.render.responsive import StackedRecord, render_stacked_records, structured_layout
 
             _DESC = {
                 "yfinance": "Yahoo Finance (免费)",

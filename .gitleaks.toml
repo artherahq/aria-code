@@ -1,0 +1,21 @@
+title = "Aria Code gitleaks config"
+
+# Extend gitleaks' default ruleset rather than replace it — this file exists
+# only to allowlist specific, verified-safe findings, never to weaken the
+# scan itself.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Verified false positives — see the comment above each entry"
+regexes = [
+  # src/aria_code/apps/cli/google_login.py: FIREBASE_WEB_API_KEY.
+  # Firebase Web API keys are public by design (Google's own docs: they
+  # identify the Firebase project and authorize nothing on their own — real
+  # authorization comes from Firebase Security Rules and user auth tokens,
+  # not this key). Every Firebase web/mobile client ships this same value in
+  # its bundle. Matches gitleaks' gcp-api-key rule on shape (AIza... prefix)
+  # with no way to distinguish "public Firebase key" from "real GCP API key"
+  # by pattern alone.
+  '''AIzaSyC9iYiroXgxTu2ANUPIjeGbITVzWEUjXAI''',
+]

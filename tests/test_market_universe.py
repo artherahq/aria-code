@@ -23,7 +23,7 @@ def test_static_global_assets_resolve_common_classes():
 
 
 def test_market_detect_prefers_universe_index_alias_over_old_etf_alias():
-    from apps.cli.utils.market_detect import _extract_market_symbol, _extract_market_symbols
+    from aria_code.apps.cli.utils.market_detect import _extract_market_symbol, _extract_market_symbols
 
     assert _extract_market_symbol("纳斯达克的走势和预测") == "^IXIC"
     assert _extract_market_symbols("纳斯达克的走势和预测") == ["^IXIC"]
@@ -63,7 +63,7 @@ def test_same_name_symbols_require_explicit_selection():
 
 
 def test_ambiguity_probe_is_cache_only(monkeypatch):
-    import apps.cli.market_universe as universe
+    import aria_code.apps.cli.market_universe as universe
 
     monkeypatch.setattr(universe, "_load_cache", lambda: [])
     monkeypatch.setattr(

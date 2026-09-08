@@ -99,7 +99,7 @@ jobs:
           pyinstaller --onefile --name ${{ env.BIN_NAME }}
           --distpath dist-native/dist --workpath dist-native/build --specpath dist-native
           --collect-all rich --collect-all prompt_toolkit
-          aria_cli.py
+          src/aria_code/aria_cli.py
       - name: Smoke test
         run: dist-native\dist\${{ env.BIN_NAME }}.exe --version
       - uses: actions/upload-artifact@v4
@@ -111,7 +111,7 @@ jobs:
           pyinstaller --onefile --name ${{ env.MCP_BIN_NAME }}
           --distpath dist-native/dist --workpath dist-native/build --specpath dist-native
           --copy-metadata aria-code
-          aria_mcp_server.py
+          src/aria_code/aria_mcp_server.py
       - name: Smoke test (MCP server binary)
         run: dist-native\dist\${{ env.MCP_BIN_NAME }}.exe --version
       - uses: actions/upload-artifact@v4
@@ -135,7 +135,7 @@ jobs:
           pyinstaller --onefile --name ${{ env.BIN_NAME }}
           --distpath dist-native/dist --workpath dist-native/build --specpath dist-native
           --collect-all rich --collect-all prompt_toolkit
-          aria_cli.py
+          src/aria_code/aria_cli.py
       - name: Smoke test
         run: dist-native/dist/${{ env.BIN_NAME }} --version
       - uses: actions/upload-artifact@v4
@@ -147,7 +147,7 @@ jobs:
           pyinstaller --onefile --name ${{ env.MCP_BIN_NAME }}
           --distpath dist-native/dist --workpath dist-native/build --specpath dist-native
           --copy-metadata aria-code
-          aria_mcp_server.py
+          src/aria_code/aria_mcp_server.py
       - name: Smoke test (MCP server binary)
         run: dist-native/dist/${{ env.MCP_BIN_NAME }} --version
       - uses: actions/upload-artifact@v4

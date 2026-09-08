@@ -1,6 +1,6 @@
 """Tests for packages.aria_services.settings.SettingsService — the concrete
 implementation behind the registry's `settings` ServiceSpec. Mechanics were
-extracted verbatim from apps/cli/config_store.py; these tests pin the merge,
+extracted verbatim from aria_code.apps/cli/config_store.py; these tests pin the merge,
 normalization, persistence, and hook contracts so CLI behavior can't drift."""
 
 import json

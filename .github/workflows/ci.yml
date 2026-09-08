@@ -50,6 +50,17 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pytest pytest-asyncio pytest-cov pytest-timeout
+          # google-genai backs the Gemini/Vertex provider (aria_code.apps.cli.providers.vertexai_stream),
+          # now the default cloud model — kept optional in pyproject.toml so the
+          # base install stays light, but installed here so its tests run for
+          # real instead of failing on ModuleNotFoundError.
+          pip install google-genai
+          # Installs this repo itself (no-deps: requirements.txt already covers
+          # its dependencies) so `aria_code` is importable outside pytest's own
+          # process too — several tests deliberately spawn a subprocess to
+          # check import-time behavior on a fresh interpreter, which pytest's
+          # `pythonpath` ini setting does not reach.
+          pip install --no-deps -e .
 
       # 只把"能抓真 bug"的三类设成硬失败：name-defined / used-before-def /
       # no-redef。其余 280 个（多为缺类型注解）留作后续逐模块收紧——一次性
@@ -132,4 +143,32 @@ jobs:
           gitleaks version
 
       - name: Scan repository and history for secrets
-        run: gitleaks detect --source . --redact --verbose --exit-code 1
+        run: gitleaks detect --source . --config .gitleaks.toml --redact --verbose --exit-code 1
+
+  eval-preflight:
+    name: Eval suites still measure something
+    runs-on: ubuntu-latest
+    # 不需要模型、不需要 API key、几秒钟。它只回答一个问题：套件里的任务
+    # 还都是「一开始是红的」吗？
+    #
+    # 这道门禁的直接由来：一个漂移成绿色的 fixture 是一次**静默的记分牌注水** ——
+    # 套件会报出不断上升的通过率，同时量到的东西越来越少，而且这个故障恰恰
+    # 因为数字好看而不可见。跑一次 --check 的代价是每个任务一条命令，换来的是
+    # 在造成它的那个 commit 上抓住它，而不是一个月以后对着一个假的分数做决策。
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pytest pyyaml
+
+      - name: Every task must still start red
+        run: python -m aria_code.evals.runner evals/suites/core.yaml --check

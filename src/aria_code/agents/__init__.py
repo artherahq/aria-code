@@ -11,7 +11,7 @@ agents/ — Aria Code 可组合多智能体系统
   synthesis   → 汇总以上，输出可操作建议
 
 自定义 Agent 示例 (aria_agents/northbound_agent.py):
-    from agents.base import BaseAgent, AgentResult
+    from aria_code.agents.base import BaseAgent, AgentResult
 
     class NorthboundAgent(BaseAgent):
         name        = "northbound"

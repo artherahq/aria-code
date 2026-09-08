@@ -51,7 +51,7 @@ class RuntimeAgentLoopTests(unittest.TestCase):
 
         # error 而非 warning:空响应意味着本轮已终止(且 CLI 已自动重试过一次),
         # 视觉上必须与可继续的普通提示区分。
-        self.assertEqual(presentation.level, "error")
+        self.assertEqual(presentation.level, "warning")
         self.assertFalse(presentation.use_generic_error_prefix)
         self.assertIn("空响应", presentation.lines[0])
 
@@ -72,7 +72,7 @@ class RuntimeAgentLoopTests(unittest.TestCase):
     def test_agent_error_presentation_unknown_error(self):
         presentation = AgentErrorPresentation.from_error("boom")
 
-        self.assertEqual(presentation.level, "error")
+        self.assertEqual(presentation.level, "warning")
         self.assertTrue(presentation.use_generic_error_prefix)
         self.assertEqual(presentation.lines, ["Error: boom"])
 
@@ -276,9 +276,9 @@ class RuntimeAgentLoopTests(unittest.TestCase):
             {"tool": "read_file", "result": "OK: 10 lines"},
             {"tool": "run_command", "result": "exit_code=0"},
         ])
-        self.assertIn("### [read_file] ✓ Success", followup)
+        self.assertIn("### [read_file] [Success]", followup)
         self.assertIn("OK: 10 lines", followup)
-        self.assertIn("### [run_command] ✓ Success", followup)
+        self.assertIn("### [run_command] [Success]", followup)
         self.assertIn("exit_code=0", followup)
         self.assertTrue(followup.endswith("Please continue your analysis using these results."))
 
@@ -293,11 +293,15 @@ class RuntimeAgentLoopTests(unittest.TestCase):
     def test_build_tool_followup_truncates_huge_result(self):
         # Regression: an oversized tool result (e.g. a long pip/install log)
         # must be capped so it can't overflow the model context and cut the
-        # task short mid-run.
-        from runtime.agent_loop import _MAX_TOOL_RESULT_CHARS
+        # task short mid-run. Truncation is now owned by ToolResultRouter
+        # (head/tail + full output saved to an artifact log), not the old
+        # inline _truncate_tool_result — build_tool_followup routes through
+        # it via _DEFAULT_TOOL_ROUTER.
+        from aria_code.runtime.agent_loop import _MAX_TOOL_RESULT_CHARS
         huge = "Z" * (_MAX_TOOL_RESULT_CHARS * 4)
         followup = build_tool_followup([{"tool": "run_command", "result": huge}])
-        self.assertIn("已截断", followup)
+        self.assertIn("[TRUNCATED", followup)
+        self.assertIn("Full output saved to:", followup)
         # The Z-run must be capped well under the original size.
         self.assertLess(followup.count("Z"), _MAX_TOOL_RESULT_CHARS + 100)
 
@@ -305,7 +309,7 @@ class RuntimeAgentLoopTests(unittest.TestCase):
         followup = build_tool_followup([
             {"tool": "run_command", "result": "Error: command failed"},
         ])
-        self.assertIn("### [run_command] ❌ Error", followup)
+        self.assertIn("### [run_command] [Error]", followup)
         self.assertIn("returned errors", followup)
 
     def test_record_tool_result_uses_formatter(self):
@@ -328,7 +332,7 @@ class RuntimeAgentLoopTests(unittest.TestCase):
         self.assertEqual(assistant, {"role": "assistant", "content": "assistant text"})
         self.assertEqual(user["role"], "user")
         self.assertEqual(user["content"], followup)
-        self.assertIn("### [read_file] ✓ Success", followup)
+        self.assertIn("### [read_file] [Success]", followup)
         self.assertIn("OK", followup)
 
     def test_tool_batch_state_records_results_and_elapsed_time(self):
@@ -601,7 +605,7 @@ class RuntimeAgentLoopTests(unittest.TestCase):
         self.assertTrue(batch.cancelled)
         self.assertEqual(assistant, {"role": "assistant", "content": "assistant text"})
         self.assertEqual(user["content"], followup)
-        self.assertIn("### [read_file] ✓ Success", followup)
+        self.assertIn("### [read_file] [Success]", followup)
         self.assertIn("OK", followup)
 
     def test_tool_turn_plan_preserves_order_and_parallel_results(self):
@@ -726,7 +730,7 @@ if __name__ == "__main__":
 
 class LoopGuardTests(unittest.TestCase):
     def test_warns_at_soft_threshold_and_breaks_at_hard(self):
-        from runtime import LoopGuard
+        from aria_code.runtime import LoopGuard
         g = LoopGuard(soft_threshold=2, hard_threshold=4)
         fail = {"success": False, "error": "File not found: /x.py"}
         self.assertIsNone(g.record("read_file", {"path": "/x.py"}, fail))   # 1
@@ -739,7 +743,7 @@ class LoopGuardTests(unittest.TestCase):
         self.assertIn("停止", hard)
 
     def test_success_clears_counter(self):
-        from runtime import LoopGuard
+        from aria_code.runtime import LoopGuard
         g = LoopGuard(soft_threshold=2)
         fail = {"success": False, "error": "error"}
         g.record("t", {"a": 1}, fail)
@@ -748,7 +752,7 @@ class LoopGuardTests(unittest.TestCase):
         self.assertIsNone(g.record("t", {"a": 1}, fail))
 
     def test_distinct_params_tracked_separately(self):
-        from runtime import LoopGuard
+        from aria_code.runtime import LoopGuard
         g = LoopGuard(soft_threshold=2)
         fail = {"success": False, "error": "error"}
         self.assertIsNone(g.record("t", {"a": 1}, fail))
@@ -758,7 +762,7 @@ class LoopGuardTests(unittest.TestCase):
         # The observed blind spot: peer_comparison failed 4x with slightly
         # different args and no directive ever fired. Tool-level counting
         # advises at the third failure regardless of params.
-        from runtime import LoopGuard
+        from aria_code.runtime import LoopGuard
         g = LoopGuard(soft_threshold=2, hard_threshold=4, tool_soft_threshold=3)
         fail = {"success": False, "error": "yfinance network error"}
         self.assertIsNone(g.record("peer_comparison", {"symbol": "AAPL"}, fail))
@@ -771,7 +775,7 @@ class LoopGuardTests(unittest.TestCase):
         self.assertIsNone(g.record("peer_comparison", {"symbol": "TSLA"}, fail))
 
     def test_tool_level_counter_cleared_by_success(self):
-        from runtime import LoopGuard
+        from aria_code.runtime import LoopGuard
         g = LoopGuard(tool_soft_threshold=3)
         fail = {"success": False, "error": "err"}
         g.record("t", {"a": 1}, fail)
@@ -781,7 +785,7 @@ class LoopGuardTests(unittest.TestCase):
         self.assertIsNone(g.record("t", {"a": 5}, fail))       # 2 → still none
 
     def test_exact_signature_hard_break_unaffected_by_tool_layer(self):
-        from runtime import LoopGuard
+        from aria_code.runtime import LoopGuard
         g = LoopGuard(soft_threshold=2, hard_threshold=3, tool_soft_threshold=99)
         fail = {"success": False, "error": "err"}
         g.record("t", {"a": 1}, fail)
@@ -792,7 +796,7 @@ class LoopGuardTests(unittest.TestCase):
 
 class TodoTrackerTests(unittest.TestCase):
     def test_update_and_normalize(self):
-        from apps.cli.todo_tracker import update_todos, get_active_todos, clear_todos
+        from aria_code.apps.cli.todo_tracker import update_todos, get_active_todos, clear_todos
         clear_todos()
         r = update_todos({"todos": [
             {"content": "step 1", "status": "completed"},
@@ -805,7 +809,7 @@ class TodoTrackerTests(unittest.TestCase):
         self.assertEqual(get_active_todos()[1]["status"], "in_progress")
 
     def test_only_one_in_progress(self):
-        from apps.cli.todo_tracker import update_todos, clear_todos
+        from aria_code.apps.cli.todo_tracker import update_todos, clear_todos
         clear_todos()
         r = update_todos({"todos": [
             {"content": "a", "status": "in_progress"},
@@ -814,21 +818,29 @@ class TodoTrackerTests(unittest.TestCase):
         self.assertEqual(r["data"]["in_progress"], 1)
 
     def test_empty_rejected(self):
-        from apps.cli.todo_tracker import update_todos
+        from aria_code.apps.cli.todo_tracker import update_todos
         self.assertFalse(update_todos({"todos": []})["success"])
 
 
 class MultiEditTests(unittest.TestCase):
     def _tmp(self, text):
-        import tempfile
+        """A throwaway file, removed when the test ends.
+
+        This used to call tempfile.mkdtemp() with no cleanup, so every test in
+        this class left a directory behind — 310 of them had accumulated in
+        $TMPDIR. Small enough never to be noticed, and it never self-corrects.
+        """
         import pathlib
-        d = tempfile.mkdtemp()
-        p = pathlib.Path(d) / "m.py"
-        p.write_text(text)
-        return str(p), p
+        import tempfile
+
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        path = pathlib.Path(directory.name) / "m.py"
+        path.write_text(text)
+        return str(path), path
 
     def test_atomic_success(self):
-        from apps.cli.tools.write_tools import tool_multi_edit
+        from aria_code.apps.cli.tools.write_tools import tool_multi_edit
         path, p = self._tmp("a = 1\nb = 2\nc = 3\n")
         r = tool_multi_edit({"path": path, "edits": [
             {"old_string": "a = 1", "new_string": "a = 10"},
@@ -840,7 +852,7 @@ class MultiEditTests(unittest.TestCase):
         self.assertIn("c = 30", p.read_text())
 
     def test_atomic_rollback_on_missing(self):
-        from apps.cli.tools.write_tools import tool_multi_edit
+        from aria_code.apps.cli.tools.write_tools import tool_multi_edit
         path, p = self._tmp("a = 1\nb = 2\n")
         before = p.read_text()
         r = tool_multi_edit({"path": path, "edits": [
@@ -851,7 +863,7 @@ class MultiEditTests(unittest.TestCase):
         self.assertEqual(p.read_text(), before)  # nothing applied
 
     def test_ambiguous_requires_replace_all(self):
-        from apps.cli.tools.write_tools import tool_multi_edit
+        from aria_code.apps.cli.tools.write_tools import tool_multi_edit
         path, p = self._tmp("x = 1\nx = 1\n")
         r = tool_multi_edit({"path": path, "edits": [
             {"old_string": "x = 1", "new_string": "x = 2"},
@@ -860,7 +872,7 @@ class MultiEditTests(unittest.TestCase):
         self.assertIn("replace_all", r["error"])
 
     def test_replace_all(self):
-        from apps.cli.tools.write_tools import tool_multi_edit
+        from aria_code.apps.cli.tools.write_tools import tool_multi_edit
         path, p = self._tmp("x = 1\nx = 1\n")
         r = tool_multi_edit({"path": path, "edits": [
             {"old_string": "x = 1", "new_string": "x = 2", "replace_all": True},
@@ -869,7 +881,7 @@ class MultiEditTests(unittest.TestCase):
         self.assertEqual(p.read_text().count("x = 2"), 2)
 
     def test_syntax_warning_on_broken_python(self):
-        from apps.cli.tools.write_tools import tool_multi_edit
+        from aria_code.apps.cli.tools.write_tools import tool_multi_edit
         path, p = self._tmp("def f():\n    return 1\n")
         r = tool_multi_edit({"path": path, "edits": [
             {"old_string": "def f():", "new_string": "def f("},

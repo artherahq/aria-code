@@ -33,7 +33,7 @@ def test_predict_uses_quant_engine_predictor_not_football_data_client(monkeypatc
     football_agent.py imports quick_predict locally inside predict(), so the
     patch target is the predictor module itself (where the name is looked up
     at call time), not agents.sports.football_agent's module namespace."""
-    import packages.quant_engine.sports.predictor as predictor_module
+    import aria_code.packages.quant_engine.sports.predictor as predictor_module
 
     called = {"quick_predict": False}
     original = predictor_module.quick_predict

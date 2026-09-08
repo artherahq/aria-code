@@ -49,8 +49,8 @@ class StrategistAgent(BaseAgent):
 
         # Try to import from Arthera packages quant engine
         try:
-            from packages.quant_engine.agent_runtime.quant_strategist import QuantStrategistAgent
-            from packages.quant_engine.risk.risk_compliance_agent import RiskComplianceAgent
+            from aria_code.packages.quant_engine.agent_runtime.quant_strategist import QuantStrategistAgent
+            from aria_code.packages.quant_engine.risk.risk_compliance_agent import RiskComplianceAgent
 
             cloud_strategist = QuantStrategistAgent()
             rule_tree = await cloud_strategist.design_strategy(

@@ -19,37 +19,37 @@ import shlex
 from typing import Dict, Any, Optional
 
 def _run_event_hook(*args, **kwargs):
-    from aria_cli import _run_event_hook as fn
+    from aria_code.aria_cli import _run_event_hook as fn
     return fn(*args, **kwargs)
 def _load_hooks(*args, **kwargs):
-    from aria_cli import _load_hooks as fn
+    from aria_code.aria_cli import _load_hooks as fn
     return fn(*args, **kwargs)
 def _display_path(*args, **kwargs):
-    from aria_cli import _display_path as fn
+    from aria_code.aria_cli import _display_path as fn
     return fn(*args, **kwargs)
 def _get_MODELS():
-    from aria_cli import MODELS as val
+    from aria_code.aria_cli import MODELS as val
     return val
 def _get__HAS_JSON_HOOKS():
-    from aria_cli import _HAS_JSON_HOOKS as val
+    from aria_code.aria_cli import _HAS_JSON_HOOKS as val
     return val
 def _tool_run_command(*args, **kwargs):
-    from aria_cli import _tool_run_command as fn
+    from aria_code.aria_cli import _tool_run_command as fn
     return fn(*args, **kwargs)
 def resolve_model_key(*args, **kwargs):
-    from aria_cli import resolve_model_key as fn
+    from aria_code.aria_cli import resolve_model_key as fn
     return fn(*args, **kwargs)
 def _load_project_context(*args, **kwargs):
-    from aria_cli import _load_project_context as fn
+    from aria_code.aria_cli import _load_project_context as fn
     return fn(*args, **kwargs)
 def _fire_json_hook(*args, **kwargs):
-    from aria_cli import _fire_json_hook as fn
+    from aria_code.aria_cli import _fire_json_hook as fn
     return fn(*args, **kwargs)
 def _print_phase(*args, **kwargs):
-    from aria_cli import _print_phase as fn
+    from aria_code.aria_cli import _print_phase as fn
     return fn(*args, **kwargs)
 def _get_CONFIG_DIR():
-    from aria_cli import CONFIG_DIR as val
+    from aria_code.aria_cli import CONFIG_DIR as val
     return val
 
 import json
@@ -104,7 +104,7 @@ class WorkflowCommandsMixin:
         if sub == "list":
             if _get__HAS_JSON_HOOKS():
                 try:
-                    from apps.cli.hooks import list_hooks as _list_json_hooks
+                    from aria_code.apps.cli.hooks import list_hooks as _list_json_hooks
                     _json_rows = _list_json_hooks()
                     if _json_rows:
                         if self.context.has_rich:
@@ -151,7 +151,7 @@ class WorkflowCommandsMixin:
         elif sub == "edit":
             if not rest:
                 if _get__HAS_JSON_HOOKS():
-                    from apps.cli.hooks import hooks_file_path, create_example_hooks
+                    from aria_code.apps.cli.hooks import hooks_file_path, create_example_hooks
                     _hpath = hooks_file_path("global")
                     create_example_hooks(_hpath)
                     editor = os.getenv("EDITOR", "nano")
@@ -238,7 +238,7 @@ class WorkflowCommandsMixin:
 
     def cmd_rewind(self, args: str):
         """Restore code checkpoints, conversation history, or both."""
-        from runtime.checkpoints import (
+        from aria_code.runtime.checkpoints import (
             CheckpointConflictError,
             CheckpointNotFoundError,
             CheckpointStore,
@@ -456,7 +456,7 @@ class WorkflowCommandsMixin:
         # receives it as evidence and must not pretend it accessed anything
         # beyond the supplied file or diff.
         try:
-            from agents.code_review import CodeReviewAgent
+            from aria_code.agents.code_review import CodeReviewAgent
 
             findings = CodeReviewAgent.review_source(
                 review_source,

@@ -17,13 +17,22 @@ import sys
 
 def main() -> None:
     """Synchronous entry point for the ``aria-code`` command."""
-    from aria_cli import main as _async_main
+    from aria_code.aria_cli import main as _async_main
 
     try:
         asyncio.run(_async_main())
     except KeyboardInterrupt:
         print()
         sys.exit(0)
+
+
+if __name__ == "__main__":
+    # Lets `python -m aria_code.apps.cli.main` launch the CLI directly — the
+    # path install.sh and the npm launcher use, since they invoke the venv's
+    # python rather than relying on the pip-generated `aria-code` console
+    # script. Without this guard, `-m` only imports the module and exits
+    # immediately: `main` is defined but never called.
+    main()
 
 
 __all__ = ["main"]

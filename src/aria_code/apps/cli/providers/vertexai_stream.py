@@ -1,7 +1,14 @@
-"""Native Google Cloud Vertex AI LLM Provider using google-genai."""
+"""Native Google Cloud Vertex AI LLM Provider using google-genai.
+
+google-genai is an optional dependency: most users run Ollama or an
+OpenAI-compatible endpoint and should not have to install a Google SDK. That
+makes the "it is not installed" path a normal one to land on, so it has to say
+what to do rather than leaking a ModuleNotFoundError.
+"""
 
 import asyncio
 import json
+import os
 from typing import AsyncGenerator, Optional
 
 from aria_code.apps.cli.providers.base import (
@@ -12,6 +19,13 @@ from aria_code.apps.cli.providers.base import (
     LLMToken,
     LLMToolCall,
 )
+
+_MISSING_SDK_MESSAGE = (
+    "Gemini/Vertex AI 需要 google-genai，当前未安装。\n"
+    "  安装：pip install google-genai\n"
+    "  或改用其他模型：/model  （Ollama 本地模型无需额外依赖）"
+)
+
 
 class VertexAIProvider(LLMProvider):
     """Native Vertex AI provider using google-genai."""
@@ -27,10 +41,68 @@ class VertexAIProvider(LLMProvider):
         self.system_override = system_override
         self._client = None
 
+    def _api_key(self) -> str:
+        """Gemini API key from config, falling back to the standard env vars."""
+        for value in (
+            self.config.get("api_key"),
+            self.config.get("gemini_key"),
+            os.getenv("GEMINI_API_KEY"),
+            os.getenv("GOOGLE_API_KEY"),
+        ):
+            key = str(value or "").strip()
+            if key:
+                return key
+        return ""
+
+    def _use_vertex(self) -> bool:
+        """Decide between Vertex AI (ADC) and the Gemini API-key endpoint.
+
+        ``use_vertexai`` used to default to True unconditionally, so a developer
+        holding only a GEMINI_API_KEY got ``genai.Client(vertexai=True)`` and a
+        credentials error — Vertex needs application-default credentials and a
+        project.  An explicit config value still wins; otherwise pick whichever
+        set of credentials is actually present.
+        """
+        configured = self.config.get("use_vertexai")
+        if configured is not None:
+            return bool(configured)
+        env_flag = os.getenv("GOOGLE_GENAI_USE_VERTEXAI", "").strip().lower()
+        if env_flag in {"1", "true", "yes", "on"}:
+            return True
+        if env_flag in {"0", "false", "no", "off"}:
+            return False
+        has_vertex_creds = bool(
+            os.getenv("GOOGLE_CLOUD_PROJECT")
+            or os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+        )
+        if has_vertex_creds:
+            return True
+        # No project/ADC configured: an API key is the only usable path.
+        return not self._api_key()
+
     def _get_client(self):
         if self._client is None:
             from google import genai
-            self._client = genai.Client(vertexai=True)
+
+            if self._use_vertex():
+                project = os.getenv("GOOGLE_CLOUD_PROJECT") or self.config.get("gcp_project")
+                location = (
+                    os.getenv("GOOGLE_CLOUD_LOCATION")
+                    or self.config.get("gcp_location")
+                    or "us-central1"
+                )
+                kwargs = {"vertexai": True, "location": location}
+                if project:
+                    kwargs["project"] = str(project)
+                self._client = genai.Client(**kwargs)
+            else:
+                api_key = self._api_key()
+                if not api_key:
+                    raise RuntimeError(
+                        "Gemini 需要凭据：设置 GEMINI_API_KEY，或配置 Vertex AI "
+                        "(GOOGLE_CLOUD_PROJECT + gcloud auth application-default login)。"
+                    )
+                self._client = genai.Client(api_key=api_key)
         return self._client
         
     def _messages_to_contents(self, messages: list):
@@ -54,17 +126,40 @@ class VertexAIProvider(LLMProvider):
             genai_role = "user" if role == "user" else "model"
             
             if role == "tool":
-                # For tool results, role should be "user" with Part containing FunctionResponse
-                # Wait, google-genai role for function response is "user" or "tool"?
-                # Actually, role='user', part=FunctionResponse
-                tool_name = msg.get("name", "unknown")
-                part = types.Part.from_function_response(
-                    name=tool_name,
-                    response={"result": content_str}
-                )
-                contents.append(types.Content(role="user", parts=[part]))
+                # Rendered as text, not as a FunctionResponse part.
+                #
+                # Gemini only accepts a function_response that answers a
+                # function_call it can see in the preceding model turn, and the
+                # agent loop does not preserve those: it records the assistant
+                # turn as plain text. Sending an unanswered function_response
+                # made the conversation malformed, and Gemini replied with a
+                # single whitespace character and no tool call — the turn died
+                # as "empty_response" a round or two in, every time.
+                #
+                # The information is not lost by doing this: the loop already
+                # puts the same results in the follow-up user message that
+                # comes next, in a form written to be read.
+                tool_name = msg.get("name") or "tool"
+                text = f"[{tool_name}] {content_str}".strip()
+                if not text:
+                    continue
+                if contents and contents[-1].role == "user":
+                    contents[-1].parts.append(types.Part.from_text(text=text))
+                else:
+                    contents.append(types.Content(
+                        role="user", parts=[types.Part.from_text(text=text)]))
                 continue
                 
+            # An empty part is worse than no part. When a model answers a turn
+            # with nothing but a function call — which Gemini does routinely,
+            # and which the agent loop records as an assistant message whose
+            # text is "" — this used to send Content(role="model", parts=[""]).
+            # Gemini responds to that with a single whitespace character and no
+            # tool call, so the second round of every tool-using turn came back
+            # as "empty_response" and the task died after one step.
+            if not str(content_str or "").strip():
+                continue
+
             # Check if previous message has same role
             # (Gemini requires alternating roles: user, model, user, model)
             if contents and contents[-1].role == genai_role:
@@ -74,42 +169,61 @@ class VertexAIProvider(LLMProvider):
                 
         return contents, system_instruction
 
+    def _schema_from_dict(self, d: dict, types):
+        if not d:
+            return None
+        t = d.get("type", "string").upper()
+        if t == "ARRAY":
+            items = d.get("items", {})
+            return types.Schema(
+                type="ARRAY",
+                description=d.get("description", ""),
+                items=self._schema_from_dict(items, types) if items else types.Schema(type="STRING")
+            )
+        elif t == "OBJECT":
+            props = d.get("properties", {})
+            req = d.get("required", [])
+            schema_props = {k: self._schema_from_dict(v, types) for k, v in props.items()}
+            return types.Schema(
+                type="OBJECT",
+                description=d.get("description", ""),
+                properties=schema_props if schema_props else None,
+                required=req if req else None
+            )
+        else:
+            return types.Schema(
+                type=t,
+                description=d.get("description", "")
+            )
+
     def _tools_to_genai(self, tools: list):
         if not tools:
             return None
-        
         from google.genai import types
-        
         genai_tools = []
+        # Vertex rejects the entire request when two declarations share a name
+        # ("Duplicate function declaration found: web_fetch"), where
+        # OpenAI-compatible backends just take the last one. The registries
+        # upstream should not produce duplicates, but this is the boundary
+        # where a duplicate becomes a hard 400 for the whole turn, so it is
+        # also the boundary that has to be certain.
+        seen: set = set()
         for tool in tools:
-            # Assume tool is a dict adhering to OpenAI JSON schema
             func = tool.get("function", tool)
             name = func.get("name")
+            if not name or name in seen:
+                continue
+            seen.add(name)
             desc = func.get("description", "")
             
-            # Map parameters
+            # Map parameters recursively
             params = func.get("parameters", {})
-            properties = params.get("properties", {})
-            required = params.get("required", [])
+            schema = self._schema_from_dict(params, types) if params else None
             
-            schema_props = {}
-            for k, v in properties.items():
-                prop_type = v.get("type", "string").upper()
-                if prop_type == "ARRAY":
-                    prop_type = "ARRAY"
-                schema_props[k] = types.Schema(
-                    type=prop_type,
-                    description=v.get("description", ""),
-                )
-                
             tool_declaration = types.FunctionDeclaration(
                 name=name,
                 description=desc,
-                parameters=types.Schema(
-                    type="OBJECT",
-                    properties=schema_props,
-                    required=required
-                ) if properties else None
+                parameters=schema
             )
             genai_tools.append(types.Tool(function_declarations=[tool_declaration]))
             
@@ -122,15 +236,19 @@ class VertexAIProvider(LLMProvider):
         *,
         cancel_event: Optional[asyncio.Event] = None,
     ) -> AsyncGenerator[LLMEvent, None]:
-        from google.genai import types
-        from google.genai.errors import APIError
-        
+        # These imports must sit INSIDE the try. They were above it, so when
+        # google-genai was not installed they raised first and the handler
+        # below — the one that explains how to fix it — was unreachable. The
+        # user saw a bare "No module named 'google.genai'" and no way forward.
         try:
+            from google.genai import types
+            from google.genai.errors import APIError
+
             client = self._get_client()
         except ImportError:
             yield LLMDone(
                 response="", provider="vertexai", success=False,
-                error="google-genai package not found. Please pip install google-genai."
+                error=_MISSING_SDK_MESSAGE,
             )
             return
         except Exception as e:

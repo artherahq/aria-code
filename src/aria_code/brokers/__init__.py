@@ -5,7 +5,7 @@ brokers/ — Aria Code 券商接入层
 
 快速使用::
 
-    from brokers.registry import get_registry
+    from aria_code.brokers.registry import get_registry
 
     reg    = get_registry()
     broker = reg.connect("xt_main")          # 从 ~/.arthera/brokers.json 读取

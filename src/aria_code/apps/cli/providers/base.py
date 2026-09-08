@@ -80,7 +80,7 @@ def _resolve_ollama_stream():
         rebound = getattr(module, "stream_ollama", None) if module else None
         if callable(rebound):
             return rebound
-    from apps.cli.providers.llm.ollama_stream import stream_ollama
+    from aria_code.apps.cli.providers.llm.ollama_stream import stream_ollama
 
     return stream_ollama
 
@@ -249,7 +249,7 @@ class AriaSSEProvider:
         *,
         cancel_event: Optional[asyncio.Event] = None,
     ) -> AsyncGenerator[LLMEvent, None]:
-        from apps.cli.providers.llm.sse_stream import stream_chat
+        from aria_code.apps.cli.providers.llm.sse_stream import stream_chat
 
         history = [m for m in messages if not (m.get("role") == "user" and m is messages[-1])]
         prompt = messages[-1].get("content", "") if messages else ""
@@ -279,6 +279,19 @@ class AriaSSEProvider:
 
         async for event in _stream_callback_provider(_invoke, done_provider="aria_sse"):
             yield event
+
+
+def _opt_in(config: dict, key: str, default: bool = True) -> bool:
+    """Read a tri-state boolean setting where "unset" means *default*.
+
+    ``config.get(key, default)`` is the wrong tool here and produced a real
+    failure: a config holding ``"use_vertexai": null`` returns None — the
+    stored value, not the default — so a Google model silently opted out of
+    Vertex and went down the OpenAI-compatible path instead. Settings that are
+    written as null by a config round-trip have to mean "not configured".
+    """
+    value = config.get(key)
+    return default if value is None else bool(value)
 
 
 class ConfiguredProvider:
@@ -334,12 +347,23 @@ class ConfiguredProvider:
         system_override: Optional[str] = None,
     ) -> None:
         self.config = dict(config or {})
-        self.model = model
-        from apps.cli.providers.chat_routing import normalize_provider_name
+        from aria_code.apps.cli.providers.chat_routing import (
+            model_provider,
+            normalize_provider_name,
+        )
 
-        self.backend = normalize_provider_name(
+        # A provider-qualified model id names its own backend and wins over
+        # local_provider — the default config pairs model="gemini-pro" with
+        # local_provider="ollama", so deriving the backend from local_provider
+        # alone sent every Gemini request to Ollama.
+        declared = model_provider(model)
+        self.backend = declared or normalize_provider_name(
             self.config.get("local_provider") or "ollama"
         )
+        # Downstream APIs expect the bare model name; "google/gemini-2.5-pro"
+        # would 404 against Google's endpoint and would be re-prefixed into
+        # "google/google/gemini-2.5-pro" by the registry path below.
+        self.model = model.split("/", 1)[1] if declared else model
         self.config["local_provider"] = self.backend
         self.system_override = system_override
 
@@ -364,8 +388,10 @@ class ConfiguredProvider:
     ) -> AsyncGenerator[LLMEvent, None]:
         prepared = self._messages(messages)
         
-        if self.backend in ("vertexai", "vertex-ai", "google-genai") or (self.backend in ("google", "gemini") and self.config.get("use_vertexai", True)):
-            from apps.cli.providers.vertexai_stream import VertexAIProvider
+        if self.backend in ("vertexai", "vertex-ai", "google-genai") or (
+            self.backend in ("google", "gemini") and _opt_in(self.config, "use_vertexai")
+        ):
+            from aria_code.apps.cli.providers.vertexai_stream import VertexAIProvider
             provider = VertexAIProvider(
                 model=self.model,
                 config=self.config,
@@ -376,13 +402,13 @@ class ConfiguredProvider:
             return
 
         if self.backend in self.LOCAL_OPENAI_BACKENDS | self.GENERIC_OPENAI_BACKENDS:
-            from local_llm_provider import LocalLLMProvider
+            from aria_code.local_llm_provider import LocalLLMProvider
 
             cfg = dict(self.config)
             cfg["model"] = self.model
             if self.backend in self.GENERIC_OPENAI_BACKENDS:
                 import os
-                from providers.llm.registry import _load_provider_cfg_from_file
+                from aria_code.providers.llm.registry import _load_provider_cfg_from_file
 
                 file_cfg = _load_provider_cfg_from_file(self.backend)
                 api_key = (
@@ -421,8 +447,8 @@ class ConfiguredProvider:
             source = self.backend
             event_stream = provider.stream(prepared, tools=tools, cancel_event=cancel_event)
         else:
-            from providers.llm.base import Message
-            from providers.llm.registry import get_provider
+            from aria_code.providers.llm.base import Message
+            from aria_code.providers.llm.registry import get_provider
 
             try:
                 provider = get_provider(f"{self.backend}/{self.model}")

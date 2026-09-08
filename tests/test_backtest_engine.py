@@ -117,8 +117,8 @@ def test_strategy_order_to_intent_parity():
 # ── LLM tool wrapper (offline via mocked load_bars) ─────────────────────────────
 
 def test_run_portfolio_backtest_tool(monkeypatch):
-    import backtest_engine as be
-    import local_finance_tools as lft
+    from aria_code import backtest_engine as be
+    from aria_code import local_finance_tools as lft
 
     def fake_load(sym, days=365, interval="1d"):
         return [be.Bar(f"2026-01-{i+1:02d}", c, c, c, c)
@@ -134,13 +134,13 @@ def test_run_portfolio_backtest_tool(monkeypatch):
 
 
 def test_run_portfolio_backtest_requires_symbols():
-    import local_finance_tools as lft
+    from aria_code import local_finance_tools as lft
     assert lft._run_portfolio_backtest({"symbols": ""})["success"] is False
 
 
 def test_run_portfolio_backtest_unknown_strategy(monkeypatch):
-    import backtest_engine as be
-    import local_finance_tools as lft
+    from aria_code import backtest_engine as be
+    from aria_code import local_finance_tools as lft
     monkeypatch.setattr(be, "load_bars", lambda *a, **k: [be.Bar("2026-01-01", 1, 1, 1, 1)])
     r = lft._run_portfolio_backtest({"symbols": "AAA", "strategy": "nope"})
     assert r["success"] is False and "unknown strategy" in r["error"]

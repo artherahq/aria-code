@@ -18,53 +18,53 @@ import os
 from typing import Dict, Any, Optional
 
 def detect_ollama_models_rich(*args, **kwargs):
-    from aria_cli import detect_ollama_models_rich as fn
+    from aria_code.aria_cli import detect_ollama_models_rich as fn
     return fn(*args, **kwargs)
 def _load_project_context(*args, **kwargs):
-    from aria_cli import _load_project_context as fn
+    from aria_code.aria_cli import _load_project_context as fn
     return fn(*args, **kwargs)
 def _get__HAS_MCP():
-    from aria_cli import _HAS_MCP as val
+    from aria_code.aria_cli import _HAS_MCP as val
     return val
 def _get_LOCAL_TOOL_SCHEMAS():
-    from aria_cli import LOCAL_TOOL_SCHEMAS as val
+    from aria_code.aria_cli import LOCAL_TOOL_SCHEMAS as val
     return val
 import pathlib
 def _get_provider_key(*args, **kwargs):
-    from aria_cli import _get_provider_key as fn
+    from aria_code.aria_cli import _get_provider_key as fn
     return fn(*args, **kwargs)
 def _get_rich_box():
-    from aria_cli import rich_box as val
+    from aria_code.aria_cli import rich_box as val
     return val
 def _arrow_select(*args, **kwargs):
-    from aria_cli import _arrow_select as fn
+    from aria_code.aria_cli import _arrow_select as fn
     return fn(*args, **kwargs)
 def _get___version__():
-    from aria_cli import __version__ as val
+    from aria_code.aria_cli import __version__ as val
     return val
 def _get_LOCAL_TOOLS():
-    from aria_cli import LOCAL_TOOLS as val
+    from aria_code.aria_cli import LOCAL_TOOLS as val
     return val
 def get_model_capability(*args, **kwargs):
-    from aria_cli import get_model_capability as fn
+    from aria_code.aria_cli import get_model_capability as fn
     return fn(*args, **kwargs)
 def _get_MCP_CONFIG_PATH():
-    from aria_cli import MCP_CONFIG_PATH as val
+    from aria_code.aria_cli import MCP_CONFIG_PATH as val
     return val
 def _get_SESSIONS_DIR():
-    from aria_cli import SESSIONS_DIR as val
+    from aria_code.aria_cli import SESSIONS_DIR as val
     return val
 def _print_error(*args, **kwargs):
-    from aria_cli import _print_error as fn
+    from aria_code.aria_cli import _print_error as fn
     return fn(*args, **kwargs)
 def _get__HAS_MODEL_CAP():
-    from aria_cli import _HAS_MODEL_CAP as val
+    from aria_code.aria_cli import _HAS_MODEL_CAP as val
     return val
 def _strip_markdown_fences(*args, **kwargs):
-    from aria_cli import _strip_markdown_fences as fn
+    from aria_code.aria_cli import _strip_markdown_fences as fn
     return fn(*args, **kwargs)
 def _load_data_keys(*args, **kwargs):
-    from aria_cli import _load_data_keys as fn
+    from aria_code.aria_cli import _load_data_keys as fn
     return fn(*args, **kwargs)
 
 import json
@@ -83,19 +83,19 @@ class WorkspaceCommandsMixin:
     async def cmd_packages(self, args: str):
         """Show Aria Code package facades and Arthera package bridge status."""
         try:
-            from packages.aria_agents import list_agent_manifests
-            from packages.aria_core import (
+            from aria_code.packages.aria_agents import list_agent_manifests
+            from aria_code.packages.aria_core import (
                 build_package_manifest,
                 list_architecture_layers,
                 required_architecture_layer_names,
                 write_package_manifest,
             )
-            from packages.aria_infra import (
+            from aria_code.packages.aria_infra import (
                 aria_code_identity,
                 build_package_doctor_report,
                 discover_arthera_packages,
             )
-            from packages.aria_mcp import (
+            from aria_code.packages.aria_mcp import (
                 arthera_quant_engine_server_config,
                 default_exposures,
                 load_mcp_config,
@@ -104,14 +104,14 @@ class WorkspaceCommandsMixin:
                 mcp_tools_to_specs,
                 write_mcp_config,
             )
-            from packages.aria_services import (
+            from aria_code.packages.aria_services import (
                 list_service_specs,
                 list_service_usage_specs,
                 required_service_names,
             )
-            from packages.aria_services.provider_health import GLOBAL_PROVIDER_HEALTH
-            from packages.aria_skills import builtin_skill_specs
-            from packages.aria_tools import build_registry_from_legacy
+            from aria_code.packages.aria_services.provider_health import GLOBAL_PROVIDER_HEALTH
+            from aria_code.packages.aria_skills import builtin_skill_specs
+            from aria_code.packages.aria_tools import build_registry_from_legacy
         except Exception as exc:
             _print_error(f"packages facade unavailable: {exc}")
             return
@@ -133,7 +133,7 @@ class WorkspaceCommandsMixin:
             if len(raw_parts) > 1:
                 out_path = pathlib.Path(raw_parts[1]).expanduser()
             else:
-                from artifacts import artifact_dir
+                from aria_code.artifacts import artifact_dir
                 out_path = artifact_dir("manifests", "packages") / "aria_package_manifest.json"
 
             reg = getattr(self.terminal, "_mcp_registry", None)
@@ -188,7 +188,7 @@ class WorkspaceCommandsMixin:
                     mcp_tools = []
             status = mcp_server_status(mcp_config_path, "arthera_quant_engine", runtime_status)
             specs = mcp_tools_to_specs(mcp_tools, "arthera_quant_engine")
-            from artifacts import artifact_dir
+            from aria_code.artifacts import artifact_dir
             manifest_path = artifact_dir("manifests", "packages", create=False) / "aria_package_manifest.json"
             report = build_package_doctor_report(
                 arthera=arthera,
@@ -426,7 +426,7 @@ class WorkspaceCommandsMixin:
 
             self.context.console.print()
             self.context.console.print("[bold]Arthera Packages[/bold]")
-            from ui.render.output import display_path as _display_path
+            from aria_code.ui.render.output import display_path as _display_path
             if arthera.available:
                 self.context.console.print(f"  [green]found[/green] [dim]{_display_path(arthera.root, fallback='package root')}[/dim]")
                 for name, path in sorted(arthera.packages.items()):
@@ -470,7 +470,7 @@ class WorkspaceCommandsMixin:
         # ── 确保 file_session 已初始化 ────────────────────────────────────────
         if self.terminal._file_session is None:
             try:
-                from file_analysis_tools import FileSession
+                from aria_code.file_analysis_tools import FileSession
                 self.terminal._file_session = FileSession()
             except ImportError as e:
                 if self.context.has_rich:
@@ -500,7 +500,7 @@ class WorkspaceCommandsMixin:
                 except Exception:
                     pass
 
-            from file_analysis_tools import parse_file, check_parsers
+            from aria_code.file_analysis_tools import parse_file, check_parsers
             fc = await loop.run_in_executor(
                 None, lambda: parse_file(rest, include_images=include_img))
 
@@ -559,7 +559,7 @@ class WorkspaceCommandsMixin:
 
             layer_names = {1: "📌 快速摘要", 2: "🔍 深度分析", 3: "💡 领域洞察", 4: "✅ 行动建议"}
 
-            from file_analysis_tools import build_analysis_prompt
+            from aria_code.file_analysis_tools import build_analysis_prompt
 
             for layer in layers_to_run:
                 if self.context.has_rich:
@@ -597,7 +597,7 @@ class WorkspaceCommandsMixin:
             if not question:
                 return
 
-            from file_analysis_tools import build_analysis_prompt
+            from aria_code.file_analysis_tools import build_analysis_prompt
             prompt = build_analysis_prompt(fc, layer=0, question=question)
             await self.terminal.send_message(
                 prompt,
@@ -650,7 +650,7 @@ class WorkspaceCommandsMixin:
 
         # ────────────────── /file check ───────────────────────────────────────
         elif sub == "check":
-            from file_analysis_tools import check_parsers
+            from aria_code.file_analysis_tools import check_parsers
             parsers = check_parsers()
             if self.context.has_rich:
                 from rich.table import Table as _T
@@ -713,7 +713,7 @@ class WorkspaceCommandsMixin:
         from rich.table import Table as _T
         from rich import box as _box
         try:
-            from project_tools import ProjectSession, scan_project, format_grep_results
+            from aria_code.project_tools import ProjectSession, scan_project, format_grep_results
             _HAS_PT = True
         except ImportError:
             _HAS_PT = False
@@ -945,7 +945,7 @@ class WorkspaceCommandsMixin:
             if _target_path.is_absolute():
                 target_dir = _target_path
             else:
-                from artifacts import user_projects_dir as _user_projects_dir
+                from aria_code.artifacts import user_projects_dir as _user_projects_dir
                 target_dir = _user_projects_dir() / _target_name
             if target_dir.exists():
                 self.context.console.print(f"[yellow]目录已存在: {target_dir}[/yellow]") if self.context.has_rich else print(f"目录已存在: {target_dir}")
@@ -968,7 +968,7 @@ class WorkspaceCommandsMixin:
                 print(f"✅ 创建: {target_dir}"); [print(f"  {p}") for p in created]
             # Optionally generate ARIA.md inside the new project
             try:
-                from apps.cli.project_aria import build_project_aria_md
+                from aria_code.apps.cli.project_aria import build_project_aria_md
                 _aria_tgt = target_dir / "ARIA.md"
                 if not _aria_tgt.exists():
                     _aria_tgt.write_text(
@@ -1081,7 +1081,7 @@ class WorkspaceCommandsMixin:
         # ── Step 1: Detect LOCAL backends only (not cloud LLM providers) ───────
         _LOCAL_BACKENDS_ONLY = {"ollama", "lmstudio", "vllm", "llamacpp", "jan"}
         try:
-            from local_llm_provider import probe_all_backends, BACKEND_DEFAULTS
+            from aria_code.local_llm_provider import probe_all_backends, BACKEND_DEFAULTS
             _all_backends = probe_all_backends()
             # Filter to only true local backends — cloud providers appear in Step 3
             backends = {k: v for k, v in _all_backends.items() if k in _LOCAL_BACKENDS_ONLY}
@@ -1254,7 +1254,7 @@ class WorkspaceCommandsMixin:
                     # __file__ 因此指向仓库根的 aria_cli.py 而非本文件，四层 parent
                     # 算出 /Users/setup_wizard.py，永远不存在——异常被下面的
                     # except 吞掉，这条分支一直静默退化成"请手动运行"提示。
-                    import setup_wizard as _wiz
+                    from aria_code import setup_wizard as _wiz
                     _e = _wiz._load_env()
                     if sub == "feishu":
                         _wiz.setup_feishu(_e)
@@ -1264,9 +1264,9 @@ class WorkspaceCommandsMixin:
                 except Exception as _we:
                     _fallback_flag = "--feishu" if sub == "feishu" else "--telegram"
                     if self.context.has_rich:
-                        self.context.console.print(f"  [yellow]请运行: python3 setup_wizard.py {_fallback_flag}[/yellow]")
+                        self.context.console.print(f"  [yellow]请运行: python3 -m aria_code.setup_wizard {_fallback_flag}[/yellow]")
                     else:
-                        print(f"  Run: python3 setup_wizard.py {_fallback_flag}")
+                        print(f"  Run: python3 -m aria_code.setup_wizard {_fallback_flag}")
                 return
 
             self.context.console.print() if self.context.has_rich else print()
@@ -1356,7 +1356,7 @@ class WorkspaceCommandsMixin:
                     pass
             # 3. Search strategy vault
             try:
-                from strategy_vault import get_vault as _gv
+                from aria_code.strategy_vault import get_vault as _gv
                 vault = _gv()
                 for s in (vault.list() or []):
                     name = str(s.get("name", ""))

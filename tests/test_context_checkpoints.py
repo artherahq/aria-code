@@ -96,7 +96,7 @@ def test_default_root_honors_aria_home(monkeypatch, tmp_path):
 
 def _mixin_self(conversation, tmp_path, monkeypatch):
     """A minimal SlashCommands-like object exposing the mixin helper."""
-    from apps.cli.commands.session_ux_cmds import SessionUxCommandsMixin
+    from aria_code.apps.cli.commands.session_ux_cmds import SessionUxCommandsMixin
     monkeypatch.setenv("ARIA_HOME", str(tmp_path))
     obj = SimpleNamespace(terminal=SimpleNamespace(
         conversation=conversation,

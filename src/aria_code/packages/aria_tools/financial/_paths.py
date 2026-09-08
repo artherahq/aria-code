@@ -33,7 +33,7 @@ __all__ = ["find_skill_script", "missing_script_message", "ensure_arthera_sdk"]
 def _skill_roots() -> list[Path]:
     """优先复用 skill loader 的发现顺序；它不可用时退化为等价的最小实现。"""
     try:
-        from packages.aria_skills.loader import default_skill_roots
+        from aria_code.packages.aria_skills.loader import default_skill_roots
 
         return [Path(p) for p in default_skill_roots()]
     except Exception:

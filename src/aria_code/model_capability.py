@@ -9,7 +9,7 @@ Responsibilities:
 
 Usage::
 
-    from model_capability import get_model_capability, build_ollama_tool_payload
+    from aria_code.model_capability import get_model_capability, build_ollama_tool_payload
 
     caps = get_model_capability("qwen2.5-coder:7b")
     # {"tool_calls": True, "format": "ollama_native", "context_window": 32768, ...}
@@ -35,6 +35,10 @@ class ModelCapability:
     # "ollama_native"  → Ollama's message.tool_calls list
     # "xml_tags"       → <tool_call>{"name":…,"arguments":{…}}</tool_call>
     # "json_fence"     → ```json\n{"tool":…,"arguments":{…}}\n```
+    # "anthropic_native" → tool calling via the Anthropic SDK
+    # "openai_native"  → tool calling via an OpenAI-compatible / Vertex endpoint
+    #                    (OpenAI, Gemini, Grok) — structured `tool_calls` in the
+    #                    response, not parsed out of the text stream
     # "text_only"      → no tool calling; prompt must ask for plain-text answers
     # "router_only"    → model is only suitable for intent classification / routing;
     #                    MUST NOT handle coding, analysis, or multi-step tasks
@@ -62,7 +66,7 @@ def is_router_only(cap: "ModelCapability") -> bool:
 def can_handle_coding(cap: "ModelCapability") -> bool:
     """Return True if the model is large/capable enough for code generation tasks."""
     return (
-        cap.format in ("ollama_native", "xml_tags", "anthropic_native")
+        cap.format in ("ollama_native", "xml_tags", "anthropic_native", "openai_native")
         and cap.context_window >= 8192
         and cap.size_class not in ("nano",)
     )
@@ -188,29 +192,95 @@ _CAPABILITY_TABLE: Dict[str, ModelCapability] = {
     "gpt-oss:120b":             ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.3, thinking=True, notes="GPT-OSS 120B via Ollama Cloud"),
     "gpt-oss":                  ModelCapability(tool_calls=True,  format="ollama_native", context_window=131072, temperature=0.3, thinking=True, notes="GPT-OSS via Ollama Cloud"),
     "deepseek-v3.1:671b-cloud": ModelCapability(tool_calls=True,  format="ollama_native", context_window=163840, temperature=0.3, thinking=True, notes="DeepSeek V3.1 671B via Ollama Cloud"),
+    # ── Google Gemini (cloud, via apps/cli/providers/vertexai_stream.py) ──
+    # Registered here as well as in the MODELS catalogue: callers such as the
+    # tool-routing check in aria_cli use get_model_capability() directly, and a
+    # missing entry silently degrades the model to text_only / 4K context.
+    "gemini-2.5-pro":           ModelCapability(tool_calls=True, format="openai_native", context_window=1048576, temperature=0.2, size_class="large",  vision=True, thinking=True, notes="Gemini 2.5 Pro — 1M context"),
+    "gemini-2.5-flash":         ModelCapability(tool_calls=True, format="openai_native", context_window=1048576, temperature=0.2, size_class="medium", vision=True,                notes="Gemini 2.5 Flash — 1M context"),
+    "gemini-2.0-flash":         ModelCapability(tool_calls=True, format="openai_native", context_window=1048576, temperature=0.2, size_class="medium", vision=True),
+    "gemini-1.5-pro":           ModelCapability(tool_calls=True, format="openai_native", context_window=2097152, temperature=0.2, size_class="large",  vision=True),
+    "gemini-1.5-flash":         ModelCapability(tool_calls=True, format="openai_native", context_window=1048576, temperature=0.2, size_class="medium", vision=True),
+    "gemini":                   ModelCapability(tool_calls=True, format="openai_native", context_window=1048576, temperature=0.2, size_class="large",  vision=True),
+    # ── OpenAI (cloud, via providers/llm/openai_compat.py) ────────────────
+    "gpt-5":                    ModelCapability(tool_calls=True, format="openai_native", context_window=400000, temperature=0.2, size_class="large",  vision=True, thinking=True),
+    "gpt-4.1":                  ModelCapability(tool_calls=True, format="openai_native", context_window=1047576, temperature=0.2, size_class="large",  vision=True),
+    "gpt-4o-mini":              ModelCapability(tool_calls=True, format="openai_native", context_window=128000, temperature=0.2, size_class="medium", vision=True),
+    "gpt-4o":                   ModelCapability(tool_calls=True, format="openai_native", context_window=128000, temperature=0.2, size_class="large",  vision=True),
+    "gpt-4-turbo":              ModelCapability(tool_calls=True, format="openai_native", context_window=128000, temperature=0.2, size_class="large",  vision=True),
+    "gpt-4":                    ModelCapability(tool_calls=True, format="openai_native", context_window=8192,   temperature=0.2, size_class="large"),
+    "o4-mini":                  ModelCapability(tool_calls=True, format="openai_native", context_window=200000, temperature=1.0, size_class="medium", thinking=True),
+    "o3-mini":                  ModelCapability(tool_calls=True, format="openai_native", context_window=200000, temperature=1.0, size_class="medium", thinking=True),
+    "o3":                       ModelCapability(tool_calls=True, format="openai_native", context_window=200000, temperature=1.0, size_class="large",  thinking=True),
+    "o1":                       ModelCapability(tool_calls=True, format="openai_native", context_window=200000, temperature=1.0, size_class="large",  thinking=True),
+    # ── xAI Grok (cloud, OpenAI-compatible endpoint) ──────────────────────
+    "grok-4":                   ModelCapability(tool_calls=True, format="openai_native", context_window=256000, temperature=0.3, size_class="large",  vision=True),
+    "grok":                     ModelCapability(tool_calls=True, format="openai_native", context_window=131072, temperature=0.3, size_class="large"),
 }
 
-# Default fallback when model is unknown
+# Provider-qualified ids ("google/gemini-2.5-pro", "openai/gpt-4o") are stripped
+# down to the bare model name before prefix matching.  The CLI stores the fully
+# qualified id in its config, so without this every cloud model looked unknown.
+_VENDOR_PREFIXES = (
+    "google/", "openai/", "anthropic/", "x-ai/", "xai/", "meta-llama/",
+    "mistralai/", "deepseek/", "qwen/", "alibaba/", "vertex_ai/", "vertexai/",
+    "azure/", "bedrock/", "openrouter/", "together/", "groq/",
+)
+
+# Default fallback when model is unknown.  Deliberately conservative: guessing
+# tool support wrong breaks every turn.  ``UNKNOWN_MODEL_NOTE`` lets callers
+# detect this case and warn the user instead of degrading in silence.
+UNKNOWN_MODEL_NOTE = "Unknown model — conservative settings applied"
+
 _DEFAULT_CAPABILITY = ModelCapability(
     tool_calls=False, format="text_only", context_window=4096, temperature=0.5,
-    notes="Unknown model — conservative settings applied",
+    notes=UNKNOWN_MODEL_NOTE,
 )
+
+
+def is_unknown_model(cap: "ModelCapability") -> bool:
+    """Return True if *cap* is the unregistered-model fallback.
+
+    A model that is missing from the registry runs without tools and with a 4K
+    context budget.  For a cloud model that is a severe, invisible downgrade —
+    it cannot read files and the context gauge is computed against the wrong
+    denominator — so callers should surface it rather than absorb it.
+    """
+    return cap.notes == UNKNOWN_MODEL_NOTE
+
+
+def strip_vendor_prefix(model_name: str) -> str:
+    """Strip a provider prefix ("google/gemini-2.5-pro" → "gemini-2.5-pro")."""
+    name = (model_name or "").strip().lower()
+    for prefix in _VENDOR_PREFIXES:
+        if name.startswith(prefix):
+            return name[len(prefix):]
+    return name
 
 
 def get_model_capability(model_name: str) -> ModelCapability:
     """
     Return capability for *model_name* using longest-prefix matching.
 
+    Provider-qualified ids are normalised first, so the fully qualified id the
+    CLI stores in its config resolves to the same entry as the bare name.
+
     Examples::
 
         get_model_capability("qwen2.5-coder:7b-instruct-q4_K_M")
         # → same as "qwen2.5-coder:7b" entry
+
+        get_model_capability("google/gemini-2.5-pro")
+        # → same as "gemini-2.5-pro" entry
     """
-    name = (model_name or "").strip().lower()
+    name = strip_vendor_prefix(model_name)
     # Strip GGUF quantisation suffixes like :q4_k_m, :f16, etc.
     clean = re.sub(r":[qfQ][0-9].*$", "", name)
     # Also strip common instruct/chat/gguf tags appended after the size
     clean = re.sub(r"-(instruct|chat|gguf|base|it)$", "", clean)
+    # Cloud ids carry a dated or "-latest" suffix ("gemini-2.5-pro-preview-06-05",
+    # "claude-3-5-sonnet-20241022") that must not defeat prefix matching.
+    clean = re.sub(r"-(latest|preview|exp)(-[0-9-]+)?$", "", clean)
 
     best_prefix = ""
     best_cap = _DEFAULT_CAPABILITY

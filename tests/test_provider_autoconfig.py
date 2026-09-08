@@ -89,7 +89,7 @@ def test_probe_is_read_only_for_cloud_providers(monkeypatch):
     try:
         import aria_code.providers.llm.autoconfig as ac
     except ImportError:
-        import providers.llm.autoconfig as ac
+        import aria_code.providers.llm.autoconfig as ac
     monkeypatch.setattr(ac, "_fetch_json", lambda *a, **k: called.append(a) or None)
     monkeypatch.setattr(ac, "_port_open", lambda *a, **k: False)
 

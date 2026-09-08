@@ -204,7 +204,7 @@ def markdown_to_pdf(md: str | Path, pdf_path: Path,
                    and len(md) < 512 and Path(md).expanduser().is_file())
                else str(md))
     html = render_markdown_html(md_text, lang=lang)
-    from report_generator import html_string_to_pdf
+    from aria_code.report_generator import html_string_to_pdf
     return html_string_to_pdf(html, Path(pdf_path))
 
 
@@ -219,7 +219,7 @@ def tool_export_markdown_pdf(params: Dict[str, Any]) -> Dict[str, Any]:
         lang = params.get("lang", "auto")
         stem = str(params.get("filename") or "report").removesuffix(".pdf")
         try:
-            from artifacts import create_user_artifact
+            from aria_code.artifacts import create_user_artifact
             record = create_user_artifact("reports", params.get("topic"),
                                           stem, ".pdf")
             pdf_path = record.path

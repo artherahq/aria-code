@@ -38,7 +38,7 @@ APPROX_COST_PER_SECOND_USD = 0.25
 
 
 def _providers_path() -> Path:
-    from apps.cli.config_paths import resolve_paths
+    from aria_code.apps.cli.config_paths import resolve_paths
     return resolve_paths().providers_file
 
 
@@ -142,7 +142,7 @@ def poll_video(task_id: str, *, download: bool = True) -> Dict[str, Any]:
             return {"success": False, "status": status, "error": "SUCCEEDED but no output URLs present"}
         result = {"success": True, "status": status, "video_url": outputs[0]}
         if download:
-            from artifacts import create_user_artifact
+            from aria_code.artifacts import create_user_artifact
 
             video_resp = requests.get(outputs[0], timeout=120)
             if video_resp.status_code == 200:

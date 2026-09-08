@@ -14,17 +14,17 @@ from typing import Optional
 
 
 def _local_tools() -> dict:
-    import aria_cli
+    from aria_code import aria_cli
     return aria_cli.LOCAL_TOOLS
 
 
 def _fix_json(raw: str) -> str:
-    import aria_cli
+    from aria_code import aria_cli
     return aria_cli._fix_json_string(raw)
 
 
 def _get_model_cfg(key: str) -> dict:
-    import aria_cli
+    from aria_code import aria_cli
     return aria_cli.get_model_cfg(key)
 
 
@@ -203,7 +203,7 @@ def strip_tool_call_tags(text: str) -> str:
 
 def estimate_message_tokens(messages: list, extra_content: str = "") -> int:
     """Return a rough token estimate matching the terminal context meter."""
-    from packages.aria_services.context import ContextService
+    from aria_code.packages.aria_services.context import ContextService
 
     return ContextService.estimate_message_tokens(messages, extra_content=extra_content)
 
@@ -222,7 +222,7 @@ def context_compaction_decision(
     except Exception:
         threshold = 0.78
     max_ctx = int(_get_model_cfg(model_key).get("num_ctx", 16384) or 16384)
-    from packages.aria_services.context import build_context_service
+    from aria_code.packages.aria_services.context import build_context_service
 
     service = build_context_service(
         max_tokens=max_ctx,
@@ -247,7 +247,7 @@ def compact_messages(
     4. Error markers are never discarded.
     """
     ctx = int(_get_model_cfg(model_key).get("num_ctx", 16384) or 16384)
-    from packages.aria_services.context import build_context_service
+    from aria_code.packages.aria_services.context import build_context_service
 
     service = build_context_service(max_tokens=ctx)
     return service.compact_messages(messages, max_chars=max_chars)
@@ -260,7 +260,7 @@ def build_broker_context_block() -> str:
 
     Returns "" if no broker is connected or data fetch fails.
     """
-    import aria_cli as _ac
+    from aria_code import aria_cli as _ac
     if not getattr(_ac, "_HAS_BROKERS", False):
         return ""
     try:

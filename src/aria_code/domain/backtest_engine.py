@@ -272,7 +272,7 @@ def strategy_order_to_intent(order: StrategyOrder, *, price: float | None = None
                              source: str = "strategy"):
     """Convert a StrategyOrder into a broker OrderIntent so the SAME strategy can
     drive live trading through the preview -> risk -> (auto)execute pipeline."""
-    from brokers.trading import OrderIntent
+    from aria_code.brokers.trading import OrderIntent
     if order.action == "target":
         return OrderIntent(symbol=order.symbol, side="buy",
                            target_weight=order.target_weight, source=source)
@@ -337,7 +337,7 @@ def get_strategy(name: str, **kwargs: Any) -> Strategy:
 
 def load_bars(symbol: str, days: int = 365, interval: str = "1d") -> List[Bar]:
     """Pull OHLC history via DataService and adapt to Bar objects (for real runs)."""
-    from data_service import DataService
+    from aria_code.data_service import DataService
     res = DataService().history(symbol, days=days, interval=interval)
     rows = (res.data or {}).get("data") or []
     out: List[Bar] = []

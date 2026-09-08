@@ -12,7 +12,7 @@ def resolve_user_code_path(
     user_generated_dir: Path,
 ) -> Path:
     """Resolve a code output path into the user's generated workspace."""
-    from artifacts import slugify_topic
+    from aria_code.artifacts import slugify_topic
 
     if save_path:
         p = Path(save_path).expanduser()

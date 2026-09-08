@@ -62,7 +62,7 @@ def estimate_cost(size: str = "1024x1536", quality: str = "high") -> Dict[str, A
 
 
 def _providers_path() -> Path:
-    from apps.cli.config_paths import resolve_paths
+    from aria_code.apps.cli.config_paths import resolve_paths
     return resolve_paths().providers_file
 
 
@@ -154,7 +154,7 @@ def generate_image(
 
     import requests
 
-    from artifacts import create_user_artifact
+    from aria_code.artifacts import create_user_artifact
 
     key = _require_key()
     resp = requests.post(
@@ -203,7 +203,7 @@ def edit_image(
 
     import requests
 
-    from artifacts import create_user_artifact
+    from aria_code.artifacts import create_user_artifact
 
     src = Path(image_path)
     if not src.exists():

@@ -65,7 +65,7 @@ class SafetyService:
 
     def privacy(self):
         """Current PrivacySettings derived from config."""
-        from privacy import PrivacySettings
+        from aria_code.privacy import PrivacySettings
         return PrivacySettings.from_config(self._config)
 
     # ── broker / trading risk (capability: audit — trading is the audited
@@ -73,14 +73,14 @@ class SafetyService:
 
     def trading_policy(self, broker_type: str = ""):
         """TradingPolicy resolved from config (paper/live, confirm, limits)."""
-        from brokers.trading import policy_from_config
+        from aria_code.brokers.trading import policy_from_config
         return policy_from_config(self._config, broker_type)
 
     def trading_mode(self, broker_type: str = "") -> str:
-        from brokers.trading import resolve_trading_mode
+        from aria_code.brokers.trading import resolve_trading_mode
         return resolve_trading_mode(self._config, broker_type)
 
     def trading_dry_run(self) -> bool:
         """Global operational kill-switch (env ARIA_TRADING_DRY_RUN)."""
-        from brokers.trading import global_dry_run
+        from aria_code.brokers.trading import global_dry_run
         return global_dry_run()

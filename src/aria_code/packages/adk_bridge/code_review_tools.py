@@ -21,7 +21,7 @@ class CodeReviewTools:
         # 122 个模块、numpy 在内，约 260ms。放在模块级会让 packages.adk_bridge 整体
         # 变重，也会让 agents/ 侧的任何导入故障连累 MarketResearchTools——两个工具面
         # 本该互不影响。market_tools.py 对 DataService 用的是同一套惰性做法。
-        from agents.code_review import CodeReviewAgent
+        from aria_code.agents.code_review import CodeReviewAgent
 
         if not isinstance(source, str) or not source.strip():
             return {"success": False, "error": "Non-empty source text is required."}

@@ -34,7 +34,7 @@ class OrchestratorAgent(BaseAgent):
         context = kwargs.get("context", "")
         # Because Orchestrator doesn't have its own tools, it just calls the LLM with a basic generate_text
         # We need a simple non-streaming call or accumulate the stream.
-        from aria_cli import send_message
+        from aria_code.aria_cli import send_message
         prompt = self.get_prompt(context)
         
         # Or we can just use the provider directly if we have a simple function.

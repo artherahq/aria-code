@@ -43,7 +43,7 @@ def test_tool_generate_image_requires_prompt():
 
 
 def test_tool_generate_image_calls_local_backend_with_dimensions(monkeypatch):
-    import local_image_provider
+    from aria_code import local_image_provider
 
     called = {}
 
@@ -74,7 +74,7 @@ def test_tool_edit_image_requires_image_path_and_prompt():
 
 
 def test_tool_edit_image_calls_local_backend_with_strength(monkeypatch):
-    import local_image_provider
+    from aria_code import local_image_provider
 
     called = {}
 
@@ -94,7 +94,7 @@ def test_aria_cli_local_tools_registry_includes_image_tools():
     """Integration check: the actual aria_cli.py module (the real chat
     loop's tool registry) has these tools registered, not just the
     standalone register_image_tools() function in isolation."""
-    import aria_cli
+    from aria_code import aria_cli
 
     assert "generate_image" in aria_cli.LOCAL_TOOLS
     assert "edit_image" in aria_cli.LOCAL_TOOLS

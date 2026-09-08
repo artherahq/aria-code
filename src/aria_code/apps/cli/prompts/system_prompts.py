@@ -69,6 +69,25 @@ def build_coding_prompt_lite(user_message: str) -> str:
     """Condensed coding system prompt for small models (<=3B parameters)."""
     today = _dt.now().strftime("%Y年%m月%d日")
     low = user_message.lower()
+    is_financial = any(k in low for k in (
+        "股票", "行情", "投资", "量化", "交易", "回测", "策略", "持仓", "组合",
+        "stock", "market data", "portfolio", "trading", "backtest", "ticker",
+        "aapl", "nvda", "btc", "etf", "forex",
+    ))
+    if not is_financial:
+        return (
+            f"You are Aria, a general-purpose product and software-engineering coding agent. Today is {today}.\n"
+            "Help with any legitimate software product: web, mobile, backend, desktop, data, automation, APIs, DevOps, and libraries.\n\n"
+            "Rules:\n"
+            "- Understand the requested outcome and existing stack before choosing an implementation.\n"
+            "- For an existing project, inspect relevant files before proposing edits. Never invent repository contents.\n"
+            "- Write complete, syntactically valid code in the project's language and conventions; do not force Python.\n"
+            "- Prefer small, reversible changes. Preserve user code outside the requested scope.\n"
+            "- Validate proportionally with the project's own formatter, type checker, tests, or build.\n"
+            "- Never claim a command or test passed unless a tool result proves it.\n"
+            "- Do not install dependencies, publish, deploy, delete data, or change external systems without authorization.\n"
+            "- Lead the final response with the outcome, changed files, verification, and remaining limitations.\n"
+        )
     is_chart = any(k in low for k in ("k线", "kline", "candlestick", "蜡烛", "图表", "chart", "plot", "图"))
     is_ashare = any(k in low for k in (
         "a股", "a-股", "沪深", "上交所", "深交所", "akshare",
@@ -223,7 +242,7 @@ def build_analysis_prompt_lite(user_message: str) -> str:
 def build_finance_prompt(user_message: str = "") -> str:
     """Build FINANCE_CHAT_PROMPT with today's date and language rule injected."""
     try:
-        from finance_formulas import FORMULA_PROMPT_BLOCK_CORE as _fpb
+        from aria_code.finance_formulas import FORMULA_PROMPT_BLOCK_CORE as _fpb
     except Exception:
         _fpb = ""
 

@@ -9,7 +9,7 @@ import re
 from datetime import datetime
 
 try:
-    from packages.aria_skills.loader import CORE_FILE_TOOLS as _CORE_FILE_TOOLS
+    from aria_code.packages.aria_skills.loader import CORE_FILE_TOOLS as _CORE_FILE_TOOLS
 except Exception:
     _CORE_FILE_TOOLS: frozenset[str] = frozenset()
 
@@ -194,7 +194,7 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
 
     # ── 模型自动解析：确保请求的模型在 Ollama 中存在 ─────────────────────────
     try:
-        from local_llm_provider import resolve_model_async
+        from aria_code.local_llm_provider import resolve_model_async
         _resolved = await resolve_model_async(ollama_url, model)
         if _resolved != model:
             model = _resolved   # silently remap to available model
@@ -205,7 +205,7 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
     # 如果分配到的模型是 small/nano 级别，但任务需要代码生成、复杂分析或长文本，
     # 自动升级到 Ollama 中最优可用模型，防止低质量/模板化输出。
     try:
-        from model_capability import get_model_capability, is_router_only, can_handle_coding
+        from aria_code.model_capability import get_model_capability, is_router_only, can_handle_coding
         _cap_check = get_model_capability(model)
         _task_needs_upgrade = (
             is_router_only(_cap_check)
@@ -249,7 +249,7 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
     _finance_prompt = _build_finance_prompt(_intent_message)
 
     try:
-        from intent_classifier import (
+        from aria_code.intent_classifier import (
             classify_intent_async,
             INTENT_CODING, INTENT_ANALYSIS, INTENT_REALTIME,
             INTENT_GENERAL, INTENT_FINANCE,
@@ -274,7 +274,7 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
 
     _is_general = (_intent == "general")
     try:
-        from apps.cli.intent_router import build_intent_route
+        from aria_code.apps.cli.intent_router import build_intent_route
         _route = build_intent_route(_intent_message)
     except Exception:
         _route = None
@@ -285,7 +285,7 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
     _is_tool_followup = message.lstrip().startswith("## Tool Results")
     _skill_activation = None
     try:
-        from packages.aria_skills import activate_external_skills as _activate_external_skills
+        from aria_code.packages.aria_skills import activate_external_skills as _activate_external_skills
 
         _skill_activation = _activate_external_skills(
             _intent_message,
@@ -410,7 +410,7 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
     # Analysis uses the full tool-aware prompt for capable models and the lite
     # prefetched-data prompt for small/text-only models.
     try:
-        from model_capability import get_model_capability as _gmc
+        from aria_code.model_capability import get_model_capability as _gmc
         _prompt_cap = _gmc(model)
         _model_size = _prompt_cap.size_class
         _model_supports_native_tools = bool(
@@ -437,8 +437,9 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
         from datetime import datetime as _dt2
         _today_str = _dt2.now().strftime("%Y年%m月%d日")
         _base_prompt = (
-            f"你是 Aria，Arthera 的 AI 助手。今天是 {_today_str}。\n"
-            "你的能力覆盖：金融量化分析、足球/体育赛事分析与预测（含泊松算法）、编程、通用知识问答。\n\n"
+            f"你是 Aria，Arthera 的通用产品与软件工程 AI 助手。今天是 {_today_str}。\n"
+            "你的核心能力是：审核用户产品、理解代码仓库、发现缺陷与风险、规划架构、编写和验证代码、改进 UX 与交付质量。"
+            "金融量化和体育分析是可选领域能力，只有用户明确提出相关需求时才启用。\n\n"
             "## 体育量化分析规则（重要）\n"
             "用户消息中可能包含两种特殊数据块：\n\n"
             "### 【比赛信息】块\n"
@@ -458,6 +459,9 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
             "5. **绝对不要**说「我没有实时数据」「世界杯尚未开始」「不包含实时数据」「以上预测基于历史」——这些与上方数据矛盾\n"
             "6. **绝对不要**在末尾添加「若需最新数据请使用/football命令」之类的建议——用户已经有数据了\n\n"
             "## 通用规则\n"
+            "- 对产品审核按：目标与用户 → 功能与流程 → 架构与代码 → 安全与隐私 → 测试与交付 → 优先级建议\n"
+            "- 对代码任务先读取证据，再提出修改；没有工具结果时不得声称已读取文件、运行测试或完成修改\n"
+            "- 默认不执行高风险或破坏性操作；修改前说明范围，修改后给出验证结果\n"
             "- 使用 Markdown（**粗体**、## 标题、- 列表、表格）\n"
             "- 不要编造股价/汇率等金融数字\n"
             "- 简洁精准，用数据说话\n"
@@ -495,7 +499,7 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
 
     # Prepend global user memory (user profile, project history, preferences)
     try:
-        from memory_manager import MemoryManager as _MM
+        from aria_code.memory_manager import MemoryManager as _MM
         _mem_block = _MM().load_context(max_chars=500)
         if _mem_block:
             system_prompt = _mem_block + "\n" + system_prompt
@@ -863,6 +867,22 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
     _consecutive_reads = 0  # Track repeated read_file without fixing
     _last_failed_cmd = ""  # Track last failed run_command to detect repeats
     _consecutive_cmd_failures = 0  # Count consecutive failures of same command
+    # ── Tool-result context budget ────────────────────────────────────────
+    # Tool output is injected mid-turn, after the pre-turn compaction check has
+    # already run, so a turn that calls many tools could push the context from
+    # comfortable to full with nothing to stop it.  Cap what one turn may spend
+    # on tool results at a fraction of the window, and shrink each result's
+    # allowance as the budget is consumed.
+    _tool_result_budget_chars = max(
+        MIN_TOOL_RESULT_CHAR_LIMIT * 4,
+        int(_num_ctx * _chars_per_tok * 0.25),
+    )
+    _tool_result_chars_used = [0]
+
+    def _next_tool_result_limit() -> int:
+        """Per-result character allowance, given what this turn already spent."""
+        remaining = _tool_result_budget_chars - _tool_result_chars_used[0]
+        return max(MIN_TOOL_RESULT_CHAR_LIMIT, min(DEFAULT_TOOL_RESULT_CHAR_LIMIT, remaining))
     # Repetition loop detection — check every 80 chars (was 200, too slow for 200-token responses)
     _rep_check_interval = 80
     _rep_token_count = [0]     # mutable for closure
@@ -994,7 +1014,7 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
                             _ollama_err = f"HTTP {resp.status}"
                         # Invalidate model cache so next call re-probes
                         try:
-                            from local_llm_provider import _model_cache
+                            from aria_code.local_llm_provider import _model_cache
                             _model_cache.clear()
                         except Exception:
                             pass
@@ -1176,14 +1196,18 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
                 continue
 
             # Detect "intent without action" — model says it will do something
-            # but didn't output a tool call
-            _intent_words = [
-                "let me", "i will", "i'll", "let's", "让我", "我会", "我将",
-                "让我们", "我来", "接下来", "下面", "我们来", "我需要",
-                "再次", "重新", "检查", "修复", "fix", "retry", "check",
-            ]
-            has_intent = any(w in clean_text for w in _intent_words)
-            should_nudge = (_in_error_recovery or _last_tool_had_error or has_intent) and _nudge_count < 5
+            # but didn't output a tool call.  See apps/cli/action_nudge.py: the
+            # predicate lives there so it can be tested, and so that ordinary
+            # Chinese connectives no longer count as a promise to act.
+            from aria_code.apps.cli.action_nudge import should_nudge_for_action
+
+            should_nudge = should_nudge_for_action(
+                clean_text,
+                in_error_recovery=_in_error_recovery,
+                last_tool_had_error=_last_tool_had_error,
+                nudge_count=_nudge_count,
+                tools_available=bool(_available_tool_names),
+            )
 
             if should_nudge and tool_round < max_tool_rounds - 1:
                 _nudge_count += 1
@@ -1210,6 +1234,13 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
                         "Do NOT describe what you will do — just DO it. "
                         "Output a <tool_call> NOW to take the next action."
                     )
+                # Keep the prose this round produced.  Without this the answer
+                # was dropped from the returned text while the nudged follow-up
+                # round survived — the user saw a full review in the terminal
+                # (tokens had already streamed) but the stored answer was just
+                # the fragment that came after, e.g. a bare echoed "NOW".
+                if full_response.strip():
+                    response_segments.append(full_response.rstrip())
                 payload["messages"].append({"role": "assistant", "content": full_response})
                 payload["messages"].append({"role": "user", "content": nudge})
                 continue
@@ -1312,7 +1343,10 @@ async def stream_ollama(ollama_url: str, message: str, history: list,
                 break
             _print_tool_result(tool_name, result, tool_dt)
 
-            summary = _format_tool_summary(tool_name, result)
+            summary = _format_tool_summary(
+                tool_name, result, char_limit=_next_tool_result_limit()
+            )
+            _tool_result_chars_used[0] += len(summary)
 
             # Track if this tool had an error (for nudge logic)
             _last_tool_had_error = not result.get("success", False)

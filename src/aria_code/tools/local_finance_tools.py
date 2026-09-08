@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 try:
-    from aliyun_data_client import (
+    from aria_code.aliyun_data_client import (
         AliyunDataClient,
         cloud_get_quote_sync,
         cloud_get_history_sync,
@@ -981,7 +981,7 @@ def _screen_ashare(params: dict) -> dict:
     # Primary: direct eastmoney clist (host-rotating, proxy-resilient, small
     # paged query). Far more reliable than akshare's full-market spot endpoint.
     try:
-        from market_data_client import screen_ashare as _em_screen
+        from aria_code.market_data_client import screen_ashare as _em_screen
         _em = _em_screen(max_pe=max_pe, min_market_cap_yi=min_market_cap, limit=limit)
         if _em.get("success") and _em.get("stocks"):
             _em["criteria"] = params
@@ -1557,7 +1557,7 @@ def _get_market_insights(params: dict) -> dict:
 
     if _HAS_CLOUD:
         try:
-            from aliyun_data_client import run_async
+            from aria_code.aliyun_data_client import run_async
             result = run_async(AliyunDataClient.get().get_market_insights(symbols, market=market))
             if result:
                 return {"success": True, **result, "provider": "aliyun_cloud"}
@@ -1607,7 +1607,7 @@ def _get_predictions(params: dict) -> dict:
 
     if _HAS_CLOUD:
         try:
-            from aliyun_data_client import run_async
+            from aria_code.aliyun_data_client import run_async
             result = run_async(AliyunDataClient.get().get_predictions(symbols, prediction_days=days, market=market))
             if result and result.get("predictions"):
                 return {"success": True, **result, "provider": "aliyun_cloud"}
@@ -1669,7 +1669,7 @@ def _cloud_backtest(params: dict) -> dict:
 
     if _HAS_CLOUD:
         try:
-            from aliyun_data_client import run_async
+            from aria_code.aliyun_data_client import run_async
             result = run_async(
                 AliyunDataClient.get().run_backtest(
                     symbols, strategy_cfg,
@@ -2250,6 +2250,32 @@ LOCAL_FINANCE_TOOL_SCHEMAS = [
                     "symbol": {"type": "string", "description": "Crypto symbol e.g. BTC, ETH, SOL"},
                 },
                 "required": ["symbol"],
+            },
+        },
+    },
+    # ── get_funding_rates_compare ─────────────────────────────────────────────
+    # The handler has been in LOCAL_FINANCE_TOOL_REGISTRY all along with no
+    # schema beside it, so it was registered, callable, and invisible: the
+    # model was never told it exists.
+    {
+        "type": "function",
+        "function": {
+            "name": "get_funding_rates_compare",
+            "description": (
+                "Compare perpetual funding rates for the same assets across Binance, OKX "
+                "and Bybit in one call. Use this to spot cross-exchange arbitrage: a spread "
+                "wider than about 0.02% between venues is worth attention. Requires ccxt."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "symbols": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Perpetual pairs, e.g. [\"BTC/USDT\", \"ETH/USDT\"]. Defaults to BTC, ETH and SOL.",
+                    },
+                },
+                "required": [],
             },
         },
     },
@@ -3140,7 +3166,37 @@ def _web_search(params: dict) -> dict:
         except Exception as e:
             logger.debug("Tavily search failed: %s", e)
 
-    # ── 3. DuckDuckGo (free, no key, but rate-limited) ────────────────────────
+    # ── 3. Google Programmable Search (Custom Search JSON API) ───────────────
+    # GOOGLE_SEARCH_API_KEY / GOOGLE_SEARCH_ENGINE_ID were documented in
+    # .env.example but never read by any code path, so configuring them did
+    # nothing and the chain fell through to rate-limited DuckDuckGo.
+    google_key = _resolve_search_key("GOOGLE_SEARCH_API_KEY", "google")
+    google_cx = _resolve_search_key("GOOGLE_SEARCH_ENGINE_ID", "google_cx")
+    if google_key and google_cx:
+        try:
+            import urllib.request as _req3
+            import urllib.parse as _parse3
+
+            _g_params = {"key": google_key, "cx": google_cx, "q": query, "num": num}
+            if any("\u4e00" <= _c <= "\u9fff" for _c in query):
+                _g_params["lr"] = "lang_zh-CN"
+            url3 = "https://www.googleapis.com/customsearch/v1?" + _parse3.urlencode(_g_params)
+            with _req3.urlopen(url3, timeout=10) as r3:
+                data3 = json.loads(r3.read())
+            results = [
+                {
+                    "title":   item.get("title", ""),
+                    "url":     item.get("link", ""),
+                    "snippet": item.get("snippet", ""),
+                }
+                for item in (data3.get("items") or [])[:num]
+            ]
+            if results:
+                return {"success": True, "query": query, "results": results, "provider": "google"}
+        except Exception as e:
+            logger.debug("Google Programmable Search failed: %s; trying next provider", e)
+
+    # ── 4. DuckDuckGo (free, no key, but rate-limited) ────────────────────────
     try:
         import warnings as _w
         with _w.catch_warnings():
@@ -3148,7 +3204,7 @@ def _web_search(params: dict) -> dict:
             try:
                 from ddgs import DDGS
             except ImportError:
-                from duckduckgo_search import DDGS
+                from duckduckgo_search import DDGS  # type: ignore[no-redef]
         results = []
         for item in DDGS().text(query, max_results=num):
             results.append({
@@ -3164,7 +3220,8 @@ def _web_search(params: dict) -> dict:
             "results": [],
             "error":   (
                 "DuckDuckGo returned no results (rate-limited). "
-                "推荐配置: BRAVE_SEARCH_API_KEY (免费2000次/月) 或 TAVILY_API_KEY (AI专用, 免费1000次/月)"
+                "推荐配置: BRAVE_SEARCH_API_KEY (免费2000次/月)、TAVILY_API_KEY (AI专用, 免费1000次/月) "
+                "或 GOOGLE_SEARCH_API_KEY + GOOGLE_SEARCH_ENGINE_ID (免费100次/天)"
             ),
         }
     except ImportError:
@@ -3180,6 +3237,8 @@ def _web_search(params: dict) -> dict:
             "无可用搜索服务。推荐配置:\n"
             "  BRAVE_SEARCH_API_KEY — https://brave.com/search/api/ (免费2000次/月)\n"
             "  TAVILY_API_KEY       — https://tavily.com (AI专用, 免费1000次/月)\n"
+            "  GOOGLE_SEARCH_API_KEY + GOOGLE_SEARCH_ENGINE_ID\n"
+            "                       — https://developers.google.com/custom-search (免费100次/天)\n"
             "  或安装: pip install duckduckgo-search"
         ),
     }
@@ -3201,7 +3260,7 @@ def _run_portfolio_backtest(params: dict) -> dict:
         return {"success": False, "error": "symbols is required"}
 
     try:
-        from backtest_engine import BacktestEngine, get_strategy, load_bars
+        from aria_code.backtest_engine import BacktestEngine, get_strategy, load_bars
     except Exception as exc:
         return {"success": False, "error": f"backtest engine unavailable: {exc}"}
 

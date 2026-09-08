@@ -35,7 +35,7 @@ def _module_file(dotted: str) -> Path:
 @pytest.mark.parametrize("sub", _SUBPACKAGES)
 def test_subpackage_declares_namespace_extension(sub):
     """每一层都得自己声明——父层的拼接不会向下传递。"""
-    init = REPO_ROOT / "packages" / "quant_engine" / sub / "__init__.py"
+    init = REPO_ROOT / "src" / "aria_code" / "packages" / "quant_engine" / sub / "__init__.py"
     text = init.read_text(encoding="utf-8")
     assert "_extend_namespace(__path__" in text, (
         f"{sub}/__init__.py 没有扩展 __path__；Arthera 侧该子包的独有模块会不可达"
@@ -45,15 +45,15 @@ def test_subpackage_declares_namespace_extension(sub):
 @pytest.mark.parametrize("sub", _SUBPACKAGES)
 def test_subpackage_imports_without_private_repo(sub):
     """公开仓的用户没有 Arthera checkout，缺它绝不能让 import 失败。"""
-    importlib.import_module(f"packages.quant_engine.{sub}")
+    importlib.import_module(f"aria_code.packages.quant_engine.{sub}")
 
 
 @pytest.mark.parametrize(
     "dotted",
     [
-        "packages.quant_engine.backtest.engine",
-        "packages.quant_engine.portfolio.optimizer",
-        "packages.quant_engine.stochastic.ito_calculus",
+        "aria_code.packages.quant_engine.backtest.engine",
+        "aria_code.packages.quant_engine.portfolio.optimizer",
+        "aria_code.packages.quant_engine.stochastic.ito_calculus",
     ],
 )
 def test_bundled_modules_still_win(dotted):
@@ -71,8 +71,8 @@ def test_bundled_modules_still_win(dotted):
 @pytest.mark.parametrize(
     "dotted",
     [
-        "packages.quant_engine.backtest.walk_forward_test",
-        "packages.quant_engine.portfolio.position_manager",
+        "aria_code.packages.quant_engine.backtest.walk_forward_test",
+        "aria_code.packages.quant_engine.portfolio.position_manager",
     ],
 )
 def test_private_only_modules_are_reachable(dotted):

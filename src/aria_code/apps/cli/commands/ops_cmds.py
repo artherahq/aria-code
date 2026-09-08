@@ -11,28 +11,28 @@ import shlex
 from typing import Dict, Any, Optional
 
 def _display_path(*args, **kwargs):
-    from aria_cli import _display_path as fn
+    from aria_code.aria_cli import _display_path as fn
     return fn(*args, **kwargs)
 def _tool_github(*args, **kwargs):
-    from aria_cli import _tool_github as fn
+    from aria_code.aria_cli import _tool_github as fn
     return fn(*args, **kwargs)
 def _get_LOCAL_TOOLS():
-    from aria_cli import LOCAL_TOOLS as val
+    from aria_code.aria_cli import LOCAL_TOOLS as val
     return val
 def _get_provider_key(*args, **kwargs):
-    from aria_cli import _get_provider_key as fn
+    from aria_code.aria_cli import _get_provider_key as fn
     return fn(*args, **kwargs)
 def _tool_run_command(*args, **kwargs):
-    from aria_cli import _tool_run_command as fn
+    from aria_code.aria_cli import _tool_run_command as fn
     return fn(*args, **kwargs)
 def _tool_write_file(*args, **kwargs):
-    from aria_cli import _tool_write_file as fn
+    from aria_code.aria_cli import _tool_write_file as fn
     return fn(*args, **kwargs)
 def _get_Syntax():
-    from aria_cli import Syntax as val
+    from aria_code.aria_cli import Syntax as val
     return val
 def _get__SYNTAX_THEME():
-    from aria_cli import _SYNTAX_THEME as val
+    from aria_code.aria_cli import _SYNTAX_THEME as val
     return val
 
 import json
@@ -100,7 +100,7 @@ class OpsCommandsMixin:
         """Show CLI service tiers and core workflows."""
         provider_summary = None
         try:
-            from packages.aria_services.provider_health import GLOBAL_PROVIDER_HEALTH
+            from aria_code.packages.aria_services.provider_health import GLOBAL_PROVIDER_HEALTH
             provider_summary = GLOBAL_PROVIDER_HEALTH.summary()
         except Exception:
             provider_summary = None
@@ -222,7 +222,7 @@ class OpsCommandsMixin:
                 print("  /plan 1. Analyze sentiment  2. Build model  3. Backtest")
             return
 
-        from plan_utils import parse_plan
+        from aria_code.plan_utils import parse_plan
         plan_steps = parse_plan(raw)
         if not plan_steps:
             self.context.console.print("[dim]No valid steps found[/dim]" if self.context.has_rich else "No valid steps found")
@@ -492,7 +492,7 @@ class OpsCommandsMixin:
         /lsp <file>         — run diagnostics (errors/warnings) on a file
         """
         try:
-            from runtime.lsp import available_servers, server_for, get_diagnostics
+            from aria_code.runtime.lsp import available_servers, server_for, get_diagnostics
         except ImportError as _e:
             self.context.console.print(f"[red]runtime.lsp not available: {_e}[/red]") if self.context.has_rich else print(f"Error: {_e}")
             return
@@ -588,7 +588,7 @@ class OpsCommandsMixin:
         # _rebind_mixin_globals(), so module-level names from this file (Path and
         # the _build_*/_detect_user_shell helpers) must be imported locally.
         from pathlib import Path
-        from apps.cli.commands.ops_cmds import (
+        from aria_code.apps.cli.commands.ops_cmds import (
             _build_bash_completion, _build_zsh_completion, _detect_user_shell,
         )
 
@@ -596,7 +596,7 @@ class OpsCommandsMixin:
 
         # Build sorted slash command list from VISIBLE_SLASH_COMMANDS
         try:
-            from apps.cli.commands.catalog import VISIBLE_SLASH_COMMANDS
+            from aria_code.apps.cli.commands.catalog import VISIBLE_SLASH_COMMANDS
             cmds = sorted(VISIBLE_SLASH_COMMANDS)
         except ImportError:
             cmds = ["/help", "/model", "/config", "/recall", "/permissions", "/deep", "/quote"]

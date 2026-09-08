@@ -1,6 +1,6 @@
 {
   "name": "@artheras/aria-code",
-  "version": "4.4.1",
+  "version": "4.4.2",
   "description": "AI-powered financial terminal — local LLM + 19+ cloud providers + real-time market data",
   "keywords": [
     "ai",
@@ -33,7 +33,7 @@
     "postinstall": "node scripts/postinstall.js",
     "repair": "node scripts/postinstall.js",
     "update-engine": "node scripts/postinstall.js",
-    "test": "node tests/paths.test.js && node tests/venv.test.js"
+    "test": "node tests/paths.test.js && node tests/venv.test.js && node tests/launcher-paths.test.js"
   },
   "engines": {
     "node": ">=16.0.0"

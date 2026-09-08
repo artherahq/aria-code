@@ -25,7 +25,7 @@ def _token() -> str:
     if token:
         return token
     try:
-        from apps.cli.config_paths import resolve_paths
+        from aria_code.apps.cli.config_paths import resolve_paths
         import json
 
         path = resolve_paths().providers_file

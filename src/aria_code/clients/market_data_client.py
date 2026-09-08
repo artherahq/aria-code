@@ -15,7 +15,7 @@ Design principles
 
 Quick usage
 ───────────
-    from market_data_client import MarketDataClient
+    from aria_code.market_data_client import MarketDataClient
     mdc = MarketDataClient()
     print(mdc.quote("NVDA"))
     print(mdc.quote("000001"))          # A-share
@@ -285,7 +285,7 @@ class MarketDataClient:
         """
         if self._ts_source is _UNSET:
             try:
-                from datasources.sources.tushare_source import TushareSource
+                from aria_code.datasources.sources.tushare_source import TushareSource
                 src = TushareSource()
                 self._ts_source = src if src.is_configured() else None
             except Exception as e:

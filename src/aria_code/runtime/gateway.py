@@ -76,6 +76,7 @@ async def run_turn(
     requires_evidence: bool = False,
     grounding_tools=(),
     evidence_already_grounded: bool = False,
+    acceptance=None,
 ) -> TurnResult:
     """Drive one ``run_agent`` turn; return its text + lifecycle as a TurnResult.
 
@@ -83,6 +84,11 @@ async def run_turn(
     the returned ``text`` is independent of the result object's field names; it
     falls back to the turn result's authoritative ``final_text`` only if nothing
     streamed (e.g. a non-streaming provider).
+
+    ``acceptance`` takes an :class:`~aria_code.runtime.acceptance.AcceptanceGate`.
+    Passing one makes "done" conditional on the inferred checks going green for
+    every adapter at once — CLI, headless, daemon and API — which is the point
+    of having a single gateway. Omitting it keeps the previous behaviour.
     """
     schemas = list(tool_schemas or [])
     acc: List[str] = []
@@ -109,6 +115,7 @@ async def run_turn(
             requires_evidence=bool(requires_evidence),
             grounding_tools=frozenset(grounding_tools or ()),
             evidence_already_grounded=bool(evidence_already_grounded),
+            acceptance=acceptance,
         ),
         on_token=_on_token,         # streamed live (run_agent emits no token events)
         on_thinking=on_thinking,    # streamed live (no thinking events either)

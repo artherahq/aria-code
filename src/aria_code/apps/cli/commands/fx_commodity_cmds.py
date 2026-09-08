@@ -19,10 +19,10 @@ import shlex
 from typing import Dict, Any, Optional
 
 def _get__HAS_MDC():
-    from aria_cli import _HAS_MDC as val
+    from aria_code.aria_cli import _HAS_MDC as val
     return val
 def _get_mdc(*args, **kwargs):
-    from aria_cli import _get_mdc as fn
+    from aria_code.aria_cli import _get_mdc as fn
     return fn(*args, **kwargs)
 
 import json

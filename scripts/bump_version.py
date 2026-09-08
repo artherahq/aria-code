@@ -29,7 +29,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 PYPROJECT = ROOT / "pyproject.toml"
 PACKAGE_JSON = ROOT / "npm" / "package.json"
-ARIA_CLI = ROOT / "aria_cli.py"
+# src/aria_code/aria_cli.py, not the repo root. It moved there in the package
+# restructure and this was not updated, so `--check` died with FileNotFoundError
+# — which is the first job publish.yml runs on a tag. Releases could not run at
+# all, and the failure named a missing file rather than a stale path.
+ARIA_CLI = ROOT / "src" / "aria_code" / "aria_cli.py"
 
 SEMVER = re.compile(r"^\d+\.\d+\.\d+([.-][0-9A-Za-z.]+)?$")
 

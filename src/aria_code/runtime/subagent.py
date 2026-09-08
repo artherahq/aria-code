@@ -30,6 +30,7 @@ from .task_ledger import TaskLedger
 _TASKS: Dict[str, "SubagentTask"] = {}
 _RUNNER: Optional[Callable] = None  # set by aria_cli.py
 _LEDGER: Optional[TaskLedger] = None
+_TRACE_REPORTER: Optional[Callable[[Dict[str, Any]], None]] = None  # set by procedural_trace.wire_trace_reporters
 
 
 @dataclass
@@ -99,12 +100,31 @@ def _ledger() -> TaskLedger:
     return _LEDGER
 
 
+def set_trace_reporter(reporter: Optional[Callable[[Dict[str, Any]], None]]) -> None:
+    """Register a best-effort execution-trace reporter for completed tasks.
+
+    None (the default) disables reporting entirely. Only
+    `procedural_trace.wire_trace_reporters()` should call this, and only
+    after the user has explicitly opted in — see that module's docstring.
+    """
+    global _TRACE_REPORTER
+    _TRACE_REPORTER = reporter
+
+
 def _persist(task: SubagentTask) -> None:
     """A ledger write must never make a live task fail."""
     try:
         _ledger().upsert(task.snapshot())
     except Exception:
         pass
+
+    # Reporting is a separate, independently-failing side effect — a broken
+    # or unreachable reporter must never affect the ledger write above it.
+    if _TRACE_REPORTER is not None and task.status in ("done", "failed"):
+        try:
+            _TRACE_REPORTER(task.snapshot())
+        except Exception:
+            pass
 
 
 def restore_tasks() -> int:
@@ -231,7 +251,7 @@ async def _run_background(task: SubagentTask) -> None:
     _persist(task)
     try:
         if task.mode == "workspace-write" and task.isolation == "worktree":
-            from apps.cli.config_paths import resolve_config_dir
+            from aria_code.apps.cli.config_paths import resolve_config_dir
             from .worktrees import WorktreeManager
 
             manager = WorktreeManager(resolve_config_dir() / "worktrees")
@@ -254,7 +274,7 @@ async def _run_background(task: SubagentTask) -> None:
         )
         full_prompt = f"{execution_contract}\n\n{full_prompt}"
         if task.backend != "aria":
-            from external_agent_runner import RUNNERS
+            from aria_code.external_agent_runner import RUNNERS
 
             result_text = await RUNNERS[task.backend](full_prompt, cwd=task.workspace or None)
         else:
@@ -397,7 +417,7 @@ def apply_task_worktree(task_id: str, *, cleanup: bool = True) -> dict:
         return {"success": False, "error": "Task has no isolated worktree changes"}
     try:
         from .worktrees import WorktreeManager
-        from apps.cli.config_paths import resolve_config_dir
+        from aria_code.apps.cli.config_paths import resolve_config_dir
 
         manager = WorktreeManager(resolve_config_dir() / "worktrees")
         tracked, untracked = manager.changed_paths(task.worktree_spec)

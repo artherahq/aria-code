@@ -12,6 +12,22 @@ class WorkspaceFilesTests(unittest.TestCase):
         self.assertFalse(security.is_safe_path("/etc/passwd"))
         self.assertFalse(security.is_safe_path("/dev/null"))
 
+    def test_remote_scope_is_confined_to_assigned_workspace(self):
+        with tempfile.TemporaryDirectory() as workspace, tempfile.TemporaryDirectory() as outside:
+            security = WorkspaceSecurity(cwd=workspace, allow_home=False)
+            self.assertTrue(security.is_safe_path(Path(workspace) / "src" / "app.py"))
+            self.assertFalse(security.is_safe_path(Path(outside) / "secret.txt"))
+            self.assertFalse(security.is_safe_path(Path.home() / ".ssh" / "id_ed25519"))
+
+    def test_remote_scope_can_add_an_explicit_read_root(self):
+        with tempfile.TemporaryDirectory() as workspace, tempfile.TemporaryDirectory() as shared:
+            security = WorkspaceSecurity(
+                cwd=workspace,
+                allowed_roots=[shared],
+                allow_home=False,
+            )
+            self.assertTrue(security.is_safe_path(Path(shared) / "rules" / "AGENTS.md"))
+
     def test_read_list_and_search(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

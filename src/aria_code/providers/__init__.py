@@ -9,7 +9,7 @@ CLI 自动按优先级路由，任何一级失败自动降级到下一级。
   云端:  deepseek, openai, anthropic, groq, together, dashscope
 
 快速使用:
-    from providers.llm.registry import get_provider, stream_cloud_fallback
+    from aria_code.providers.llm.registry import get_provider, stream_cloud_fallback
     provider = get_provider("deepseek")
     async for chunk in provider.stream(messages):
         print(chunk["text"], end="", flush=True)

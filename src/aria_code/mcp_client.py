@@ -560,14 +560,27 @@ class MCPToolRegistry:
                 input_schema = tool.get("inputSchema") or tool.get("parameters") or {
                     "type": "object", "properties": {}, "required": []
                 }
-                schema_registry.append({
+                schema = {
                     "type": "function",
                     "function": {
                         "name":        model_name,
                         "description": f"[{srv_name}] {tool.get('description', '')}",
                         "parameters":  input_schema,
                     },
-                })
+                }
+                # Replace in place rather than append. The handler dict above
+                # is keyed by name so re-registering is idempotent there, but
+                # the schema list is not — reconnecting MCP (which core_cmds
+                # does with overwrite=True) appended a second copy of every
+                # tool. Most providers tolerate that and silently spend the
+                # context; Vertex rejects the whole request with "Duplicate
+                # function declaration found".
+                for index, existing in enumerate(schema_registry):
+                    if (existing.get("function") or existing).get("name") == model_name:
+                        schema_registry[index] = schema
+                        break
+                else:
+                    schema_registry.append(schema)
 
         return added
 

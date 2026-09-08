@@ -16,7 +16,7 @@ def _fake_prices(symbols):
 
 
 def test_dashboard_brief_mode_is_market_focused(monkeypatch, tmp_path):
-    import dashboard_generator as dg
+    from aria_code import dashboard_generator as dg
 
     monkeypatch.setattr(dg, "_load_portfolio", lambda: ([], []))
     monkeypatch.setattr(dg, "_load_alerts", lambda: [])
@@ -34,7 +34,7 @@ def test_dashboard_brief_mode_is_market_focused(monkeypatch, tmp_path):
 
 
 def test_dashboard_portfolio_mode_is_position_focused(monkeypatch, tmp_path):
-    import dashboard_generator as dg
+    from aria_code import dashboard_generator as dg
 
     positions = [
         {"symbol": "AAPL", "avg_cost": 90.0, "net_qty": 10, "cost_basis": 900.0},
@@ -59,7 +59,7 @@ def test_dashboard_portfolio_mode_is_position_focused(monkeypatch, tmp_path):
 
 
 def test_dashboard_default_output_uses_user_generated_dir(monkeypatch, tmp_path):
-    import dashboard_generator as dg
+    from aria_code import dashboard_generator as dg
 
     monkeypatch.setenv("ARIA_USER_OUTPUT_ROOT", str(tmp_path / "user-output"))
     monkeypatch.setenv("ARIA_ARTIFACT_ROOT", str(tmp_path / "project-artifacts"))

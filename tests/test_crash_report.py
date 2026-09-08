@@ -55,7 +55,7 @@ def test_writer_never_raises_even_when_target_is_unwritable(tmp_path, monkeypatc
     """崩溃记录器自己再崩一次，只会把原始错误从屏幕上冲掉，让排查更难。"""
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(
-        "runtime.crash_report._crash_dir",
+        "aria_code.runtime.crash_report._crash_dir",
         lambda: (_ for _ in ()).throw(OSError("disk on fire")),
     )
     try:
@@ -82,7 +82,7 @@ def test_only_recent_reports_are_kept(tmp_path, monkeypatch):
 def test_keyboard_interrupt_is_not_recorded(tmp_path, monkeypatch):
     """用户主动中断不是故障，记下来只会污染真实崩溃的记录。"""
     import sys
-    from runtime.crash_report import install_excepthook
+    from aria_code.runtime.crash_report import install_excepthook
 
     monkeypatch.setenv("HOME", str(tmp_path))
     original = sys.excepthook

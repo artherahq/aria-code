@@ -99,7 +99,7 @@ def apply_report_quality_gate(team_result: Any, expected_agents: list[str] | tup
 
 
 async def export_report_pdf(report_path: Path) -> Path | None:
-    from report_generator import export_pdf
+    from aria_code.report_generator import export_pdf
 
     return await asyncio.get_event_loop().run_in_executor(
         None,
@@ -108,7 +108,7 @@ async def export_report_pdf(report_path: Path) -> Path | None:
 
 
 async def update_report_index(report_dir: Path) -> Path | None:
-    from report_generator import update_reports_index
+    from aria_code.report_generator import update_reports_index
 
     return await asyncio.get_event_loop().run_in_executor(
         None,
@@ -118,8 +118,8 @@ async def update_report_index(report_dir: Path) -> Path | None:
 
 def build_report_llm_provider(config: dict[str, Any]) -> Any:
     try:
-        from providers.llm.base import ProviderConfig
-        from providers.llm.ollama import OllamaProvider
+        from aria_code.providers.llm.base import ProviderConfig
+        from aria_code.providers.llm.ollama import OllamaProvider
 
         model = config.get("model", "qwen2.5:7b")
         url = config.get("ollama_url", "http://localhost:11434")
@@ -137,8 +137,8 @@ async def run_report_agents(
     on_agent_done: Any = None,
     on_synthesis_start: Any = None,
 ) -> Any:
-    from agents.team import run_team
-    from datasources.router import get_router
+    from aria_code.agents.team import run_team
+    from aria_code.datasources.router import get_router
 
     agent_names = report_agent_names(report_type)
     llm_provider = build_report_llm_provider(config)
@@ -184,7 +184,7 @@ async def generate_html_report(
     on_agent_done: Any = None,
     on_synthesis_start: Any = None,
 ) -> GeneratedHtmlReport:
-    from report_generator import generate_report
+    from aria_code.report_generator import generate_report
 
     agent_names = report_agent_names(report_type)
     team_result = None
@@ -398,7 +398,7 @@ def save_markdown_report(
         out_file.write_text(clean_markdown_report_response(markdown_text), encoding="utf-8")
         return SavedMarkdownReport(path=out_file)
 
-    from artifacts import create_user_artifact, write_artifact_metadata, write_artifact_raw_data
+    from aria_code.artifacts import create_user_artifact, write_artifact_metadata, write_artifact_raw_data
 
     artifact = create_user_artifact("reports/market", symbol, f"{symbol}_market_report", ".md")
     out_file = artifact.path

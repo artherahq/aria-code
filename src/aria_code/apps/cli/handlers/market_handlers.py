@@ -1,7 +1,7 @@
 """Market data handlers extracted from aria_cli.py.
 
 Handles market data prefetching, snapshot rows, and full snapshot analysis.
-Imports market detection helpers from apps.cli.utils.market_detect.
+Imports market detection helpers from aria_code.apps.cli.utils.market_detect.
 _HAS_MDC and _get_mdc are resolved via lazy import to avoid circular deps.
 """
 from __future__ import annotations
@@ -538,25 +538,25 @@ def _get_provider_key(provider: str) -> str:
 
 # Lazy MDC accessor (mirrors the pattern in market_tools.py)
 def _get_mdc_lazy():
-    aria_cli = sys.modules.get("aria_cli")
-    injected = getattr(aria_cli, "_get_mdc", None) if aria_cli else None
+    from aria_code import aria_cli
+    injected = getattr(aria_cli, "_get_mdc", None)
     if callable(injected):
         try:
             return injected()
         except Exception:
             pass
     try:
-        from market_data_client import get_mdc as _gm
+        from aria_code.market_data_client import get_mdc as _gm
         return _gm()
     except Exception:
         return None
 
 def _has_mdc_lazy() -> bool:
-    aria_cli = sys.modules.get("aria_cli")
-    if aria_cli is not None and hasattr(aria_cli, "_HAS_MDC"):
+    from aria_code import aria_cli
+    if hasattr(aria_cli, "_HAS_MDC"):
         return bool(getattr(aria_cli, "_HAS_MDC"))
     try:
-        import market_data_client  # noqa
+        from aria_code import market_data_client  # noqa
         return True
     except ImportError:
         return False
@@ -804,7 +804,7 @@ def _fetch_snapshot_row_for_symbol(symbol: str, mdc) -> dict:
     quality: dict = {}
     stale = False
     try:
-        from packages.aria_services.data import DataService
+        from aria_code.packages.aria_services.data import DataService
         service = DataService(market_client=mdc, router=False)
         quote_result = service.quote(symbol)
         fund_result = service.fundamentals(symbol)
@@ -1504,7 +1504,7 @@ def _try_handle_market_snapshot_analysis(message: str, history: list = None) -> 
         try:
             mdc = _get_mdc_lazy()
             try:
-                from packages.aria_services.data import DataService as _SnapshotDataService
+                from aria_code.packages.aria_services.data import DataService as _SnapshotDataService
                 with _ctxlib_snapshot.redirect_stdout(_io_snapshot.StringIO()), _ctxlib_snapshot.redirect_stderr(_io_snapshot.StringIO()):
                     _quote_result = _SnapshotDataService(market_client=mdc, router=False).quote(symbol)
                 quote = _quote_result.data or {}
@@ -2408,7 +2408,7 @@ def _try_handle_market_snapshot_analysis(message: str, history: list = None) -> 
             pred_symbol = symbol
             if _is_a_share and _ashare_code:
                 pred_symbol = ("sh" if _ashare_code.startswith(("6", "9")) else "sz") + _ashare_code
-            from local_finance_tools import _get_predictions
+            from aria_code.local_finance_tools import _get_predictions
             import contextlib as _ctxlib_pred
             import io as _io_pred
             with _ctxlib_pred.redirect_stdout(_io_pred.StringIO()), _ctxlib_pred.redirect_stderr(_io_pred.StringIO()):

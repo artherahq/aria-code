@@ -74,7 +74,7 @@ class InputBoxTests(unittest.TestCase):
         with patch.dict("os.environ", {"TERM_PROGRAM": "Apple_Terminal"}, clear=True):
             self.assertEqual(detect_terminal_theme(), "light")
 
-    @patch("ui.input_box.shutil.get_terminal_size", return_value=os.terminal_size((80, 24)))
+    @patch("aria_code.ui.input_box.shutil.get_terminal_size", return_value=os.terminal_size((80, 24)))
     def test_status_bar_prioritizes_runtime_state_without_repeating_full_path(self, _size):
         config = PanelInputConfig(
             theme="dark",
@@ -98,7 +98,7 @@ class InputBoxTests(unittest.TestCase):
         self.assertIn("ctx 25%", text)
         self.assertNotIn("/Users/mac/Desktop", text)
 
-    @patch("ui.input_box.shutil.get_terminal_size", return_value=os.terminal_size((80, 24)))
+    @patch("aria_code.ui.input_box.shutil.get_terminal_size", return_value=os.terminal_size((80, 24)))
     def test_status_bar_does_not_round_nonzero_context_to_zero(self, _size):
         config = PanelInputConfig(
             theme="dark",
@@ -113,7 +113,7 @@ class InputBoxTests(unittest.TestCase):
         self.assertIn("ctx <1%", text)
         self.assertNotIn("ctx 0%", text)
 
-    @patch("ui.input_box.shutil.get_terminal_size", return_value=os.terminal_size((80, 24)))
+    @patch("aria_code.ui.input_box.shutil.get_terminal_size", return_value=os.terminal_size((80, 24)))
     def test_chinese_status_bar_uses_readable_labels(self, _size):
         config = PanelInputConfig(
             theme="light",
@@ -222,9 +222,9 @@ class InputBoxTests(unittest.TestCase):
             return window
 
         with (
-            patch("ui.input_box.TextArea", FakeTextArea),
-            patch("ui.input_box.Application", FakeApplication),
-            patch("ui.input_box.Window", tracking_window),
+            patch("aria_code.ui.input_box.TextArea", FakeTextArea),
+            patch("aria_code.ui.input_box.Application", FakeApplication),
+            patch("aria_code.ui.input_box.Window", tracking_window),
         ):
             self.assertEqual(run_panel_input(config=PanelInputConfig(theme="dark")), "long prompt")
 
@@ -251,7 +251,7 @@ class InputBoxTests(unittest.TestCase):
                 return "ok"
 
         with (
-            patch("ui.input_box._build_panel_input_application", return_value=FakeApplication()),
+            patch("aria_code.ui.input_box._build_panel_input_application", return_value=FakeApplication()),
             patch.dict("os.environ", {}, clear=False),
         ):
             os.environ.pop("PROMPT_TOOLKIT_NO_CPR", None)
@@ -273,7 +273,7 @@ class InputBoxTests(unittest.TestCase):
 
         async def exercise():
             with patch(
-                "ui.input_box._build_panel_input_application",
+                "aria_code.ui.input_box._build_panel_input_application",
                 return_value=FakeApplication(),
             ):
                 return await run_panel_input_async()

@@ -57,7 +57,7 @@ def test_sdk_provider_factory_normalizes_local_and_cloud_modes():
 
 
 def test_ollama_stream_resolver_supports_direct_script_entrypoint(monkeypatch):
-    import apps.cli.providers.base as provider_base
+    import aria_code.apps.cli.providers.base as provider_base
 
     sentinel = lambda: None
     fake_main = types.SimpleNamespace(stream_ollama=sentinel)
@@ -69,7 +69,7 @@ def test_ollama_stream_resolver_supports_direct_script_entrypoint(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_callback_provider_streams_events_before_done(monkeypatch):
-    import apps.cli.providers.base as provider_base
+    import aria_code.apps.cli.providers.base as provider_base
 
     async def fake_stream_ollama(*args, **kwargs):
         assert kwargs["tool_schemas"] == [{"type": "function", "function": {"name": "echo"}}]
@@ -165,7 +165,7 @@ async def test_stream_provider_result_allows_tool_only_turn():
 
 @pytest.mark.asyncio
 async def test_sdk_query_uses_deterministic_router(monkeypatch):
-    import packages.aria_sdk.client as sdk_client
+    import aria_code.packages.aria_sdk.client as sdk_client
 
     calls = []
 
@@ -193,7 +193,7 @@ async def test_sdk_query_uses_deterministic_router(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_sdk_query_falls_back_to_llm_when_deterministic_misses(monkeypatch):
-    import packages.aria_sdk.client as sdk_client
+    import aria_code.packages.aria_sdk.client as sdk_client
 
     monkeypatch.setattr(
         sdk_client,
@@ -220,7 +220,7 @@ async def test_sdk_query_falls_back_to_llm_when_deterministic_misses(monkeypatch
 
 @pytest.mark.asyncio
 async def test_sdk_llm_path_uses_provider_factory(monkeypatch):
-    import packages.aria_sdk.client as sdk_client
+    import aria_code.packages.aria_sdk.client as sdk_client
 
     class FakeProvider:
         async def stream(self, messages, tools, *, cancel_event=None):
@@ -256,7 +256,7 @@ async def test_sdk_llm_path_uses_provider_factory(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_sdk_agent_path_emits_tool_events(monkeypatch):
-    import packages.aria_sdk.client as sdk_client
+    import aria_code.packages.aria_sdk.client as sdk_client
 
     class FakeProvider:
         def __init__(self):
@@ -300,7 +300,7 @@ async def test_sdk_agent_path_emits_tool_events(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_sdk_run_collects_final_result(monkeypatch):
-    import packages.aria_sdk.client as sdk_client
+    import aria_code.packages.aria_sdk.client as sdk_client
 
     monkeypatch.setattr(
         sdk_client,
@@ -327,7 +327,7 @@ def test_deterministic_router_preserves_strategy_advice_path():
 
 
 def test_tool_capable_model_skips_blocking_deterministic_market_lookup(monkeypatch):
-    import apps.cli.deterministic as deterministic
+    import aria_code.apps.cli.deterministic as deterministic
 
     market_calls = []
     monkeypatch.setattr(deterministic, "handle_strategy_advice", lambda _message: {"success": False})

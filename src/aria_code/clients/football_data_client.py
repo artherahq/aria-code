@@ -958,8 +958,8 @@ def predict_wc_match(
 
     # ── 优先使用新量化引擎 ─────────────────────────────────────────────────────
     try:
-        from packages.quant_engine.sports.predictor import get_predictor
-        from packages.quant_engine.sports.tracker import (
+        from aria_code.packages.quant_engine.sports.predictor import get_predictor
+        from aria_code.packages.quant_engine.sports.tracker import (
             sync_elo_from_wc, fetch_wc_league_avg,
             record_prediction, fetch_wc_rho, auto_calibrate,
         )

@@ -15,7 +15,7 @@ import stat as _stat
 
 def _ac():
     """Return the aria_cli module (already loaded, never reimported from scratch)."""
-    import aria_cli
+    from aria_code import aria_cli
     return aria_cli
 
 
@@ -81,7 +81,7 @@ def _lsp_autocheck(path: "pathlib.Path") -> "tuple[str | None, list]":
     except Exception:
         return None, []
     try:
-        from runtime.lsp import server_for, get_diagnostics
+        from aria_code.runtime.lsp import server_for, get_diagnostics
         if not server_for(path):
             return None, []
         diags = get_diagnostics(path, timeout=6.0)
@@ -143,7 +143,7 @@ def _record_checkpoint(change, params: dict, *, existed_before: bool, before_mod
     if not run_id and not session_id:
         return None, None
     try:
-        from runtime.checkpoints import CheckpointStore
+        from aria_code.runtime.checkpoints import CheckpointStore
         checkpoint = CheckpointStore().record_change(
             path=change.path,
             before_content=change.before_content,
@@ -353,6 +353,47 @@ def _print_inline_diff(old_str: str, new_str: str, console, max_lines: int = 12)
 
 # ── Public tool functions ─────────────────────────────────────────────────────
 
+def _attach_verification_hint(result_data: dict, path, console=None, has_rich: bool = False) -> None:
+    """Note the checks this change calls for, on the tool result.
+
+    One function instead of three pasted copies. The copies differed only in
+    what the result dict and the console were called in each enclosing scope,
+    and papered over that with ``_wdata if "_wdata" in locals() else _data``
+    plus ``locals().get("console", locals().get("_console2"))``. Both names are
+    compiled unconditionally, so whichever was absent from a given function was
+    an undefined reference — three F821s that only avoided raising because a
+    bare ``except Exception: pass`` sat around them, which would equally have
+    hidden a real failure. Passing them in makes the dependency visible and
+    checkable.
+
+    Advisory only: the acceptance gate is what actually runs these commands
+    after the turn. This tells the model what is coming, so it can factor the
+    check into what it does next rather than being surprised by it.
+    """
+    try:
+        import os
+
+        from aria_code.workspace.verify import VerificationPlanner
+
+        plan = VerificationPlanner(root=os.getcwd()).infer([str(path)])
+    except Exception:
+        # Planning is a convenience; a successful write must not be downgraded
+        # because the planner is unavailable.
+        return
+    if not plan.commands:
+        return
+
+    joined = " && ".join(plan.commands)
+    result_data["suggested_verification"] = (
+        f"Verification recommended ({plan.reason}): run `{joined}`"
+    )
+    if has_rich and console is not None:
+        try:
+            console.print(f"  [cyan]✓ 推荐验证命令: {joined}[/cyan]")
+        except Exception:
+            pass
+
+
 def tool_write_file(params: dict) -> dict:
     """Write content to a file (create or overwrite)."""
     path = params.get("path", "")
@@ -411,7 +452,7 @@ def tool_write_file(params: dict) -> dict:
     try:
         raw_path = pathlib.Path(path).expanduser()
         if not raw_path.is_absolute():
-            from artifacts import user_generated_dir
+            from aria_code.artifacts import user_generated_dir
             raw_path = user_generated_dir() / raw_path
         p = raw_path.resolve()
         if not _is_safe(p):
@@ -420,7 +461,7 @@ def tool_write_file(params: dict) -> dict:
         existed = p.exists()
         desktop = pathlib.Path.home() / "Desktop"
         import tempfile as _tf
-        from artifacts import user_output_root
+        from aria_code.artifacts import user_output_root
         user_root = user_output_root().resolve()
         _auto_trusted_prefixes = (
             str(desktop),
@@ -541,7 +582,7 @@ def tool_write_file(params: dict) -> dict:
             "user_message":   f"文件已保存到: {p}  打开所在目录: {_reveal_hint}",
         }
         try:
-            from artifacts import register_existing_artifact
+            from aria_code.artifacts import register_existing_artifact
 
             artifact = register_existing_artifact(
                 p,
@@ -563,6 +604,9 @@ def tool_write_file(params: dict) -> dict:
         if _syntax_warn:
             _wdata["syntax_check"] = "failed"
             return {"success": True, "data": _wdata, "warning": _syntax_warn}
+
+
+        _attach_verification_hint(_wdata, p, _console2, _has_rich2)
 
         _lsp_warn, _lsp_diags = _lsp_autocheck(p)
         if _lsp_warn:
@@ -666,6 +710,9 @@ def tool_edit_file(params: dict) -> dict:
             return {"success": True, "data": _data, "warning": _syntax_warn}
 
         # Opt-in LSP diagnostics (catches what the syntax check can't)
+
+        _attach_verification_hint(_data, p, console, has_rich)
+
         _lsp_warn, _lsp_diags = _lsp_autocheck(p)
         if _lsp_warn:
             _print_lsp_diags(_lsp_diags, console, has_rich)
@@ -784,6 +831,9 @@ def tool_multi_edit(params: dict) -> dict:
         if _syntax_warn:
             _data["syntax_check"] = "failed"
             return {"success": True, "data": _data, "warning": _syntax_warn}
+
+
+        _attach_verification_hint(_data, p, console, has_rich)
 
         _lsp_warn, _lsp_diags = _lsp_autocheck(p)
         if _lsp_warn:
