@@ -17,6 +17,10 @@ from .acceptance import AcceptanceGate
 from .approval import ApprovalDecision, apply_approval_decision
 from .tool_executor import ToolExecutor
 from .budget import BudgetTracker
+from .tool_result_router import ToolResultRouter
+
+# Global default tool result router
+_DEFAULT_TOOL_ROUTER = ToolResultRouter()
 
 
 DEFAULT_SERIAL_TOOLS = {"write_file", "edit_file", "multi_edit", "run_command"}
@@ -1003,34 +1007,35 @@ def _truncate_tool_result(text: str, limit: int = _MAX_TOOL_RESULT_CHARS) -> str
     )
 
 
-def build_tool_followup(tool_results: Sequence[dict]) -> str:
+def build_tool_followup(tool_results: Sequence[dict], router: Optional[ToolResultRouter] = None) -> str:
     """Build a structured follow-up message from tool results.
 
     Each result block is labelled with its tool name and a success/error
     status so the model can clearly distinguish outcomes and respond
-    appropriately to failures rather than silently ignoring them. Each result
-    is size-capped (see ``_truncate_tool_result``) so a single huge output
-    cannot overflow the context window and cut the task short.
+    appropriately to failures rather than silently ignoring them. Large outputs
+    are routed to artifact logs with high-density summaries via ToolResultRouter.
     """
     if not tool_results:
         return "No tool results. Continue with what you know or ask the user for clarification."
 
+    res_router = router or _DEFAULT_TOOL_ROUTER
     blocks: List[str] = []
     error_tools: List[str] = []
 
     for item in tool_results:
         tool = item.get("tool", "unknown")
         result = item.get("result", "")
-        result_str = _truncate_tool_result(str(result))
+        routed = res_router.route(tool, result)
+        result_str = routed.inline_text
 
         is_error = (
             result_str.startswith("Error") or
-            result_str.startswith("❌") or
+            result_str.startswith("[Error]") or
             "error" in result_str[:80].lower() or
             "traceback" in result_str[:200].lower() or
             "exception" in result_str[:200].lower()
         )
-        status = "❌ Error" if is_error else "✓ Success"
+        status = "[Error]" if is_error else "[Success]"
         if is_error:
             error_tools.append(tool)
         blocks.append(f"### [{tool}] {status}\n{result_str}")
