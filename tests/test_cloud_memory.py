@@ -127,6 +127,42 @@ class PreferencesTests(unittest.TestCase):
             self.assertTrue(client.put_preferences({"theme": "dark"}))
 
 
+class ReportExecutionTraceTests(unittest.TestCase):
+    def setUp(self):
+        self.client = CloudMemoryClient("https://api.example.com", "a-token")
+        self.trace = {
+            "goal": "fix OAuth login",
+            "steps": [{"action": "a", "observation": "b", "error": None}],
+            "outcome": "success",
+            "source": "aria_code.task_ledger",
+            "source_ref": "task-1",
+        }
+
+    def test_successful_report_returns_the_trace_id(self):
+        with mock.patch(
+            "urllib.request.urlopen",
+            return_value=_FakeResponse({"id": "trace-1"}),
+        ) as urlopen:
+            trace_id = self.client.report_execution_trace(self.trace)
+        self.assertEqual(trace_id, "trace-1")
+        request = urlopen.call_args[0][0]
+        self.assertEqual(
+            request.full_url, "https://api.example.com/api/v2/memory/execution-traces"
+        )
+        body = json.loads(request.data.decode("utf-8"))
+        self.assertEqual(body["goal"], "fix OAuth login")
+
+    def test_unavailable_client_returns_none_without_a_request(self):
+        client = CloudMemoryClient("https://api.example.com", None)
+        with mock.patch("urllib.request.urlopen") as urlopen:
+            self.assertIsNone(client.report_execution_trace(self.trace))
+        urlopen.assert_not_called()
+
+    def test_an_unreachable_backend_fails_quietly(self):
+        with mock.patch("urllib.request.urlopen", side_effect=OSError("no route")):
+            self.assertIsNone(self.client.report_execution_trace(self.trace))
+
+
 class ClientFromConfigTests(unittest.TestCase):
     def test_reads_the_login_written_keys(self):
         client = client_from_config({"api_url": "https://api.example.com", "auth_token": "tok"})

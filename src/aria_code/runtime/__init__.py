@@ -82,8 +82,26 @@ from .subagent import (
     register_runner,
     restore_tasks,
 )
+from .tool_result_router import ToolResultRouter, RoutedResult
+from .context_engine import ContextEngine, ContextBudgets, AssembledContext, discover_project_instructions
+from .verify_loop import (
+    VerificationLoop,
+    VerificationSummary,
+    VerificationCheckResult,
+    tool_verify_changes,
+)
 
 __all__ = [
+    "ToolResultRouter",
+    "RoutedResult",
+    "ContextEngine",
+    "ContextBudgets",
+    "AssembledContext",
+    "discover_project_instructions",
+    "VerificationLoop",
+    "VerificationSummary",
+    "VerificationCheckResult",
+    "tool_verify_changes",
     "REPO_MAP_SCHEMAS",
     "REPO_MAP_TOOLS",
     "RepoMap",

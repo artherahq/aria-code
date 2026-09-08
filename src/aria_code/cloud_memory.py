@@ -153,6 +153,23 @@ class CloudMemoryClient:
         items = result.get("items")
         return items if isinstance(items, list) else []
 
+    # ── execution traces (procedural memory) ────────────────────────────────
+
+    def report_execution_trace(self, trace: Dict[str, Any]) -> Optional[str]:
+        """Report one execution trace (goal → steps → outcome) for Arthera's
+        procedural-memory pipeline (`packages/ml/llm/memory/procedural_memory.py`,
+        `trace_from_contract`). Same best-effort contract as `push_item`:
+        returns the trace id on success, None otherwise, never raises.
+
+        Callers build `trace` with `runtime/procedural_trace.py`'s adapters —
+        this method only knows how to transport the already-built contract.
+        """
+        result = self._request("POST", "/api/v2/memory/execution-traces", body=trace)
+        if not isinstance(result, dict):
+            return None
+        trace_id = result.get("id") or result.get("trace_id")
+        return str(trace_id) if trace_id else None
+
     # ── preferences ──────────────────────────────────────────────────────────
 
     def get_preferences(self) -> Dict[str, Any]:

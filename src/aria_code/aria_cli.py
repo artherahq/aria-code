@@ -1197,6 +1197,15 @@ except Exception as _exc:
     logger.debug("Subagent tools init error: %s", _exc)
     SUBAGENT_SCHEMAS: list = []  # type: ignore[no-redef]
 
+# ── Register post-edit verification tool ──────────────────────────────────────
+try:
+    from aria_code.runtime.verify_loop import VERIFY_TOOLS, VERIFY_SCHEMAS
+    LOCAL_TOOLS.update(VERIFY_TOOLS)
+    logger.info("Registered %d verification tools", len(VERIFY_TOOLS))
+except Exception as _exc:
+    logger.debug("Verification tool init error: %s", _exc)
+    VERIFY_SCHEMAS: list = []  # type: ignore[no-redef]
+
 # ── Register LSP diagnostics tool ─────────────────────────────────────────────
 try:
     from aria_code.runtime.lsp import LSP_TOOLS, LSP_SCHEMAS
@@ -1345,6 +1354,13 @@ try:
 except Exception as _exc:
     logger.debug("Code audit tools init error: %s", _exc)
 
+try:
+    from aria_code.tools.patch_tools import register_patch_tools as _reg_patch
+    _n_patch = _reg_patch(LOCAL_TOOLS, LOCAL_TOOL_SCHEMAS)
+    logger.info("Registered %d surgical patch tools (apply_patch, read_range, find_symbol, find_references)", _n_patch)
+except Exception as _exc:
+    logger.debug("Patch tools init error: %s", _exc)
+
 # Ollama tool schemas (for function calling) — extend so finance schemas added above are kept
 
 
@@ -1370,6 +1386,7 @@ LOCAL_TOOL_SCHEMAS.extend(_wrap_bare_schemas(SUBAGENT_SCHEMAS))
 LOCAL_TOOL_SCHEMAS.extend(_wrap_bare_schemas(LSP_SCHEMAS))
 LOCAL_TOOL_SCHEMAS.extend(_wrap_bare_schemas(REPO_MAP_SCHEMAS))
 LOCAL_TOOL_SCHEMAS.extend(_wrap_bare_schemas(ARTIFACT_TOOL_SCHEMAS))
+LOCAL_TOOL_SCHEMAS.extend(_wrap_bare_schemas(VERIFY_SCHEMAS))
 
 
 
@@ -7003,6 +7020,13 @@ Examples:
         from aria_code.apps.cli.update_check import start_update_check
         _ui_lang_early = config.get("ui_lang", "en") or "en"
         start_update_check(__version__, lang=_ui_lang_early)
+    except Exception:
+        pass
+
+    # ── Wire execution-trace reporting (no-ops unless the user opted in) ────
+    try:
+        from aria_code.runtime.procedural_trace import wire_trace_reporters
+        wire_trace_reporters(config)
     except Exception:
         pass
 
