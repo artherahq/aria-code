@@ -276,9 +276,9 @@ class RuntimeAgentLoopTests(unittest.TestCase):
             {"tool": "read_file", "result": "OK: 10 lines"},
             {"tool": "run_command", "result": "exit_code=0"},
         ])
-        self.assertIn("### [read_file] ✓ Success", followup)
+        self.assertIn("### [read_file] [Success]", followup)
         self.assertIn("OK: 10 lines", followup)
-        self.assertIn("### [run_command] ✓ Success", followup)
+        self.assertIn("### [run_command] [Success]", followup)
         self.assertIn("exit_code=0", followup)
         self.assertTrue(followup.endswith("Please continue your analysis using these results."))
 
@@ -293,11 +293,15 @@ class RuntimeAgentLoopTests(unittest.TestCase):
     def test_build_tool_followup_truncates_huge_result(self):
         # Regression: an oversized tool result (e.g. a long pip/install log)
         # must be capped so it can't overflow the model context and cut the
-        # task short mid-run.
+        # task short mid-run. Truncation is now owned by ToolResultRouter
+        # (head/tail + full output saved to an artifact log), not the old
+        # inline _truncate_tool_result — build_tool_followup routes through
+        # it via _DEFAULT_TOOL_ROUTER.
         from aria_code.runtime.agent_loop import _MAX_TOOL_RESULT_CHARS
         huge = "Z" * (_MAX_TOOL_RESULT_CHARS * 4)
         followup = build_tool_followup([{"tool": "run_command", "result": huge}])
-        self.assertIn("已截断", followup)
+        self.assertIn("[TRUNCATED", followup)
+        self.assertIn("Full output saved to:", followup)
         # The Z-run must be capped well under the original size.
         self.assertLess(followup.count("Z"), _MAX_TOOL_RESULT_CHARS + 100)
 
@@ -305,7 +309,7 @@ class RuntimeAgentLoopTests(unittest.TestCase):
         followup = build_tool_followup([
             {"tool": "run_command", "result": "Error: command failed"},
         ])
-        self.assertIn("### [run_command] ❌ Error", followup)
+        self.assertIn("### [run_command] [Error]", followup)
         self.assertIn("returned errors", followup)
 
     def test_record_tool_result_uses_formatter(self):
@@ -328,7 +332,7 @@ class RuntimeAgentLoopTests(unittest.TestCase):
         self.assertEqual(assistant, {"role": "assistant", "content": "assistant text"})
         self.assertEqual(user["role"], "user")
         self.assertEqual(user["content"], followup)
-        self.assertIn("### [read_file] ✓ Success", followup)
+        self.assertIn("### [read_file] [Success]", followup)
         self.assertIn("OK", followup)
 
     def test_tool_batch_state_records_results_and_elapsed_time(self):
@@ -601,7 +605,7 @@ class RuntimeAgentLoopTests(unittest.TestCase):
         self.assertTrue(batch.cancelled)
         self.assertEqual(assistant, {"role": "assistant", "content": "assistant text"})
         self.assertEqual(user["content"], followup)
-        self.assertIn("### [read_file] ✓ Success", followup)
+        self.assertIn("### [read_file] [Success]", followup)
         self.assertIn("OK", followup)
 
     def test_tool_turn_plan_preserves_order_and_parallel_results(self):
