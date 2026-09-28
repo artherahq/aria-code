@@ -167,9 +167,10 @@ def test_pyproject_includes_top_level_modules():
     with open("pyproject.toml", "rb") as handle:
         data = tomllib.load(handle)
 
-    modules = set(data["tool"]["setuptools"]["py-modules"])
-
-    assert {"aria_cli", "doctor", "data_service", "artifacts", "report_generator"} <= modules
+    setuptools = data["tool"]["setuptools"]
+    assert setuptools["package-dir"] == {"": "src"}
+    assert setuptools["packages"]["find"]["where"] == ["src"]
+    assert "aria_code*" in setuptools["packages"]["find"]["include"]
 
 
 def test_python_drift_ok_when_versions_match_and_home_exists():
