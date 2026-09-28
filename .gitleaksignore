@@ -1,0 +1,6 @@
+# Historical Firebase web client API key in two commits. The file is absent
+# from the current tree; keep scanning all other commits and rules.
+# Firebase Web API keys identify a client app and require API-key restrictions
+# and Firebase security rules. Review those settings if this key is still live.
+28589c073bd4c5fd46a3e0f936239bebfc15fe12:src/aria_code/apps/cli/google_login.py:gcp-api-key:36
+d07acb2f8e14477e714f495a286ec7deb40ff23b:src/aria_code/apps/cli/google_login.py:gcp-api-key:36
