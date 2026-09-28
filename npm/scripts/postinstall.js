@@ -532,7 +532,7 @@ function writeInstallInfo(python, venv) {
     installDirSource: PATHS.installDirSource,
     venvDir:    venv.venvDir,
     venvPy:     venv.venvPy,
-    ariaCli:    path.join(INSTALL_DIR, "aria_cli.py"),
+    ariaCli:    path.join(INSTALL_DIR, "src", "aria_code", "aria_cli.py"),
     configDir:  PATHS.configDir,
     cacheDir:   PATHS.cacheDir,
     infoFile:   INFO_FILE,
