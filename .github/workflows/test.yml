@@ -31,6 +31,9 @@ jobs:
   install-smoke-test:
     name: install smoke test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    env:
+      ARIA_HOME: ${{ runner.temp }}/aria-home
+      ARIA_INSTALL_TEST_REF: ${{ github.head_ref || github.ref_name }}
     strategy:
       fail-fast: false
       matrix:
@@ -62,9 +65,6 @@ jobs:
       # actually exercise the code under review.
       - name: npm install -g (runs postinstall.js for real)
         shell: bash
-        env:
-          ARIA_HOME: ${{ runner.temp }}/aria-home
-          ARIA_INSTALL_TEST_REF: ${{ github.head_ref || github.ref_name }}
         run: |
           set -e
           PKG=$(ls "${{ runner.temp }}"/artheras-aria-code-*.tgz)

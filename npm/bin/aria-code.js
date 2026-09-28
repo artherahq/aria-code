@@ -75,11 +75,14 @@ function findPython(info) {
 function findAriaCli(info) {
   const installDir = info && info.installDir ? info.installDir : PATHS.installDir;
   const candidates = [
+    path.join(PATHS.installDir, "src", "aria_code", "aria_cli.py"),
     path.join(PATHS.installDir, "aria_cli.py"),
     info && info.ariaCli,
+    path.join(installDir, "src", "aria_code", "aria_cli.py"),
     path.join(installDir, "aria_cli.py"),
     path.join(PATHS.legacyInstallDir, "aria_cli.py"),
     // bundled alongside this script (dev/test only)
+    path.join(__dirname, "..", "..", "src", "aria_code", "aria_cli.py"),
     path.join(__dirname, "..", "..", "aria_cli.py"),
   ].filter(Boolean);
 

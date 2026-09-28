@@ -246,8 +246,8 @@ def test_console_script_points_to_apps_cli_entrypoint():
     with open("pyproject.toml", "rb") as handle:
         data = tomllib.load(handle)
 
-    assert data["project"]["scripts"]["aria-code"] == "apps.cli.main:main"
-    assert "apps*" in data["tool"]["setuptools"]["packages"]["find"]["include"]
+    assert data["project"]["scripts"]["aria-code"] == "aria_code.apps.cli.main:main"
+    assert "aria_code*" in data["tool"]["setuptools"]["packages"]["find"]["include"]
 
 
 def test_market_slash_commands_are_registered_for_interactive_routing():

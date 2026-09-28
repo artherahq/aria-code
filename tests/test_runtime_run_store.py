@@ -112,6 +112,38 @@ def test_event_payload_redacts_credentials(store):
     assert event.data["usage"]["completion_tokens"] == 42
 
 
+def test_event_redaction_handles_camel_case_keys_and_embedded_credentials(store):
+    run = _create_run(store)
+    store.append_event(run.run_id, "provider_request", {
+        "apiKey": "camel-secret",
+        "clientSecret": "client-secret",
+        "message": "Authorization: Bearer bearer-secret",
+    })
+
+    event = store.events(run.run_id)[-1]
+    assert event.data["apiKey"] == "[REDACTED]"
+    assert event.data["clientSecret"] == "[REDACTED]"
+    assert "bearer-secret" not in event.data["message"]
+
+
+def test_run_prompt_and_error_redact_credentials_before_persistence(store):
+    run = _create_run(
+        store,
+        prompt="Use apiKey=prompt-secret to inspect the portfolio",
+    )
+    assert "prompt-secret" not in run.prompt
+    assert "apiKey=[REDACTED]" in run.prompt
+
+    store.transition(run.run_id, RunStatus.RUNNING)
+    failed = store.transition(
+        run.run_id,
+        RunStatus.FAILED,
+        error="request failed: Bearer error-secret",
+    )
+    assert "error-secret" not in failed.error
+    assert "[REDACTED]" in failed.error
+
+
 def test_recovers_active_run_owned_by_dead_process(store):
     run = _create_run(
         store,

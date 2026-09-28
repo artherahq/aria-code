@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import socket
 import sqlite3
 import time
@@ -23,16 +24,36 @@ from aria_code.packages.aria_core.paths import aria_home
 
 
 _SECRET_KEYS = {
-    "api_key",
-    "access_token",
-    "auth_token",
+    "apikey",
+    "accesstoken",
+    "authtoken",
     "authorization",
     "cookie",
     "password",
-    "private_key",
+    "privatekey",
     "secret",
+    "clientsecret",
     "token",
 }
+
+_SECRET_TEXT_PATTERNS = (
+    re.compile(
+        r"(?i)\b(api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|password)\b(\s*[:=]\s*)([^\s,;]+)"
+    ),
+    re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+"),
+    re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,})\b"),
+)
+
+
+def _redact_text(value: str) -> str:
+    """Remove common credential forms from free-text run data."""
+    redacted = value
+    for pattern in _SECRET_TEXT_PATTERNS:
+        if pattern.groups == 3:
+            redacted = pattern.sub(r"\1\2[REDACTED]", redacted)
+        else:
+            redacted = pattern.sub("[REDACTED]", redacted)
+    return redacted
 
 
 def _default_database_path() -> Path:
@@ -49,11 +70,13 @@ def _redact(value: Any) -> Any:
     if isinstance(value, dict):
         result = {}
         for key, item in value.items():
-            normalized = str(key).lower().replace("-", "_")
+            normalized = re.sub(r"[^a-z0-9]", "", str(key).lower())
             result[key] = "[REDACTED]" if normalized in _SECRET_KEYS else _redact(item)
         return result
     if isinstance(value, (list, tuple)):
         return [_redact(item) for item in value]
+    if isinstance(value, str):
+        return _redact_text(value)
     return value
 
 
@@ -266,7 +289,7 @@ class RunStore:
                     session_id,
                     parent_run_id,
                     RunStatus.QUEUED.value,
-                    prompt,
+                    _redact_text(prompt),
                     workspace,
                     provider,
                     pid,
@@ -326,7 +349,7 @@ class RunStore:
             }:
                 next_error = ""
             else:
-                next_error = row["error"] if error is None else str(error)
+                next_error = row["error"] if error is None else _redact_text(str(error))
             next_provider = row["provider"] if provider is None else str(provider)
             connection.execute(
                 """UPDATE runs
