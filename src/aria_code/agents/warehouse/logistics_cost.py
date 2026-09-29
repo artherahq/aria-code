@@ -1,24 +1,16 @@
-"""
-agents/warehouse/logistics_cost.py — Logistics Cost Optimizer Agent
-===================================================================
-Analyzes shipping bills, freight rate tiers, surcharges, and billing discrepancies.
-Recommends optimal carrier allocation to minimize logistics spend while meeting SLAs.
-"""
+"""Logistics cost audit backed by waybill records and traceable calculations."""
 
 from __future__ import annotations
 
-import json
-import logging
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, Optional
 
 from ..base import BaseAgent, AgentResult
-
-logger = logging.getLogger(__name__)
+from ...tools.logistics_tools import tool_analyze_logistics_data
 
 
 class LogisticsCostOptimizerAgent(BaseAgent):
     name = "warehouse_logistics_cost"
-    description = "物流运费优化智能体 — 负责运费账单审计、异常加价识别与承运商分流优化"
+    description = "物流运费优化智能体 — 基于运单核算费用、准时率和计费重量异常"
 
     def __init__(
         self,
@@ -40,57 +32,53 @@ class LogisticsCostOptimizerAgent(BaseAgent):
             lang=lang,
         )
 
-
-
     async def _execute_tool(self, tool_name: str, tool_args: Dict[str, Any]) -> str:
-        if tool_name == "analyze_logistics_data":
-            if self.on_tool_start:
-                self.on_tool_start(tool_name, tool_args)
-                
-            from aria_code.tools.logistics_tools import tool_analyze_logistics_data
-            
-            try:
-                res = tool_analyze_logistics_data(tool_args)
-                result_str = str(res)
-            except Exception as e:
-                result_str = f"Error: {e}"
-                
-            if self.on_tool_end:
-                self.on_tool_end(tool_name, result_str)
-            return result_str
-            
-        return await super()._execute_tool(tool_name, tool_args)
+        if tool_name != "analyze_logistics_data":
+            return await super()._execute_tool(tool_name, tool_args)
+        if self.on_tool_start:
+            self.on_tool_start(tool_name, tool_args)
+        result = str(tool_analyze_logistics_data(tool_args))
+        if self.on_tool_end:
+            self.on_tool_end(tool_name, result)
+        return result
 
     async def analyze(self, symbol: str, data: Dict[str, Any]) -> AgentResult:
-
-        """
-        Analyze logistics waybill records and billing discrepancies using LLM and tools.
-        """
-        request_text = data.get("request", "分析物流承运商及异常运单数据")
-        
-        system_prompt = (
-            "你是一个高级企业物流与供应链成本优化专家。\n"
-            "你的任务是通过调用 `analyze_logistics_data` 工具审计真实的物流运单数据，分析各承运商的准时率、运费成本，以及可能存在的包裹计费重量异常（如抛货异常）。\n"
-            "你可以直接调用该工具，不需要传入参数，它会自动连接并查询本地的物流真实数据库。\n"
-            "工具调用格式：\n"
-            '{"type": "tool_call", "name": "analyze_logistics_data", "args": {}}\n'
-            "在收到数据后，请输出一份结构清晰的Markdown财务审计报告，指出哪些承运商存在问题，以及预计可节省的成本。"
+        params: Dict[str, Any] = {key: data[key] for key in ("waybills", "file_path") if key in data}
+        audit = tool_analyze_logistics_data(params)
+        if not audit["success"]:
+            error = audit["error"]
+            return AgentResult(
+                agent=self.name,
+                symbol=symbol,
+                analysis=f"无法完成物流成本审计：{error}",
+                confidence=0.0,
+                signal="HOLD",
+                error=error,
+                limitations=["未取得可审计的运单记录"],
+            )
+        result = audit["data"]
+        rate = result["overall_on_time_rate"]
+        rate_text = f"{rate}%" if rate is not None else "未知（没有准时状态记录）"
+        carrier_lines = [
+            f"- {item['carrier']}：{item['count']} 单，费用 ¥{item['total_spend']:,.2f}，准时率 "
+            + (f"{item['on_time_rate']}%" if item["on_time_rate"] is not None else "未知")
+            for item in result["carrier_metrics"]
+        ]
+        analysis = (
+            f"## 物流费用审计\n来源：{audit['source']}；共 {result['total_waybills']} 单。\n"
+            f"运费总支出：¥{result['total_freight_spend']:,.2f}；已知准时率：{rate_text}。\n\n"
+            "### 承运商表现\n" + "\n".join(carrier_lines) + "\n\n"
+            f"### 异常计费发现\n{len(result['billing_anomalies'])} 单计费重量高于实重 20% 以上，"
+            "需核对体积重及合同条款后才能确认多收费用。"
         )
-        
-        user_prompt = f"请开始执行任务：{request_text}"
-        
-        analysis = await self._call_llm(system_prompt, user_prompt, max_tokens=800)
-        
         return AgentResult(
             agent=self.name,
             symbol=symbol,
             analysis=analysis,
-            confidence=0.9,
-            signal="CONCERN",
-            key_points=[
-                "Logistics Audit Completed via Local DB",
-                "Anomaly Analysis Executed"
-            ],
-            data_used={},
-            provenance=["logistics-billing-audit", "carrier-performance-matrix"],
+            confidence=1.0,
+            signal="CONCERN" if result["billing_anomalies"] else "HOLD",
+            key_points=[f"运费总支出 ¥{result['total_freight_spend']:,.2f}", f"待核实重量异常 {len(result['billing_anomalies'])} 单"],
+            data_used=result,
+            provenance=[audit["source"]],
+            limitations=["重量差异仅是审计线索；无法据此推断可节省金额"],
         )

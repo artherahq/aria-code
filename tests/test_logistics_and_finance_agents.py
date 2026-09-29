@@ -3,8 +3,6 @@ tests/test_logistics_and_finance_agents.py — Tests for Logistics & Corporate F
 """
 
 import asyncio
-import json
-import pytest
 from aria_code.agents.registry import get_registry
 from aria_code.agents.warehouse.logistics_cost import LogisticsCostOptimizerAgent
 from aria_code.agents.warehouse.fulfillment_leadtime import FulfillmentLeadTimeAgent
@@ -27,21 +25,6 @@ def test_enterprise_agents_registry_discovery():
     assert cashflow_burn_cls is not None
 
 
-# 9121539 ("feat(logistics): integrate real SQLite ERP database into logistics
-# agent with LLM tool calling") rewrote LogisticsCostOptimizerAgent to produce
-# its report through _call_llm and a tool call, with data_used={} and
-# signal="CONCERN" hardcoded. The deterministic report these assert — the
-# 运费总支出 / 异常计费发现 sections, the populated data_used, and the GOOD
-# signal the workflow derives from it — is gone, and what replaced it needs a
-# live LLM. Skipped with the reason rather than deleted so the coverage gap
-# stays visible; the replacement contract is a call for whoever owns 9121539.
-_LOGISTICS_AGENT_NOW_LLM_DRIVEN = pytest.mark.skip(
-    reason="LogisticsCostOptimizerAgent became LLM+tool driven in 9121539; "
-           "these assert the pre-LLM deterministic contract"
-)
-
-
-@_LOGISTICS_AGENT_NOW_LLM_DRIVEN
 def test_logistics_cost_optimizer_agent():
     agent = LogisticsCostOptimizerAgent()
     sample_waybills = [
@@ -148,11 +131,39 @@ def test_cashflow_burn_rate_agent():
     asyncio.run(_run())
 
 
-def test_logistics_tool_execution():
+def test_logistics_tool_requires_actual_records(tmp_path, monkeypatch):
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
     tool_res = tool_analyze_logistics_data({})
+    assert tool_res["success"] is False
+    assert "No waybills" in tool_res["error"]
+
+
+def test_logistics_tool_calculates_only_known_delivery_status():
+    tool_res = tool_analyze_logistics_data({"waybills": [
+        {"waybill_no": "A", "carrier": "One", "total_cost": 100, "actual_weight_kg": 10, "billed_weight_kg": 15, "is_on_time": True},
+        {"waybill_no": "B", "carrier": "One", "total_cost": 50},
+    ]})
     assert tool_res["success"] is True
-    assert "data" in tool_res
-    assert tool_res["data"]["total_waybills"] >= 1
+    assert tool_res["data"]["total_freight_spend"] == 150
+    assert tool_res["data"]["overall_on_time_rate"] == 100
+    assert tool_res["data"]["known_delivery_count"] == 1
+    assert len(tool_res["data"]["billing_anomalies"]) == 1
+
+
+def test_logistics_agent_reports_missing_data(tmp_path, monkeypatch):
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+    res = asyncio.run(LogisticsCostOptimizerAgent().analyze("SHIPPING", {}))
+    assert res.success is False
+    assert res.data_used == {}
+
+
+def test_logistics_csv_import(tmp_path):
+    path = tmp_path / "waybills.csv"
+    path.write_text("waybill_no,carrier,total_cost,is_on_time\nA,One,12.5,false\n", encoding="utf-8")
+    res = tool_analyze_logistics_data({"file_path": str(path)})
+    assert res["success"] is True
+    assert res["source"] == str(path)
+    assert res["data"]["overall_on_time_rate"] == 0
 
 
 def test_enterprise_finance_tool_execution():
