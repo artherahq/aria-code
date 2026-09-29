@@ -1,5 +1,15 @@
 <p align="center">
-  <img src="docs/assets/aria-code-icon.png" alt="Aria Code 图标" width="100">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/aria-code-icon.png">
+    <img src="docs/assets/aria-code-icon-light.png" alt="Aria Code 图标" width="88">
+  </picture>
+</p>
+
+<h1 align="center">Aria Code</h1>
+
+<p align="center">
+  <b>面向编码与研究的命令行 AI 工作台</b><br>
+  <sub>代码开发 · 企业业务流程 · 金融研究 · 本地或云端模型</sub>
 </p>
 
 <p align="center">
@@ -8,21 +18,10 @@
 </p>
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/@artheras/aria-code"><img src="https://img.shields.io/npm/v/@artheras/aria-code?style=for-the-badge&logo=npm&color=cb3837&label=npm" alt="npm"/></a>
-  <a href="https://pypi.org/project/aria-code/"><img src="https://img.shields.io/pypi/v/aria-code?style=for-the-badge&logo=pypi&logoColor=white&label=PyPI&color=3775A9" alt="PyPI"/></a>
-  <a href="https://github.com/artherahq/aria-code/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/artherahq/aria-code/ci.yml?branch=main&style=for-the-badge&logo=githubactions&logoColor=white&label=CI" alt="CI"/></a>
-  <img src="https://img.shields.io/badge/Python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="python"/>
-  <img src="https://img.shields.io/badge/Ollama-本地大模型-black?style=for-the-badge&logo=llama&logoColor=white" alt="ollama"/>
-  <img src="https://img.shields.io/badge/云端-19+供应商-f59e0b?style=for-the-badge" alt="providers"/>
-  <img src="https://img.shields.io/badge/协议-BSL%201.1-f59e0b?style=for-the-badge" alt="license"/>
-  <img src="https://img.shields.io/github/stars/artherahq/aria-code?style=for-the-badge&color=f59e0b" alt="stars"/>
-</p>
-
-<h1 align="center">Aria Code</h1>
-
-<p align="center">
-  <b>面向编码与研究的命令行 AI 工作台</b><br>
-  <sub>代码开发 · 企业业务流程 · 金融研究 · 本地或云端模型</sub>
+  <a href="https://www.npmjs.com/package/@artheras/aria-code"><img src="https://img.shields.io/npm/v/@artheras/aria-code?style=flat-square&logo=npm&label=npm" alt="npm 版本"/></a>
+  <a href="https://pypi.org/project/aria-code/"><img src="https://img.shields.io/pypi/v/aria-code?style=flat-square&logo=pypi&label=PyPI" alt="PyPI 版本"/></a>
+  <a href="https://github.com/artherahq/aria-code/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/artherahq/aria-code/ci.yml?branch=main&style=flat-square&logo=githubactions&label=CI" alt="CI 状态"/></a>
+  <img src="https://img.shields.io/badge/license-BSL%201.1-64748b?style=flat-square" alt="BSL 1.1 协议"/>
 </p>
 
 <p align="center">
