@@ -79,6 +79,10 @@ class DockerfileTests(unittest.TestCase):
                 if "-m" in argv:
                     module = argv[argv.index("-m") + 1]
                     self.assertTrue(_importable(module), f"{module} is not importable")
+                elif argv[0] in {"sh", "bash"}:
+                    self.assertGreater(len(argv), 1, f"{path.name} has no shell script")
+                    script = ROOT / argv[1]
+                    self.assertTrue(script.is_file(), f"{path.name} runs missing script {argv[1]}")
                 elif argv[0].endswith(".py"):
                     self.fail(f"{path.name} runs a bare script: {argv[0]}")
                 elif argv[0] in _DEPENDENCY_COMMANDS:
