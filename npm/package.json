@@ -1,6 +1,6 @@
 {
   "name": "@artheras/aria-code",
-  "version": "0.50.0",
+  "version": "0.51.0",
   "description": "AI coding and research workspace with optional finance and connected-domain tools",
   "keywords": [
     "ai",
@@ -45,10 +45,10 @@
     "access": "public"
   },
   "optionalDependencies": {
-    "@artheras/aria-code-darwin-arm64": "0.50.0",
-    "@artheras/aria-code-darwin-x64": "0.50.0",
-    "@artheras/aria-code-linux-x64": "0.50.0",
-    "@artheras/aria-code-linux-arm64": "0.50.0",
-    "@artheras/aria-code-win32-x64": "0.50.0"
+    "@artheras/aria-code-darwin-arm64": "0.51.0",
+    "@artheras/aria-code-darwin-x64": "0.51.0",
+    "@artheras/aria-code-linux-x64": "0.51.0",
+    "@artheras/aria-code-linux-arm64": "0.51.0",
+    "@artheras/aria-code-win32-x64": "0.51.0"
   }
 }

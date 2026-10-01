@@ -4,6 +4,10 @@ All notable changes to Aria Code are documented here.
 
 ---
 
+## [0.51.0] — 2026-10-01
+
+- Merge pull request #58 from Cinsoul/fix/publish-checks-out-the-tag
+
 ## [0.50.0] — 2026-10-01
 
 - Merge pull request #57 from Cinsoul/fix/decouple-registries
