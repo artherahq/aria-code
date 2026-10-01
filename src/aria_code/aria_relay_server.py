@@ -28,7 +28,7 @@ WebSocket 注册流程:
 启动:
   python3 aria_relay_server.py
   # 或
-  uvicorn aria_relay_server:app --host 0.0.0.0 --port 8765
+  uvicorn aria_code.aria_relay_server:app --host 0.0.0.0 --port 8765
 
 所需环境变量:
   FEISHU_APP_ID         飞书应用 App ID
@@ -482,7 +482,7 @@ async def status(request: Request):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(
-        "aria_relay_server:app",
+        "aria_code.aria_relay_server:app",
         host="0.0.0.0",
         port=int(os.environ.get("PORT", "8765")),
         reload=False,

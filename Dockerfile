@@ -11,7 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt websockets
+RUN pip install --no-cache-dir -r requirements.txt websockets fastapi "uvicorn[standard]"
 
 COPY . .
 # Installs the console scripts (aria-code, aria-code-mcp) and puts aria_code on
@@ -23,5 +23,8 @@ RUN mkdir -p /root/.aria
 
 ENV PYTHONUNBUFFERED=1
 
-# aria_cli.py moved under src/aria_code/; run the installed entry point.
-CMD ["aria-code"]
+EXPOSE 8080
+
+# The managed Cloud Run trigger builds this root Dockerfile. Cloud Run sets
+# PORT; local CLI containers keep the original aria-code command.
+CMD ["sh", "scripts/container-entrypoint.sh"]

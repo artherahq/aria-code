@@ -1,17 +1,9 @@
 # Cloud Build: build the relay server image and deploy it to Cloud Run.
 #
-# Why this file exists
-# --------------------
-# The trigger for this repo was configured entirely in the console with
-# Dockerfile auto-detection. That picks the root Dockerfile, whose CMD is the
-# interactive aria-code CLI — with no TTY it prints its banner and exits 0,
-# and never listens on anything. Cloud Run only considers a revision healthy
-# once the container listens on $PORT, so Build and Push succeeded while
-# Deploy failed on every single run.
-#
-# aria_relay_server.py is the one HTTP service in this repo: it binds
-# 0.0.0.0 and reads $PORT (defaulting to 8765), which is exactly the Cloud Run
-# contract. Dockerfile.relay builds it.
+# The managed trigger currently auto-detects the root Dockerfile. That image
+# now starts the relay server when Cloud Run supplies PORT, so its existing
+# deployment works. This file is the smaller, explicit relay-only alternative
+# using Dockerfile.relay; its server binds 0.0.0.0 on $PORT.
 #
 # To use this, point the trigger at this file:
 #   Cloud Build → Triggers → edit the trigger →

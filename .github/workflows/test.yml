@@ -7,6 +7,39 @@ on:
   workflow_dispatch:
 
 jobs:
+  relay-startup:
+    name: relay listens on Cloud Run PORT
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install relay runtime
+        run: python -m pip install fastapi uvicorn httpx websockets
+      - name: Start packaged relay and probe HTTP
+        shell: bash
+        env:
+          PYTHONPATH: src
+          PORT: "18765"
+          DB_PATH: ${{ runner.temp }}/relay-smoke.sqlite
+        run: |
+          python -m aria_code.aria_relay_server > "$RUNNER_TEMP/relay.log" 2>&1 &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true' EXIT
+          for attempt in {1..20}; do
+            if curl --silent --show-error --fail "http://127.0.0.1:$PORT/status"; then
+              exit 0
+            fi
+            if ! kill -0 "$pid" 2>/dev/null; then
+              cat "$RUNNER_TEMP/relay.log"
+              exit 1
+            fi
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/relay.log"
+          exit 1
+
   npm-wrapper:
     name: npm wrapper tests (node)
     runs-on: ubuntu-latest
