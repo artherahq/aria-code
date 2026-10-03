@@ -25,6 +25,7 @@ of the two shows up.
 
 from __future__ import annotations
 
+import importlib.util
 import pathlib
 import json
 import shutil
@@ -38,19 +39,36 @@ import yaml
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "build-native-binaries.yml"
 
+_spec = importlib.util.spec_from_file_location(
+    "package_onedir", ROOT / "scripts" / "package_onedir.py")
+package_onedir = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(package_onedir)
+
 # What each platform's two artifacts are called, as the upload steps name them.
+# Each artifact is the archive of a --onedir build (scripts/package_onedir.py).
 ARTIFACTS = {
-    "darwin-arm64": ("aria-code-macos-arm64", "aria-code-bin",
-                     "aria-code-mcp-macos-arm64", "aria-code-mcp-bin"),
-    "darwin-x64":   ("aria-code-macos-x64", "aria-code-bin",
-                     "aria-code-mcp-macos-x64", "aria-code-mcp-bin"),
-    "linux-x64":    ("aria-code-linux-x64", "aria-code-bin",
-                     "aria-code-mcp-linux-x64", "aria-code-mcp-bin"),
-    "linux-arm64":  ("aria-code-linux-arm64", "aria-code-bin",
-                     "aria-code-mcp-linux-arm64", "aria-code-mcp-bin"),
-    "win32-x64":    ("aria-code-windows-x64", "aria-code-bin.exe",
-                     "aria-code-mcp-windows-x64", "aria-code-mcp-bin.exe"),
+    "darwin-arm64": ("aria-code-macos-arm64", "aria-code-bin.tar.gz",
+                     "aria-code-mcp-macos-arm64", "aria-code-mcp-bin.tar.gz"),
+    "darwin-x64":   ("aria-code-macos-x64", "aria-code-bin.tar.gz",
+                     "aria-code-mcp-macos-x64", "aria-code-mcp-bin.tar.gz"),
+    "linux-x64":    ("aria-code-linux-x64", "aria-code-bin.tar.gz",
+                     "aria-code-mcp-linux-x64", "aria-code-mcp-bin.tar.gz"),
+    "linux-arm64":  ("aria-code-linux-arm64", "aria-code-bin.tar.gz",
+                     "aria-code-mcp-linux-arm64", "aria-code-mcp-bin.tar.gz"),
+    "win32-x64":    ("aria-code-windows-x64", "aria-code-bin.zip",
+                     "aria-code-mcp-windows-x64", "aria-code-mcp-bin.zip"),
 }
+
+
+def _upload_paths() -> dict[str, str]:
+    """Artifact name -> the path its upload step sends, from the workflow."""
+    doc = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    out: dict[str, str] = {}
+    for job in doc["jobs"].values():
+        for step in job.get("steps") or []:
+            if str(step.get("uses", "")).startswith("actions/upload-artifact"):
+                out[step["with"]["name"]] = step["with"]["path"]
+    return out
 
 
 def _assemble_script() -> str:
@@ -98,12 +116,18 @@ class _Fixture(unittest.TestCase):
 
     def place(self, platform: str, *, cli: bool = True, mcp: bool = True) -> None:
         cli_dir, cli_file, mcp_dir, mcp_file = ARTIFACTS[platform]
-        if cli:
-            (self.built / cli_dir).mkdir(parents=True, exist_ok=True)
-            (self.built / cli_dir / cli_file).write_bytes(b"\x7fELF")
-        if mcp:
-            (self.built / mcp_dir).mkdir(parents=True, exist_ok=True)
-            (self.built / mcp_dir / mcp_file).write_bytes(b"\x7fELF")
+        for wanted, directory, archive in ((cli, cli_dir, cli_file), (mcp, mcp_dir, mcp_file)):
+            if not wanted:
+                continue
+            name = archive.split(".")[0]
+            build = self.tmp / "onedir" / directory / name
+            (build / "_internal").mkdir(parents=True, exist_ok=True)
+            exe = build / (f"{name}.exe" if archive.endswith(".zip") else name)
+            exe.write_bytes(b"\x7fELF")
+            (self.built / directory).mkdir(parents=True, exist_ok=True)
+            produced = package_onedir.pack(build, self.built / directory,
+                                           use_zip=archive.endswith(".zip"))
+            assert produced.name == archive, (produced.name, archive)
 
 
 class AFullSetOfArtifactsAssembles(_Fixture):
@@ -159,6 +183,26 @@ class MissingArtifactsStopTheRelease(_Fixture):
         self.assertNotIn("ARG:", proc.stdout)
 
 
+class TheUploadsAreWhatAssemblyReads(unittest.TestCase):
+    """The assemble step names each artifact's file. If an upload step sends
+    something else, assembly finds nothing and refuses the release — after
+    five platform builds. This catches it before any of them run."""
+
+    def test_every_artifact_uploads_the_archive_assembly_expects(self) -> None:
+        env = {"${{ env.BIN_NAME }}": "aria-code-bin", "${{ env.MCP_BIN_NAME }}": "aria-code-mcp-bin"}
+        uploads: dict[str, str] = {}
+        for name, path in _upload_paths().items():
+            for placeholder, value in env.items():
+                path = path.replace(placeholder, value)
+            for arch in ("arm64", "x64"):
+                uploads[name.replace("${{ matrix.arch }}", arch)] = path
+        for cli_dir, cli_file, mcp_dir, mcp_file in ARTIFACTS.values():
+            for directory, archive in ((cli_dir, cli_file), (mcp_dir, mcp_file)):
+                with self.subTest(artifact=directory):
+                    self.assertIn(directory, uploads, f"no upload step produces {directory}")
+                    self.assertEqual(pathlib.PurePosixPath(uploads[directory]).name, archive)
+
+
 class PlatformPackagesAreSplit(_Fixture):
     def test_cli_and_mcp_have_separate_tarball_inputs(self) -> None:
         for platform in ARTIFACTS:
@@ -178,10 +222,9 @@ class PlatformPackagesAreSplit(_Fixture):
                 manifest = json.loads((package / "package.json").read_text())
                 self.assertEqual(manifest["name"], f"@artheras/aria-code-{kind}{platform}")
                 self.assertEqual(manifest["version"], "9.9.9")
-                binaries = list((package / "bin").iterdir())
-                self.assertEqual(len(binaries), 1)
+                self.assertEqual([p.name for p in (package / "bin").iterdir()], [name])
                 extension = ".exe" if platform.startswith("win32") else ""
-                self.assertEqual(binaries[0].name, f"{name}{extension}")
+                self.assertTrue((package / "bin" / name / f"{name}{extension}").is_file())
 
 
 if __name__ == "__main__":

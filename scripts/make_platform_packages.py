@@ -6,24 +6,36 @@ Combining both PyInstaller binaries exceeded the npm registry's payload limit
 on Linux arm64 (307.8 MB at v0.53.0). Each install downloads only the two
 packages matching its platform and runs no install-time code.
 
+Each input is the release archive of a PyInstaller --onedir build (see
+scripts/package_onedir.py for why it is not --onefile). The package carries the
+unpacked directory with every symlink replaced by a copy, because an npm
+tarball cannot be relied on to carry symlinks:
+
+    bin/aria-code-bin/aria-code-bin        (.exe on Windows)
+    bin/aria-code-bin/_internal/...
+
 Usage:
   python scripts/make_platform_packages.py --version 4.4.3 \\
-      --binary darwin-arm64=dist/macos-arm64/aria-code-bin \\
-      --binary linux-x64=dist/linux-x64/aria-code-bin \\
-      --mcp    darwin-arm64=dist/macos-arm64/aria-code-mcp-bin \\
+      --binary darwin-arm64=built/aria-code-macos-arm64/aria-code-bin.tar.gz \\
+      --mcp    darwin-arm64=built/aria-code-mcp-macos-arm64/aria-code-mcp-bin.tar.gz \\
       --out npm/platforms
 
-Each --binary and --mcp is <platform-key>=<path>. A release requires both
+Each --binary and --mcp is <platform-key>=<archive>. A release requires both
 binaries for every platform pinned by the dispatcher.
 """
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import pathlib
 import shutil
-import stat
 import sys
+
+_spec = importlib.util.spec_from_file_location(
+    "package_onedir", pathlib.Path(__file__).with_name("package_onedir.py"))
+package_onedir = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(package_onedir)
 
 SCOPE = "@artheras"
 BASE = "aria-code"
@@ -67,11 +79,15 @@ def build_one(key: str, version: str, source: pathlib.Path,
         shutil.rmtree(pkg_dir)
     bin_dir.mkdir(parents=True)
 
-    target = bin_dir / binary_name(key, name)
-    shutil.copy2(source, target)
+    app_dir = package_onedir.unpack(source, bin_dir, dereference=True)
+    if app_dir.name != name:
+        raise SystemExit(f"{source.name} unpacks to {app_dir.name}/, expected {name}/")
+    target = app_dir / binary_name(key, name)
+    if not target.is_file():
+        raise SystemExit(f"{source.name} has no {target.name} at its top level")
     # npm preserves the mode it finds. A binary shipped without +x installs
     # fine and then fails with EACCES on first run.
-    target.chmod(target.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    package_onedir.ensure_executable(target)
 
     (pkg_dir / "package.json").write_text(json.dumps({
         "name": f"{SCOPE}/{BASE}-{suffix}",
@@ -90,9 +106,9 @@ def main(argv: list[str]) -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--version", required=True)
     ap.add_argument("--binary", action="append", default=[],
-                    help="<platform-key>=<path to aria-code-bin>")
+                    help="<platform-key>=<archive of the aria-code-bin directory>")
     ap.add_argument("--mcp", action="append", default=[],
-                    help="<platform-key>=<path to aria-code-mcp-bin>")
+                    help="<platform-key>=<archive of the aria-code-mcp-bin directory>")
     ap.add_argument("--out", default="npm/platforms")
     args = ap.parse_args(argv[1:])
 
@@ -114,8 +130,8 @@ def main(argv: list[str]) -> int:
 
     print(f"Built {len(built)} platform package(s) in {out_root}:")
     for pkg in built:
-        names = sorted(p.name for p in (pkg / "bin").iterdir())
-        print(f"  {pkg.name:34} {', '.join(names)}")
+        files = sum(1 for p in (pkg / "bin").rglob("*") if p.is_file())
+        print(f"  {pkg.name:34} {files} files")
     missing = [k for k in PLATFORM_KEYS if k not in main_bins]
     if missing:
         print(f"Not built this run: {', '.join(missing)}", file=sys.stderr)

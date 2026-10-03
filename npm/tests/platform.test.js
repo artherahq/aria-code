@@ -66,15 +66,15 @@ test("the mcp binary follows the same rule", () => {
 test("the require path points inside the platform package", () => {
   assert.strictEqual(
     P.binaryRequestFor("darwin-arm64"),
-    "@artheras/aria-code-darwin-arm64/bin/aria-code-bin"
+    "@artheras/aria-code-darwin-arm64/bin/aria-code-bin/aria-code-bin"
   );
   assert.strictEqual(
     P.binaryRequestFor("win32-x64"),
-    "@artheras/aria-code-win32-x64/bin/aria-code-bin.exe"
+    "@artheras/aria-code-win32-x64/bin/aria-code-bin/aria-code-bin.exe"
   );
   assert.strictEqual(
     P.binaryRequestFor("linux-arm64", "aria-code-mcp-bin"),
-    "@artheras/aria-code-mcp-linux-arm64/bin/aria-code-mcp-bin"
+    "@artheras/aria-code-mcp-linux-arm64/bin/aria-code-mcp-bin/aria-code-mcp-bin"
   );
 });
 
@@ -109,6 +109,15 @@ test("every supported key produces a usable triple", () => {
     assert.ok(P.binaryRequestFor(key).includes("/bin/"));
     assert.ok(P.missingPackageMessage(key).includes(key));
   }
+});
+
+test("the first-launch notice is per build, and says it is a one-off", () => {
+  const a = P.firstLaunchMarker("/home/u", "/x/aria-code-bin", 1);
+  assert.strictEqual(a, P.firstLaunchMarker("/home/u", "/x/aria-code-bin", 1));
+  assert.notStrictEqual(a, P.firstLaunchMarker("/home/u", "/x/aria-code-bin", 2),
+                        "an upgraded build would not be announced");
+  assert.ok(a.startsWith("/home/u/.aria-code/"), a);
+  assert.ok(/once/.test(P.FIRST_LAUNCH_NOTICE));
 });
 
 if (failures) { console.error(`\n${failures} failing`); process.exit(1); }

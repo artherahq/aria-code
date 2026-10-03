@@ -55,6 +55,8 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -299,8 +301,34 @@ def _resolve(command: str) -> str:
     Without this a suite silently verifies against whatever ``python3`` means
     on PATH, which is how five tasks once reported red because that
     interpreter had no pytest installed.
+
+    The path is quoted, because the command runs through a shell. Unquoted, an
+    interpreter under "Application Support" — where the macOS app keeps its
+    projects — split at the space, every check exited 126, and the pre-flight
+    reported all four tasks red: measuring nothing while saying it was fine.
     """
-    return (command or "").replace("{python}", sys.executable)
+    if os.name == "nt":
+        interpreter = subprocess.list2cmdline([sys.executable])
+    else:
+        interpreter = shlex.quote(sys.executable)
+    return (command or "").replace("{python}", interpreter)
+
+
+# Exit codes with which the shell says it never ran the check at all: 125 is
+# _run's own "could not start", 126 not executable, 127 not found, 9009 the
+# Windows not-found. A red result for any of these is not a broken fixture and
+# not a failed agent — counting it as either lets an environment problem pose
+# as a measurement.
+_COULD_NOT_RUN = {125: "could not start", 126: "not executable", 127: "command not found",
+                  9009: "command not found"}
+
+
+def _could_not_run(code: int, log: str) -> str:
+    reason = _COULD_NOT_RUN.get(code)
+    if reason is None:
+        return ""
+    last = (log or "").strip().splitlines()[-1:] or [""]
+    return f"the check itself could not run (exit {code}, {reason}): {last[0]}".rstrip(": ")
 
 
 def _missing_modules(names: Iterable[str]) -> list[str]:
@@ -488,6 +516,9 @@ def run_task(
         # ── the pre-flight ────────────────────────────────────────────────
         # Confirm the task is actually broken before asking anyone to fix it.
         before_code, before_log = _run(task.verify, workspace, task.timeout)
+        broken = _could_not_run(before_code, before_log)
+        if broken:
+            return _result(ERROR, exit_code=before_code, detail=broken, log=_trim(before_log))
         if before_code == 0 and not task.allow_green_start:
             return _result(
                 INVALID, exit_code=0,
@@ -526,6 +557,10 @@ def run_task(
         after_code, after_log = _run(task.verify, workspace, task.timeout)
         if after_code == 0:
             return _result(PASS, exit_code=0, changed=changed)
+        broken = _could_not_run(after_code, after_log)
+        if broken:
+            return _result(ERROR, exit_code=after_code, detail=broken,
+                           log=_trim(after_log), changed=changed)
 
         # Red — now the solver's status decides who is to blame. A subprocess
         # that died in seconds on a provider outage or a crash never gave the

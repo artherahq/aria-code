@@ -486,18 +486,18 @@ def _calculate_factors(params: dict) -> dict:
         factors["volume_ratio_20d"] = round(float(volume.iloc[-1] / vol_ma20), 3) if vol_ma20 > 0 else None
 
     # ── RSI ────────────────────────────────────────────────────────────────
-    if _HAS_TA and len(close) >= 14:
-        ta = _get_pandas_ta()
-        if ta is not None:
-            rsi = ta.rsi(close, length=14)
-            if rsi is not None and not rsi.empty:
-                factors["rsi_14"] = round(float(rsi.iloc[-1]), 2)
-            else:
-                factors["rsi_14"] = None
+    # pandas_ta when it imports; otherwise the same 14-day RSI by hand. It is
+    # installed-but-broken more often than absent (numba has no wheel for a
+    # new Python; the native binary leaves it out), and that used to report
+    # rsi_14 = None rather than falling back.
+    ta = _get_pandas_ta() if len(close) >= 14 else None
+    if ta is not None:
+        rsi = ta.rsi(close, length=14)
+        if rsi is not None and not rsi.empty:
+            factors["rsi_14"] = round(float(rsi.iloc[-1]), 2)
         else:
             factors["rsi_14"] = None
     else:
-        # Manual RSI
         delta = close.diff()
         gain  = delta.clip(lower=0).rolling(14).mean()
         loss  = (-delta.clip(upper=0)).rolling(14).mean()

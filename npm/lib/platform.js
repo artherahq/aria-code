@@ -58,10 +58,17 @@ function packageNameFor(key, name = "aria-code-bin") {
   return `${SCOPE}/${BASE}-${kind}${key}`;
 }
 
-/** The require path of a binary inside its platform package. */
+/**
+ * The require path of a binary inside its platform package.
+ *
+ * The package carries a PyInstaller --onedir build: the executable sits in a
+ * directory beside its _internal/ libraries. A --onefile binary unpacked ~400
+ * libraries to a fresh temp directory on every launch and macOS re-scanned
+ * each one, so every command took 90 s; see scripts/package_onedir.py.
+ */
 function binaryRequestFor(key, name = "aria-code-bin") {
   const platform = key.split("-")[0];
-  return `${packageNameFor(key, name)}/bin/${binaryName(platform, name)}`;
+  return `${packageNameFor(key, name)}/bin/${name}/${binaryName(platform, name)}`;
 }
 
 /**
@@ -97,7 +104,28 @@ function missingPackageMessage(key) {
   ].join("\n");
 }
 
+/**
+ * The first launch of a newly installed build on macOS takes about a minute
+ * and a half: the system scans each of its ~400 native libraries once before
+ * they may load. Every later launch takes ~2 s. Without a word, that first
+ * launch looks like a hang, so the dispatcher says so — once per installed
+ * build, keyed by the binary's path and modification time so an upgrade
+ * (new files, new scan) is told again.
+ */
+const FIRST_LAUNCH_NOTICE =
+  "aria-code: first launch of this version — macOS is checking its bundled " +
+  "libraries, which takes about a minute once. Later launches take seconds.";
+
+function firstLaunchMarker(homedir, binaryPath, mtimeMs) {
+  const crypto = require("crypto");
+  const path = require("path");
+  const id = crypto.createHash("sha256").update(`${binaryPath}\0${mtimeMs}`).digest("hex").slice(0, 16);
+  return path.join(homedir, ".aria-code", "launched", id);
+}
+
 module.exports = {
+  FIRST_LAUNCH_NOTICE,
+  firstLaunchMarker,
   PLATFORM_KEYS,
   SCOPE,
   BASE,

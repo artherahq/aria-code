@@ -1,4 +1,9 @@
-"""Offline checks for the dependency-free Unix installer."""
+"""Offline checks for the dependency-free Unix installer.
+
+Releases ship a PyInstaller --onedir build as aria-code-<os>-<arch>.tar.gz;
+releases before that switch shipped a single file named aria-code-<os>-<arch>.
+The installer must handle both, because ARIA_CODE_VERSION can pin either.
+"""
 
 from __future__ import annotations
 
@@ -7,26 +12,45 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import tarfile
 import tempfile
 import unittest
 
 
 INSTALLER = Path(__file__).resolve().parents[1] / "scripts" / "install.sh"
+VERSION_SCRIPT = "#!/bin/sh\n[ \"$1\" = --version ] && echo v0.55.0\n"
 
 
 class NativeInstallerTest(unittest.TestCase):
-    def run_installer(self, *, valid_checksum: bool) -> tuple[subprocess.CompletedProcess[str], Path]:
-        root = Path(tempfile.mkdtemp(prefix="aria-installer-test-"))
-        self.addCleanup(shutil.rmtree, root)
-        fake_bin = root / "fake-bin"
-        fake_bin.mkdir()
-        release = root / "release"
-        release.mkdir()
-        binary = release / "aria-code-macos-arm64"
-        binary.write_text("#!/bin/sh\n[ \"$1\" = --version ] && echo v0.55.0\n", encoding="utf-8")
+    def setUp(self) -> None:
+        self.root = Path(tempfile.mkdtemp(prefix="aria-installer-test-"))
+        self.addCleanup(shutil.rmtree, self.root)
+        self.release = self.root / "release"
+        self.release.mkdir()
+
+    def publish_onedir(self) -> Path:
+        build = self.root / "build" / "aria-code-bin"
+        (build / "_internal").mkdir(parents=True)
+        (build / "_internal" / "base_library.zip").write_bytes(b"zip")
+        exe = build / "aria-code-bin"
+        exe.write_text(VERSION_SCRIPT, encoding="utf-8")
+        exe.chmod(0o755)
+        archive = self.release / "aria-code-macos-arm64.tar.gz"
+        with tarfile.open(archive, "w:gz") as tf:
+            tf.add(build, arcname="aria-code-bin")
+        return archive
+
+    def publish_single_file(self) -> Path:
+        binary = self.release / "aria-code-macos-arm64"
+        binary.write_text(VERSION_SCRIPT, encoding="utf-8")
         binary.chmod(0o755)
-        digest = hashlib.sha256(binary.read_bytes()).hexdigest() if valid_checksum else "0" * 64
-        (release / "SHA256SUMS").write_text(f"{digest}  {binary.name}\n", encoding="utf-8")
+        return binary
+
+    def run_installer(self, asset: Path, *, valid_checksum: bool = True) -> subprocess.CompletedProcess[str]:
+        digest = hashlib.sha256(asset.read_bytes()).hexdigest() if valid_checksum else "0" * 64
+        (self.release / "SHA256SUMS").write_text(f"{digest}  {asset.name}\n", encoding="utf-8")
+        fake_bin = self.root / "fake-bin"
+        fake_bin.mkdir(exist_ok=True)
         (fake_bin / "uname").write_text(
             "#!/bin/sh\ncase \"$1\" in -s) echo Darwin ;; -m) echo arm64 ;; esac\n",
             encoding="utf-8",
@@ -40,30 +64,105 @@ class NativeInstallerTest(unittest.TestCase):
             (fake_bin / command).chmod(0o755)
         env = os.environ.copy()
         env.update(
-            HOME=str(root),
+            HOME=str(self.root),
             SHELL="/bin/zsh",
             PATH=f"{fake_bin}:{env['PATH']}",
-            ARIA_TEST_RELEASE=str(release),
+            ARIA_TEST_RELEASE=str(self.release),
             ARIA_CODE_VERSION="v0.55.0",
         )
-        result = subprocess.run(["/bin/sh", str(INSTALLER)], env=env, text=True, capture_output=True)
-        return result, root
+        return subprocess.run(["/bin/sh", str(INSTALLER)], env=env, text=True, capture_output=True)
 
-    def test_installs_verified_binary_and_updates_future_path(self) -> None:
-        result, root = self.run_installer(valid_checksum=True)
+    @property
+    def command(self) -> Path:
+        return self.root / ".local/bin/aria-code"
+
+    def test_installs_the_onedir_build_and_links_it_onto_path(self) -> None:
+        result = self.run_installer(self.publish_onedir())
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertTrue((root / ".local/bin/aria-code").is_file())
-        aria = root / ".local/bin/aria"
-        self.assertTrue(aria.is_file())
-        self.assertEqual(subprocess.run([str(aria), "code", "--version"], text=True, capture_output=True).stdout.strip(), "v0.55.0")
-        self.assertIn('export PATH="$HOME/.local/bin:$PATH"', (root / ".zprofile").read_text())
+        app = self.root / ".local/share/aria-code/aria-code-bin"
+        self.assertTrue((app / "_internal" / "base_library.zip").is_file(),
+                        "the executable's libraries must sit beside it")
+        self.assertTrue(self.command.is_symlink())
+        self.assertEqual(self.command.resolve(), (app / "aria-code-bin").resolve())
+        run = subprocess.run([str(self.command), "--version"], capture_output=True, text=True)
+        self.assertEqual(run.stdout.strip(), "v0.55.0")
+        alias = self.command.with_name("aria")
+        self.assertTrue(alias.is_file())
+        run_alias = subprocess.run([str(alias), "code", "--version"], capture_output=True, text=True)
+        self.assertEqual(run_alias.stdout.strip(), "v0.55.0")
+        self.assertIn('export PATH="$HOME/.local/bin:$PATH"', (self.root / ".zprofile").read_text())
+
+    def test_reinstalling_replaces_the_previous_build(self) -> None:
+        archive = self.publish_onedir()
+        self.assertEqual(self.run_installer(archive).returncode, 0)
+        stale = self.root / ".local/share/aria-code/aria-code-bin/_internal/stale.so"
+        stale.write_bytes(b"old")
+        result = self.run_installer(archive)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(stale.exists(), "a library from the previous version survived")
+        self.assertFalse((self.root / ".local/share/aria-code/aria-code-bin.old").exists())
+
+    def test_replaces_a_single_file_install_from_before_onedir(self) -> None:
+        self.command.parent.mkdir(parents=True)
+        self.command.write_text("#!/bin/sh\necho old\n", encoding="utf-8")
+        result = self.run_installer(self.publish_onedir())
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(self.command.is_symlink())
+
+    def test_a_release_from_before_onedir_still_installs(self) -> None:
+        result = self.run_installer(self.publish_single_file())
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(self.command.is_file())
+        self.assertFalse(self.command.is_symlink())
+        alias = self.command.with_name("aria")
+        self.assertTrue(alias.is_file())
+        run_alias = subprocess.run([str(alias), "code", "--version"], capture_output=True, text=True)
+        self.assertEqual(run_alias.stdout.strip(), "v0.55.0")
 
     def test_rejects_checksum_mismatch_before_installing(self) -> None:
-        result, root = self.run_installer(valid_checksum=False)
+        for publish in (self.publish_onedir, self.publish_single_file):
+            with self.subTest(asset=publish.__name__):
+                result = self.run_installer(publish(), valid_checksum=False)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("checksum mismatch", result.stderr)
+                self.assertFalse(self.command.exists())
+                self.assertFalse(self.command.with_name("aria").exists())
+                self.assertFalse((self.root / ".local/share/aria-code").exists())
+
+    def test_a_release_without_this_platform_says_so(self) -> None:
+        other = self.release / "aria-code-linux-x64.tar.gz"
+        other.write_bytes(b"x")
+        result = self.run_installer(other)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("checksum mismatch", result.stderr)
-        self.assertFalse((root / ".local/bin/aria-code").exists())
-        self.assertFalse((root / ".local/bin/aria").exists())
+        self.assertIn("no build for macos-arm64", result.stderr)
+
+
+class WindowsInstallerMatchesTheRelease(unittest.TestCase):
+    """No PowerShell on the macOS and Linux CI runners, so these are static:
+    the names it downloads and the layout it expects must be the ones the
+    release workflow produces."""
+
+    def setUp(self) -> None:
+        self.script = (INSTALLER.parent / "install.ps1").read_text(encoding="utf-8")
+
+    def test_downloads_the_onedir_zip_and_falls_back_to_the_old_exe(self) -> None:
+        self.assertIn("$asset = 'aria-code-windows-x64'", self.script)
+        self.assertIn('$file = "$asset.zip"', self.script)
+        self.assertIn('$file = "$asset.exe"', self.script)
+        self.assertLess(self.script.index('"$asset.zip"'), self.script.index('"$asset.exe"'),
+                        "the onedir build must be preferred")
+
+    def test_keeps_the_libraries_beside_the_executable(self) -> None:
+        self.assertIn("Join-Path $build 'aria-code-bin.exe'", self.script)
+        self.assertIn("Move-Item (Join-Path $build '_internal') $libraries", self.script)
+        self.assertIn("$libraries = Join-Path $installDir '_internal'", self.script)
+        self.assertIn("Copy-Item -Force $destination (Join-Path $installDir 'aria.exe')", self.script)
+
+    def test_verifies_before_replacing_anything(self) -> None:
+        checked = self.script.index("Checksum mismatch")
+        self.assertLess(checked, self.script.index("Remove-Item -Force $destination"))
+        self.assertLess(self.script.index("& $exe --version"),
+                        self.script.index("Remove-Item -Force $destination"))
 
 
 if __name__ == "__main__":

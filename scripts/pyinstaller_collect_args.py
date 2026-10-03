@@ -36,6 +36,9 @@ names `aria_code` as a hidden import. It prints:
     --additional-hooks-dir <dir>
     --hidden-import aria_code
 
+It also excludes the modules in EXCLUDED, which are installed but must not be
+frozen.
+
 Printed one token per line, so it splices correctly into bash and PowerShell
 `$(...)` alike.
 """
@@ -49,6 +52,17 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = ROOT / "src" / "aria_code"
 HOOKS_DIR = ROOT / "build" / "pyinstaller-hooks"
+
+# pandas_ta imports numba at module level, and numba brings llvmlite: an LLVM
+# build that was 133 MB of the 468 MB Linux binary, 42 MB of it compressed.
+# That pushed the linux-x64 npm package to 201.6 MB packed; npm's publish
+# body is the tarball base64-encoded, so 268.7 MB against a 256 MiB limit,
+# and v0.59.0 was rejected (linux-arm64, 195.9 MB, got through).
+#
+# The binary used pandas_ta for one thing: RSI in the factor tool, which has a
+# pandas fallback. Python the user runs goes to their own interpreter, not the
+# frozen one, so nothing they write loses pandas_ta. pip installs keep it.
+EXCLUDED = ("pandas_ta", "numba", "llvmlite")
 
 
 def _is_module(path: Path) -> bool:
@@ -96,8 +110,11 @@ def collect_args() -> list[str]:
     # Relative to the working directory: both callers build from the repo
     # root, and an absolute path with a space in it ("Application Support")
     # would be split in two by the unquoted $(...) that splices this in.
-    return ["--additional-hooks-dir", os.path.relpath(write_hook()),
+    args = ["--additional-hooks-dir", os.path.relpath(write_hook()),
             "--hidden-import", "aria_code"]
+    for module in EXCLUDED:
+        args += ["--exclude-module", module]
+    return args
 
 
 def main() -> int:

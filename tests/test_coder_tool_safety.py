@@ -1,6 +1,7 @@
 """Regression checks for model-facing code tools."""
 
 import asyncio
+import shlex
 import sys
 
 from aria_code.agents.engineering.coder import CoderAgent
@@ -13,7 +14,9 @@ def call(agent, name, args):
 def test_command_requires_real_approval(tmp_path):
     agent = CoderAgent(output_dir=tmp_path)
     marker = tmp_path / "executed"
-    command = f'{sys.executable} -c "open(\'executed\', \'w\').write(\'yes\')"'
+    # Quoted: run_command splits with shlex, and an interpreter under
+    # "Application Support" would otherwise split at the space.
+    command = f'{shlex.quote(sys.executable)} -c "open(\'executed\', \'w\').write(\'yes\')"'
     assert "approval is unavailable" in call(agent, "run_command", {"command": command})
     assert not marker.exists()
     agent.command_approval = lambda argv, cwd: True

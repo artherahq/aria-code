@@ -7,6 +7,11 @@ name: Build Native Binaries
 # explicitly rather than claiming Gatekeeper-readiness it hasn't earned).
 # Windows/Linux need no signing step — there's no notarization-equivalent
 # gate blocking a plain .exe/ELF binary from running.
+#
+# Every build is PyInstaller --onedir, shipped as one archive per binary
+# (.tar.gz, or .zip on Windows). --onefile unpacked ~400 native libraries to a
+# new temp directory on every launch and macOS re-scanned each one: 90 s per
+# command. See scripts/package_onedir.py.
 
 on:
   push:
@@ -103,11 +108,13 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: aria-code-macos-${{ matrix.arch }}
-          path: dist-native/dist/${{ env.BIN_NAME }}
+          path: dist-native/release/${{ env.BIN_NAME }}.tar.gz
+          if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
           name: aria-code-mcp-macos-${{ matrix.arch }}
-          path: dist-native/dist/${{ env.MCP_BIN_NAME }}
+          path: dist-native/release/${{ env.MCP_BIN_NAME }}.tar.gz
+          if-no-files-found: error
 
   build-windows:
     name: Build (Windows x64)
@@ -122,34 +129,40 @@ jobs:
       - name: Install project + PyInstaller
         run: |
           python -m pip install --quiet -e . pyinstaller
-      - name: Run PyInstaller (--onefile)
+      - name: Run PyInstaller (--onedir)
         run: >
-          pyinstaller --onefile --name ${{ env.BIN_NAME }}
+          pyinstaller --onedir --name ${{ env.BIN_NAME }}
           --distpath dist-native/dist --workpath dist-native/build --specpath dist-native
           --paths src/aria_code --paths src
           $(python scripts/pyinstaller_collect_args.py)
           --collect-all rich --collect-all prompt_toolkit
           src/aria_code/aria_cli.py
       - name: Smoke test
-        run: dist-native\dist\${{ env.BIN_NAME }}.exe --version
+        run: dist-native\dist\${{ env.BIN_NAME }}\${{ env.BIN_NAME }}.exe --version
+      - name: Archive build directory
+        run: python scripts/package_onedir.py pack dist-native/dist/${{ env.BIN_NAME }} dist-native/release
       - uses: actions/upload-artifact@v4
         with:
           name: aria-code-windows-x64
-          path: dist-native/dist/${{ env.BIN_NAME }}.exe
-      - name: Run PyInstaller for the MCP server binary (--onefile)
+          path: dist-native/release/${{ env.BIN_NAME }}.zip
+          if-no-files-found: error
+      - name: Run PyInstaller for the MCP server binary (--onedir)
         run: >
-          pyinstaller --onefile --name ${{ env.MCP_BIN_NAME }}
+          pyinstaller --onedir --name ${{ env.MCP_BIN_NAME }}
           --distpath dist-native/dist --workpath dist-native/build --specpath dist-native
           --paths src/aria_code --paths src
           $(python scripts/pyinstaller_collect_args.py)
           --copy-metadata aria-code
           src/aria_code/aria_mcp_server.py
       - name: Smoke test (MCP server binary)
-        run: dist-native\dist\${{ env.MCP_BIN_NAME }}.exe --version
+        run: dist-native\dist\${{ env.MCP_BIN_NAME }}\${{ env.MCP_BIN_NAME }}.exe --version
+      - name: Archive the MCP server build directory
+        run: python scripts/package_onedir.py pack dist-native/dist/${{ env.MCP_BIN_NAME }} dist-native/release
       - uses: actions/upload-artifact@v4
         with:
           name: aria-code-mcp-windows-x64
-          path: dist-native/dist/${{ env.MCP_BIN_NAME }}.exe
+          path: dist-native/release/${{ env.MCP_BIN_NAME }}.zip
+          if-no-files-found: error
 
   build-linux:
     # ubuntu-24.04-arm is a GitHub-hosted arm64 runner, so arm64 builds natively
@@ -176,34 +189,40 @@ jobs:
       - name: Install project + PyInstaller
         run: |
           python -m pip install --quiet -e . pyinstaller
-      - name: Run PyInstaller (--onefile)
+      - name: Run PyInstaller (--onedir)
         run: >
-          pyinstaller --onefile --name ${{ env.BIN_NAME }}
+          pyinstaller --onedir --name ${{ env.BIN_NAME }}
           --distpath dist-native/dist --workpath dist-native/build --specpath dist-native
           --paths src/aria_code --paths src
           $(python scripts/pyinstaller_collect_args.py)
           --collect-all rich --collect-all prompt_toolkit
           src/aria_code/aria_cli.py
       - name: Smoke test
-        run: dist-native/dist/${{ env.BIN_NAME }} --version
+        run: dist-native/dist/${{ env.BIN_NAME }}/${{ env.BIN_NAME }} --version
+      - name: Archive build directory
+        run: python scripts/package_onedir.py pack dist-native/dist/${{ env.BIN_NAME }} dist-native/release
       - uses: actions/upload-artifact@v4
         with:
           name: aria-code-linux-${{ matrix.arch }}
-          path: dist-native/dist/${{ env.BIN_NAME }}
-      - name: Run PyInstaller for the MCP server binary (--onefile)
+          path: dist-native/release/${{ env.BIN_NAME }}.tar.gz
+          if-no-files-found: error
+      - name: Run PyInstaller for the MCP server binary (--onedir)
         run: >
-          pyinstaller --onefile --name ${{ env.MCP_BIN_NAME }}
+          pyinstaller --onedir --name ${{ env.MCP_BIN_NAME }}
           --distpath dist-native/dist --workpath dist-native/build --specpath dist-native
           --paths src/aria_code --paths src
           $(python scripts/pyinstaller_collect_args.py)
           --copy-metadata aria-code
           src/aria_code/aria_mcp_server.py
       - name: Smoke test (MCP server binary)
-        run: dist-native/dist/${{ env.MCP_BIN_NAME }} --version
+        run: dist-native/dist/${{ env.MCP_BIN_NAME }}/${{ env.MCP_BIN_NAME }} --version
+      - name: Archive the MCP server build directory
+        run: python scripts/package_onedir.py pack dist-native/dist/${{ env.MCP_BIN_NAME }} dist-native/release
       - uses: actions/upload-artifact@v4
         with:
           name: aria-code-mcp-linux-${{ matrix.arch }}
-          path: dist-native/dist/${{ env.MCP_BIN_NAME }}
+          path: dist-native/release/${{ env.MCP_BIN_NAME }}.tar.gz
+          if-no-files-found: error
 
   attach-to-release:
     name: Attach binaries to GitHub Release
@@ -232,14 +251,15 @@ jobs:
             slug="$(basename "$dir")"          # e.g. aria-code-mcp-linux-arm64
             for file in "$dir"*; do
               case "$file" in
-                *.exe) cp "$file" "release/${slug}.exe" ;;
-                *)     cp "$file" "release/${slug}" && chmod +x "release/${slug}" ;;
+                *.zip)    cp "$file" "release/${slug}.zip" ;;
+                *.tar.gz) cp "$file" "release/${slug}.tar.gz" ;;
+                *)        echo "::error::unexpected artifact $file — every build ships an archive"; exit 1 ;;
               esac
             done
           done
           count="$(find release -maxdepth 1 -type f -name 'aria-code-*' | wc -l | tr -d ' ')"
           if [ "$count" -ne 10 ]; then
-            echo "::error::expected 10 CLI/MCP release binaries, found $count"
+            echo "::error::expected 10 CLI/MCP release archives, found $count"
             exit 1
           fi
           (cd release && sha256sum aria-code-* > SHA256SUMS)
@@ -325,11 +345,11 @@ jobs:
             fi
             return 0
           }
-          add darwin-arm64 aria-code-macos-arm64   aria-code-bin      aria-code-mcp-macos-arm64  aria-code-mcp-bin
-          add darwin-x64   aria-code-macos-x64     aria-code-bin      aria-code-mcp-macos-x64    aria-code-mcp-bin
-          add linux-x64    aria-code-linux-x64     aria-code-bin      aria-code-mcp-linux-x64    aria-code-mcp-bin
-          add linux-arm64  aria-code-linux-arm64   aria-code-bin      aria-code-mcp-linux-arm64  aria-code-mcp-bin
-          add win32-x64    aria-code-windows-x64   aria-code-bin.exe  aria-code-mcp-windows-x64  aria-code-mcp-bin.exe
+          add darwin-arm64 aria-code-macos-arm64   aria-code-bin.tar.gz  aria-code-mcp-macos-arm64  aria-code-mcp-bin.tar.gz
+          add darwin-x64   aria-code-macos-x64     aria-code-bin.tar.gz  aria-code-mcp-macos-x64    aria-code-mcp-bin.tar.gz
+          add linux-x64    aria-code-linux-x64     aria-code-bin.tar.gz  aria-code-mcp-linux-x64    aria-code-mcp-bin.tar.gz
+          add linux-arm64  aria-code-linux-arm64   aria-code-bin.tar.gz  aria-code-mcp-linux-arm64  aria-code-mcp-bin.tar.gz
+          add win32-x64    aria-code-windows-x64   aria-code-bin.zip     aria-code-mcp-windows-x64  aria-code-mcp-bin.zip
           python scripts/make_platform_packages.py --version "$VERSION" \
             --out npm/platforms "${ARGS[@]}"
 
@@ -352,13 +372,17 @@ jobs:
             echo "::error::Expected five CLI and five MCP packages, found ${#packages[@]}"
             exit 1
           fi
-          # Check every tarball before publishing any package. A combined CLI
-          # and MCP Linux arm64 tarball was 307.8 MB and npm rejected it with
-          # E413 after the macOS packages had already been published.
+          # Check every tarball before publishing any package. npm sends the
+          # tarball base64-encoded, so the 256 MiB publish limit is ~201 MB
+          # packed. v0.59.0's linux-x64 package was 201.6 MB: the old 240 MB
+          # threshold let it through, npm rejected it, and the three packages
+          # published before it were left without a dispatcher. 190 MB keeps
+          # a margin for normal growth between releases.
           for dir in "${packages[@]}"; do
             size="$(cd "$dir" && npm pack --dry-run --json | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>process.stdout.write(String(JSON.parse(s)[0].size)))')"
-            if [ "$size" -ge 240000000 ]; then
-              echo "::error::$(basename "$dir") is $size bytes packed; split or slim it before publishing"
+            echo "$(basename "$dir"): $size bytes packed"
+            if [ "$size" -ge 190000000 ]; then
+              echo "::error::$(basename "$dir") is $size bytes packed; npm's limit is ~201 MB. Slim it before publishing: EXCLUDED in the PyInstaller collector script lists what is left out"
               exit 1
             fi
           done
@@ -370,7 +394,7 @@ jobs:
             fi
             echo "── publishing $spec"
             (cd "$dir" && npm publish --access public) || {
-              echo "::error::npm rejected $(basename "$dir"). Check that the token's account can create packages in the @artheras scope and that the token allows package write and CI publishing."
+              echo "::error::npm rejected $(basename "$dir"). E413 or a closed connection means it is too large (~201 MB packed limit); E403/E404 means the token cannot publish to the @artheras scope. The npm error is above."
               exit 1
             }
           done

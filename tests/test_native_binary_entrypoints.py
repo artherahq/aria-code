@@ -3,7 +3,7 @@
 The src/ restructure moved aria_cli.py and aria_mcp_server.py to
 src/aria_code/. The release path kept passing the old root-relative names:
 
-    pyinstaller --onefile --name aria-code-bin ... aria_cli.py
+    pyinstaller --onedir --name aria-code-bin ... aria_cli.py
 
 Six places in total -- four in build-native-binaries.yml (Windows and Linux,
 CLI and MCP server) and two in scripts/build_native_binary.sh (macOS). All five
@@ -141,7 +141,7 @@ class TheFreezeCanResolveTheBareImportRoot(unittest.TestCase):
 
     def test_the_macos_script_passes_both_roots_to_every_build(self) -> None:
         text = MAC_SCRIPT.read_text(encoding="utf-8")
-        builds = text.count("--onefile --name")
+        builds = text.count("--onedir --name")
         self.assertEqual(builds, 2, "expected two PyInstaller invocations")
         args = [a.strip('"') for a in re.findall(r"--paths\s+(\S+)", text)]
         for root in self.REQUIRED_ROOTS:

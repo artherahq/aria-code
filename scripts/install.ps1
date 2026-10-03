@@ -13,30 +13,70 @@ if ($version -eq 'latest') {
     throw 'ARIA_CODE_VERSION must look like v0.55.0.'
 }
 
-$asset = 'aria-code-windows-x64.exe'
+# Releases ship a PyInstaller --onedir build as aria-code-windows-x64.zip: the
+# executable plus an _internal folder it loads from. --onefile unpacked every
+# library to a new temp folder on each launch. Releases before the switch have
+# a single aria-code-windows-x64.exe, which this still installs.
+$asset = 'aria-code-windows-x64'
 $installDir = if ($env:ARIA_CODE_INSTALL_DIR) { $env:ARIA_CODE_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA 'AriaCode\bin' }
 $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("aria-code-install-" + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $tempDir | Out-Null
 
+function Get-Checksum([string[]]$lines, [string]$name) {
+    $line = $lines | Where-Object { $_ -match "^[a-fA-F0-9]{64}\s+\*?$([regex]::Escape($name))$" } | Select-Object -First 1
+    if ($line) { return ($line -split '\s+')[0].ToLowerInvariant() }
+    return $null
+}
+
 try {
     $checksums = Join-Path $tempDir 'SHA256SUMS'
-    $binary = Join-Path $tempDir $asset
-    Write-Host "Downloading $asset..."
     Invoke-WebRequest -UseBasicParsing -Uri "$base/SHA256SUMS" -OutFile $checksums
-    Invoke-WebRequest -UseBasicParsing -Uri "$base/$asset" -OutFile $binary
+    $lines = Get-Content $checksums
 
-    $line = Get-Content $checksums | Where-Object { $_ -match "^[a-fA-F0-9]{64}\s+\*?$([regex]::Escape($asset))$" } | Select-Object -First 1
-    if (-not $line) { throw "Checksum for $asset is missing from this release." }
-    $expected = ($line -split '\s+')[0].ToLowerInvariant()
-    $actual = (Get-FileHash -Algorithm SHA256 -Path $binary).Hash.ToLowerInvariant()
-    if ($actual -ne $expected) { throw "Checksum mismatch for $asset." }
-    & $binary --version | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw 'Downloaded binary failed its version check.' }
+    $file = "$asset.zip"
+    $expected = Get-Checksum $lines $file
+    if (-not $expected) {
+        $file = "$asset.exe"
+        $expected = Get-Checksum $lines $file
+    }
+    if (-not $expected) { throw "This release has no Windows x64 build." }
+
+    $download = Join-Path $tempDir $file
+    Write-Host "Downloading $file..."
+    Invoke-WebRequest -UseBasicParsing -Uri "$base/$file" -OutFile $download
+    $actual = (Get-FileHash -Algorithm SHA256 -Path $download).Hash.ToLowerInvariant()
+    if ($actual -ne $expected) { throw "Checksum mismatch for $file." }
 
     New-Item -ItemType Directory -Force -Path $installDir | Out-Null
     $destination = Join-Path $installDir 'aria-code.exe'
-    Copy-Item -Force $binary $destination
-    Copy-Item -Force $binary (Join-Path $installDir 'aria.exe')
+    $libraries = Join-Path $installDir '_internal'
+
+    if ($file -like '*.exe') {
+        & $download --version | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'Downloaded binary failed its version check.' }
+        Copy-Item -Force $download $destination
+    } else {
+        $unpacked = Join-Path $tempDir 'unpacked'
+        Expand-Archive -Path $download -DestinationPath $unpacked
+        $build = Join-Path $unpacked 'aria-code-bin'
+        $exe = Join-Path $build 'aria-code-bin.exe'
+        if (-not (Test-Path $exe)) { throw "$file does not contain aria-code-bin\aria-code-bin.exe." }
+        & $exe --version | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'Downloaded binary failed its version check.' }
+
+        # _internal is a generic name other PyInstaller apps use too. Only
+        # replace one that sits beside an aria-code.exe.
+        if ((Test-Path $libraries) -and -not (Test-Path $destination)) {
+            throw "$installDir already has an _internal folder that is not Aria Code's; set ARIA_CODE_INSTALL_DIR to an empty folder."
+        }
+        # Fails, rather than half-replacing, if aria-code is running.
+        if (Test-Path $destination) { Remove-Item -Force $destination }
+        if (Test-Path $libraries) { Remove-Item -Recurse -Force $libraries }
+        Move-Item (Join-Path $build '_internal') $libraries
+        # The bootloader finds _internal beside itself whatever the exe is called.
+        Move-Item $exe $destination
+    }
+    Copy-Item -Force $destination (Join-Path $installDir 'aria.exe')
 
     if (-not $env:ARIA_CODE_INSTALL_DIR) {
         $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')

@@ -129,6 +129,34 @@ class EnvironmentTests(HarnessBase):
         # Green start, so INVALID — which proves the interpreter matched.
         self.assertEqual(result.outcome, INVALID)
 
+    def test_an_interpreter_path_with_a_space_still_runs_the_check(self):
+        # The macOS app keeps projects under "Application Support". Unquoted,
+        # {python} split there and every check exited 126.
+        import os
+        import sys
+        from unittest import mock
+
+        from aria_code.evals import harness
+
+        if os.name == "nt":
+            self.skipTest("symlinking an interpreter needs privileges on Windows")
+        spaced = self.fixtures.parent / "Application Support" / "python"
+        spaced.parent.mkdir(parents=True)
+        spaced.symlink_to(sys.executable)
+        _fixture(self.fixtures, "broken", {"check.py": "import sys; sys.exit(1)\n"})
+        with mock.patch.object(harness.sys, "executable", str(spaced)):
+            result = self._run(self._task(), lambda p, w: None)
+        self.assertEqual(result.outcome, FAIL, result.detail)
+        self.assertEqual(result.exit_code, 1)
+
+    def test_a_check_the_shell_cannot_run_is_an_error_not_a_red_task(self):
+        # A pre-flight that counts "command not found" as red reports a healthy
+        # suite while measuring nothing.
+        _fixture(self.fixtures, "broken", {"check.py": _GUARD})
+        result = self._run(self._task(verify="definitely_not_a_command_xyz"), lambda p, w: None)
+        self.assertEqual(result.outcome, ERROR)
+        self.assertIn("could not run", result.detail)
+
     def test_a_check_that_never_finishes_is_a_failure(self):
         _fixture(self.fixtures, "broken", {"check.py": "import time; time.sleep(30)\n"})
         result = self._run(self._task(timeout=1), lambda p, w: None)

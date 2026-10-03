@@ -27,8 +27,12 @@ import ast
 import pathlib
 import re
 import sys
-import tomllib
 import unittest
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python < 3.11
+    import tomli as tomllib
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SRC = ROOT / "src" / "aria_code"

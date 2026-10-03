@@ -14,7 +14,12 @@
  */
 
 const { spawnSync } = require("child_process");
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
 const {
+  FIRST_LAUNCH_NOTICE,
+  firstLaunchMarker,
   platformKey,
   binaryRequestFor,
   unsupportedMessage,
@@ -38,7 +43,28 @@ function resolveBinary(name) {
 
 // argv[2..] is the user's command line; argv[0..1] are node and this script.
 const binary = resolveBinary("aria-code-bin");
+
+// Best effort throughout: a notice that cannot be recorded is shown again next
+// time, which is harmless; it must never stop the binary from running.
+let marker = null;
+if (process.platform === "darwin" && process.stderr.isTTY) {
+  try {
+    marker = firstLaunchMarker(os.homedir(), binary, fs.statSync(binary).mtimeMs);
+    if (fs.existsSync(marker)) marker = null;
+    else process.stderr.write(`${FIRST_LAUNCH_NOTICE}\n`);
+  } catch {
+    marker = null;
+  }
+}
+
 const result = spawnSync(binary, process.argv.slice(2), { stdio: "inherit" });
+
+if (marker && !result.error) {
+  try {
+    fs.mkdirSync(path.dirname(marker), { recursive: true });
+    fs.writeFileSync(marker, "");
+  } catch {}
+}
 
 if (result.error) {
   // ENOENT here means the package resolved but the file is gone or not

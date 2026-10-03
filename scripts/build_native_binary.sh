@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
-# scripts/build_native_binary.sh — build, sign, and (optionally) notarize a
-# standalone aria-code CLI binary via PyInstaller.
+# scripts/build_native_binary.sh — build, sign, and (optionally) notarize the
+# standalone aria-code CLI and MCP server via PyInstaller --onedir, then archive
+# each as dist-native/release/<name>.tar.gz for the release.
+#
+# --onedir, not --onefile: --onefile unpacked ~400 native libraries to a new
+# temp directory on every launch and macOS re-scanned each one, so every
+# command took ~90 s. See scripts/package_onedir.py.
 #
 # Why this exists: npm install / pip install both fetch or build a separate
 # Python runtime on the user's machine, which is what produced the whole
@@ -38,9 +43,13 @@ SIGN_IDENTITY="${SIGN_IDENTITY:-Developer ID Application: Xindi Wang (2HJXDCWWKX
 BUILD_DIR="${BUILD_DIR:-$PROJECT_ROOT/dist-native}"
 VENV_DIR="$BUILD_DIR/.build-venv"
 BIN_NAME="aria-code-bin"
-BIN_PATH="$BUILD_DIR/dist/$BIN_NAME"
+# Each build is a directory holding the executable of the same name.
+BIN_DIR="$BUILD_DIR/dist/$BIN_NAME"
+BIN_PATH="$BIN_DIR/$BIN_NAME"
 MCP_BIN_NAME="aria-code-mcp-bin"
-MCP_BIN_PATH="$BUILD_DIR/dist/$MCP_BIN_NAME"
+MCP_BIN_DIR="$BUILD_DIR/dist/$MCP_BIN_NAME"
+MCP_BIN_PATH="$MCP_BIN_DIR/$MCP_BIN_NAME"
+RELEASE_DIR="$BUILD_DIR/release"
 ENTITLEMENTS="$BUILD_DIR/entitlements.plist"
 
 echo "── Finding a Python within pyproject.toml's requires-python bound ──"
@@ -67,8 +76,8 @@ rm -rf "$VENV_DIR"
 "$BUILD_PYTHON" -m venv "$VENV_DIR"
 "$VENV_DIR/bin/pip" install --quiet -e "$PROJECT_ROOT" pyinstaller
 
-echo "── Running PyInstaller (--onefile) ──"
-"$VENV_DIR/bin/pyinstaller" --onefile --name "$BIN_NAME" \
+echo "── Running PyInstaller (--onedir) ──"
+"$VENV_DIR/bin/pyinstaller" --noconfirm --onedir --name "$BIN_NAME" \
   --distpath "$BUILD_DIR/dist" \
   --workpath "$BUILD_DIR/build" \
   --specpath "$BUILD_DIR" \
@@ -79,7 +88,7 @@ echo "── Running PyInstaller (--onefile) ──"
   --collect-all prompt_toolkit \
   "$PROJECT_ROOT/src/aria_code/aria_cli.py"
 
-echo "── Running PyInstaller for the MCP server binary (--onefile) ──"
+echo "── Running PyInstaller for the MCP server binary (--onedir) ──"
 # Separate entry point, separate binary: the MCP server (packages/aria_mcp/
 # server.py) has to be launchable on its own (`claude mcp add aria-code --
 # /path/to/aria-code-mcp-bin`) — a Claude Code/Codex/Cursor user shouldn't
@@ -90,7 +99,7 @@ echo "── Running PyInstaller for the MCP server binary (--onefile) ──"
 # "unknown" instead of the real version, because importlib.metadata.version()
 # can't find the package's dist-info inside a frozen PyInstaller app unless
 # it's explicitly copied in.
-"$VENV_DIR/bin/pyinstaller" --onefile --name "$MCP_BIN_NAME" \
+"$VENV_DIR/bin/pyinstaller" --noconfirm --onedir --name "$MCP_BIN_NAME" \
   --distpath "$BUILD_DIR/dist" \
   --workpath "$BUILD_DIR/build" \
   --specpath "$BUILD_DIR" \
@@ -104,6 +113,17 @@ echo "── Running PyInstaller for the MCP server binary (--onefile) ──"
 # pipeline below — iterate rather than duplicate the whole block per binary.
 BIN_NAMES=("$BIN_NAME" "$MCP_BIN_NAME")
 BIN_PATHS=("$BIN_PATH" "$MCP_BIN_PATH")
+BIN_DIRS=("$BIN_DIR" "$MCP_BIN_DIR")
+
+# The release ships each directory as one archive: upload-artifact would drop
+# the build's symlinks and execute bits. Called on every exit path below, so an
+# unsigned CI build is archived exactly like a signed one.
+archive_builds() {
+  rm -rf "$RELEASE_DIR"
+  for d in "${BIN_DIRS[@]}"; do
+    "$VENV_DIR/bin/python" "$PROJECT_ROOT/scripts/package_onedir.py" pack "$d" "$RELEASE_DIR"
+  done
+}
 
 echo "── Checking for signing identity in keychain ──"
 # CI runners (and any machine without the real Developer ID cert imported)
@@ -114,6 +134,7 @@ echo "── Checking for signing identity in keychain ──"
 if ! security find-identity -v -p codesigning 2>/dev/null | grep -qF "$SIGN_IDENTITY"; then
   echo "── Smoke test: the unsigned binaries must actually run ──"
   for p in "${BIN_PATHS[@]}"; do "$p" --version; done
+  archive_builds
   echo ""
   echo "Signing identity '$SIGN_IDENTITY' not found in keychain — built unsigned: ${BIN_PATHS[*]}"
   echo "This machine can't sign/notarize (no cert imported). Gatekeeper will reject"
@@ -122,14 +143,11 @@ if ! security find-identity -v -p codesigning 2>/dev/null | grep -qF "$SIGN_IDEN
   exit 0
 fi
 
-# disable-library-validation is required in --onefile mode: PyInstaller
-# extracts its bundled Python.framework to a temp dir at runtime and
-# dlopen()s it, and hardened runtime otherwise refuses to load a library
-# whose Team ID doesn't match the parent process — which the bundled
-# framework's own signature never will, since it isn't signed by us.
-# Confirmed empirically: without this entitlement the signed binary fails
-# to launch at all (dlopen error, "different Team IDs"), not just a
-# notarization-time rejection.
+# disable-library-validation: hardened runtime refuses to load a library
+# whose Team ID differs from the executable's. Every Mach-O in _internal/ is
+# re-signed with our identity below, but Python extension modules can still
+# dlopen() third-party libraries at runtime, and the --onefile build failed to
+# launch at all without this ("different Team IDs"). Kept rather than re-proven.
 cat > "$ENTITLEMENTS" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -143,19 +161,32 @@ cat > "$ENTITLEMENTS" <<'PLIST'
 </plist>
 PLIST
 
-for p in "${BIN_PATHS[@]}"; do
+for i in "${!BIN_PATHS[@]}"; do
+  p="${BIN_PATHS[$i]}"
+  d="${BIN_DIRS[$i]}"
+  # Inside out: every Mach-O under _internal/ (notarization rejects an
+  # unsigned or ad-hoc-signed nested binary), then the executable. Symlinks are
+  # skipped — signing one signs its target, which find visits on its own.
+  echo "── Signing the libraries in $d/_internal ──"
+  while IFS= read -r -d '' f; do
+    if file -b "$f" | grep -q 'Mach-O'; then
+      codesign --force --sign "$SIGN_IDENTITY" --options runtime --timestamp "$f"
+    fi
+  done < <(find "$d/_internal" -type f -print0)
+
   echo "── Signing $p with $SIGN_IDENTITY ──"
   codesign --force --sign "$SIGN_IDENTITY" --options runtime --timestamp \
     --entitlements "$ENTITLEMENTS" "$p"
 
   echo "── Verifying signature ──"
-  codesign --verify --deep --strict --verbose=2 "$p"
+  codesign --verify --strict --verbose=2 "$p"
 
   echo "── Smoke test: the signed binary must actually run ──"
   "$p" --version
 done
 
 if [[ "${1:-}" != "--notarize" ]]; then
+  archive_builds
   echo ""
   echo "Signed (not notarized): ${BIN_PATHS[*]}"
   echo "Gatekeeper will currently reject them (spctl -a -vvv -t exec <path>)."
@@ -192,10 +223,11 @@ fi
 for i in "${!BIN_PATHS[@]}"; do
   p="${BIN_PATHS[$i]}"
   n="${BIN_NAMES[$i]}"
+  d="${BIN_DIRS[$i]}"
 
-  echo "── Zipping $n for submission (notarytool cannot notarize a bare binary directly) ──"
+  echo "── Zipping the $n directory for submission ──"
   NOTARY_ZIP="$BUILD_DIR/${n}-notarize.zip"
-  ditto -c -k --keepParent "$p" "$NOTARY_ZIP"
+  ditto -c -k --keepParent "$d" "$NOTARY_ZIP"
 
   echo "── Submitting $n to Apple notarization (this polls and can take a few minutes) ──"
   if has_api_creds; then
@@ -221,16 +253,20 @@ for i in "${!BIN_PATHS[@]}"; do
   echo ""
   echo "── Verifying Gatekeeper acceptance for $n (real test: execute a quarantined copy, not spctl -t exec) ──"
   GATEKEEPER_TEST_COPY="$BUILD_DIR/gatekeeper-test-copy-$n"
-  cp "$p" "$GATEKEEPER_TEST_COPY"
-  xattr -w com.apple.quarantine "0181;$(printf '%x' "$(date +%s)");Safari;" "$GATEKEEPER_TEST_COPY"
-  if ! "$GATEKEEPER_TEST_COPY" --version >/dev/null 2>&1; then
+  rm -rf "$GATEKEEPER_TEST_COPY"
+  cp -R "$d" "$GATEKEEPER_TEST_COPY"
+  # Every file, as a browser download extracted by Archive Utility would be.
+  find "$GATEKEEPER_TEST_COPY" -type f -exec \
+    xattr -w com.apple.quarantine "0181;$(printf '%x' "$(date +%s)");Safari;" {} +
+  if ! "$GATEKEEPER_TEST_COPY/$n" --version >/dev/null 2>&1; then
     echo "Gatekeeper rejected the quarantined $n binary at launch — notarization did not take effect." >&2
-    rm -f "$GATEKEEPER_TEST_COPY"
+    rm -rf "$GATEKEEPER_TEST_COPY"
     exit 1
   fi
-  rm -f "$GATEKEEPER_TEST_COPY"
+  rm -rf "$GATEKEEPER_TEST_COPY"
   echo "  quarantined copy launched cleanly — Gatekeeper accepts $n."
 done
 
+archive_builds
 echo ""
 echo "Signed + notarized: ${BIN_PATHS[*]}"

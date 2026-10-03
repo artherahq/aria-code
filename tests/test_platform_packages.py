@@ -31,6 +31,7 @@ def _load():
 
 
 mpp = _load()
+package_onedir = mpp.package_onedir
 
 
 class KeysAgreeWithTheDispatcher(unittest.TestCase):
@@ -44,29 +45,77 @@ class KeysAgreeWithTheDispatcher(unittest.TestCase):
         self.assertEqual(from_js, mpp.PLATFORM_KEYS)
 
 
+def _onedir_archive(tmp: pathlib.Path, name: str, *, windows: bool = False,
+                    extra_link: tuple[str, str] | None = None) -> pathlib.Path:
+    """A miniature PyInstaller --onedir build, archived the way CI archives it.
+
+    Shaped like the real macOS output: an executable beside _internal/, with a
+    framework whose Versions/Current is a directory symlink and a library that
+    is a file symlink.
+    """
+    root = tmp / "src" / name
+    if root.parent.exists():
+        import shutil
+        shutil.rmtree(root.parent)
+    internal = root / "_internal"
+    exe = root / (f"{name}.exe" if windows else name)
+    (internal / "Python.framework" / "Versions" / "3.13").mkdir(parents=True)
+    (internal / "Python.framework" / "Versions" / "3.13" / "Python").write_bytes(b"dylib")
+    (internal / "base_library.zip").write_bytes(b"zip")
+    exe.parent.mkdir(parents=True, exist_ok=True)
+    exe.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    exe.chmod(0o755)
+    if not windows:
+        os.symlink("3.13", internal / "Python.framework" / "Versions" / "Current")
+        os.symlink("Python.framework/Versions/Current/Python", internal / "Python")
+        if extra_link:
+            os.symlink(extra_link[1], internal / extra_link[0])
+    return package_onedir.pack(root, tmp / "archives" / name, use_zip=windows)
+
+
 class GeneratedPackages(unittest.TestCase):
     def setUp(self):
         self.tmp = pathlib.Path(tempfile.mkdtemp())
-        self.fake = self.tmp / "fake-bin"
-        self.fake.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         self.out = self.tmp / "platforms"
 
-    def _build(self, key, mcp=False):
-        return mpp.build_one(key, "9.9.9", self.fake, self.out, mcp=mcp)
+    def _build(self, key, mcp=False, **archive):
+        name = "aria-code-mcp-bin" if mcp else "aria-code-bin"
+        source = _onedir_archive(self.tmp, name, windows=key.startswith("win32"), **archive)
+        return mpp.build_one(key, "9.9.9", source, self.out, mcp=mcp)
 
     def test_windows_binaries_get_exe_and_nothing_else_does(self):
         win = self._build("win32-x64")
-        self.assertTrue((win / "bin" / "aria-code-bin.exe").is_file())
+        self.assertTrue((win / "bin" / "aria-code-bin" / "aria-code-bin.exe").is_file())
         for key in ("darwin-arm64", "linux-x64"):
             pkg = self._build(key)
-            self.assertTrue((pkg / "bin" / "aria-code-bin").is_file())
-            self.assertFalse((pkg / "bin" / "aria-code-bin.exe").exists())
+            self.assertTrue((pkg / "bin" / "aria-code-bin" / "aria-code-bin").is_file())
+            self.assertFalse((pkg / "bin" / "aria-code-bin" / "aria-code-bin.exe").exists())
+
+    def test_the_binary_sits_beside_its_libraries(self):
+        """--onedir: the executable finds _internal/ next to itself."""
+        pkg = self._build("darwin-arm64")
+        app = pkg / "bin" / "aria-code-bin"
+        self.assertTrue((app / "_internal" / "base_library.zip").is_file())
 
     def test_the_binary_is_executable(self):
         pkg = self._build("linux-x64")
-        mode = (pkg / "bin" / "aria-code-bin").stat().st_mode
+        mode = (pkg / "bin" / "aria-code-bin" / "aria-code-bin").stat().st_mode
         for bit in (stat.S_IXUSR, stat.S_IXGRP, stat.S_IXOTH):
             self.assertTrue(mode & bit, "binary would install without +x")
+
+    def test_no_symlink_reaches_the_npm_package(self):
+        """npm tarballs cannot be relied on to carry symlinks; the real macOS
+        build has 22. Each must arrive as a real file or directory."""
+        pkg = self._build("darwin-arm64")
+        internal = pkg / "bin" / "aria-code-bin" / "_internal"
+        self.assertEqual([p for p in pkg.rglob("*") if p.is_symlink()], [])
+        self.assertEqual((internal / "Python").read_bytes(), b"dylib")
+        self.assertTrue((internal / "Python.framework" / "Versions" / "Current").is_dir())
+
+    def test_a_symlink_out_of_the_build_is_refused(self):
+        for target in ("/etc/passwd", "../../../../etc/passwd"):
+            with self.subTest(target=target), self.assertRaises(SystemExit):
+                self._build("linux-x64", extra_link=("libssl.so", target))
 
     def test_os_and_cpu_let_npm_refuse_the_wrong_machine(self):
         for key, want_os, want_cpu in (
@@ -85,13 +134,22 @@ class GeneratedPackages(unittest.TestCase):
         self.assertEqual(meta["version"], "9.9.9")
         self.assertEqual(meta["files"], ["bin/"])
 
+    def test_the_layout_matches_the_dispatchers_require_path(self):
+        js = JS_MODULE.read_text(encoding="utf-8")
+        self.assertIn("/bin/${name}/${binaryName(platform, name)}", js)
+
     def test_the_mcp_binary_has_its_own_package(self):
         cli = self._build("darwin-arm64")
         mcp = self._build("darwin-arm64", mcp=True)
         self.assertFalse((cli / "bin" / "aria-code-mcp-bin").exists())
-        self.assertTrue((mcp / "bin" / "aria-code-mcp-bin").is_file())
+        self.assertTrue((mcp / "bin" / "aria-code-mcp-bin" / "aria-code-mcp-bin").is_file())
         self.assertEqual(json.loads((mcp / "package.json").read_text())["name"],
                          "@artheras/aria-code-mcp-darwin-arm64")
+
+    def test_an_archive_of_the_wrong_build_is_refused(self):
+        source = _onedir_archive(self.tmp, "aria-code-mcp-bin")
+        with self.assertRaises(SystemExit):
+            mpp.build_one("linux-x64", "9.9.9", source, self.out)
 
     def test_rebuilding_replaces_rather_than_accumulates(self):
         pkg = self._build("linux-x64")

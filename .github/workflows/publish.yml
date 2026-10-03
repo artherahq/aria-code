@@ -340,23 +340,6 @@ jobs:
           echo "  publish-pypi: $PYPI_RESULT"
           echo
 
-          # PyPI. Queried through the JSON API rather than `pip index`, which
-          # is marked experimental and has changed output more than once.
-          if curl -sf "https://pypi.org/pypi/aria-code/$VERSION/json" >/dev/null; then
-            echo "PyPI  ✓ aria-code $VERSION"
-          else
-            echo "::error::PyPI has no aria-code $VERSION, but $TAG was tagged"
-            MISSING=1
-          fi
-
-          # npm dispatcher.
-          if npm view "@artheras/aria-code@$VERSION" version >/dev/null 2>&1; then
-            echo "npm   ✓ @artheras/aria-code $VERSION"
-          else
-            echo "::error::npm has no @artheras/aria-code $VERSION, but $TAG was tagged"
-            MISSING=1
-          fi
-
           # The platform packages the dispatcher pins. A dispatcher published
           # without them installs a launcher and no binary, and npm reports
           # nothing, because skipping an unresolvable optionalDependency is
@@ -368,14 +351,47 @@ jobs:
           }
           NODE
           )"
-          while IFS= read -r pkg; do
-            if npm view "$pkg" version >/dev/null 2>&1; then
-              echo "npm   ✓ $pkg"
-            else
-              echo "::error::no $pkg — the dispatcher is incomplete on that platform"
-              MISSING=1
-            fi
-          done <<< "$PACKAGE_LINES"
+
+          # What still has to be seen, one per line. PyPI is queried through
+          # the JSON API rather than `pip index`, which is marked experimental
+          # and has changed output more than once.
+          PENDING="pypi:aria-code@$VERSION
+          npm:@artheras/aria-code@$VERSION
+          $(sed 's/^/npm:/' <<< "$PACKAGE_LINES")"
+
+          seen() {
+            case "$1" in
+              pypi:*) curl -sf "https://pypi.org/pypi/aria-code/$VERSION/json" >/dev/null ;;
+              npm:*)  npm view "${1#npm:}" version >/dev/null 2>&1 ;;
+            esac
+          }
+
+          # Both registries are eventually consistent. v0.58.0 was published
+          # completely and this step still failed it: npm answered "no such
+          # version" for a dispatcher written moments earlier. So something
+          # absent is re-asked for up to five minutes before it counts as
+          # missing, and only what is still absent is re-asked.
+          for attempt in 1 2 3 4 5 6 7 8 9 10 11; do
+            STILL=""
+            while IFS= read -r item; do
+              item="$(echo "$item" | xargs)"
+              [ -n "$item" ] || continue
+              if seen "$item"; then
+                echo "✓ ${item#*:}"
+              else
+                STILL="$STILL$item"$'\n'
+              fi
+            done <<< "$PENDING"
+            PENDING="$STILL"
+            [ -z "$PENDING" ] && break
+            [ "$attempt" -lt 11 ] && { echo "  not visible yet, re-checking in 30 s:"; echo -n "$PENDING" | sed 's/^/    /'; sleep 30; }
+          done
+
+          while IFS= read -r item; do
+            [ -n "$item" ] || continue
+            echo "::error::${item%%:*} has no ${item#*:}, but $TAG was tagged"
+            MISSING=1
+          done <<< "$PENDING"
 
           if [ "$MISSING" -ne 0 ]; then
             echo

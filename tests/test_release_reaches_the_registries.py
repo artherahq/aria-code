@@ -80,8 +80,10 @@ class ThePublishedVersionIsVerified(unittest.TestCase):
         # dispatcher without its pinned binaries is not a working release.
         script = "\n".join(str(s.get("run", "")) for s in self.job.get("steps") or [])
         self.assertIn("manifest.optionalDependencies", script)
-        self.assertIn("::error::no $pkg", script)
+        self.assertIn('has no ${item#*:}, but $TAG was tagged', script)
         self.assertIn("MISSING=1", script)
+        # That it waits out registry lag first, and still fails a real gap, is
+        # run for real in tests/test_release_verification_waits.py.
 
 
 # The job graph — that publishing no longer waits on the npm binaries, and

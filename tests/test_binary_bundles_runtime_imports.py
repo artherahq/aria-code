@@ -122,6 +122,30 @@ class TheHookLoads(unittest.TestCase):
             self.assertNotIn(" ", arg)
 
 
+class TheNumbaStackStaysOut(unittest.TestCase):
+    """numba/llvmlite made the Linux npm package too large to publish."""
+
+    def test_the_collector_excludes_it(self) -> None:
+        args = _collector().collect_args()
+        excluded = {args[i + 1] for i, a in enumerate(args) if a == "--exclude-module"}
+        self.assertEqual(excluded, {"pandas_ta", "numba", "llvmlite"})
+
+    def test_no_first_party_module_needs_it_to_import(self) -> None:
+        # Excluding is only safe while every import of these is lazy or
+        # guarded; a bare module-level import would stop the binary starting.
+        for path in SRC.rglob("*.py"):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in tree.body:
+                names = []
+                if isinstance(node, ast.Import):
+                    names = [a.name for a in node.names]
+                elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+                    names = [node.module]
+                for name in names:
+                    with self.subTest(file=str(path.relative_to(SRC)), module=name):
+                        self.assertNotIn(name.split(".")[0], {"pandas_ta", "numba", "llvmlite"})
+
+
 class EveryBuildUsesTheCollector(unittest.TestCase):
     def test_workflow_builds(self) -> None:
         text = WORKFLOW.read_text(encoding="utf-8")
@@ -132,7 +156,7 @@ class EveryBuildUsesTheCollector(unittest.TestCase):
 
     def test_macos_script_builds(self) -> None:
         text = MAC_SCRIPT.read_text(encoding="utf-8")
-        builds = text.count("--onefile --name")
+        builds = text.count("--onedir --name")
         self.assertGreater(builds, 0)
         self.assertEqual(text.count("pyinstaller_collect_args.py"), builds,
                          "a PyInstaller build in the macOS script does not use the collector")
