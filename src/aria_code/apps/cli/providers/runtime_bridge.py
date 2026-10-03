@@ -145,8 +145,8 @@ async def run_with_fallback(
     instead of being discarded and re-run:
 
       • ``skip`` / ``ollama`` → run local Ollama directly (no cloud round)
-      • ``cloud``            → run cloud; if it fails or returns a placeholder
-                               (empty / canned / backend stub), fall back to
+      • ``cloud``            → run cloud; if it fails or returns an empty answer,
+                               fall back to
                                local Ollama
 
     ``run_cloud`` / ``run_ollama`` are async ``(on_token) -> result dict``
@@ -156,8 +156,8 @@ async def run_with_fallback(
     if route in ("skip", "ollama", "configured"):
         return await run_ollama(on_token)
 
-    # route == "cloud": count streamed tokens so a long-but-unstreamed canned
-    # backend reply is recognised as a placeholder, not a real generation.
+    # Route == "cloud": track streamed chunks for telemetry only. A response
+    # delivered in one final event is still a valid answer.
     _tokens = [0]
 
     def _counting_on_token(tok: str) -> None:

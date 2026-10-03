@@ -42,8 +42,9 @@ class ChatRoutingTests(unittest.TestCase):
 
     def test_is_placeholder_response(self):
         self.assertTrue(is_placeholder_response("", 10))
-        self.assertTrue(is_placeholder_response("short", 10))
-        self.assertTrue(is_placeholder_response("x" * 100, token_count=1))  # canned, ~no tokens
+        self.assertTrue(is_placeholder_response("  ", 10))
+        self.assertFalse(is_placeholder_response("short", 10))
+        self.assertFalse(is_placeholder_response("x" * 100, token_count=1))
         self.assertTrue(is_placeholder_response("stub help text here ok", 50,
                                                 stub_detector=lambda r: True))
         self.assertFalse(is_placeholder_response("A real, sufficiently long answer.", 50))

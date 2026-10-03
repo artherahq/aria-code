@@ -34,17 +34,17 @@ Install the standalone CLI on macOS or Linux without Python, Node.js, or npm:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/artheras/aria-code/main/scripts/install.sh | sh
-~/.local/bin/aria-code --help
+~/.local/bin/aria
 ```
 
 On Windows x64, run this in PowerShell:
 
 ```powershell
 irm https://raw.githubusercontent.com/artheras/aria-code/main/scripts/install.ps1 | iex
-aria-code --help
+aria
 ```
 
-The installer downloads the binary for your OS from the latest [GitHub release](https://github.com/artheras/aria-code/releases/latest), checks its SHA-256 digest, and installs it in your user account. Open a new terminal to use `aria-code` by name on macOS or Linux. Set `ARIA_CODE_VERSION=v0.55.0` to pin a release.
+The installer downloads the binary for your OS from the latest [GitHub release](https://github.com/artheras/aria-code/releases/latest), checks its SHA-256 digest, and installs it in your user account. Open a new terminal to start the interactive CLI with `aria`, `aria code`, or `aria-code`. Set `ARIA_CODE_VERSION=v0.55.0` to pin a release.
 
 Alternative package-manager installs: `npm install -g @artheras/aria-code` (requires npm) or `python3 -m pip install --upgrade aria-code` (requires Python 3.10+). For development from source, see [CONTRIBUTING.md](CONTRIBUTING.md).
 

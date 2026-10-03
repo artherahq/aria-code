@@ -1,4 +1,5 @@
 import io
+from contextlib import redirect_stdout
 
 from rich import box
 from rich.console import Console
@@ -89,6 +90,16 @@ def test_minimal_layout_drops_panel_chrome():
     assert "71 tools · 14 skills" in rendered
     assert "╭" not in rendered
     assert "Runtime" not in rendered
+    assert "▄▄▄▄▄▄▄▄▄" in rendered
+
+
+def test_plain_terminal_also_shows_robot():
+    output = io.StringIO()
+    with redirect_stdout(output):
+        render_startup_dashboard(
+            _view(), console=None, has_rich=False, rich_box=None,
+        )
+    assert "▄▄▄▄▄▄▄▄▄" in output.getvalue()
 
 
 def test_chinese_view_model_localizes_sections():

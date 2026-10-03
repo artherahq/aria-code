@@ -52,6 +52,14 @@ mkdir -p "$install_dir"
 cp "$tmp_dir/$asset" "$install_dir/.aria-code-new-$$"
 chmod 755 "$install_dir/.aria-code-new-$$"
 mv -f "$install_dir/.aria-code-new-$$" "$install_dir/aria-code"
+cat > "$tmp_dir/aria" <<'EOF'
+#!/bin/sh
+if [ "${1-}" = code ]; then shift; fi
+exec "$(dirname "$0")/aria-code" "$@"
+EOF
+chmod 755 "$tmp_dir/aria"
+cp "$tmp_dir/aria" "$install_dir/.aria-new-$$"
+mv -f "$install_dir/.aria-new-$$" "$install_dir/aria"
 
 if [ -z "${ARIA_CODE_INSTALL_DIR:-}" ]; then
   case "${SHELL:-}" in
@@ -67,4 +75,4 @@ if [ -z "${ARIA_CODE_INSTALL_DIR:-}" ]; then
 fi
 
 printf 'Installed %s\n' "$install_dir/aria-code"
-printf 'Run it now: %s --help\n' "$install_dir/aria-code"
+printf 'Run it now: %s or %s code\n' "$install_dir/aria-code" "$install_dir/aria"

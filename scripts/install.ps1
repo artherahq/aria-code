@@ -36,6 +36,7 @@ try {
     New-Item -ItemType Directory -Force -Path $installDir | Out-Null
     $destination = Join-Path $installDir 'aria-code.exe'
     Copy-Item -Force $binary $destination
+    Copy-Item -Force $binary (Join-Path $installDir 'aria.exe')
 
     if (-not $env:ARIA_CODE_INSTALL_DIR) {
         $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')

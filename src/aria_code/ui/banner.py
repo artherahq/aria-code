@@ -308,6 +308,10 @@ def render_startup_dashboard(
 ) -> None:
     """Render startup state using a layout selected from terminal width."""
     if not has_rich:
+        from .robot import ROBOT_ROW_COUNT, get_robot_row
+
+        for row in range(ROBOT_ROW_COUNT):
+            print("  " + "".join(fragment for _, fragment in get_robot_row(0, row)))
         print(f"\n  Aria Code v{view.version}")
         print(f"  {view.runtime_label}")
         print(f"  {view.cwd}")
@@ -329,15 +333,19 @@ def render_startup_dashboard(
     layout = select_dashboard_layout(width, height)
 
     if layout == "minimal":
-        console.print(
-            f"  {_MASCOT} {_mark('primary', 'Aria Code')} "
-            f"{_mark('subtle', f'v{view.version}')} {_mark('dim', '·')} "
-            f"{_normalize_dim_markup(view.runtime_label)}"
+        identity = Table.grid(padding=(0, 1))
+        identity.add_column(no_wrap=True, vertical="top")
+        identity.add_column(vertical="middle")
+        identity.add_row(
+            _robot_text(),
+            Text.from_markup(
+                f"{_mark('primary', 'Aria Code')} {_mark('subtle', f'v{view.version}')}\n"
+                f"{_normalize_dim_markup(view.runtime_label)}\n"
+                f"{_mark('muted', escape(view.cwd))}\n"
+                f"{_mark('muted', escape(view.capabilities))}"
+            ),
         )
-        console.print(
-            f"  {_mark('muted', escape(view.cwd))} {_mark('dim', '·')} "
-            f"{_mark('muted', escape(view.capabilities))}"
-        )
+        console.print(identity)
         return
 
     identity = Table.grid(padding=(0, 2))

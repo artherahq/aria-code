@@ -53,6 +53,9 @@ class NativeInstallerTest(unittest.TestCase):
         result, root = self.run_installer(valid_checksum=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue((root / ".local/bin/aria-code").is_file())
+        aria = root / ".local/bin/aria"
+        self.assertTrue(aria.is_file())
+        self.assertEqual(subprocess.run([str(aria), "code", "--version"], text=True, capture_output=True).stdout.strip(), "v0.55.0")
         self.assertIn('export PATH="$HOME/.local/bin:$PATH"', (root / ".zprofile").read_text())
 
     def test_rejects_checksum_mismatch_before_installing(self) -> None:
@@ -60,6 +63,7 @@ class NativeInstallerTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("checksum mismatch", result.stderr)
         self.assertFalse((root / ".local/bin/aria-code").exists())
+        self.assertFalse((root / ".local/bin/aria").exists())
 
 
 if __name__ == "__main__":

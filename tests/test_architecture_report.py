@@ -1,6 +1,10 @@
 import unittest
+import io
+from types import SimpleNamespace
 
-from aria_code.apps.cli.commands.diagnostic_ops_cmds import format_architecture_report
+from rich.console import Console
+
+from aria_code.apps.cli.commands.diagnostic_ops_cmds import DiagnosticOpsCommandsMixin, format_architecture_report
 from aria_code.packages.aria_core import architecture_status_counts, list_architecture_layers
 
 
@@ -29,6 +33,15 @@ class ArchitectureReportTests(unittest.TestCase):
     def test_rich_markup_emitted(self):
         lines = format_architecture_report(self.layers, self.counts, rich=True)
         self.assertTrue(any("[bold]" in ln for ln in lines))
+
+    def test_command_renders_architecture_panel(self):
+        console = Console(file=io.StringIO(), record=True, width=100, force_terminal=False)
+        command = DiagnosticOpsCommandsMixin()
+        command.context = SimpleNamespace(console=console, has_rich=True)
+        command.cmd_architecture("--gaps")
+        rendered = console.export_text()
+        self.assertIn("Aria 架构", rendered)
+        self.assertIn("send_message", rendered)
 
 
 if __name__ == "__main__":
