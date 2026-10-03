@@ -86,6 +86,10 @@ class NativeInstallerTest(unittest.TestCase):
         self.assertEqual(self.command.resolve(), (app / "aria-code-bin").resolve())
         run = subprocess.run([str(self.command), "--version"], capture_output=True, text=True)
         self.assertEqual(run.stdout.strip(), "v0.55.0")
+        alias = self.command.with_name("aria")
+        self.assertTrue(alias.is_file())
+        run_alias = subprocess.run([str(alias), "code", "--version"], capture_output=True, text=True)
+        self.assertEqual(run_alias.stdout.strip(), "v0.55.0")
         self.assertIn('export PATH="$HOME/.local/bin:$PATH"', (self.root / ".zprofile").read_text())
 
     def test_reinstalling_replaces_the_previous_build(self) -> None:
@@ -110,6 +114,10 @@ class NativeInstallerTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(self.command.is_file())
         self.assertFalse(self.command.is_symlink())
+        alias = self.command.with_name("aria")
+        self.assertTrue(alias.is_file())
+        run_alias = subprocess.run([str(alias), "code", "--version"], capture_output=True, text=True)
+        self.assertEqual(run_alias.stdout.strip(), "v0.55.0")
 
     def test_rejects_checksum_mismatch_before_installing(self) -> None:
         for publish in (self.publish_onedir, self.publish_single_file):
@@ -118,6 +126,7 @@ class NativeInstallerTest(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("checksum mismatch", result.stderr)
                 self.assertFalse(self.command.exists())
+                self.assertFalse(self.command.with_name("aria").exists())
                 self.assertFalse((self.root / ".local/share/aria-code").exists())
 
     def test_a_release_without_this_platform_says_so(self) -> None:
@@ -147,6 +156,7 @@ class WindowsInstallerMatchesTheRelease(unittest.TestCase):
         self.assertIn("Join-Path $build 'aria-code-bin.exe'", self.script)
         self.assertIn("Move-Item (Join-Path $build '_internal') $libraries", self.script)
         self.assertIn("$libraries = Join-Path $installDir '_internal'", self.script)
+        self.assertIn("Copy-Item -Force $destination (Join-Path $installDir 'aria.exe')", self.script)
 
     def test_verifies_before_replacing_anything(self) -> None:
         checked = self.script.index("Checksum mismatch")

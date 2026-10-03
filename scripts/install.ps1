@@ -76,6 +76,7 @@ try {
         # The bootloader finds _internal beside itself whatever the exe is called.
         Move-Item $exe $destination
     }
+    Copy-Item -Force $destination (Join-Path $installDir 'aria.exe')
 
     if (-not $env:ARIA_CODE_INSTALL_DIR) {
         $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')

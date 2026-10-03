@@ -10,8 +10,9 @@ roughly a third of Vertex turns died fetching an OAuth token.
 import inspect
 import ssl
 import unittest
+from unittest.mock import patch
 
-from aria_code.apps.cli.bootstrap import initialize_cli_environment, use_system_trust_store
+from aria_code.apps.cli.bootstrap import initialize_cli_environment, use_system_trust_store, use_macos_ca_bundle
 
 
 class TrustStoreTests(unittest.TestCase):
@@ -21,6 +22,17 @@ class TrustStoreTests(unittest.TestCase):
     def test_it_is_applied_at_startup(self):
         source = inspect.getsource(initialize_cli_environment)
         self.assertIn("use_system_trust_store()", source)
+        self.assertIn("use_macos_ca_bundle()", source)
+
+    def test_macos_missing_ca_uses_verified_system_bundle(self):
+        from pathlib import Path
+        with patch("aria_code.apps.cli.bootstrap.sys.platform", "darwin"), \
+             patch("aria_code.apps.cli.bootstrap.ssl.get_default_verify_paths") as paths, \
+             patch("aria_code.apps.cli.bootstrap.Path.is_file", return_value=True), \
+             patch.dict("os.environ", {}, clear=True):
+            paths.return_value.cafile = None
+            self.assertTrue(use_macos_ca_bundle())
+            self.assertEqual(__import__("os").environ["SSL_CERT_FILE"], str(Path("/etc/ssl/cert.pem")))
 
     def test_a_default_context_still_verifies(self):
         # The tempting wrong fix is to disable verification, which accepts any

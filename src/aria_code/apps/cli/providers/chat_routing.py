@@ -101,15 +101,18 @@ def is_placeholder_response(
     token_count: int,
     stub_detector: Optional[Callable[[str], bool]] = None,
 ) -> bool:
-    """A 'successful' result that is actually empty / canned / a backend stub."""
+    """Detect empty or explicitly recognized stubs, never infer from length.
+
+    ``token_count`` remains in the signature for existing callers, but an SSE
+    final event can contain a valid answer without any streamed token events.
+    """
     resp = response or ""
-    if len(resp) < 20:
+    if not resp.strip():
         return True
     if stub_detector is not None and stub_detector(resp):
         return True
-    # Long "response" with ~no streamed tokens ⇒ canned backend reply, not a generation.
-    if token_count <= 2 and len(resp) > 80:
-        return True
+    # A short answer ("OK") or a long answer in one SSE final event is valid.
+    # Token counts describe transport chunking, not answer quality.
     return False
 
 

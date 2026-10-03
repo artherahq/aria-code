@@ -3917,6 +3917,7 @@ class ArtheraTerminal:
 
     def __init__(self, config: dict):
         self.config = config
+        self._session_banner_mode: Optional[str] = None
         self.context = AriaContext(
             console=globals().get('console'),
             config=config,
@@ -4202,9 +4203,27 @@ class ArtheraTerminal:
             if len(wl) > 5:
                 wl_str += f" +{len(wl) - 5}"
 
-        _badge = m.get("badge", "")
-        _runtime = "cloud" if _badge == "Cloud" or "cloud" in current_id.lower() else "local"
-        _banner_mode = self.config.get("banner", "full")  # full | compact | off
+        from apps.cli.providers.chat_routing import model_provider
+        _provider = model_provider(current_id)
+        _cloud_provider = bool(_provider and _provider not in {"ollama", "lmstudio"})
+        _runtime = (
+            "cloud" if self.config.get("backend_chat") or _cloud_provider
+            or m.get("badge") == "Cloud" or "cloud" in current_id.lower()
+            else "local"
+        )
+        _badge = "Cloud" if _runtime == "cloud" else m.get("badge", "")
+        _uses_google = (
+            _provider in {"google", "vertexai", "vertex-ai", "google-genai"}
+            or current_id.lower().startswith("gemini")
+            or self.config.get("local_provider") in {"vertex", "google"}
+        )
+        _health_status = (
+            ("Google Cloud · via Arthera API" if _uses_google else "Arthera API · cloud")
+            if self.config.get("backend_chat") else
+            "Cloud model configured" if _cloud_provider else
+            self._ollama_status_label(rich=True)
+        )
+        _banner_mode = self._session_banner_mode or self.config.get("banner", "full")
         _mascot = "[bold #C08050]▣[/bold #C08050]"
 
         if _banner_mode == "off":
@@ -4264,7 +4283,7 @@ class ArtheraTerminal:
                     runtime_label=_rt_label,
                     cwd=cwd,
                     control_status=self._control_status_label(rich=True),
-                    health_status=self._ollama_status_label(rich=True),
+                    health_status=_health_status,
                     tool_count=tool_count,
                     skill_count=skill_count,
                     lang=_ui_lang,
@@ -6603,10 +6622,10 @@ Examples:
             config["local_provider"] = "ollama"
     if getattr(args, "local", False):
         config["local_mode"] = True
-    if getattr(args, "no_banner", False):
-        config["banner"] = "off"
-    elif getattr(args, "banner", None):
-        config["banner"] = args.banner
+    # Banner flags apply only to this invocation; the REPL saves config on exit.
+    session_banner_mode = (
+        "off" if getattr(args, "no_banner", False) else getattr(args, "banner", None)
+    )
     if args.thinking:
         config["thinking_mode"] = "thinking"
     if args.url:
@@ -6631,6 +6650,7 @@ Examples:
             console.print(f"[dim]Auto-allowed tools: {', '.join(sorted(_session_always_allow))}[/dim]")
 
     terminal = ArtheraTerminal(config)
+    terminal._session_banner_mode = session_banner_mode
 
     # Resume session
     if args.resume or args.session:
@@ -6677,7 +6697,7 @@ Examples:
         return
 
     # Mode 2: Direct command
-    if args.command:
+    if args.command and not (args.command.lower() == "code" and not args.args):
         cmd = args.command.lower()
         cmd_args = " ".join(args.args)
 

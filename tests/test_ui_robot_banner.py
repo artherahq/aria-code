@@ -27,11 +27,14 @@ class RobotBannerTests(unittest.TestCase):
         rows = ["".join(text for _, text in get_robot_row(2, row)) for row in range(ROBOT_ROW_COUNT)]
 
         self.assertEqual(rows, [
-            " ▄▄▄▄▄▄▄▄▄ ",
-            "           ",
-            "▪  ▀   ▬  ▪",
-            " ▬▬▬▬▬▬▬▬▬ ",
-            "  ▀ ▀ ▀ ▀  ",
+            "  ▄▄▄▄▄▄▄▄▄▄▄  ",
+            "               ",
+            "               ",
+            "▪    █   ▬    ▪",
+            "               ",
+            "               ",
+            " ▂▂▂▂▂▂▂▂▂▂▂▂▂ ",
+            "  ▀▀ ▀▀ ▀▀ ▀▀  ",
         ])
 
     def test_robot_uses_distinct_styles_for_screen_and_accents(self):

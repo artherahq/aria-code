@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 import socket
+import ssl
+import sys
 import urllib.parse
 from pathlib import Path
 
@@ -82,11 +84,30 @@ def use_system_trust_store() -> bool:
         return False
 
 
+def use_macos_ca_bundle() -> bool:
+    """Use macOS's verified CA bundle when Python has no default CA file.
+
+    Some standalone Python runtimes have no configured OpenSSL CA path, while
+    curl and the system browser can verify the same HTTPS service. This keeps
+    verification enabled and respects an explicit SSL_CERT_FILE override.
+    """
+    if sys.platform != "darwin" or os.environ.get("SSL_CERT_FILE"):
+        return False
+    if ssl.get_default_verify_paths().cafile:
+        return False
+    bundle = Path("/etc/ssl/cert.pem")
+    if not bundle.is_file():
+        return False
+    os.environ["SSL_CERT_FILE"] = str(bundle)
+    return True
+
+
 def initialize_cli_environment() -> None:
     os.environ.setdefault("TQDM_DISABLE", "1")
     load_aria_env()
     disable_broken_proxy()
-    use_system_trust_store()
+    if not use_system_trust_store():
+        use_macos_ca_bundle()
 
 
 # The model used when nothing has been configured yet.

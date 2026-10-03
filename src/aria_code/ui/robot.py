@@ -5,9 +5,9 @@ States
   The mascot stays visually stable at startup. Runtime state is shown by the
   compact status dot so the banner keeps the same low-noise feel as Claude Code.
 
-Robot shape (7 rows, 13 columns, hand-placed). It is intentionally drawn as a
-terminal icon, not a raster-image conversion: light shell, dark screen, one
-white eye, one copper eye, a copper status strip, and four small legs.
+The canonical pixel artwork is ``assets/aria-robot.png``. This character-cell
+silhouette follows its cap, recessed screen, asymmetric eyes, ear nubs, copper
+base and four feet for terminals that cannot render inline images.
 """
 
 from __future__ import annotations
@@ -148,24 +148,23 @@ def detect_theme() -> str:
     return _theme_cache
 
 
-# 11 cols × 5 rows — a SOLID body with a "monitor" screen cut into it, modelled on
-# the minimal robot icon and kept short/flat to sit beside the three-line banner
-# text. Each cell is ``(palette-role, text)``; get_robot_row() resolves the role
-# to a themed style. Layout: ▄ top cap · screen · eye(▀) + dash(▬) + ear dots(▪)
-# · copper strip(▬) · legs(▀).
+# 15 columns × 8 rows. The extra screen and shell rows restore the proportions
+# of the supplied artwork. Each cell is (palette-role, text).
 _MASCOT_TEMPLATE = [
-    [("", " "), ("shelltop", "▄▄▄▄▄▄▄▄▄"), ("", " ")],
-    [("", " "), ("shell", " "), ("screen", "       "), ("shell", " "), ("", " ")],
+    [("", "  "), ("shelltop", "▄▄▄▄▄▄▄▄▄▄▄"), ("", "  ")],
+    [("", " "), ("shell", "             "), ("", " ")],
+    [("", " "), ("shell", " "), ("screen", "           "), ("shell", " "), ("", " ")],
     [
-        ("ear", "▪"), ("shell", " "),
-        ("screen", " "), ("eye", "▀"), ("screen", "   "),
-        ("dash", "▬"), ("screen", " "),
-        ("shell", " "), ("ear", "▪"),
+        ("ear", "▪"), ("shell", " "), ("screen", "   "),
+        ("eye", "█"), ("screen", "   "), ("dash", "▬"),
+        ("screen", "   "), ("shell", " "), ("ear", "▪"),
     ],
-    [("", " "), ("strip", "▬▬▬▬▬▬▬▬▬"), ("", " ")],
+    [("", " "), ("shell", " "), ("screen", "           "), ("shell", " "), ("", " ")],
+    [("", " "), ("shell", "             "), ("", " ")],
+    [("", " "), ("strip", "▂▂▂▂▂▂▂▂▂▂▂▂▂"), ("", " ")],
     [
-        ("", "  "), ("leg", "▀"), ("", " "), ("leg", "▀"), ("", " "),
-        ("leg", "▀"), ("", " "), ("leg", "▀"), ("", "  "),
+        ("", "  "), ("leg", "▀▀"), ("", " "), ("leg", "▀▀"), ("", " "),
+        ("leg", "▀▀"), ("", " "), ("leg", "▀▀"), ("", "  "),
     ],
 ]
 
@@ -188,8 +187,8 @@ def _resolve_eyes(state: RobotState, tick: int) -> tuple[str, str]:
 def get_robot_row(tick: int, row: int) -> list:
     """Return FormattedText fragments for a single robot row, themed.
 
-    Rows: 0 shell top · 1 screen · 2 ear dots + eyes (square · dash) · 3 copper
-    strip · 4 legs. Each role is resolved to a colour for the active light/dark
+    Rows: cap, shell top, recessed screen, eyes and ears, screen bottom,
+    shell bottom, copper base, four feet. Roles follow the active light/dark
     theme (see detect_theme()).
     """
     del tick

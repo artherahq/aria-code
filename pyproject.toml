@@ -215,6 +215,7 @@ all = [
 
 [project.scripts]
 aria-code = "aria_code.apps.cli.main:main"
+aria = "aria_code.apps.cli.main:main"
 aria-code-mcp = "aria_code.aria_mcp_server:main"
 
 [project.urls]

@@ -59,23 +59,23 @@ async def test_cloud_failure_falls_back_to_ollama():
     assert c["n"] == 1 and o["n"] == 1
 
 
-async def test_cloud_short_placeholder_falls_back():
-    # success, but a tiny (<20 char) canned reply → placeholder
+async def test_cloud_short_answer_is_kept():
+    # A brief answer is still a successful model answer.
     cloud, c = _make_runner(_ok("ok"))
     ollama, o = _make_runner(_ok("ollama produced the real, full answer here"))
     res = await run_with_fallback("cloud", run_cloud=cloud, run_ollama=ollama)
-    assert res["response"].startswith("ollama produced")
-    assert o["n"] == 1
+    assert res["response"] == "ok"
+    assert c["n"] == 1 and o["n"] == 0
 
 
-async def test_cloud_long_but_unstreamed_stub_falls_back():
-    # long response but ~zero streamed tokens ⇒ backend stub, not a generation
+async def test_cloud_final_event_answer_is_kept():
+    # Some gateways return an entire valid answer in a final SSE event.
     stub = "This is a long canned backend help message that was not streamed. " * 3
     cloud, c = _make_runner(_ok(stub), stream="")  # 0 tokens streamed
     ollama, o = _make_runner(_ok("ollama real generation here"))
     res = await run_with_fallback("cloud", run_cloud=cloud, run_ollama=ollama)
-    assert res["response"].startswith("ollama real")
-    assert o["n"] == 1
+    assert res["response"] == stub
+    assert c["n"] == 1 and o["n"] == 0
 
 
 async def test_cloud_cancelled_does_not_fall_back():
