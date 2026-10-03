@@ -1,6 +1,6 @@
-"""Background npm-registry version checker for Aria Code.
+"""Background version checker for the active Aria Code install channel.
 
-Checks registry.npmjs.org once per 24 hours in a daemon thread so startup is
+Checks GitHub, scoped npm, or PyPI once per 24 hours in a daemon thread so startup is
 never blocked.  The result is cached to ~/.arthera/update_check.json and read
 at banner render time.
 
@@ -17,13 +17,16 @@ Public API
 from __future__ import annotations
 
 import json
+import sys
 import threading
 import time
 from pathlib import Path
 from typing import Optional
 from aria_code.packages.aria_core.paths import aria_home
 
-_NPM_URL       = "https://registry.npmjs.org/aria-code/latest"
+_RELEASE_URL   = "https://api.github.com/repos/artheras/aria-code/releases/latest"
+_NPM_URL       = "https://registry.npmjs.org/@artheras%2Faria-code/latest"
+_PYPI_URL      = "https://pypi.org/pypi/aria-code/json"
 _CACHE_FILE    = aria_home() / "update_check.json"
 _CACHE_TTL_S   = 86_400      # 24 hours
 _FETCH_TIMEOUT = 4           # seconds — fail cleanly on slow networks
@@ -34,19 +37,16 @@ _lock   = threading.Lock()
 
 # ── Version comparison ────────────────────────────────────────────────────────
 
-def _parse(v: str) -> tuple[int, ...]:
-    """'4.1.2' → (4, 1, 2).  Tolerates 'v' prefix and non-numeric suffixes."""
-    parts: list[int] = []
-    for seg in v.lstrip("v").split("."):
-        try:
-            parts.append(int(seg))
-        except ValueError:
-            break
-    return tuple(parts) or (0,)
+def _parse(v: str) -> tuple[int, int, int] | None:
+    """Accept only stable project release tags, never another package's version."""
+    import re
+    match = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)", v.strip())
+    return tuple(map(int, match.groups())) if match else None
 
 
 def _newer(latest: str, current: str) -> bool:
-    return _parse(latest) > _parse(current)
+    parsed_latest, parsed_current = _parse(latest), _parse(current)
+    return parsed_latest is not None and parsed_current is not None and parsed_latest > parsed_current
 
 
 # ── Cache helpers ─────────────────────────────────────────────────────────────
@@ -68,8 +68,28 @@ def _write_cache(data: dict) -> None:
 
 # ── Notice builder ────────────────────────────────────────────────────────────
 
-def _build_notice(latest: str, current: str, lang: str) -> str:
-    cmd = "npm update -g @artheras/aria-code"
+def _install_channel() -> str:
+    """Infer which update channel owns the running executable."""
+    executable = str(getattr(sys, "executable", "") or "").lower()
+    if "node_modules" in executable and "aria" in executable:
+        return "npm"
+    return "native" if getattr(sys, "frozen", False) else "pip"
+
+
+def _update_command(channel: str) -> str:
+    if channel == "npm":
+        return "npm install -g @artheras/aria-code@latest"
+    if channel == "pip":
+        return "python3 -m pip install --upgrade aria-code"
+    if sys.platform == "win32":
+        return "irm https://raw.githubusercontent.com/artheras/aria-code/main/scripts/install.ps1 | iex"
+    return "curl -fsSL https://raw.githubusercontent.com/artheras/aria-code/main/scripts/install.sh | sh"
+
+
+def _build_notice(latest: str, current: str, lang: str, channel: str = "native") -> str:
+    latest = latest.removeprefix("v")
+    current = current.removeprefix("v")
+    cmd = _update_command(channel)
     if lang == "zh":
         return (
             f"[yellow]⬆  新版本可用[/yellow] "
@@ -85,48 +105,61 @@ def _build_notice(latest: str, current: str, lang: str) -> str:
 
 # ── Background worker ─────────────────────────────────────────────────────────
 
-def _worker(current: str, lang: str) -> None:
+def _worker(current: str, lang: str, channel: str = "native") -> None:
     global _notice
+    sources = {
+        "native": (_RELEASE_URL, "tag_name"),
+        "npm": (_NPM_URL, "version"),
+        "pip": (_PYPI_URL, "info"),
+    }
+    source_url, version_field = sources[channel]
 
     # 1. Serve from cache if still fresh
     cache = _read_cache()
     now   = time.time()
-    if cache.get("checked_at", 0) + _CACHE_TTL_S > now:
+    if cache.get("source") == source_url and cache.get("checked_at", 0) + _CACHE_TTL_S > now:
         latest = cache.get("latest", "")
         if latest and _newer(latest, current):
             with _lock:
-                _notice = _build_notice(latest, current, lang)
+                _notice = _build_notice(latest, current, lang, channel)
         return
 
-    # 2. Fetch npm registry
+    # 2. Fetch metadata for this installation channel, never a similarly named package.
     try:
         import urllib.request
         req = urllib.request.Request(
-            _NPM_URL,
-            headers={"Accept": "application/json"},
+            source_url,
+            headers={"Accept": "application/vnd.github+json", "User-Agent": "aria-code-update-check"},
         )
         with urllib.request.urlopen(req, timeout=_FETCH_TIMEOUT) as resp:
             data   = json.loads(resp.read())
-            latest = data["version"]
+            latest = data[version_field]
+            if channel == "pip":
+                latest = latest["version"]
     except Exception:
         return   # network error → silently skip, try again next day
 
     # 3. Persist to cache
-    _write_cache({"checked_at": now, "latest": latest})
+    if _parse(latest) is None:
+        return
+    _write_cache({"source": source_url, "checked_at": now, "latest": latest})
 
     # 4. Set notice
     if _newer(latest, current):
         with _lock:
-            _notice = _build_notice(latest, current, lang)
+            _notice = _build_notice(latest, current, lang, channel)
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def start_update_check(current_version: str, lang: str = "en") -> None:
     """Start background version check. Call once, early in startup."""
+    global _notice
+    with _lock:
+        _notice = None
     t = threading.Thread(
         target=_worker,
-        args=(current_version, lang),
+        args=(current_version, lang, _install_channel()),
         daemon=True,
         name="aria-update-check",
     )

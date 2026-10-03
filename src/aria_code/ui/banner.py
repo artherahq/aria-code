@@ -335,7 +335,7 @@ def render_startup_dashboard(
     if layout == "minimal":
         identity = Table.grid(padding=(0, 1))
         identity.add_column(no_wrap=True, vertical="top")
-        identity.add_column(vertical="middle")
+        identity.add_column(vertical="top")
         identity.add_row(
             _robot_text(),
             Text.from_markup(
@@ -350,7 +350,7 @@ def render_startup_dashboard(
 
     identity = Table.grid(padding=(0, 2))
     identity.add_column(no_wrap=True, vertical="top")
-    identity.add_column(vertical="middle")
+    identity.add_column(vertical="top")
     identity.add_row(_robot_text(), Text.from_markup(_identity_markup(view)))
 
     border_style = _banner_style("dim")
@@ -369,7 +369,8 @@ def render_startup_dashboard(
     body.add_column(ratio=5, vertical="top")
     body.add_column(width=1, vertical="top")
     body.add_column(ratio=6, vertical="top")
-    divider = Text("\n".join("│" for _ in range(5)), style=_banner_style("dim"))
+    from .robot import ROBOT_ROW_COUNT
+    divider = Text("\n".join("│" for _ in range(ROBOT_ROW_COUNT)), style=_banner_style("dim"))
     body.add_row(identity, divider, Text.from_markup(_compact_guidance_markup(view)))
     console.print(Panel(body, title=panel_title, title_align="left", box=panel_box, border_style=border_style, padding=(0, 1)))
 

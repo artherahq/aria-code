@@ -64,7 +64,7 @@ def test_80_column_layout_is_compact_two_column_dashboard():
     assert "Quick start" not in rendered
     assert "Local: Ollama 3" in rendered
     assert "│" in rendered
-    assert len(rendered.splitlines()) <= 7
+    assert len(rendered.splitlines()) <= 11
     assert all(len(line) <= 80 for line in rendered.splitlines())
 
 
@@ -80,7 +80,7 @@ def test_80_column_first_run_does_not_wrap():
     assert "Quick start" in rendered
     assert "main · dirty" in rendered
     assert "MCP 1 · 71 tools" in rendered
-    assert len(rendered.splitlines()) <= 7
+    assert len(rendered.splitlines()) <= 11
 
 
 def test_minimal_layout_drops_panel_chrome():
@@ -90,7 +90,7 @@ def test_minimal_layout_drops_panel_chrome():
     assert "71 tools · 14 skills" in rendered
     assert "╭" not in rendered
     assert "Runtime" not in rendered
-    assert "▄▄▄▄▄▄▄▄▄" in rendered
+    assert "▄▄▄▄▄▄▄▄▄▄▄" in rendered
 
 
 def test_plain_terminal_also_shows_robot():
@@ -99,7 +99,7 @@ def test_plain_terminal_also_shows_robot():
         render_startup_dashboard(
             _view(), console=None, has_rich=False, rich_box=None,
         )
-    assert "▄▄▄▄▄▄▄▄▄" in output.getvalue()
+    assert "▄▄▄▄▄▄▄▄▄▄▄" in output.getvalue()
 
 
 def test_chinese_view_model_localizes_sections():

@@ -1,0 +1,75 @@
+"""Release metadata and service diagnostics follow the selected installation and route."""
+
+import io
+import time
+import unittest
+from unittest.mock import patch
+
+from aria_code.apps.cli import update_check
+from aria_code.apps.cli.commands.diagnostic_cmds import _health_targets
+
+
+class UpdateAndHealthTests(unittest.TestCase):
+    def test_old_unscoped_registry_cache_is_ignored(self):
+        with patch.object(update_check, "_read_cache", return_value={
+            "checked_at": time.time(), "latest": "4.1.0",
+        }), patch("urllib.request.urlopen", side_effect=OSError("offline")) as fetch:
+            update_check._notice = None
+            update_check._worker("0.56.0", "en")
+        fetch.assert_called_once()
+        self.assertIsNone(update_check._notice)
+
+    def test_release_cache_and_version_are_validated(self):
+        self.assertTrue(update_check._newer("v0.62.0", "0.56.0"))
+        self.assertFalse(update_check._newer("v4.1.0-beta", "0.56.0"))
+        self.assertFalse(update_check._newer("not-a-version", "0.56.0"))
+        with patch.object(update_check, "_read_cache", return_value={
+            "source": update_check._RELEASE_URL,
+            "checked_at": time.time(), "latest": "v0.62.0",
+        }):
+            update_check._notice = None
+            update_check._worker("0.56.0", "en")
+        self.assertIn("v0.62.0", update_check._notice)
+        self.assertNotIn("vv0.62.0", update_check._notice)
+        self.assertIn("scripts/install.sh", update_check._notice)
+
+    def test_each_install_channel_has_its_own_source_and_command(self):
+        self.assertEqual(update_check._update_command("npm"), "npm install -g @artheras/aria-code@latest")
+        self.assertIn("pip install --upgrade aria-code", update_check._update_command("pip"))
+        self.assertIn("%2Faria-code", update_check._NPM_URL)
+        with patch.object(update_check, "_read_cache", return_value={}), \
+                patch.object(update_check, "_write_cache") as save, \
+                patch("urllib.request.urlopen", return_value=io.BytesIO(b'{"version":"0.62.0"}')) as fetch:
+            update_check._notice = None
+            update_check._worker("0.56.0", "en", "npm")
+        self.assertEqual(fetch.call_args.args[0].full_url, update_check._NPM_URL)
+        self.assertEqual(save.call_args.args[0]["source"], update_check._NPM_URL)
+        self.assertIn("npm install -g @artheras/aria-code@latest", update_check._notice)
+
+    def test_health_checks_only_the_active_cloud_backend(self):
+        targets, message = _health_targets({
+            "model": "gemini-3.8-flash", "backend_chat": True,
+        }, "https://api.arthera.finance")
+        self.assertEqual(targets, [
+            ("Google Cloud · Arthera API", "https://api.arthera.finance", "/health"),
+        ])
+        self.assertEqual(message, "")
+
+    def test_direct_cloud_provider_is_not_misreported_offline(self):
+        targets, message = _health_targets({
+            "model": "google/gemini-2.5-pro", "backend_chat": False,
+        }, "https://api.arthera.finance")
+        self.assertEqual(targets, [])
+        self.assertIn("configured (not probed)", message)
+
+    def test_local_route_checks_ollama_only(self):
+        targets, message = _health_targets({
+            "model": "qwen2.5:7b", "backend_chat": False,
+            "local_provider": "ollama",
+        }, "https://api.arthera.finance")
+        self.assertEqual(targets[0][0], "Ollama")
+        self.assertEqual(message, "")
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -13,6 +13,26 @@ import time
 import shlex
 from typing import Dict, Any, Optional
 
+
+def _health_targets(config: dict, api_url: str) -> tuple[list[tuple[str, str, str]], str]:
+    """Probe only the service used by the selected chat route."""
+    from aria_code.apps.cli.providers.chat_routing import model_provider
+
+    model = str(config.get("model") or "")
+    provider = model_provider(model)
+    cloud_model = bool(provider and provider not in {"ollama", "lmstudio"}) or model.lower().startswith("gemini")
+    if config.get("backend_chat"):
+        label = "Google Cloud · Arthera API" if cloud_model else "Arthera API"
+        return [(label, api_url, "/health")], ""
+    if cloud_model:
+        return [], f"{model} · {provider or 'google'} configured (not probed)"
+    local_provider = str(config.get("local_provider") or "ollama").lower()
+    if local_provider == "ollama":
+        return [("Ollama", config.get("ollama_url", "http://localhost:11434"), "/api/tags")], ""
+    if local_provider in {"local", "local-server", "server"}:
+        return [("Local Server", config.get("local_url", "http://localhost:8001"), "/health")], ""
+    return [], f"{local_provider} configured (not probed)"
+
 def _get_ARIA_TOOLS():
     # Owned by apps/cli/tool_registry.py; aria_cli fills it in place.
     from ..tool_registry import ARIA_TOOLS as val
@@ -70,7 +90,15 @@ class DiagnosticCommandsMixin:
 
         _lp = t._last_provider or ""
         _badge = next((v.get("badge", "") for v in _get_MODELS().values() if v["id"] == model_id), "")
-        if _lp == "ollama":
+        from aria_code.apps.cli.providers.chat_routing import model_provider
+        selected_provider = model_provider(model_id)
+        if cfg.get("backend_chat"):
+            runtime = "cloud (Arthera API)"
+        elif selected_provider and selected_provider not in {"ollama", "lmstudio"}:
+            runtime = f"cloud ({selected_provider})"
+        elif model_id.lower().startswith("gemini"):
+            runtime = "cloud (google)"
+        elif _lp == "ollama":
             runtime = "local (Ollama)"
         elif _lp in ("deepseek", "openai", "anthropic", "groq", "dashscope", "together"):
             runtime = f"cloud ({_lp})"
@@ -202,15 +230,17 @@ class DiagnosticCommandsMixin:
         import aiohttp
         if self.context.has_rich:
             self.context.console.print()
-        urls = [
-            ("AWS Backend", self.terminal.api_url, "/health"),
-            ("Local Server", self.terminal.config.get("local_url", "http://localhost:8001"), "/health"),
-            ("Ollama", self.terminal.config.get("ollama_url", "http://localhost:11434"), "/api/tags"),
-        ]
+        urls, message = _health_targets(self.terminal.config, self.terminal.api_url)
+        if message:
+            if self.context.has_rich:
+                self.context.console.print(f"  [cyan]●[/cyan] {message}")
+            else:
+                print(f"  ? {message}")
         for label, url, path in urls:
             try:
                 async with aiohttp.ClientSession() as session:
-                    async with session.get(f"{url}{path}", timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                    async with session.get(f"{str(url).rstrip('/')}{path}", timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                        resp.raise_for_status()
                         data = await resp.json()
                         if label == "Ollama":
                             models = [m.get("name", "?") for m in data.get("models", [])[:3]]
