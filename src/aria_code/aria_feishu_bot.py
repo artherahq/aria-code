@@ -15,7 +15,18 @@ OpenClaw 同款设计：任意输入（文字/语音/图片/文件）→ Aria AI
        FEISHU_APP_ID=cli_xxx        FEISHU_APP_SECRET=xxx
        ANTHROPIC_API_KEY=xxx        # 图片理解 / LLM
        OPENAI_API_KEY=xxx           # Whisper 语音转文字（可选）
-       FEISHU_ALLOWED_USER_IDS=uid1,uid2   # 留空=不限制
+       FEISHU_ALLOWED_USER_IDS=ou_xxx,ou_yyy   # 必填：留空 = 谁都不能用
+       FEISHU_ENCRYPT_KEY=xxx 或 FEISHU_VERIFICATION_TOKEN=xxx   # 独立运行时必填其一
+       ARIA_BOT_ALLOW_TOOLS=write_file      # 可选：机器人可免审批使用的工具
+
+安全边界（2026-10-03）：
+  - 白名单为空时拒绝所有人。之前留空 = 不限制，而机器人调用 aria 时自动批准
+    全部工具，于是任何能给它发消息的人都能在这台机器上跑 shell 命令。
+  - 机器人不再自动批准需要确认的工具（run_command / write_file / edit_file /
+    multi_edit）；没有人能在飞书里点「同意」，这些调用会被拒绝。确实需要的，
+    由管理员用 ARIA_BOT_ALLOW_TOOLS 逐个列出。
+  - 独立运行时校验飞书事件签名；未配置 Encrypt Key 或 Verification Token 时
+    拒绝一切事件。之前任何能访问端口的人都能伪造发件人。
 
 支持的消息类型：
   📝 文字（非命令）→ Aria LLM 自然语言回答
@@ -42,8 +53,19 @@ import re
 import sys
 import tempfile
 import time
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Dict, Optional
+
+from aria_code.apps.channels.conversation import (
+    ChannelTurn,
+    ConversationStore,
+    InboundMessage,
+    handle_owner_command,
+    prepare_turn,
+    should_respond,
+)
+from aria_code.tools.logistics_tenancy import OWNER_SCOPE_ENV
 
 logger = logging.getLogger(__name__)
 
@@ -135,6 +157,48 @@ async def _get_access_token() -> Optional[str]:
 
 # ── Send message helpers ───────────────────────────────────────────────────────
 
+# Set by the relay client while it is connected. In relay mode this machine has
+# no Feishu app credentials — by design, the app secret stays on the relay — so
+# every message goes back over the WebSocket and the relay sends it. Before
+# 2026-10-03 nothing did this, and relay mode silently dropped every answer.
+_RELAY_SEND = None
+
+
+def set_relay_sender(sender) -> None:
+    """Route sends through the relay: sender(request) -> Feishu-style result dict."""
+    global _RELAY_SEND
+    _RELAY_SEND = sender
+
+
+def can_send() -> bool:
+    """Whether this process can deliver a message at all."""
+    has_app = bool(os.environ.get("FEISHU_APP_ID") and os.environ.get("FEISHU_APP_SECRET"))
+    return has_app or _RELAY_SEND is not None
+
+
+async def _send_message(op: str, target: str, msg_type: str, content: str,
+                        receive_id_type: str = "chat_id") -> Optional[dict]:
+    """The one place a message leaves: directly with app credentials, else via the relay.
+
+    op "reply" answers message `target`; op "send" posts to chat `target`.
+    """
+    token = await _get_access_token()
+    if token:
+        if op == "reply":
+            return await _feishu_post(f"{_FEISHU_API}/im/v1/messages/{target}/reply", token,
+                                      {"msg_type": msg_type, "content": content})
+        return await _feishu_post(f"{_FEISHU_API}/im/v1/messages?receive_id_type={receive_id_type}",
+                                  token, {"receive_id": target, "msg_type": msg_type, "content": content})
+    if _RELAY_SEND is not None:
+        try:
+            return await _RELAY_SEND({"op": op, "target": target, "msg_type": msg_type,
+                                      "content": content, "receive_id_type": receive_id_type})
+        except Exception as exc:
+            logger.warning("relay send failed: %s", exc)
+            return None
+    logger.error("cannot send: no Feishu app credentials and no relay connection")
+    return None
+
 async def _feishu_post(url: str, token: str, payload: dict) -> Optional[dict]:
     """POST to Feishu API; log the response code on error."""
     try:
@@ -165,16 +229,8 @@ async def reply_text(message_id: str, text: str) -> None:
     if not message_id:
         logger.error("reply_text: empty message_id — cannot reply")
         return
-    token = await _get_access_token()
-    if not token:
-        logger.error("reply_text: no access token")
-        return
     logger.info("reply_text → message_id=%s len=%d", message_id, len(text))
-    await _feishu_post(
-        f"{_FEISHU_API}/im/v1/messages/{message_id}/reply",
-        token,
-        {"msg_type": "text", "content": json.dumps({"text": text[:3000]})},
-    )
+    await _send_message("reply", message_id, "text", json.dumps({"text": text[:3000]}))
 
 
 async def reply_card(message_id: str, title: str, body: str,
@@ -183,10 +239,6 @@ async def reply_card(message_id: str, title: str, body: str,
     if not message_id:
         logger.error("reply_card: empty message_id — cannot reply")
         return
-    token = await _get_access_token()
-    if not token:
-        await reply_text(message_id, f"【{title}】\n{body}")
-        return
     elements = _build_card_elements(body, footer)
     card = {
         "config": {"wide_screen_mode": True},
@@ -194,11 +246,7 @@ async def reply_card(message_id: str, title: str, body: str,
         "elements": elements,
     }
     logger.info("reply_card → message_id=%s title=%s", message_id, title[:40])
-    result = await _feishu_post(
-        f"{_FEISHU_API}/im/v1/messages/{message_id}/reply",
-        token,
-        {"msg_type": "interactive", "content": json.dumps(card)},
-    )
+    result = await _send_message("reply", message_id, "interactive", json.dumps(card))
     # If card failed, fall back to plain text
     if result and result.get("code") != 0:
         logger.info("reply_card: card failed (code %s), falling back to text", result.get("code"))
@@ -258,48 +306,35 @@ def _build_card_elements(body: str, footer: str = "") -> list:
 async def _reply_card_raw(message_id: str, title: str, body: str,
                           color: str = "blue", footer: str = "") -> Optional[dict]:
     """Reply with a card; return raw API response dict."""
-    token = await _get_access_token()
-    if not token:
-        return None
     elements = _build_card_elements(body, footer)
     card = {
         "config": {"wide_screen_mode": True},
         "header": {"title": {"tag": "plain_text", "content": title}, "template": color},
         "elements": elements,
     }
-    return await _feishu_post(
-        f"{_FEISHU_API}/im/v1/messages/{message_id}/reply",
-        token,
-        {"msg_type": "interactive", "content": json.dumps(card)},
-    )
+    return await _send_message("reply", message_id, "interactive", json.dumps(card))
 
 
 async def send_card_to_chat(chat_id: str, title: str, body: str,
-                            color: str = "blue", receive_id_type: str = "chat_id") -> None:
-    """Send a new card message to a chat (group or user)."""
-    token = await _get_access_token()
-    if not token:
-        return
+                            color: str = "blue", receive_id_type: str = "chat_id") -> bool:
+    """Send a new card message to a chat (group or user). True if Feishu accepted it.
+
+    The content is the card itself. It was wrapped as {"card": ...} — the
+    custom-webhook format, which /im/v1/messages rejects — and the response
+    was never read, so every proactive send failed without a trace. Nothing
+    scheduled depended on it until the shipper digest.
+    """
     elements = _build_card_elements(body)
     card = {
         "config": {"wide_screen_mode": True},
         "header": {"title": {"tag": "plain_text", "content": title}, "template": color},
         "elements": elements,
     }
-    try:
-        import httpx
-        async with httpx.AsyncClient(timeout=15) as client:
-            await client.post(
-                f"{_FEISHU_API}/im/v1/messages?receive_id_type={receive_id_type}",
-                headers={"Authorization": f"Bearer {token}"},
-                json={
-                    "receive_id": chat_id,
-                    "msg_type":   "interactive",
-                    "content":    json.dumps({"card": card}),
-                },
-            )
-    except Exception as exc:
-        logger.warning("send_card_to_chat failed: %s", exc)
+    result = await _send_message("send", chat_id, "interactive", json.dumps(card), receive_id_type) or {}
+    if result.get("code") != 0:
+        logger.warning("send_card_to_chat rejected: code=%s msg=%s", result.get("code"), result.get("msg"))
+        return False
+    return True
 
 
 # ── Command router ─────────────────────────────────────────────────────────────
@@ -661,15 +696,30 @@ async def _async_run_aria(cmd: str, message_id: str) -> None:
 
 # ── Multimodal helpers ────────────────────────────────────────────────────────
 
-def _is_allowed_user(user_id: str) -> bool:
-    """Check FEISHU_ALLOWED_USER_IDS allowlist (empty = allow all)."""
-    raw = os.environ.get("FEISHU_ALLOWED_USER_IDS", "").strip()
-    if not raw:
-        return True
-    return user_id in {u.strip() for u in raw.split(",") if u.strip()}
+def _is_allowed_user(*sender_ids: str) -> bool:
+    """Whether any of the sender's ids (user_id, open_id) is on the allowlist.
+
+    Fails closed: an empty FEISHU_ALLOWED_USER_IDS allows nobody. It used to
+    allow everybody, and the bot runs aria with tools — so an unconfigured
+    deployment answered anyone who could message it.
+    """
+    raw = os.environ.get("FEISHU_ALLOWED_USER_IDS", "")
+    allowed = {u.strip() for u in raw.split(",") if u.strip()}
+    return any(i in allowed for i in sender_ids if i)
 
 
-async def _query_aria_direct(text: str, timeout: int = 90) -> str:
+def _bot_cli_flags() -> list[str]:
+    """Extra aria CLI flags for bot-run commands: only an explicit tool allowlist.
+
+    Bot mode no longer approves every tool. A tool that needs confirmation is
+    refused, because nobody in the chat can answer the prompt; an operator who
+    needs one names it in ARIA_BOT_ALLOW_TOOLS.
+    """
+    tools = [t.strip() for t in os.environ.get("ARIA_BOT_ALLOW_TOOLS", "").split(",") if t.strip()]
+    return ["--allow-tools", ",".join(tools)] if tools else []
+
+
+async def _query_aria_direct(text: str, timeout: int = 90, history: Optional[list] = None) -> str:
     """
     Query the LLM directly via providers/llm/registry.py — no subprocess, no tool use.
     Used for conversational NL queries where we want a clean text answer.
@@ -683,7 +733,7 @@ async def _query_aria_direct(text: str, timeout: int = 90) -> str:
 
         collected: list[str] = []
         result = await _aio.wait_for(
-            stream_cloud_fallback(text, history=[], on_token=collected.append),
+            stream_cloud_fallback(text, history=list(history or []), on_token=collected.append),
             timeout=timeout,
         )
         if result.get("success") and collected:
@@ -709,10 +759,16 @@ async def _query_aria_llm(text: str, timeout: int = 120) -> str:
     if not aria_cli.exists():
         return "❌ aria_cli.py 未找到，请检查 ARIA_CODE_DIR 配置。"
     try:
-        # ARIA_BOT_MODE=1: auto-approves tools + suppresses visual diffs in aria_cli
+        # ARIA_BOT_MODE=1: plain output for a chat card. It no longer approves
+        # tools; see _bot_cli_flags.
         bot_env = {**os.environ, "ARIA_BOT_MODE": "1"}
+        # A conversation bound to a shipper confines every tool in this run to
+        # that shipper; the logistics tools enforce it (logistics_tenancy).
+        bot_env.pop(OWNER_SCOPE_ENV, None)
+        if _TURN_OWNER.get():
+            bot_env[OWNER_SCOPE_ENV] = _TURN_OWNER.get()
         proc = await asyncio.create_subprocess_exec(
-            sys.executable, str(aria_cli), "-p", text,
+            sys.executable, str(aria_cli), "-p", text, *_bot_cli_flags(),
             stdin=asyncio.subprocess.DEVNULL,   # no interactive prompts
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -939,23 +995,243 @@ async def _analyze_file(file_bytes: bytes, filename: str) -> str:
 
 # ── Event verifier ────────────────────────────────────────────────────────────
 
-def verify_feishu_signature(timestamp: str, nonce: str, body_bytes: bytes,
-                            encrypt_key: str) -> bool:
-    """Verify Feishu event signature (optional but recommended in production)."""
-    if not encrypt_key:
-        return True
-    s = (timestamp + nonce + encrypt_key).encode() + body_bytes
-    return hmac.compare_digest(
-        hashlib.sha256(s).hexdigest(),
-        ""  # caller should pass the X-Lark-Signature header value
+def verify_feishu_request(headers: Dict[str, str], body: bytes, payload: Dict[str, Any]) -> tuple[bool, str]:
+    """(trusted, reason) for an event received directly from Feishu.
+
+    The same two checks the relay applies (aria_relay_server._verify_feishu_request),
+    kept separate because the relay ships without this module's dependencies:
+      - Encrypt Key: X-Lark-Signature = sha256(timestamp + nonce + key + body)
+      - Verification Token: the token field in the event body
+    With neither configured every event is refused, unless
+    FEISHU_ALLOW_UNVERIFIED_EVENTS=1 is set for local testing.
+
+    This replaces verify_feishu_signature, which compared the digest with an
+    empty string and was never called: the standalone server dispatched any
+    POST, so anyone who could reach the port chose the sender — including one
+    on the allowlist.
+    """
+    headers = {k.lower(): v for k, v in (headers or {}).items()}
+    encrypt_key = os.environ.get("FEISHU_ENCRYPT_KEY", "")
+    token = os.environ.get("FEISHU_VERIFICATION_TOKEN", "")
+    if encrypt_key:
+        signature = headers.get("x-lark-signature", "")
+        if not signature:
+            return False, "missing X-Lark-Signature"
+        digest = hashlib.sha256(
+            (headers.get("x-lark-request-timestamp", "") + headers.get("x-lark-request-nonce", "")
+             + encrypt_key).encode("utf-8") + body
+        ).hexdigest()
+        if not hmac.compare_digest(digest, signature):
+            return False, "signature mismatch"
+        return True, ""
+    if token:
+        sent = payload.get("token") or (payload.get("header") or {}).get("token", "")
+        if not hmac.compare_digest(str(sent), token):
+            return False, "verification token mismatch"
+        return True, ""
+    if os.environ.get("FEISHU_ALLOW_UNVERIFIED_EVENTS", "").strip().lower() in {"1", "true", "yes", "on"}:
+        return True, ""
+    return False, ("neither FEISHU_ENCRYPT_KEY nor FEISHU_VERIFICATION_TOKEN is set; "
+                   "unverified events are refused")
+
+
+# ── Conversation layer (apps/channels/conversation.py) ───────────────────────
+
+# The shipper the current conversation is bound to, for every task it spawns.
+_TURN_OWNER: ContextVar[Optional[str]] = ContextVar("aria_feishu_turn_owner", default=None)
+_STORE: Optional[ConversationStore] = None
+_MENTION_TOKEN = re.compile(r"@_user_\d+")
+
+
+def _conversation_store() -> ConversationStore:
+    global _STORE
+    if _STORE is None or str(_STORE.path) != str(_conversation_db_path()):
+        _STORE = ConversationStore(_conversation_db_path())
+    return _STORE
+
+
+def _conversation_db_path() -> Path:
+    from aria_code.apps.channels.conversation import default_db_path
+    return default_db_path()
+
+
+def _strip_mentions(text: str) -> str:
+    """Feishu writes each @ as a placeholder (@_user_1); the model needs the words."""
+    return re.sub(r"\s+", " ", _MENTION_TOKEN.sub(" ", text or "")).strip()
+
+
+def _mentions_bot(message: Dict[str, Any]) -> bool:
+    """Whether a group message addresses this bot.
+
+    With FEISHU_BOT_OPEN_ID set, the bot's own id must be among the mentions.
+    Without it, any mention counts — correct for an app without the
+    read-all-group-messages permission, which receives only @-mentions of
+    itself; set the id if the app has that permission.
+    """
+    mentions = message.get("mentions") or []
+    own_id = os.environ.get("FEISHU_BOT_OPEN_ID", "").strip()
+    if own_id:
+        return any((m.get("id") or {}).get("open_id") == own_id for m in mentions)
+    return bool(mentions)
+
+
+def feishu_inbound(event: Dict[str, Any], text: str) -> InboundMessage:
+    """A Feishu im.message.receive_v1 event as a platform-neutral message."""
+    message = event.get("message") or {}
+    sender = (event.get("sender") or {}).get("sender_id") or {}
+    open_id = sender.get("open_id", "")
+    user_id = sender.get("user_id", "")
+    direct = message.get("chat_type") == "p2p"
+    return InboundMessage(
+        channel="feishu",
+        conversation_id=message.get("chat_id", ""),
+        kind="direct" if direct else "group",
+        sender_id=open_id or user_id,
+        sender_aliases=(user_id,) if open_id and user_id else (),
+        text=text,
+        message_id=message.get("message_id", ""),
+        mentions_bot=direct or _mentions_bot(message),
+        reply_to=message.get("parent_id", ""),
     )
+
+
+async def _send_digest_now(conversation: str, message_id: str) -> None:
+    """/digest: this group's shipper digest, now, as a reply."""
+    from aria_code.apps.channels.digest import build_digest, load_feeds
+
+    owner = _conversation_store().owner_for(conversation)
+    if not owner:
+        await reply_text(message_id, "本群未绑定货主，没有可发送的简报。管理员可发送 /owner <货主ID> 绑定。")
+        return
+    try:
+        digest = build_digest(owner, load_feeds())
+    except Exception as exc:
+        logger.warning("digest for %s failed: %s", owner, exc)
+        digest = None
+    if digest is None or digest.problems and not digest.worth_sending:
+        # The details are for the operator's log, not the client's group.
+        await reply_text(message_id, "暂时无法生成简报，已记录到运维日志。")
+        return
+    if not digest.worth_sending:
+        await reply_text(message_id, f"{owner}：今天没有需要处理的补货、呆滞或运费异常。")
+        return
+    await reply_card(message_id, digest.title, digest.body, "orange")
+
+
+# ── Approvals (apps/channels/approvals.py) ────────────────────────────────────
+
+def _approval_card(approval) -> Dict[str, Any]:
+    """The request as a card: buttons while pending, the outcome once decided."""
+    from aria_code.apps.channels.approvals import PENDING, status_label
+
+    elements = _build_card_elements(approval.summary)
+    if approval.status == PENDING:
+        elements.append({"tag": "note", "elements": [{"tag": "plain_text", "content":
+            f"审批编号 {approval.id[:8]} · 24 小时内有效 · 批准后生成采购单草稿文件，不会自动下单"}]})
+        elements.append({"tag": "action", "actions": [
+            {"tag": "button", "type": "primary", "text": {"tag": "plain_text", "content": "批准"},
+             "value": {"aria_approval": approval.id, "decision": "approve"}},
+            {"tag": "button", "type": "danger", "text": {"tag": "plain_text", "content": "驳回"},
+             "value": {"aria_approval": approval.id, "decision": "reject"}},
+        ]})
+        template = "orange"
+    else:
+        outcome = f"{status_label(approval.status)} · {approval.decided_by}"
+        # The file name, not the host path; a failure's details stay in the
+        # approval record and the log, not in the client's group.
+        if approval.status == "approved" and approval.result:
+            outcome += f"\n已生成：{Path(approval.result).name}"
+        elif approval.status == "failed":
+            outcome += "\n详情已记录在审批记录中"
+        elements.append({"tag": "note", "elements": [{"tag": "plain_text", "content": outcome}]})
+        template = "green" if approval.status == "approved" else "grey"
+    return {
+        "config": {"wide_screen_mode": True, "update_multi": True},
+        "header": {"title": {"tag": "plain_text", "content": f"🧾 {approval.owner_id} 采购单草稿"},
+                   "template": template},
+        "elements": elements,
+    }
+
+
+async def _request_reorder(inbound: InboundMessage, message_id: str) -> None:
+    """/补货: propose a purchase-order draft from the reorder list, for approval."""
+    from aria_code.apps.channels.approvals import ApprovalStore, propose_reorder
+    from aria_code.apps.channels.digest import feeds_for, load_feeds
+
+    owner = _conversation_store().owner_for(inbound.key)
+    if not owner:
+        await reply_text(message_id, "本群未绑定货主，无法发起补货审批。管理员可发送 /owner <货主ID> 绑定。")
+        return
+    try:
+        inventory = feeds_for(owner, load_feeds()).get("inventory")
+        if not inventory:
+            raise ValueError(f"no inventory feed configured for {owner}")
+        proposal = propose_reorder(owner, inventory)
+    except Exception as exc:
+        logger.warning("reorder proposal for %s failed: %s", owner, exc)
+        await reply_text(message_id, "暂时无法生成补货建议，已记录到运维日志。")
+        return
+    if proposal is None:
+        await reply_text(message_id, f"{owner}：当前没有需要补货的 SKU。")
+        return
+    summary, payload = proposal
+    approval = ApprovalStore(_conversation_db_path()).request(
+        conversation=inbound.key, owner_id=owner, kind="purchase_order_draft", payload=payload,
+        summary=f"**建议订货**\n{summary}\n\n数量未计入起订量和箱规，请审批人核对。",
+        requested_by=f"feishu:{inbound.sender_id}",
+    )
+    await _send_message("reply", message_id, "interactive", json.dumps(_approval_card(approval)))
+
+
+async def _handle_card_action(event: Dict[str, Any], *, authorized_by_binding: bool = False) -> Dict[str, Any]:
+    """An approve/reject press. The response's toast and card are what the presser sees."""
+    from aria_code.apps.channels.approvals import ApprovalStore, can_decide
+
+    operator = event.get("operator") or {}
+    ids = tuple(i for i in (operator.get("open_id", ""), operator.get("user_id", "")) if i)
+    value = (event.get("action") or {}).get("value") or {}
+    chat_id = (event.get("context") or {}).get("open_chat_id", "")
+    approval_id = str(value.get("aria_approval", ""))
+    if not approval_id:
+        return {}
+
+    def toast(kind: str, text: str, card=None) -> Dict[str, Any]:
+        out: Dict[str, Any] = {"toast": {"type": kind, "content": text}}
+        if card is not None:
+            out["card"] = {"type": "raw", "data": card}
+        return out
+
+    if not authorized_by_binding and not _is_allowed_user(*ids):
+        return toast("error", "你还没有使用 Aria 的权限。")
+    conversation = f"feishu:{chat_id}"
+    decision = ApprovalStore(_conversation_db_path()).decide(
+        approval_id,
+        conversation=conversation,
+        current_owner=_conversation_store().owner_for(conversation),
+        decided_by=f"feishu:{ids[0] if ids else ''}",
+        approve=value.get("decision") == "approve",
+        authorised=can_decide("feishu", ids),
+    )
+    card = _approval_card(decision.approval) if decision.approval is not None else None
+    return toast("success" if decision.ok else "error", decision.message, card)
+
+
+async def send_digest_card(chat_id: str, title: str, body: str) -> bool:
+    """The Feishu sender for apps.channels.digest.run_digests."""
+    return await send_card_to_chat(chat_id, title, body, "orange")
 
 
 # ── Main event dispatcher (called by feishu_routes.py or standalone) ──────────
 
-async def dispatch_event(raw: Dict[str, Any]) -> Dict[str, Any]:
+async def dispatch_event(raw: Dict[str, Any], *, authorized_by_binding: bool = False) -> Dict[str, Any]:
     """
     Handle one Feishu event payload.
+
+    authorized_by_binding: the relay client passes True. The relay forwards an
+    event only to the machine its sender bound with a code shown on that
+    machine, so the binding is the authorization; a local allowlist would add
+    nothing, since the relay knows the bound id. What limits a compromised
+    relay is that bot-run commands cannot use confirmation-required tools.
     Supports: text / audio / image / file / post (富文本)
     Returns a dict to be sent as JSON response (HTTP 200 required by Feishu).
     """
@@ -966,6 +1242,10 @@ async def dispatch_event(raw: Dict[str, Any]) -> Dict[str, Any]:
     header     = raw.get("header", {})
     event      = raw.get("event", {})
     event_type = header.get("event_type") or raw.get("type", "")
+
+    # A press on an approval card's button (callback schema 2.0).
+    if event_type == "card.action.trigger":
+        return await _handle_card_action(event, authorized_by_binding=authorized_by_binding)
 
     if event_type not in ("im.message.receive_v1", "message"):
         return {"code": 0}
@@ -985,8 +1265,18 @@ async def dispatch_event(raw: Dict[str, Any]) -> Dict[str, Any]:
                      json.dumps(raw, ensure_ascii=False)[:600])
         return {"code": 0}
 
-    if not _is_allowed_user(user_id):
-        logger.warning("Blocked user %s (not in FEISHU_ALLOWED_USER_IDS)", user_id)
+    open_id = sender.get("open_id", "")
+    if not authorized_by_binding and not _is_allowed_user(sender.get("user_id", ""), open_id):
+        logger.warning("Blocked sender user_id=%s open_id=%s (not in FEISHU_ALLOWED_USER_IDS)",
+                       sender.get("user_id", ""), open_id)
+        # Say why only in a direct chat: in a group the bot would answer every
+        # message from everyone not on the list.
+        if msg.get("chat_type") == "p2p":
+            await reply_text(
+                msg_id,
+                "⛔ 你还没有使用 Aria 的权限。请把下面的 ID 发给管理员，"
+                f"加入 FEISHU_ALLOWED_USER_IDS：\n{open_id or sender.get('user_id', '')}",
+            )
         return {"code": 0}
 
     content_raw = msg.get("content", "{}")
@@ -995,22 +1285,57 @@ async def dispatch_event(raw: Dict[str, Any]) -> Dict[str, Any]:
     except Exception:
         content = {}
 
+    # Groups: only what is addressed to the bot. Feishu delivers just the
+    # @-mentions unless the app holds the read-all-group-messages permission;
+    # with it, this is what stops the bot answering every message in the room.
+    # Images, audio and files cannot @ anyone, so in a group they are ignored.
+    if msg.get("chat_type") != "p2p" and msg_type not in ("text", "post"):
+        return {"code": 0}
+
+    # Attachments are downloaded with the app's credentials, which relay mode
+    # does not have on this machine; say so instead of failing silently.
+    if msg_type in ("audio", "image", "file") and not (
+            os.environ.get("FEISHU_APP_ID") and os.environ.get("FEISHU_APP_SECRET")):
+        await reply_text(msg_id, "中继模式下暂不支持图片、语音和文件，请直接发送文字。")
+        return {"code": 0}
+
     # ── Text message ──────────────────────────────────────────────────────────
     if msg_type == "text":
-        text = content.get("text", "").strip()
-        # Strip @bot mention (飞书群里 @ 机器人会带前缀)
-        if text.startswith("@"):
-            text = " ".join(text.split()[1:]).strip()
+        text = _strip_mentions(content.get("text", ""))
         if not text:
             return {"code": 0}
+        inbound = feishu_inbound(event, text)
+        if not should_respond(inbound):
+            return {"code": 0}
 
-        if text.startswith("/"):
-            logger.info("Feishu /cmd from %s: %s", user_id, text[:80])
-            asyncio.create_task(_handle_command(text, msg_id, user_id, chat_id))
-        else:
-            # Free-form natural language → Aria LLM
-            logger.info("Feishu NL query from %s: %s", user_id, text[:80])
-            asyncio.create_task(_handle_nl_query(text, msg_id, chat_id))
+        store = _conversation_store()
+        owner_reply = handle_owner_command(inbound, store)
+        if owner_reply is not None:
+            await reply_text(msg_id, owner_reply)
+            return {"code": 0}
+        if text.strip().lower() in ("/digest", "/简报"):
+            asyncio.create_task(_send_digest_now(inbound.key, msg_id))
+            return {"code": 0}
+        if text.strip().lower() in ("/reorder", "/补货"):
+            asyncio.create_task(_request_reorder(inbound, msg_id))
+            return {"code": 0}
+
+        # A task copies the context it is created in, so every aria subprocess
+        # the tasks below start runs under this conversation's shipper scope.
+        # Reset afterwards: dispatch_event runs in its caller's context.
+        scope_token = _TURN_OWNER.set(store.owner_for(inbound.key))
+        try:
+            if text.startswith("/"):
+                logger.info("Feishu /cmd from %s: %s", user_id, text[:80])
+                asyncio.create_task(_handle_command(text, msg_id, user_id, chat_id))
+            else:
+                # Free-form natural language → Aria LLM, with this conversation's context
+                logger.info("Feishu NL query from %s: %s", user_id, text[:80])
+                turn = prepare_turn(inbound, store)
+                asyncio.create_task(_handle_nl_query(text, msg_id, chat_id, turn=turn,
+                                                     conversation=inbound.key))
+        finally:
+            _TURN_OWNER.reset(scope_token)
 
     # ── Voice / Audio ─────────────────────────────────────────────────────────
     elif msg_type == "audio":
@@ -1270,7 +1595,8 @@ def _resolve_cn_company(text: str) -> str:
     return result
 
 
-async def _handle_nl_query(text: str, message_id: str, chat_id: str = "") -> None:
+async def _handle_nl_query(text: str, message_id: str, chat_id: str = "", *,
+                           turn: Optional[ChannelTurn] = None, conversation: str = "") -> None:
     """Route free-form natural language to Aria LLM and reply."""
     import re as _re_nl
     _low = text.strip().lower()
@@ -1335,8 +1661,16 @@ async def _handle_nl_query(text: str, message_id: str, chat_id: str = "") -> Non
                 return
 
     await reply_or_send(message_id, chat_id, "🤔 思考中…", f"> {_orig[:120]}", "blue")
-    # Use direct LLM call (no subprocess, no tool execution) for conversational queries
-    result = await _query_aria_direct(text, timeout=120)
+    # Use direct LLM call (no subprocess, no tool execution) for conversational queries.
+    # With a turn, the model sees this conversation's recent messages and, when
+    # the conversation is bound to a shipper, which one.
+    if turn is not None:
+        prompt = turn.prompt if resolved == _orig else f"{turn.prompt}\n({text})"
+        result = await _query_aria_direct(prompt, timeout=120, history=turn.history)
+        if conversation and not result.startswith("❌"):
+            _conversation_store().record(conversation, "assistant", result[:2000])
+    else:
+        result = await _query_aria_direct(text, timeout=120)
     color = "red" if result.startswith("❌") else "green"
     await reply_or_send(message_id, chat_id, "💡 Aria 回答", result[:2000], color,
                         footer="Aria Code · AI 分析")
@@ -1386,6 +1720,33 @@ async def _handle_file(file_key: str, filename: str, message_id: str) -> None:
 
 # ── Standalone HTTP server (for testing without FastAPI) ──────────────────────
 
+async def _standalone_handle(request):
+    """POST /feishu/event for the standalone server: verify, then dispatch."""
+    from aiohttp import web
+
+    raw = await request.read()
+    try:
+        body = json.loads(raw)
+    except Exception:
+        return web.json_response({"code": 1, "msg": "bad json"}, status=400)
+    # Before anything else, the URL-verification challenge included: it
+    # carries the token too, and answering it unverified is a free probe.
+    trusted, reason = verify_feishu_request(dict(request.headers), raw, body)
+    if not trusted:
+        logger.warning("refused an unverified Feishu event: %s", reason)
+        return web.json_response({"code": 1, "msg": "unverified event"}, status=401)
+    return web.json_response(await dispatch_event(body))
+
+
+def _standalone_app():
+    from aiohttp import web
+
+    app = web.Application()
+    app.router.add_post("/feishu/event", _standalone_handle)
+    app.router.add_post("/api/v1/feishu/event", _standalone_handle)
+    return app
+
+
 async def _standalone_server(host: str = "0.0.0.0", port: int = 8888) -> None:
     """Minimal aiohttp-based server for standalone Feishu event reception."""
     try:
@@ -1394,17 +1755,7 @@ async def _standalone_server(host: str = "0.0.0.0", port: int = 8888) -> None:
         logger.error("aiohttp not installed. pip install aiohttp")
         return
 
-    async def handle(request):
-        try:
-            body = await request.json()
-        except Exception:
-            return web.json_response({"code": 1, "msg": "bad json"}, status=400)
-        result = await dispatch_event(body)
-        return web.json_response(result)
-
-    app = web.Application()
-    app.router.add_post("/feishu/event", handle)
-    app.router.add_post("/api/v1/feishu/event", handle)
+    app = _standalone_app()
 
     runner = web.AppRunner(app)
     await runner.setup()

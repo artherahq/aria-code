@@ -50,6 +50,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pytest pytest-asyncio pytest-cov pytest-timeout
+          # Relay and project-review service test deps; without them those tests skip.
+          pip install fastapi uvicorn python-multipart
           # google-genai backs the Gemini/Vertex provider (aria_code.apps.cli.providers.vertexai_stream),
           # now the default cloud model — kept optional in pyproject.toml so the
           # base install stays light, but installed here so its tests run for

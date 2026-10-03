@@ -95,6 +95,25 @@ def _db() -> sqlite3.Connection:
             created_at REAL NOT NULL
         )
     """)
+    # Chats a client's bound user has spoken to the bot in: the only chats the
+    # client may later send to unprompted (the daily digest).
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS client_chats (
+            client_id TEXT NOT NULL,
+            chat_id   TEXT NOT NULL,
+            last_seen REAL NOT NULL,
+            PRIMARY KEY (client_id, chat_id)
+        )
+    """)
+    # Cards the relay posted for a client: a press on one is routed back to
+    # that client, which holds the approval it belongs to.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS card_origins (
+            message_id TEXT PRIMARY KEY,
+            client_id  TEXT NOT NULL,
+            created_at REAL NOT NULL
+        )
+    """)
     conn.commit()
     return conn
 
@@ -147,6 +166,103 @@ def _is_valid_client_id(client_id: str) -> bool:
 
 _connections: dict[str, WebSocket] = {}   # client_id → WebSocket
 _pending_responses: dict[str, asyncio.Future] = {}   # request_id → Future
+
+
+# ── Sending on a client's behalf ─────────────────────────────────────────────
+#
+# Until 2026-10-03 a client could not answer at all. The relay forwarded each
+# event and replied to Feishu only when the client was offline; the client's
+# bot then tried to reply itself, with app credentials that relay mode
+# deliberately never gives it — so every answer was dropped without a trace.
+#
+# Now the client hands its message back over the WebSocket and the relay sends
+# it. That turns the relay's bot identity into something any connected client
+# can use, so a send is accepted only where the client has standing:
+#   reply — to a message the relay forwarded to this client, within an hour;
+#   send  — to a chat this client's bound user has spoken to the bot in;
+#   at most _SEND_LIMIT messages per client per minute;
+#   msg_type text or interactive, content at most 30 KB.
+
+_FORWARD_TTL = 3600
+_SEND_LIMIT = 60
+_forwarded: dict[str, tuple[str, float]] = {}       # message_id → (client_id, expires)
+_send_times: dict[str, list[float]] = {}             # client_id → recent send timestamps
+
+
+def _remember_forward(client_id: str, message_id: str, chat_id: str) -> None:
+    now = time.time()
+    for mid in [m for m, (_, exp) in _forwarded.items() if exp < now]:
+        _forwarded.pop(mid, None)
+    if message_id:
+        _forwarded[message_id] = (client_id, now + _FORWARD_TTL)
+    if chat_id:
+        get_db().execute(
+            "INSERT OR REPLACE INTO client_chats VALUES (?, ?, ?)", (client_id, chat_id, now))
+        get_db().commit()
+
+
+def _may_send(client_id: str, request: dict) -> str:
+    """"" when the request is allowed, otherwise why not."""
+    op, target = request.get("op"), str(request.get("target") or "")
+    if request.get("msg_type") not in ("text", "interactive"):
+        return "msg_type must be text or interactive"
+    if len(str(request.get("content") or "")) > 30_000:
+        return "content too large"
+    if op == "reply":
+        owner = _forwarded.get(target)
+        if not owner or owner[0] != client_id or owner[1] < time.time():
+            return "not a message forwarded to this client"
+    elif op == "send":
+        if request.get("receive_id_type", "chat_id") != "chat_id":
+            return "send is only to chats"
+        row = get_db().execute(
+            "SELECT 1 FROM client_chats WHERE client_id = ? AND chat_id = ?", (client_id, target)
+        ).fetchone()
+        if not row:
+            return "this client has no conversation in that chat"
+    else:
+        return "op must be reply or send"
+    now = time.time()
+    recent = [t for t in _send_times.get(client_id, []) if t > now - 60]
+    if len(recent) >= _SEND_LIMIT:
+        return "rate limit"
+    recent.append(now)
+    _send_times[client_id] = recent
+    return ""
+
+
+async def _send_for_client(client_id: str, request: dict) -> dict:
+    refused = _may_send(client_id, request)
+    if refused:
+        logger.warning("refused send for %s: %s", client_id, refused)
+        return {"code": -1, "msg": f"relay refused: {refused}"}
+    token = await _get_tenant_token()
+    body = {"msg_type": request["msg_type"], "content": request["content"]}
+    if request["op"] == "reply":
+        url = f"{_FEISHU_API}/im/v1/messages/{request['target']}/reply"
+    else:
+        url = f"{_FEISHU_API}/im/v1/messages?receive_id_type=chat_id"
+        body["receive_id"] = request["target"]
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(url, headers={"Authorization": f"Bearer {token}"}, json=body, timeout=15)
+        result = resp.json()
+    except Exception as exc:
+        logger.warning("send for %s failed: %s", client_id, exc)
+        return {"code": -1, "msg": "relay could not reach Feishu"}
+    sent_id = ((result.get("data") or {}).get("message_id") or "")
+    if result.get("code") == 0 and request["msg_type"] == "interactive" and sent_id:
+        get_db().execute("INSERT OR REPLACE INTO card_origins VALUES (?, ?, ?)",
+                         (sent_id, client_id, time.time()))
+        get_db().commit()
+    return {"code": result.get("code"), "msg": result.get("msg", ""),
+            "data": {"message_id": sent_id} if sent_id else {}}
+
+
+def _card_origin(message_id: str) -> Optional[str]:
+    row = get_db().execute("SELECT client_id FROM card_origins WHERE message_id = ?",
+                           (message_id,)).fetchone()
+    return row["client_id"] if row else None
 
 
 # ── Feishu API helpers ────────────────────────────────────────────────────────
@@ -217,7 +333,13 @@ async def _route_to_local(feishu_user_id: str, payload: dict) -> Optional[Any]:
     client_id = _lookup_client(feishu_user_id)
     if not client_id:
         return None
+    message = (payload.get("event") or {}).get("message") or {}
+    _remember_forward(client_id, message.get("message_id", ""), message.get("chat_id", ""))
+    return await _route_to_client(client_id, payload)
 
+
+async def _route_to_client(client_id: str, payload: dict, timeout: Optional[float] = None) -> Optional[Any]:
+    """Send an event to one connected client and wait for its result."""
     ws = _connections.get(client_id)
     if not ws:
         return None
@@ -232,7 +354,7 @@ async def _route_to_local(feishu_user_id: str, payload: dict) -> Optional[Any]:
             "id": req_id,
             "payload": payload,
         }))
-        result = await asyncio.wait_for(future, timeout=_MSG_TIMEOUT)
+        result = await asyncio.wait_for(future, timeout=timeout or _MSG_TIMEOUT)
         return result
     except asyncio.TimeoutError:
         logger.warning("Timeout waiting for response from client_id=%s", client_id)
@@ -301,6 +423,14 @@ async def ws_endpoint(websocket: WebSocket):
                 continue
 
             if response_msg.get("type") == "pong":
+                continue
+
+            if response_msg.get("type") == "send":
+                async def _answer(request=response_msg, cid=client_id):
+                    result = await _send_for_client(cid, request)
+                    await websocket.send_text(json.dumps(
+                        {"type": "send_result", "id": request.get("id", ""), "result": result}))
+                asyncio.create_task(_answer())
                 continue
 
             if response_msg.get("type") == "response":
@@ -397,6 +527,20 @@ async def feishu_event(request: Request):
     # URL verification challenge
     if "challenge" in payload:
         return {"challenge": payload["challenge"]}
+
+    # A button press on a card. Routed to the client that posted the card —
+    # it holds the approval and checks the presser against its approvers —
+    # and answered synchronously, because Feishu shows the response's toast
+    # and card to the presser and waits at most 3 s for it.
+    if (payload.get("header") or {}).get("event_type") == "card.action.trigger":
+        context = (payload.get("event") or {}).get("context") or {}
+        origin = _card_origin(context.get("open_message_id", ""))
+        if not origin:
+            return {"toast": {"type": "error", "content": "这张卡片已失效。"}}
+        result = await _route_to_client(origin, payload, timeout=2.5)
+        if isinstance(result, dict) and ("toast" in result or "card" in result):
+            return result
+        return {"toast": {"type": "error", "content": "Aria 本机未及时响应，请稍后再试。"}}
 
     # Extract sender + message_id
     event = payload.get("event", {})

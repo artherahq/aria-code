@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aria-code"
-version = "0.62.0"
+version = "0.67.0"
 description = "AI coding and research workspace with optional finance and connected-domain tools"
 readme = "README.md"
 license = { text = "Apache-2.0" }
@@ -156,6 +156,12 @@ dev = [
     "pytest-timeout>=2.3.0",
     "ruff>=0.4.0",
     "mypy>=1.10.0",
+    # The relay server's and the project-review service's tests. Without
+    # these, importorskip skipped them all in CI — the relay's account-hijack
+    # regressions included — and nobody noticed.
+    "fastapi>=0.110.0",
+    "uvicorn>=0.29.0",
+    "python-multipart>=0.0.9",
 ]
 
 # ── Full feature set (what the bootstrap installers install by default) ────────

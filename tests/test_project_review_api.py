@@ -1,8 +1,8 @@
 """HTTP-level coverage for the internal project-review/workspace service.
 
-Requires the optional "service" extra (fastapi, uvicorn, python-multipart);
-skips cleanly when it is not installed, matching how the local CLI keeps
-this dependency optional.
+Needs fastapi and python-multipart, which the dev extra and every CI test job
+install. It still skips without them, for a local run of the core suite —
+but it used to skip in CI too, because no workflow installed them.
 """
 
 from __future__ import annotations

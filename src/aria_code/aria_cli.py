@@ -1241,9 +1241,14 @@ _dedup_tool_schemas()
 
 # Tools that require user confirmation before execution
 _CONFIRM_TOOLS = {"write_file", "edit_file", "multi_edit", "run_command"}
-# In bot mode (ARIA_BOT_MODE=1): auto-approve all tools and suppress visual output
+# Bot mode (ARIA_BOT_MODE=1) is about output only: plain text for a chat card.
+# It used to start the session with every tool approved, and the Feishu and
+# Telegram bots set it — so whoever could message a bot could run shell
+# commands and write files on its host. Tools that need confirmation are now
+# refused in bot runs (nobody in a chat can answer the prompt); a bot that
+# needs one passes --allow-tools for exactly that tool.
 _ARIA_BOT_MODE: bool = bool(os.environ.get("ARIA_BOT_MODE"))
-_auto_approve_session: bool = _ARIA_BOT_MODE  # Set True when user chooses "Yes, allow all"
+_auto_approve_session: bool = False  # Set True when user chooses "Yes, allow all"
 
 # Per-tool session allow list — populated by "Always allow [tool] this session" choice.
 # More granular than _auto_approve_session: allows write_file without approving run_command.

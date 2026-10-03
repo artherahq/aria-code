@@ -45,6 +45,10 @@ class TelegramBot:
         self._running = False
         self._client: Optional[httpx.AsyncClient] = None
 
+    def is_allowed(self, chat_id: int) -> bool:
+        """Fails closed: an empty allowlist allows nobody."""
+        return chat_id in self.allowed_chat_ids
+
     # ── Low-level API ─────────────────────────────────────────────────────────
 
     def _url(self, method: str) -> str:
@@ -157,8 +161,10 @@ class TelegramBot:
                 if not text or not chat_id:
                     continue
 
-                # ACL check
-                if self.allowed_chat_ids and chat_id not in self.allowed_chat_ids:
+                # ACL check. Fails closed: an empty TELEGRAM_ALLOWED_IDS allows
+                # nobody. It used to allow everybody — anyone who found the bot
+                # could drive the daemon's commands.
+                if not self.is_allowed(chat_id):
                     await self.send_message(
                         chat_id,
                         "⛔ 未授权。请将你的 Chat ID 添加到 `TELEGRAM_ALLOWED_IDS`。\n你的 ID: `" + str(chat_id) + "`",

@@ -19,19 +19,38 @@ fails closed.
 What an error message says is part of the guarantee: it may say how many
 shippers the data spans, but never which, so a refusal does not itself
 disclose another client's name.
+
+Conversation scope
+------------------
+A chat bound to one shipper (a 3PL usually keeps one group per client) sets
+ARIA_OWNER_SCOPE for every turn it runs. Then, whatever the model asks for:
+  - owner_id defaults to that shipper, and naming another is refused;
+  - all_owners is refused — the internal view has no place in a client chat;
+  - records without owner_id are refused, because nothing shows they are this
+    shipper's (a file on the host could be anyone's).
+This is enforced here rather than in a prompt, so it holds for the CLI, the
+MCP server and every chat channel alike, and does not depend on the model
+choosing to comply.
 """
 
 from __future__ import annotations
 
+import os
 from typing import Any, Iterable
 
 OWNER_FIELD = "owner_id"
+OWNER_SCOPE_ENV = "ARIA_OWNER_SCOPE"
 
 INTERNAL_MARKER = "INTERNAL — cross-shipper view; not for client distribution"
 
 
 class TenancyError(ValueError):
     """The records cannot be analysed without mixing shippers."""
+
+
+def active_owner_scope() -> str:
+    """The shipper this process is confined to, or "" when unconfined."""
+    return os.environ.get(OWNER_SCOPE_ENV, "").strip()
 
 
 def _owner_of(record: dict[str, Any]) -> str:
@@ -55,10 +74,26 @@ def scope_records(
     if wanted and all_owners:
         raise TenancyError("Pass owner_id or all_owners, not both")
 
+    scope = active_owner_scope()
+    if scope:
+        if all_owners:
+            raise TenancyError(
+                "This conversation is confined to one shipper; the cross-shipper view "
+                "is not available here"
+            )
+        if wanted and wanted != scope:
+            raise TenancyError("This conversation is confined to one shipper and cannot analyse another")
+        wanted = scope
+
     labelled = [r for r in records if _owner_of(r)]
     unlabelled = len(records) - len(labelled)
 
     if not labelled:
+        if scope:
+            raise TenancyError(
+                f"This conversation is confined to one shipper, so every record must carry "
+                f"{OWNER_FIELD} to show it is theirs; these records have none"
+            )
         if wanted:
             raise TenancyError(
                 f"owner_id {wanted!r} was requested, but the records carry no {OWNER_FIELD}"
@@ -79,7 +114,10 @@ def scope_records(
         if not in_scope:
             # Deliberately does not list the owners that *are* present.
             raise TenancyError(f"No records for owner_id {wanted!r}")
-        return in_scope, {"mode": "single_owner", "owner_id": wanted, "client_facing": True}
+        result_scope = {"mode": "single_owner", "owner_id": wanted, "client_facing": True}
+        if scope:
+            result_scope["conversation_scoped"] = True
+        return in_scope, result_scope
 
     if len(owners) == 1:
         (only,) = owners

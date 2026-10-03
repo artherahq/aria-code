@@ -80,13 +80,48 @@ async def _handle_message(raw_msg: dict, ws) -> None:
         result = {"error": "aria_feishu_bot unavailable"}
     else:
         try:
-            result = await bot.dispatch_event(payload)
+            # The relay routes an event only to the machine its sender bound
+            # with a code shown here, so that binding is the authorization.
+            result = await bot.dispatch_event(payload, authorized_by_binding=True)
         except Exception as e:
             logger.exception("dispatch_event error")
             result = {"error": str(e)[:300]}
 
     reply = json.dumps({"type": "response", "id": req_id, "result": result})
     await ws.send(reply)
+
+
+# ── Sending through the relay ─────────────────────────────────────────────────
+#
+# This machine has no Feishu app credentials in relay mode, so the bot hands
+# each outgoing message to the relay, which sends it — and refuses anything
+# that is not a reply to a message it forwarded here, or a post to a chat this
+# user has spoken to the bot in.
+
+_pending_sends: dict[str, asyncio.Future] = {}
+_SEND_TIMEOUT = 20
+
+
+def _relay_sender(ws):
+    async def send(request: dict) -> dict:
+        import uuid
+        send_id = f"send_{uuid.uuid4().hex[:10]}"
+        future = asyncio.get_running_loop().create_future()
+        _pending_sends[send_id] = future
+        try:
+            await ws.send(json.dumps({"type": "send", "id": send_id, **request}))
+            return await asyncio.wait_for(future, timeout=_SEND_TIMEOUT)
+        except asyncio.TimeoutError:
+            return {"code": -1, "msg": "relay did not confirm the send"}
+        finally:
+            _pending_sends.pop(send_id, None)
+    return send
+
+
+def _settle_send(msg: dict) -> None:
+    future = _pending_sends.get(msg.get("id", ""))
+    if future is not None and not future.done():
+        future.set_result(msg.get("result") or {})
 
 
 # ── Main loop ─────────────────────────────────────────────────────────────────
@@ -129,6 +164,9 @@ async def _connect_and_serve(once: bool = False) -> None:
 
                 logger.info("Registered. Waiting for messages…")
                 delay = _RECONNECT_DELAY_BASE  # reset on success
+                bot = _get_feishu_bot()
+                if bot is not None and hasattr(bot, "set_relay_sender"):
+                    bot.set_relay_sender(_relay_sender(ws))
 
                 async for raw in ws:
                     try:
@@ -139,6 +177,10 @@ async def _connect_and_serve(once: bool = False) -> None:
 
                     if msg.get("type") == "ping":
                         await ws.send(json.dumps({"type": "pong"}))
+                        continue
+
+                    if msg.get("type") == "send_result":
+                        _settle_send(msg)
                         continue
 
                     if msg.get("type") == "message":
@@ -155,6 +197,10 @@ async def _connect_and_serve(once: bool = False) -> None:
         except Exception as e:
             logger.warning("Relay error: %s — retry in %ds", e, delay)
 
+        # Disconnected: sends must not go to a closed socket while we retry.
+        bot = _get_feishu_bot()
+        if bot is not None and hasattr(bot, "set_relay_sender"):
+            bot.set_relay_sender(None)
         await asyncio.sleep(delay)
         delay = min(delay * 2, _RECONNECT_DELAY_MAX)
 

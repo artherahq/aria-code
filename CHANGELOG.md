@@ -4,6 +4,26 @@ All notable changes to Aria Code are documented here.
 
 ---
 
+## [0.67.0] — 2026-10-03
+
+- Merge pull request #80 from Cinsoul/feat/relay-push-and-callbacks
+
+## [0.66.0] — 2026-10-03
+
+- Merge pull request #79 from Cinsoul/feat/card-approvals
+
+## [0.65.0] — 2026-10-03
+
+- Merge pull request #78 from Cinsoul/feat/shipper-digest
+
+## [0.64.0] — 2026-10-03
+
+- Merge pull request #77 from Cinsoul/feat/conversation-core
+
+## [0.63.0] — 2026-10-03
+
+- Merge pull request #76 from Cinsoul/fix/feishu-bot-fail-closed
+
 ## [0.62.0] — 2026-10-03
 
 - Merge pull request #74 from Cinsoul/feat/operations-evals
